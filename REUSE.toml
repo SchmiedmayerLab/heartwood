@@ -1,0 +1,22 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+version = 1
+
+# Files that cannot carry an inline SPDX header — the root license file, the
+# generated lockfile, the Python pin, and empty PEP 561 markers — are annotated
+# here. Everything else (including Markdown, via an HTML-comment header) carries
+# its own SPDX header.
+[[annotations]]
+path = [
+    "LICENSE",
+    ".python-version",
+    "uv.lock",
+    "**/py.typed",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"
+SPDX-License-Identifier = "MIT"

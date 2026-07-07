@@ -1,0 +1,18 @@
+#
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+#
+
+extends: default
+
+rules:
+  line-length:
+    max: 150
+    level: warning
+  truthy:
+    level: error
+    allowed-values: ["false", "true", "on"]  # Allow GitHub Actions workflow triggers using `on`.
+  document-start: disable

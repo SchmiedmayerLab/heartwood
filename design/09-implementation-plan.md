@@ -1,3 +1,13 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
 # 09 — Implementation plan
 
 Delivery is phased by capability. Phase 0 proves one generic, synthetic-data vertical slice before platform breadth: CLI session → detected environment → confirmed skill → sandboxed Python analysis → aggregate result → policy/audit record → attestation. Notebook UI is a presentation adapter over the same session model.
@@ -17,7 +27,7 @@ The platform-agnostic core runs end-to-end in a plain Linux/Jupyter environment 
 
 ### 0A — Repository bootstrap and CI baseline
 
-- Add repository health files: `LICENSE`, `LICENSES/`, `GOVERNANCE.md`, `CONTRIBUTORS.md`, `CODEOWNERS`, `CONTRIBUTING.md`, `SECURITY.md`, `.gitignore`, `.pre-commit-config.yaml`, `.yamllint.yml`, `.linkspector.yml`, `.github/codecov.yml`, `.github/dependabot.yml`, PR template, and issue templates aligned with `SchmiedmayerLab/.github`.
+- Add repository-local health files: `LICENSE`, `LICENSES/`, `CONTRIBUTORS.md`, `.github/CODEOWNERS`, `.gitignore`, `.pre-commit-config.yaml`, `.yamllint.yml`, `.linkspector.yml`, `.github/codecov.yml`, and `.github/dependabot.yml`. Inherit the shared community health files (code of conduct, contributing guide, security policy, support, funding, and issue/PR templates) from the `SchmiedmayerLab/.github` organization repository rather than duplicating them.
 - Add a GitHub ruleset for the default branch: required PR review, CODEOWNERS review for owned paths, required status checks, linear history, and no direct pushes.
 - Add a repo-local `.github/workflows/validate.yml` orchestrator that mirrors the lab pattern: REUSE, actionlint, Markdown links, yamllint, and whitespace.
 - Call reusable `SchmiedmayerLab/.github` workflows for `reuse.yml`, `actionlint.yml`, and `markdown-links.yml`. Run yamllint and whitespace locally because the shared `validate.yml` is not a reusable workflow.
@@ -127,9 +137,8 @@ No separate marketplace, registry service, or platform-specific repo is needed f
 ## Repo layout
 
 ```
-/README.md  /ACRONYMS.md  /GOVERNANCE.md  /CONTRIBUTING.md  /SECURITY.md
-/CONTRIBUTORS.md  /LICENSE  /LICENSES/
-/.github                    # workflow callers, templates, codecov, dependabot
+/README.md  /ACRONYMS.md  /AGENTS.md  /CONTRIBUTORS.md  /LICENSE  /LICENSES/
+/.github                    # CODEOWNERS, workflow callers, codecov, dependabot
 /design                     # this documentation set
 /pyproject.toml  /uv.lock  /.pre-commit-config.yaml   # Python workspace + local hooks
 /packages

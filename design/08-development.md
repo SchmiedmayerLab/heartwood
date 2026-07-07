@@ -1,3 +1,13 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
 # 08 — Development practices
 
 Standards for building the tool itself.
@@ -18,7 +28,7 @@ Standards for building the tool itself.
 
 ## Repository hygiene
 
-Conventional Commits + semantic PR titles + generated changelog; `CODEOWNERS`, `CONTRIBUTING.md`, `SECURITY.md`, a Contributor Covenant code of conduct, and issue/PR templates; trunk-based with short-lived branches and required review. Protect the default branch with a GitHub ruleset: required status checks, CODEOWNERS review for owned paths, linear history, and no direct pushes.
+Conventional Commits + semantic PR titles + generated changelog; `CODEOWNERS` plus the community health files — code of conduct, contributing guide, security policy, and issue/PR templates — inherited from `SchmiedmayerLab/.github`; trunk-based with short-lived branches and required review. Protect the default branch with a GitHub ruleset: required status checks, CODEOWNERS review for owned paths, linear history, and no direct pushes.
 
 ## CI/CD
 

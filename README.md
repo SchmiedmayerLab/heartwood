@@ -1,3 +1,13 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
 # heartwood
 
 *Working name.* An open-source, compliance-first coding assistant for sensitive biomedical research data.
@@ -29,6 +39,64 @@ Participant-level data stays inside the platform boundary. Model calls go only t
 
 Reuse the agent loop; own the biomedical, platform, and compliance layer. Adopt standards (`SKILL.md`, MCP, GA4GH, Sigstore) instead of inventing private formats. Keep the core platform-agnostic, bridge each environment with thin adapters, and ship an air-gapped image that can be reviewed once and reused.
 
+## Try it
+
+Heartwood is early. The commands below run today from a checkout of this repository; the full end-to-end reference workflow (detect → confirm skill → cohort → QC → baseline → attestation) is being built phase by phase — see the [implementation plan](design/09-implementation-plan.md).
+
+The only prerequisites are [`uv`](https://docs.astral.sh/uv/) and `git`; `uv` fetches the pinned Python toolchain and dependencies.
+
+```bash
+uv sync                        # create the environment (from a checkout of this repo)
+uv run heartwood --version     # heartwood 0.0.0
+uv run heartwood detect        # inspect the environment and propose — nothing runs
+```
+
+`heartwood detect` runs the deterministic, propose-not-commit platform probe — no model call and no data access — and prints what it found and how confident it is. This is the "detection proposes, a human confirms" principle the whole system is built on:
+
+```text
+Heartwood — environment detection
+
+This is a proposal only. Nothing loads or runs without your confirmation.
+
+Platform: generic (confidence 1.00)
+  - no managed-platform environment markers detected
+
+Dataset detection and skill proposals are not implemented yet (see design/04-skills.md).
+```
+
+On a managed platform the probe reports it from environment markers alone — for example `Platform: dnanexus (confidence 0.90)` when it sees `DX_*` variables, or `terra` from `WORKSPACE_*` / `GOOGLE_PROJECT`.
+
+### The full workflow (roadmap)
+
+Once the session contract, skills, policy layer, and image land, a researcher will drive one guided flow from the CLI — or from a notebook widget attached to the same session:
+
+```text
+$ heartwood chat
+> summarize the diabetes cohort by age band
+detected OMOP (0.82) → propose skill `omop-cohort-summary`   [confirm] [pick] [why]
+> confirm
+… wrote and ran a query in the sandbox · called the in-perimeter model …
+returned aggregate counts (every cell ≥ 20 participants)
+
+$ heartwood audit export     # scrubbed audit bundle + egress attestation for review
+```
+
+Participant-level data never leaves the boundary; only reviewed, aggregate results do. See the [reference workflow](design/01-overview.md) and the [security model](design/05-security-compliance.md).
+
+### Developing
+
+Every check below runs in CI and can be run locally; all must pass before review:
+
+```bash
+uv run ruff format --check .   # formatting
+uv run ruff check .            # lint
+uv run mypy packages           # strict static types
+uv run pytest                  # tests + coverage gate
+reuse lint                     # REUSE / SPDX licensing
+```
+
+See the [Schmiedmayer Lab contributing guidelines](https://github.com/SchmiedmayerLab/.github/blob/main/CONTRIBUTING.md) for the contribution process.
+
 ## Documentation
 
 | Doc | Contents |
@@ -43,6 +111,10 @@ Reuse the agent loop; own the biomedical, platform, and compliance layer. Adopt 
 | [08 · Development](design/08-development.md) | Languages, linting, licensing, CI |
 | [09 · Implementation plan](design/09-implementation-plan.md) | Phased delivery, repo layout, open questions |
 
+## Governance
+
+Heartwood is maintained by the Stanford Schmiedmayer Lab under the [MIT license](LICENSE). Maintainers — listed in [CONTRIBUTORS.md](CONTRIBUTORS.md), with owned paths in [`.github/CODEOWNERS`](.github/CODEOWNERS) — review and merge changes and are accountable for the security and compliance posture. Project-direction changes update the relevant [`design/`](design) document first, and security- or compliance-relevant claims must be backed by tests, audit records, or a documented limitation. The code of conduct, contributing guide, and security policy follow the shared [Schmiedmayer Lab standards](https://github.com/SchmiedmayerLab/.github). Because Heartwood runs next to controlled data, contributors must never include PHI, credentials, or live-platform identifiers in issues, pull requests, tests, or fixtures — all fixtures are synthetic (see [security & compliance](design/05-security-compliance.md)).
+
 ## Status
 
-Pre-implementation design. MIT-licensed. Maintained by the Stanford Schmiedmayer Lab. Domain acronyms are tracked in [ACRONYMS.md](ACRONYMS.md).
+Early implementation. Phase 0A (repository health, CI, and the `uv` workspace) is in place, and the first vertical slice — the deterministic detector and the `heartwood` CLI — runs on synthetic input. The phased path to the full workflow is in the [implementation plan](design/09-implementation-plan.md). MIT-licensed. Maintained by the Stanford Schmiedmayer Lab. Domain acronyms are tracked in [ACRONYMS.md](ACRONYMS.md).

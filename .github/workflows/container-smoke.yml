@@ -1,0 +1,36 @@
+#
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+#
+
+# Scaffolded in phase 0A. The generic image is built in phase 0E; until the
+# Dockerfile exists this workflow runs on manual dispatch only and the build job
+# is skipped. Once images/generic/Dockerfile lands, extend the triggers to
+# pull_request and mark this a required status check.
+# See design/09-implementation-plan.md.
+
+name: Container Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    name: Synthetic end-to-end smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Build the generic image and run one synthetic command
+        if: ${{ hashFiles('images/generic/Dockerfile') != '' }}
+        run: docker compose -f images/generic/compose.yaml run --rm heartwood heartwood --help
