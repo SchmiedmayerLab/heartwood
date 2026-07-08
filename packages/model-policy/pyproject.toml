@@ -5,18 +5,14 @@
 # SPDX-License-Identifier: MIT
 
 [project]
-name = "heartwood-adapters"
+name = "heartwood-model-policy"
 version = "0.0.0"
-description = "Adapter service provider interfaces and conformance checks for Heartwood."
+description = "Deny-by-default model-call policy evaluation for Heartwood."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
-dependencies = [
-    "heartwood-detector",
-    "heartwood-model-policy",
-    "heartwood-schemas",
-]
+dependencies = ["heartwood-schemas"]
 
 [build-system]
 requires = ["hatchling"]
@@ -26,6 +22,4 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
-heartwood-detector = { workspace = true }
-heartwood-model-policy = { workspace = true }
 heartwood-schemas = { workspace = true }

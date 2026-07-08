@@ -12,4 +12,4 @@ SPDX-License-Identifier: MIT
 
 Service provider interfaces for platform, model-provider, data-source, and registry adapters.
 
-Phase 0B defines the protocols and conformance checks only. Generic/local adapter implementations arrive in Phase 0C.
+The package includes the shared adapter protocols, reusable conformance checks, and deterministic generic/local implementations used by the core harness tests.

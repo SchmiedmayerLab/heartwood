@@ -51,12 +51,16 @@ The platform-agnostic core runs end-to-end in a plain Linux/Jupyter environment 
 
 ### 0C — Core harness
 
-- Wrap the OpenHands SDK behind a minimal facade for agent sessions, tool execution, event logging, skill loading, and replay.
-- Implement the session service that accepts commands, emits structured events, and persists resumable state.
-- Implement the `generic` platform adapter, `local-fs` data adapter, and a deterministic fake/local model provider for tests.
-- Implement deterministic platform and dataset detection with propose-not-commit behavior, confidence scores, visible evidence, and logged human approval.
-- Implement the model policy layer with deny-egress defaults, allowed endpoint matching, capability-tier checks, and attestation records.
-- Persist session state and the hash-chained audit log on the workspace disk.
+- Add an SDK-neutral agent facade for sessions, tool execution summaries, event logging, and replay; keep the first backend deterministic and offline, and add the real OpenHands binding only after dependencies, policy gates, and replay behavior are pinned.
+- Build the session service that accepts commands, emits structured events, and persists resumable state.
+- Provide the `generic` platform adapter, `local-fs` data adapter, and a deterministic fake/local model provider for tests.
+- Keep platform and dataset detection deterministic with propose-not-commit behavior, confidence scores, visible evidence, and logged human approval.
+- Enforce the model policy layer with deny-egress defaults, exact normalized endpoint matching, malformed-endpoint deny behavior, capability-tier checks, credential filtering, and attestation records.
+- Persist session state and the hash-chained audit log on the workspace disk, verify the chain before export, and write scrubbed JSONL exports that omit prompt, response, row, and value payloads.
+- Keep local data access root-confined and deterministic; dataset fingerprints may use filenames and headers, but not row values.
+- Do not load skills, perform registry network lookups, or execute model calls implicitly before verification and explicit approval are represented in the session event stream.
+
+**Completion criteria:** the deterministic session service handles detection, approvals, model-call policy decisions, no-op tool execution, replay, and audit export through the shared command/event contract; generic/local adapters pass the conformance suite; model-policy tests prove exact endpoint allowlisting, malformed endpoint denial, capability-tier denial, and credential allowlisting; data-adapter tests prove root confinement and header-only fingerprinting; audit tests prove hash-chain verification, tamper detection, and scrubbed export; CLI detection runs through the session service and persists local state without network access; and the standard repository checks remain green.
 
 ### 0D — Prototype skills and replay
 
@@ -144,8 +148,8 @@ No separate marketplace, registry service, or platform-specific repo is needed f
 /design                     # this documentation set
 /pyproject.toml  /uv.lock  /.pre-commit-config.yaml   # Python workspace + local hooks
 /packages
-  /core-adapter             # facade over the OpenHands SDK
-  /adapters                 # adapter SPI protocols and conformance checks
+  /core-adapter             # session orchestration and agent backend facade
+  /adapters                 # adapter SPI protocols, conformance checks, and generic/local adapters
   /schemas                  # versioned policy, audit, detection, skill, and approval schemas
   /session                  # command/event API shared by all interfaces
   /fixtures                 # synthetic fixture linting and no-live-data checks
@@ -175,8 +179,8 @@ This is the linear ordering of the 0A–0E work; each item is a small, reviewabl
 5. Add synthetic OMOP-like fixtures and no-live-data fixture checks.
 6. Implement generic/local adapters and adapter conformance tests.
 7. Implement deny-egress policy tests and fake model-provider tests.
-8. Implement local `SKILL.md` verification and skill test harness.
-9. Implement hash-chained audit logging and sample attestation export.
+8. Implement deterministic session orchestration, the offline agent facade, local state persistence, hash-chained audit logging, and scrubbed audit export.
+9. Add local `SKILL.md` verification and the skill test harness.
 10. Build the interactive CLI over the session contract.
 11. Add the notebook API and minimal widget bridge over the same contract.
 12. Package the generic Docker image and run a Docker Compose smoke test in CI.

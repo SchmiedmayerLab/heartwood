@@ -5,17 +5,19 @@
 # SPDX-License-Identifier: MIT
 
 [project]
-name = "heartwood-adapters"
+name = "heartwood-core-adapter"
 version = "0.0.0"
-description = "Adapter service provider interfaces and conformance checks for Heartwood."
+description = "Core harness orchestration for Heartwood sessions."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
-    "heartwood-detector",
+    "heartwood-adapters",
+    "heartwood-audit",
     "heartwood-model-policy",
     "heartwood-schemas",
+    "heartwood-session",
 ]
 
 [build-system]
@@ -26,6 +28,8 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
-heartwood-detector = { workspace = true }
+heartwood-adapters = { workspace = true }
+heartwood-audit = { workspace = true }
 heartwood-model-policy = { workspace = true }
 heartwood-schemas = { workspace = true }
+heartwood-session = { workspace = true }

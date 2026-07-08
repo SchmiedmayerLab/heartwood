@@ -75,9 +75,12 @@ namespace_packages = true
 explicit_package_bases = true
 mypy_path = [
     "packages/adapters/src",
+    "packages/audit/src",
     "packages/cli/src",
+    "packages/core-adapter/src",
     "packages/detector/src",
     "packages/fixtures/src",
+    "packages/model-policy/src",
     "packages/schemas/src",
     "packages/session/src",
 ]

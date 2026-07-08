@@ -17,6 +17,7 @@ from heartwood.adapters._protocols import (
     PlatformAdapter,
     RegistryAdapter,
 )
+from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
 
 def _assert_confidence(value: float) -> None:
@@ -55,7 +56,13 @@ def assert_model_provider_adapter_conforms(
             purpose="synthetic conformance check",
         )
     decision = adapter.evaluate_model_call(request)
-    assert decision.endpoint == request.endpoint
+    if decision.endpoint != "[invalid-endpoint]":
+        try:
+            assert decision.endpoint == normalize_endpoint(request.endpoint)
+        except PolicyInputError:
+            assert decision.decision == "deny"
+    else:
+        assert decision.decision == "deny"
     assert decision.capability_tier == request.capability_tier
     assert decision.reason
     if default_request:
