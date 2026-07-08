@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
 
@@ -52,7 +53,7 @@ class SessionService:
         platform_adapter: PlatformAdapter,
         data_source_adapter: DataSourceAdapter,
         model_provider_adapter: ModelProviderAdapter,
-        backend: AgentBackend | None = None,
+        backend: AgentBackend,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
     ) -> None:
@@ -61,9 +62,9 @@ class SessionService:
         self.platform_adapter = platform_adapter
         self.data_source_adapter = data_source_adapter
         self.model_provider_adapter = model_provider_adapter
-        self.backend = DeterministicAgentBackend() if backend is None else backend
+        self.backend = backend
         self.env = os.environ if env is None else env
-        self.clock: Callable[[], str] = (lambda: "2026-01-01T00:00:00Z") if clock is None else clock
+        self.clock: Callable[[], str] = _utc_now if clock is None else clock
 
     @classmethod
     def synthetic_default(
@@ -82,8 +83,9 @@ class SessionService:
             platform_adapter=platform,
             data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
             model_provider_adapter=FakeLocalModelProviderAdapter(policy),
+            backend=DeterministicAgentBackend(),
             env={} if env is None else env,
-            clock=clock,
+            clock=(lambda: "2026-01-01T00:00:00Z") if clock is None else clock,
         )
 
     @classmethod
@@ -103,6 +105,7 @@ class SessionService:
             platform_adapter=platform,
             data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
             model_provider_adapter=FakeLocalModelProviderAdapter(policy),
+            backend=DeterministicAgentBackend(),
             env=os.environ if env is None else env,
             clock=clock,
         )
@@ -266,6 +269,10 @@ def _optional_string(value: JsonValue | None) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _kind_value(kind: CommandKind | str) -> str:

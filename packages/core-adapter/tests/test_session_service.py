@@ -64,6 +64,15 @@ def test_session_records_approval_and_resume_events(tmp_path: Path) -> None:
     assert events[-1].kind == EventKind.APPROVAL_RECORDED.value
 
 
+def test_session_store_next_sequence_is_cached_after_resume(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.DETECT))
+
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    assert store.next_sequence() == 2
+    assert store.next_sequence() == 3
+
+
 def test_session_run_records_policy_decision_without_prompt_content(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
     service.handle(
@@ -152,3 +161,10 @@ def test_session_rejects_mismatched_command_session(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="does not match store session"):
         service.handle(command)
+
+
+def test_local_default_uses_non_synthetic_clock(tmp_path: Path) -> None:
+    command = _command(CommandKind.DETECT).model_copy(update={"session_id": "session-local"})
+    result = SessionService.local_default(tmp_path, env={}).handle(command)
+
+    assert result.events[0].occurred_at != "2026-01-01T00:00:00Z"

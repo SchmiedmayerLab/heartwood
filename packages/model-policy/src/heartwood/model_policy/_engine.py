@@ -118,7 +118,7 @@ class ModelPolicyEngine:
                 endpoint=normalized_endpoint,
                 capability_tier=checked_capability_tier,
                 decision="deny",
-                reason=f"capability tier {capability_tier} is not allowed for autonomous calls",
+                reason=f"capability tier {capability_tier} is not allowed for {purpose}",
             )
 
         if self.profile.deny_egress_by_default and normalized_endpoint not in normalized_allowed:

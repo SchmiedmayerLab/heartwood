@@ -39,6 +39,7 @@ class FileSessionStore:
         self.events_path = self.session_dir / "events.jsonl"
         self.audit_path = self.session_dir / "audit.jsonl"
         self.audit_export_path = self.session_dir / "audit-export.jsonl"
+        self._next_sequence: int | None = None
 
     def append_command(self, command: SessionCommand) -> None:
         """Persist one command envelope."""
@@ -53,6 +54,8 @@ class FileSessionStore:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         with self.events_path.open("a", encoding="utf-8") as file:
             file.write(event.model_dump_json() + "\n")
+        if self._next_sequence is not None:
+            self._next_sequence = max(self._next_sequence, event.sequence + 1)
 
     def read_events(self) -> tuple[SessionEvent, ...]:
         """Read persisted session events."""
@@ -66,4 +69,8 @@ class FileSessionStore:
 
     def next_sequence(self) -> int:
         """Return the next session-event sequence number."""
-        return len(self.read_events())
+        if self._next_sequence is None:
+            self._next_sequence = len(self.read_events())
+        sequence = self._next_sequence
+        self._next_sequence += 1
+        return sequence
