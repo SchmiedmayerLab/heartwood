@@ -1,0 +1,10 @@
+{
+  "schema_version": "heartwood.detector-evidence.v1",
+  "detection_id": "detect-synthetic-generic",
+  "detector_kind": "platform",
+  "candidate_id": "generic",
+  "confidence": 1.0,
+  "evidence": [
+    "no managed-platform environment markers detected"
+  ]
+}

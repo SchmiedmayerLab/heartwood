@@ -1,0 +1,4 @@
+condition_occurrence_id,person_id,condition_concept_id,condition_start_year
+101,1,201826,2020
+102,2,316866,2021
+103,3,440383,2022

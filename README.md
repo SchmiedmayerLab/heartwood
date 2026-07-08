@@ -10,6 +10,13 @@ SPDX-License-Identifier: MIT
 
 # Heartwood
 
+[![Python](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/python.yml/badge.svg?branch=main)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/python.yml)
+[![Validate](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/validate.yml)
+[![CodeQL](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/codeql.yml)
+[![Secret Scan](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/gitleaks.yml/badge.svg?branch=main)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/gitleaks.yml)
+[![Dependency Review](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/dependency-review.yml/badge.svg?branch=main)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/dependency-review.yml)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+
 A Docker-packaged coding harness for sensitive biomedical research data.
 
 Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and a CLI-first workflow for reproducible analyses.
@@ -21,7 +28,7 @@ Participant-level data stays inside the platform boundary. Development and CI us
 
 Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The project uses a Python workspace, typed contracts, platform adapters, and a shared session command/event model for all user interfaces.
 
-The current repository contains the Phase 0A foundation: repository health files, CI, the `uv` workspace, package skeletons, a deterministic platform detector, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the Phase 0B foundation: repository health files, CI, the `uv` workspace, a deterministic platform detector, adapter protocols, versioned schemas, synthetic fixture checks, the shared session contract, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -40,9 +47,13 @@ The `detect` command inspects environment markers and prints a proposal. It does
 ## Repository Structure
 
 - [`design`](design) contains the project design record and implementation plan.
+- [`fixtures`](fixtures) contains synthetic test and schema-validation fixtures only.
+- [`packages/adapters`](packages/adapters) contains adapter protocols and conformance checks.
 - [`packages/cli`](packages/cli) contains the `heartwood` command-line interface.
 - [`packages/detector`](packages/detector) contains deterministic platform detection.
-- [`packages/session`](packages/session) contains the initial session package skeleton.
+- [`packages/fixtures`](packages/fixtures) contains no-live-data fixture linting.
+- [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
+- [`packages/session`](packages/session) contains the shared session command/event contract.
 
 
 ## Development
@@ -55,6 +66,7 @@ uv run ruff check .
 uv run mypy packages
 uv run pytest
 uv run reuse lint
+uv run heartwood-fixtures fixtures
 ```
 
 Do not add PHI, credentials, live-platform identifiers, or non-synthetic records to tests, fixtures, examples, issues, or pull requests.

@@ -1,0 +1,4 @@
+{
+  "description": "Synthetic generic environment with no managed-platform markers.",
+  "env": {}
+}

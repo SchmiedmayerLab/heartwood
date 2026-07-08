@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from heartwood.schemas import DetectorEvidence
+
 
 class Platform(StrEnum):
     """A supported execution platform, identified by its adapter id."""
@@ -102,3 +104,17 @@ def detect_platform(env: Mapping[str, str] | None = None) -> PlatformDetection:
         f"ambiguous: markers for {', '.join(others)} also present",
     )
     return PlatformDetection(platform=platform, confidence=0.5, evidence=evidence)
+
+
+def platform_detection_evidence(
+    detection: PlatformDetection,
+    detection_id: str,
+) -> DetectorEvidence:
+    """Convert a platform proposal into the shared detector-evidence schema."""
+    return DetectorEvidence(
+        detection_id=detection_id,
+        detector_kind="platform",
+        candidate_id=detection.platform.value,
+        confidence=detection.confidence,
+        evidence=detection.evidence,
+    )

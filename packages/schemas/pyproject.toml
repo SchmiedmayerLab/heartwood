@@ -5,14 +5,14 @@
 # SPDX-License-Identifier: MIT
 
 [project]
-name = "heartwood-detector"
+name = "heartwood-schemas"
 version = "0.0.0"
-description = "Deterministic, propose-not-commit environment and dataset detection for Heartwood."
+description = "Versioned typed schemas for Heartwood policy, audit, detection, and skill metadata records."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
-dependencies = ["heartwood-schemas"]
+dependencies = ["pydantic>=2.12"]
 
 [build-system]
 requires = ["hatchling"]
@@ -20,6 +20,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/heartwood"]
-
-[tool.uv.sources]
-heartwood-schemas = { workspace = true }

@@ -47,6 +47,8 @@ The platform-agnostic core runs end-to-end in a plain Linux/Jupyter environment 
 - Add conformance tests that every adapter implementation must pass.
 - Add fixture linting that rejects live identifiers, PHI-shaped values, secrets, and non-synthetic source markers.
 
+**Completion criteria:** the adapter protocols import cleanly, schema models validate representative fixture records and reject malformed records, the session command/event contract serializes to stable JSON-facing names, adapter conformance checks pass against deterministic fake implementations, the no-live-data fixture linter passes on checked-in synthetic fixtures and fails on seeded direct identifiers, secrets, and live-source markers, and the standard repository checks remain green.
+
 ### 0C — Core harness
 
 - Wrap the OpenHands SDK behind a minimal facade for agent sessions, tool execution, event logging, skill loading, and replay.
@@ -143,12 +145,15 @@ No separate marketplace, registry service, or platform-specific repo is needed f
 /pyproject.toml  /uv.lock  /.pre-commit-config.yaml   # Python workspace + local hooks
 /packages
   /core-adapter             # facade over the OpenHands SDK
+  /adapters                 # adapter SPI protocols and conformance checks
+  /schemas                  # versioned policy, audit, detection, skill, and approval schemas
   /session                  # command/event API shared by all interfaces
+  /fixtures                 # synthetic fixture linting and no-live-data checks
   /model-policy             # policy profiles, capability tiers, attestation
   /detector                 # environment/dataset detection
   /skills                   # verification gate + heartwood.* metadata semantics
   /audit                    # hash-chained log + scrubbed export
-  /adapters/{platform,model,data,registry}/*
+  /adapters/{platform,model,data,registry}/*   # concrete adapter implementations
   /mcp-servers              # data gateway, omop, fhir, drs, notebook
   /cli                      # primary interaction surface
   /notebook                 # Python API + ipywidgets presentation adapter
