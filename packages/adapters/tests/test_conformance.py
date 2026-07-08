@@ -82,13 +82,13 @@ class FakeModelProviderAdapter:
 class BadInvalidEndpointModelProviderAdapter(FakeModelProviderAdapter):
     """Model-provider adapter that violates invalid-endpoint denial semantics."""
 
-    def evaluate_model_call(self, request: ModelCallRequest) -> ModelCallDecision:
+    def evaluate_model_call(self, _request: ModelCallRequest) -> ModelCallDecision:
         """Return an allowed decision for an invalid endpoint sentinel."""
         return ModelCallDecision(
             decision_id="decision-1",
             policy_profile_id="generic-default",
             endpoint="[invalid-endpoint]",
-            capability_tier=request.capability_tier,
+            capability_tier="supervised",
             decision="allow",
             reason="invalid sentinel should not allow",
         )
