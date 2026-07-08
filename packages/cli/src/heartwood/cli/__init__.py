@@ -59,7 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``heartwood`` command and return a process exit code."""
+    """Run the ``heartwood`` command and return a process exit code.
+
+    Note that ``argparse`` raises :class:`SystemExit` for ``--version``,
+    ``--help``, and invalid arguments, so callers should also handle that in
+    addition to the returned exit code.
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "detect":
