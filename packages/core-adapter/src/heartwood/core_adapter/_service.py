@@ -227,7 +227,7 @@ class SessionService:
                 "scrubbed": True,
             },
         )
-        exported = self.audit_log.export_jsonl(scrub=True)
+        exported = self.audit_log.export_jsonl()
         self.store.audit_export_path.write_text(exported, encoding="utf-8")
         return event
 

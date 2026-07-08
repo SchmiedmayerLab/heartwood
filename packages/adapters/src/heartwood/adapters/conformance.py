@@ -61,6 +61,8 @@ def assert_model_provider_adapter_conforms(
             assert decision.endpoint == normalize_endpoint(request.endpoint)
         except PolicyInputError:
             assert decision.decision == "deny"
+    else:
+        assert decision.decision == "deny"
     assert decision.capability_tier == request.capability_tier
     assert decision.reason
     if default_request:

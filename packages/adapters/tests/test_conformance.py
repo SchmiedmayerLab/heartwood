@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import pytest
+
 from heartwood.adapters import (
     AdapterDetection,
     DatasetFingerprint,
@@ -74,6 +76,21 @@ class FakeModelProviderAdapter:
             capability_tier="supervised",
             decision="deny",
             reason="synthetic provider denies egress by default",
+        )
+
+
+class BadInvalidEndpointModelProviderAdapter(FakeModelProviderAdapter):
+    """Model-provider adapter that violates invalid-endpoint denial semantics."""
+
+    def evaluate_model_call(self, request: ModelCallRequest) -> ModelCallDecision:
+        """Return an allowed decision for an invalid endpoint sentinel."""
+        return ModelCallDecision(
+            decision_id="decision-1",
+            policy_profile_id="generic-default",
+            endpoint="[invalid-endpoint]",
+            capability_tier=request.capability_tier,
+            decision="allow",
+            reason="invalid sentinel should not allow",
         )
 
 
@@ -141,6 +158,11 @@ def test_platform_adapter_conformance() -> None:
 
 def test_model_provider_adapter_conformance() -> None:
     assert_model_provider_adapter_conforms(FakeModelProviderAdapter())
+
+
+def test_model_provider_conformance_rejects_invalid_endpoint_allow_decision() -> None:
+    with pytest.raises(AssertionError):
+        assert_model_provider_adapter_conforms(BadInvalidEndpointModelProviderAdapter())
 
 
 def test_data_source_adapter_conformance() -> None:

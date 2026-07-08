@@ -45,7 +45,7 @@ class LocalRegistryAdapter:
             msg = f"invalid local skill id: {skill_id}"
             raise RegistryBoundaryError(msg)
         path = (self.root / local_name).resolve()
-        if not _is_relative_to(path, self.root):
+        if not path.is_relative_to(self.root):
             msg = f"local skill path escapes registry root: {skill_id}"
             raise RegistryBoundaryError(msg)
         return SkillReference(skill_id=skill_id, version=version, source=str(path))
@@ -53,7 +53,7 @@ class LocalRegistryAdapter:
     def verify_skill(self, reference: SkillReference) -> RegistryVerification:
         """Verify that the local skill reference exists without loading it."""
         path = Path(reference.source).resolve()
-        if not _is_relative_to(path, self.root):
+        if not path.is_relative_to(self.root):
             return RegistryVerification(
                 verified=False,
                 reason="local skill source escapes registry root",
@@ -65,7 +65,3 @@ class LocalRegistryAdapter:
             "local skill metadata is present" if verified else "local skill metadata is missing"
         )
         return RegistryVerification(verified=verified, reason=reason)
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    return path == root or root in path.parents

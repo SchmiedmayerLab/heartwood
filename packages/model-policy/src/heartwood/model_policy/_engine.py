@@ -81,6 +81,9 @@ class ModelPolicyEngine:
     ) -> None:
         self.profile = profile
         self.allowed_capability_tiers = allowed_capability_tiers
+        self._normalized_allowed_endpoints = tuple(
+            normalize_endpoint(allowed) for allowed in self.profile.allowed_model_endpoints
+        )
 
     def evaluate(
         self,
@@ -95,12 +98,8 @@ class ModelPolicyEngine:
             msg = f"unsupported capability tier: {capability_tier}"
             raise PolicyInputError(msg)
         checked_capability_tier = cast(CapabilityTier, capability_tier)
-        normalized_allowed: tuple[str, ...]
         try:
             normalized_endpoint = normalize_endpoint(endpoint)
-            normalized_allowed = tuple(
-                normalize_endpoint(allowed) for allowed in self.profile.allowed_model_endpoints
-            )
         except PolicyInputError as error:
             return ModelCallDecision(
                 decision_id=decision_id,
@@ -121,7 +120,10 @@ class ModelPolicyEngine:
                 reason=f"capability tier {capability_tier} is not allowed for {purpose}",
             )
 
-        if self.profile.deny_egress_by_default and normalized_endpoint not in normalized_allowed:
+        if (
+            self.profile.deny_egress_by_default
+            and normalized_endpoint not in self._normalized_allowed_endpoints
+        ):
             return ModelCallDecision(
                 decision_id=decision_id,
                 policy_profile_id=self.profile.policy_id,

@@ -56,7 +56,7 @@ class AuditLog:
         occurred_at: str,
         payload: dict[str, JsonValue] | None = None,
     ) -> AuditEvent:
-        """Append a new event and return the persisted record."""
+        """Append a scrubbed event and return the persisted record."""
         events = self.read()
         if events:
             self.verify(events)
@@ -97,15 +97,13 @@ class AuditLog:
                 raise AuditIntegrityError(msg)
             previous_hash = event.event_hash
 
-    def export_jsonl(self, *, scrub: bool = True) -> str:
-        """Return a JSONL export of the current audit log."""
+    def export_jsonl(self) -> str:
+        """Return a JSONL export of the current scrubbed audit log."""
         self.verify()
         events = self.read()
         exported: list[str] = []
         for event in events:
             payload: dict[str, JsonValue] = event.model_dump(mode="json")
-            if scrub:
-                payload["payload"] = scrub_json_value(payload["payload"])
             exported.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         return "\n".join(exported) + ("\n" if exported else "")
 

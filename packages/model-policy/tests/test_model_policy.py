@@ -44,6 +44,39 @@ def test_policy_allows_exact_normalized_endpoint() -> None:
     assert decision.endpoint == "https://model.local.invalid/v1/chat"
 
 
+def test_policy_allows_unlisted_endpoint_when_default_deny_disabled() -> None:
+    profile = PolicyProfile(
+        policy_id="permissive",
+        platform_id="generic",
+        deny_egress_by_default=False,
+        allowed_model_endpoints=("https://model.local.invalid/v1/chat",),
+    )
+    decision = ModelPolicyEngine(profile).evaluate(
+        endpoint="https://public.example.invalid/v1/chat",
+        capability_tier="supervised",
+        decision_id="decision-1",
+        purpose="synthetic model call",
+    )
+    assert decision.decision == "allow"
+    assert decision.endpoint == "https://public.example.invalid/v1/chat"
+
+
+def test_policy_allows_local_scheme_endpoint() -> None:
+    profile = PolicyProfile(
+        policy_id="local-default",
+        platform_id="generic",
+        allowed_model_endpoints=("local://agent/v1/invoke",),
+    )
+    decision = ModelPolicyEngine(profile).evaluate(
+        endpoint="LOCAL://AGENT/v1/invoke",
+        capability_tier="supervised",
+        decision_id="decision-1",
+        purpose="synthetic model call",
+    )
+    assert decision.decision == "allow"
+    assert decision.endpoint == "local://agent/v1/invoke"
+
+
 @pytest.mark.parametrize(
     "endpoint",
     [
@@ -54,6 +87,7 @@ def test_policy_allows_exact_normalized_endpoint() -> None:
         "https://model.local.invalid/v1/chat/extra",
         "https://model.local.invalid/v1/chat?token=secret",
         "https://token@model.local.invalid/v1/chat",
+        "local://token@agent/v1/invoke",
         "not-a-url",
     ],
 )
@@ -76,6 +110,16 @@ def test_policy_masks_invalid_endpoint_in_decision_record() -> None:
     )
     assert decision.decision == "deny"
     assert decision.endpoint == "[invalid-endpoint]"
+
+
+def test_policy_rejects_invalid_allowlist_at_construction() -> None:
+    profile = PolicyProfile(
+        policy_id="bad-allowlist",
+        platform_id="generic",
+        allowed_model_endpoints=("https://token@model.local.invalid/v1/chat",),
+    )
+    with pytest.raises(PolicyInputError):
+        ModelPolicyEngine(profile)
 
 
 def test_policy_denies_experimental_autonomy() -> None:

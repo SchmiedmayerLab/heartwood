@@ -53,7 +53,10 @@ class LocalFilesystemDataSourceAdapter:
                 "condition_concept_id",
             },
         }.items():
-            columns = set(self.table_columns(table))
+            try:
+                columns = set(self.table_columns(table))
+            except DataSourceBoundaryError:
+                continue
             if expected_columns.issubset(columns):
                 evidence.append(f"found {table}.csv with expected headers")
                 confidence += 0.45

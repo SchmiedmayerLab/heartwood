@@ -41,6 +41,15 @@ def test_local_filesystem_data_adapter_uses_headers_for_fingerprint() -> None:
     assert all("headers" in item for item in fingerprint.evidence)
 
 
+def test_local_filesystem_data_adapter_handles_missing_fingerprint_tables(
+    tmp_path: Path,
+) -> None:
+    adapter = LocalFilesystemDataSourceAdapter(tmp_path)
+    fingerprint = adapter.fingerprint()
+    assert fingerprint.confidence == 0.0
+    assert fingerprint.evidence == ("no OMOP-like CSV headers detected",)
+
+
 def test_local_filesystem_data_adapter_blocks_path_escape(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
