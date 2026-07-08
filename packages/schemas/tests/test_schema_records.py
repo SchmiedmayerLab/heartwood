@@ -42,6 +42,12 @@ def test_schema_inventory_is_versioned() -> None:
         assert "schema_version" in schema["properties"]
 
 
+def test_schema_for_accepts_fully_qualified_schema_version() -> None:
+    policy = PolicyProfile(policy_id="generic-default", platform_id="generic")
+    schema = schema_for(policy.schema_version)
+    assert schema["properties"]["schema_version"]["const"] == "heartwood.policy-profile.v1"
+
+
 def test_policy_profile_rejects_extra_fields() -> None:
     with pytest.raises(ValidationError):
         PolicyProfile.model_validate(

@@ -26,6 +26,14 @@ def test_linter_rejects_direct_identifier(tmp_path: Path) -> None:
     assert findings[0].rule == "direct-identifier.email"
 
 
+def test_linter_rejects_parenthesized_phone_number(tmp_path: Path) -> None:
+    fixture = tmp_path / "bad.txt"
+    fixture.write_text("contact=(415) 555-1212\n", encoding="utf-8")
+    findings = lint_fixture_tree(tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule == "direct-identifier.phone"
+
+
 def test_linter_rejects_secret_shape(tmp_path: Path) -> None:
     fixture = tmp_path / "bad.env"
     fake_token = "ghp_" + ("1" * 36)

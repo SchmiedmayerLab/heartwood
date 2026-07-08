@@ -184,5 +184,6 @@ def schema_names() -> tuple[str, ...]:
 
 def schema_for(name: str) -> dict[str, Any]:
     """Return the JSON Schema for a named Heartwood schema version."""
-    model = _SCHEMA_MODELS[name]
+    key = name.removeprefix("heartwood.")
+    model = _SCHEMA_MODELS[key]
     return deepcopy(model.model_json_schema())

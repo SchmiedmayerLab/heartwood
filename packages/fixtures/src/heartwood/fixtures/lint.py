@@ -57,7 +57,7 @@ _RULES: tuple[_Rule, ...] = (
     ),
     _Rule(
         name="direct-identifier.phone",
-        pattern=re.compile(r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b"),
+        pattern=re.compile(r"(?<!\w)(?:\+1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b"),
         message="fixture contains a phone-number-shaped direct identifier",
     ),
     _Rule(
