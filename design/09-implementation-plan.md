@@ -69,6 +69,8 @@ The platform-agnostic core runs end-to-end in a plain Linux/Jupyter environment 
 - Add unit tests for each skill's scripts, schema, metadata, and export guards.
 - Add one replay fixture for the full synthetic workflow, including expected tool calls, policy decisions, audit events, aggregate output, and attestation.
 
+**Completion criteria:** local skill directories verify through a root-confined gate before activation; verified skills require signed-provenance placeholders, no runtime network requirement, declared tool lists, and approval copy; the three prototype skills run deterministically against synthetic OMOP-like fixtures; aggregate export tests prove sub-floor counts are suppressed; replay fixture validation ties the synthetic workflow to expected tool calls, policy decisions, audit events, outputs, and attestations; and the standard repository checks remain green.
+
 ### 0E — CLI, notebook bridge, image, and reviewer packet
 
 - Build one self-contained Docker image for the generic Linux/Jupyter path.

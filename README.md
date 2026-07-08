@@ -26,9 +26,9 @@ Participant-level data stays inside the platform boundary. Development and CI us
 
 ## Overview
 
-Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The project uses a Python workspace, typed contracts, platform adapters, a shared session command/event model, and deterministic offline harnesses for local development and CI.
+Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The project uses a Python workspace, typed contracts, platform adapters, verified local skills, a shared session command/event model, and deterministic offline harnesses for local development and CI.
 
-The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, prototype verified skills, replay fixtures, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -47,6 +47,7 @@ The `detect` command inspects environment markers, fingerprints the local synthe
 ## Repository Structure
 
 - [`design`](design) contains the project design record and implementation plan.
+- [`evals`](evals) contains synthetic replay fixtures.
 - [`fixtures`](fixtures) contains synthetic test and schema-validation fixtures only.
 - [`packages/adapters`](packages/adapters) contains adapter protocols, conformance checks, and generic/local adapter implementations.
 - [`packages/audit`](packages/audit) contains hash-chained audit logging and scrubbed export support.
@@ -57,6 +58,8 @@ The `detect` command inspects environment markers, fingerprints the local synthe
 - [`packages/model-policy`](packages/model-policy) contains deny-by-default model-call policy evaluation and attestation records.
 - [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
 - [`packages/session`](packages/session) contains the shared session command/event contract.
+- [`packages/skills`](packages/skills) contains local `SKILL.md` verification and deterministic skill test helpers.
+- [`skills`](skills) contains verified prototype skills.
 
 
 ## Development
@@ -69,7 +72,7 @@ uv run ruff check .
 uv run mypy packages
 uv run pytest
 uvx reuse lint
-uv run heartwood-fixtures fixtures
+uv run heartwood-fixtures fixtures skills evals
 ```
 
 Do not add PHI, credentials, live-platform identifiers, or non-synthetic records to tests, fixtures, examples, issues, or pull requests.

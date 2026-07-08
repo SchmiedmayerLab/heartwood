@@ -1,0 +1,62 @@
+{
+  "schema_version": "heartwood.replay-fixture.v1",
+  "fixture_id": "synthetic-omop-phase-0d",
+  "session_id": "session-synthetic-0d",
+  "skills": [
+    "heartwood.synthetic.omop-cohort-summary",
+    "heartwood.synthetic.aggregate-export",
+    "heartwood.synthetic.baseline-model"
+  ],
+  "expected_tool_calls": [
+    {
+      "skill_id": "heartwood.synthetic.omop-cohort-summary",
+      "tool_name": "omop-cohort-summary",
+      "output_ref": "outputs/cohort-summary.json"
+    },
+    {
+      "skill_id": "heartwood.synthetic.aggregate-export",
+      "tool_name": "aggregate-export",
+      "output_ref": "outputs/aggregate-export.json"
+    },
+    {
+      "skill_id": "heartwood.synthetic.baseline-model",
+      "tool_name": "baseline-model",
+      "output_ref": "outputs/baseline-model.json"
+    }
+  ],
+  "expected_policy_decisions": [
+    {
+      "decision_id": "decision-synthetic-model-call",
+      "decision": "allow",
+      "reason": "endpoint and capability tier are allowed for synthetic core harness run"
+    }
+  ],
+  "expected_audit_events": [
+    "command.received",
+    "detection.proposed",
+    "approval.recorded",
+    "model_call.decision.recorded",
+    "tool.execution.recorded",
+    "audit.export.recorded"
+  ],
+  "expected_outputs": {
+    "cohort_summary": {
+      "participant_count": 3,
+      "condition_occurrence_count": 3,
+      "exportable": false
+    },
+    "aggregate_export": {
+      "exported": false,
+      "suppressed": true,
+      "aggregate_count_floor": 20,
+      "suppressed_count_exported": false
+    },
+    "baseline_model": {
+      "model_type": "synthetic-condition-baseline",
+      "row_values_exported": false
+    }
+  },
+  "expected_attestations": [
+    "decision-synthetic-model-call"
+  ]
+}
