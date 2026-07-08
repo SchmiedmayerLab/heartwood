@@ -26,6 +26,7 @@ dist/
 venv/
 
 # Tooling caches
+.heartwood/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

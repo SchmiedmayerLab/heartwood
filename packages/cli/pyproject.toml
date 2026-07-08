@@ -12,7 +12,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
-dependencies = ["heartwood-detector"]
+dependencies = [
+    "heartwood-core-adapter",
+    "heartwood-session",
+]
 
 [project.scripts]
 heartwood = "heartwood.cli:main"
@@ -25,4 +28,5 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
-heartwood-detector = { workspace = true }
+heartwood-core-adapter = { workspace = true }
+heartwood-session = { workspace = true }

@@ -9,9 +9,12 @@ resolution-markers = [
 [manifest]
 members = [
     "heartwood-adapters",
+    "heartwood-audit",
     "heartwood-cli",
+    "heartwood-core-adapter",
     "heartwood-detector",
     "heartwood-fixtures",
+    "heartwood-model-policy",
     "heartwood-schemas",
     "heartwood-session",
 ]
@@ -177,6 +180,23 @@ name = "heartwood-adapters"
 version = "0.0.0"
 source = { editable = "packages/adapters" }
 dependencies = [
+    { name = "heartwood-detector" },
+    { name = "heartwood-model-policy" },
+    { name = "heartwood-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "heartwood-detector", editable = "packages/detector" },
+    { name = "heartwood-model-policy", editable = "packages/model-policy" },
+    { name = "heartwood-schemas", editable = "packages/schemas" },
+]
+
+[[package]]
+name = "heartwood-audit"
+version = "0.0.0"
+source = { editable = "packages/audit" }
+dependencies = [
     { name = "heartwood-schemas" },
 ]
 
@@ -188,11 +208,36 @@ name = "heartwood-cli"
 version = "0.0.0"
 source = { editable = "packages/cli" }
 dependencies = [
-    { name = "heartwood-detector" },
+    { name = "heartwood-core-adapter" },
+    { name = "heartwood-session" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "heartwood-detector", editable = "packages/detector" }]
+requires-dist = [
+    { name = "heartwood-core-adapter", editable = "packages/core-adapter" },
+    { name = "heartwood-session", editable = "packages/session" },
+]
+
+[[package]]
+name = "heartwood-core-adapter"
+version = "0.0.0"
+source = { editable = "packages/core-adapter" }
+dependencies = [
+    { name = "heartwood-adapters" },
+    { name = "heartwood-audit" },
+    { name = "heartwood-model-policy" },
+    { name = "heartwood-schemas" },
+    { name = "heartwood-session" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "heartwood-adapters", editable = "packages/adapters" },
+    { name = "heartwood-audit", editable = "packages/audit" },
+    { name = "heartwood-model-policy", editable = "packages/model-policy" },
+    { name = "heartwood-schemas", editable = "packages/schemas" },
+    { name = "heartwood-session", editable = "packages/session" },
+]
 
 [[package]]
 name = "heartwood-detector"
@@ -209,6 +254,17 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 name = "heartwood-fixtures"
 version = "0.0.0"
 source = { editable = "packages/fixtures" }
+
+[[package]]
+name = "heartwood-model-policy"
+version = "0.0.0"
+source = { editable = "packages/model-policy" }
+dependencies = [
+    { name = "heartwood-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-schemas"
