@@ -14,7 +14,6 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from re import Pattern
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +29,7 @@ class FixtureFinding:
 @dataclass(frozen=True, slots=True)
 class _Rule:
     name: str
-    pattern: Pattern[str]
+    pattern: re.Pattern[str]
     message: str
 
 
