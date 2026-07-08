@@ -27,7 +27,8 @@ def build_model(data_root: Path) -> dict[str, Any]:
     """Build a deterministic model artifact without row-level output."""
     person_rows = _read_table(data_root / "person.csv")
     condition_rows = _read_table(data_root / "condition_occurrence.csv")
-    participant_count = max(len(person_rows), 1)
+    person_ids = {row["person_id"] for row in person_rows if row.get("person_id")}
+    participant_count = max(len(person_ids), 1)
     condition_ratio = round(len(condition_rows) / participant_count, 4)
     return {
         "schema_version": "heartwood.skill-output.v1",

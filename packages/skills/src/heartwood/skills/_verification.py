@@ -11,8 +11,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Final, Literal, cast
+
+from pydantic import ValidationError
 
 from heartwood.schemas import ApprovalRecord, JsonValue, SkillMetadata
 
@@ -126,10 +129,21 @@ def load_skill_manifest(skill_root: Path) -> SkillManifest:
 
     frontmatter = _read_skill_frontmatter(skill_file)
     metadata_payload = _mapping(frontmatter.get("metadata"), "metadata")
-    skill_metadata = SkillMetadata.model_validate(metadata_payload)
-    file_metadata = SkillMetadata.model_validate(
-        json.loads(metadata_file.read_text(encoding="utf-8"))
-    )
+    try:
+        skill_metadata = SkillMetadata.model_validate(metadata_payload)
+    except ValidationError as error:
+        msg = "SKILL.md metadata is invalid"
+        raise SkillVerificationError(msg) from error
+    try:
+        metadata_json = json.loads(metadata_file.read_text(encoding="utf-8"))
+    except JSONDecodeError as error:
+        msg = "metadata.json is invalid JSON"
+        raise SkillVerificationError(msg) from error
+    try:
+        file_metadata = SkillMetadata.model_validate(metadata_json)
+    except ValidationError as error:
+        msg = "metadata.json is invalid"
+        raise SkillVerificationError(msg) from error
     if skill_metadata.model_dump(mode="json", by_alias=True) != file_metadata.model_dump(
         mode="json", by_alias=True
     ):

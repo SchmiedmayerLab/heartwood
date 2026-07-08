@@ -25,6 +25,9 @@ def _read_table(path: Path) -> list[dict[str, str]]:
 
 def build_summary(data_root: Path, *, aggregate_count_floor: int = 20) -> dict[str, Any]:
     """Build aggregate cohort counts and quality checks."""
+    if aggregate_count_floor < 0:
+        msg = "aggregate count floor must be non-negative"
+        raise ValueError(msg)
     person_rows = _read_table(data_root / "person.csv")
     condition_rows = _read_table(data_root / "condition_occurrence.csv")
     person_ids = {row["person_id"] for row in person_rows if row.get("person_id")}
@@ -54,11 +57,19 @@ def build_summary(data_root: Path, *, aggregate_count_floor: int = 20) -> dict[s
     }
 
 
+def _non_negative_int(value: str) -> int:
+    floor = int(value)
+    if floor < 0:
+        msg = "aggregate count floor must be non-negative"
+        raise argparse.ArgumentTypeError(msg)
+    return floor
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize synthetic OMOP-like tables.")
     parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--aggregate-count-floor", default=20, type=int)
+    parser.add_argument("--aggregate-count-floor", default=20, type=_non_negative_int)
     return parser
 
 

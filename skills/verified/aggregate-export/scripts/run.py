@@ -28,6 +28,9 @@ def build_export(
     summary: Mapping[str, object], *, aggregate_count_floor: int = 20
 ) -> dict[str, Any]:
     """Build an aggregate export decision from a cohort summary."""
+    if aggregate_count_floor < 0:
+        msg = "aggregate count floor must be non-negative"
+        raise ValueError(msg)
     summary_payload = _mapping(summary.get("summary"), "summary")
     participant_count = int(summary_payload.get("participant_count", 0))
     if participant_count < aggregate_count_floor:
@@ -54,11 +57,19 @@ def build_export(
     }
 
 
+def _non_negative_int(value: str) -> int:
+    floor = int(value)
+    if floor < 0:
+        msg = "aggregate count floor must be non-negative"
+        raise argparse.ArgumentTypeError(msg)
+    return floor
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apply aggregate export guards.")
     parser.add_argument("--summary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--aggregate-count-floor", default=20, type=int)
+    parser.add_argument("--aggregate-count-floor", default=20, type=_non_negative_int)
     return parser
 
 

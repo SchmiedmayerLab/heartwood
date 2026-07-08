@@ -158,6 +158,20 @@ def test_verifier_rejects_mismatched_metadata(tmp_path: Path) -> None:
         load_skill_manifest(skill_root)
 
 
+def test_verifier_returns_failed_result_for_invalid_metadata(tmp_path: Path) -> None:
+    skill_root = _write_skill(tmp_path)
+    (skill_root / "metadata.json").write_text("{invalid json\n", encoding="utf-8")
+    result = LocalSkillVerifier(tmp_path).verify(skill_root)
+    assert result.verified is False
+    assert result.reason == "metadata.json is invalid JSON"
+
+    invalid_frontmatter_root = tmp_path / "invalid-frontmatter"
+    skill_root = _write_skill(invalid_frontmatter_root, signature=None)
+    result = LocalSkillVerifier(invalid_frontmatter_root).verify(skill_root)
+    assert result.verified is False
+    assert result.reason == "SKILL.md metadata is invalid"
+
+
 def test_verifier_rejects_missing_manifest_files(tmp_path: Path) -> None:
     skill_root = tmp_path / "missing"
     skill_root.mkdir()

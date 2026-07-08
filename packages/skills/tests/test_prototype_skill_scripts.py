@@ -9,7 +9,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from heartwood.skills import LocalSkillVerifier, SkillTestHarness
 
@@ -47,6 +50,22 @@ def test_omop_cohort_summary_script_emits_qc_and_export_guard(tmp_path: Path) ->
     assert export_guard["exportable"] is False
 
 
+def test_omop_cohort_summary_script_rejects_negative_floor(tmp_path: Path) -> None:
+    manifest = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "omop-cohort-summary")
+    output = tmp_path / "cohort-summary.json"
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        SkillTestHarness(_SKILLS_ROOT).run(
+            manifest,
+            "--data-root",
+            str(_DATA_ROOT),
+            "--output",
+            str(output),
+            "--aggregate-count-floor",
+            "-1",
+        )
+    assert "aggregate count floor must be non-negative" in error.value.stderr
+
+
 def test_aggregate_export_script_suppresses_low_counts(tmp_path: Path) -> None:
     verifier = LocalSkillVerifier(_SKILLS_ROOT)
     cohort = verifier.load_manifest(_SKILLS_ROOT / "omop-cohort-summary")
@@ -62,6 +81,24 @@ def test_aggregate_export_script_suppresses_low_counts(tmp_path: Path) -> None:
     assert payload["suppressed"] is True
     assert payload["aggregates"] == {}
     assert "participant_count" not in json.dumps(payload["aggregates"])
+
+
+def test_aggregate_export_script_rejects_negative_floor(tmp_path: Path) -> None:
+    export = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "aggregate-export")
+    summary_path = tmp_path / "cohort-summary.json"
+    output_path = tmp_path / "aggregate-export.json"
+    summary_path.write_text(json.dumps({"summary": {"participant_count": 3}}), encoding="utf-8")
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        SkillTestHarness(_SKILLS_ROOT).run(
+            export,
+            "--summary",
+            str(summary_path),
+            "--output",
+            str(output_path),
+            "--aggregate-count-floor",
+            "-1",
+        )
+    assert "aggregate count floor must be non-negative" in error.value.stderr
 
 
 def test_aggregate_export_script_exports_when_floor_is_satisfied(tmp_path: Path) -> None:
