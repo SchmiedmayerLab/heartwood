@@ -1,0 +1,28 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "heartwood.skill-bundle.v1"
+
+[[skills]]
+skill_id = "heartwood.synthetic.omop-cohort-summary"
+
+[skills.source]
+type = "local"
+path = "verified/omop-cohort-summary"
+
+[[skills]]
+skill_id = "heartwood.synthetic.aggregate-export"
+
+[skills.source]
+type = "local"
+path = "verified/aggregate-export"
+
+[[skills]]
+skill_id = "heartwood.synthetic.baseline-model"
+
+[skills.source]
+type = "local"
+path = "verified/baseline-model"

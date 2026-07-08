@@ -17,6 +17,7 @@ members = [
     "heartwood-model-policy",
     "heartwood-schemas",
     "heartwood-session",
+    "heartwood-skills",
 ]
 
 [manifest.dependency-groups]
@@ -287,6 +288,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
+
+[[package]]
+name = "heartwood-skills"
+version = "0.0.0"
+source = { editable = "packages/skills" }
+dependencies = [
+    { name = "heartwood-schemas" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "heartwood-schemas", editable = "packages/schemas" },
+    { name = "pydantic" },
+]
 
 [[package]]
 name = "iniconfig"
