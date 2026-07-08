@@ -1,3 +1,13 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
 # 07 — Testing and evaluation
 
 Verification is the guardrail against low-quality generated output, and it runs without touching PHI. Quality gates block merges and releases; they never slow a researcher's live session.

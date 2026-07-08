@@ -1,0 +1,61 @@
+#
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+#
+
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  reuse:
+    name: REUSE Compliance
+    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.2.4
+  actionlint:
+    name: Lint GitHub Actions Workflows
+    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@v0.2.4
+  markdown-links:
+    name: Check Markdown Links
+    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@v0.2.4
+  yamllint:
+    name: Lint YAML
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+      - name: Install yamllint
+        run: pip install yamllint
+      - name: Run yamllint
+        run: yamllint -c .yamllint.yml .
+  whitespace:
+    name: Check Whitespace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check trailing whitespace
+        run: |
+          if git grep -nI '[[:blank:]]$' -- .; then
+            echo "Trailing whitespace found."
+            exit 1
+          fi

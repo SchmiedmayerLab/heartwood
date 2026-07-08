@@ -1,3 +1,13 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
 # 05 — Security and compliance
 
 ## Threat model
@@ -33,4 +43,4 @@ Per platform, heartwood ships a copy-paste kit that turns per-site review into a
 
 ## Governance
 
-The initial maintenance home is the **Stanford Schmiedmayer Lab**, with a written `GOVERNANCE.md` and a succession plan. Later phases add external maintainers and, once there is traction, a neutral home (e.g. the Linux Foundation Agentic AI Foundation or a bio-consortium). A realistic funding model underwrites long-term maintenance.
+The initial maintenance home is the **Stanford Schmiedmayer Lab**, with documented governance and a succession plan. Later phases add external maintainers and, once there is traction, a neutral home (e.g. the Linux Foundation Agentic AI Foundation or a bio-consortium). A realistic funding model underwrites long-term maintenance.

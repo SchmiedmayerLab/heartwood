@@ -1,3 +1,13 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
 # Acronyms & glossary
 
 A running reference for the acronyms and named tools used across this project (medical data, genomics, cloud platforms, and agent tooling).

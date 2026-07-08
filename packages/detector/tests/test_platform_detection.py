@@ -1,0 +1,57 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+"""Unit tests for deterministic platform detection against synthetic env fixtures."""
+
+from __future__ import annotations
+
+import pytest
+
+from heartwood.detector import Platform, PlatformDetection, detect_platform
+
+
+def test_generic_when_no_markers() -> None:
+    detection = detect_platform({})
+    assert detection.platform is Platform.GENERIC
+    assert detection.confidence == 1.0
+    assert detection.evidence
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"GOOGLE_PROJECT": "aou-synthetic"}, Platform.TERRA),
+        ({"WORKSPACE_NAMESPACE": "ns", "WORKSPACE_BUCKET": "gs://b"}, Platform.TERRA),
+        ({"DX_JOB_ID": "job-xxxx"}, Platform.DNANEXUS),
+        ({"SB_API_ENDPOINT": "https://api.sbgenomics.com"}, Platform.SEVEN_BRIDGES),
+    ],
+)
+def test_managed_platform_detected(env: dict[str, str], expected: Platform) -> None:
+    detection = detect_platform(env)
+    assert detection.platform is expected
+    assert 0.9 <= detection.confidence <= 0.99
+    assert detection.evidence
+
+
+def test_more_markers_increase_confidence() -> None:
+    one = detect_platform({"WORKSPACE_NAMESPACE": "ns"})
+    many = detect_platform(
+        {"WORKSPACE_NAMESPACE": "ns", "WORKSPACE_BUCKET": "b", "GOOGLE_PROJECT": "p"}
+    )
+    assert many.confidence > one.confidence
+
+
+def test_ambiguous_markers_lower_confidence() -> None:
+    detection = detect_platform({"GOOGLE_PROJECT": "p", "DX_JOB_ID": "j"})
+    assert detection.platform in {Platform.TERRA, Platform.DNANEXUS}
+    assert detection.confidence == 0.5
+    assert any("ambiguous" in item for item in detection.evidence)
+
+
+def test_default_reads_process_environment() -> None:
+    detection = detect_platform()
+    assert isinstance(detection, PlatformDetection)
+    assert isinstance(detection.platform, Platform)
