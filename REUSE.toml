@@ -20,6 +20,8 @@ path = [
     "fixtures/**/*.csv",
     "fixtures/**/*.json",
     "fixtures/**/*.jsonl",
+    "skills/**/*.json",
+    "evals/**/*.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"

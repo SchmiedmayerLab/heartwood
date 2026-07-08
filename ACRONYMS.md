@@ -73,6 +73,7 @@ A running reference for the acronyms and named tools used across this project (m
 | SBOM | Software Bill of Materials | Inventory of components/dependencies in a build |
 | CMEK | Customer-Managed Encryption Keys | Cloud encryption with customer-controlled keys |
 | OIDC | OpenID Connect | Identity layer; used for CI "trusted publishing" of signed artifacts |
+| SHA | Secure Hash Algorithm | Family of cryptographic hashes; SHA-256 is used for content pinning |
 | SPDX | Software Package Data Exchange | Standard for per-file license/copyright metadata (used by REUSE) |
 | TLS | Transport Layer Security | Encryption protocol used to secure network connections |
 
@@ -139,6 +140,7 @@ A running reference for the acronyms and named tools used across this project (m
 | PyPI | Python Package Index | Public Python package registry; blocked at runtime in the air-gapped image |
 | IDE | Integrated Development Environment | Code editor + tooling (VS Code, JetBrains) |
 | JSON | JavaScript Object Notation | Lightweight structured-data format used for schemas and events |
+| TOML | Tom's Obvious Minimal Language | Configuration format used for Python project metadata and the skill bundle catalog |
 | YAML | YAML Ain't Markup Language | Human-readable configuration format used for workflows and metadata |
 | NDJSON | Newline-Delimited JSON | One JSON record per line; the FHIR bulk-export format |
 | FFI | Foreign Function Interface | Calling one language's code from another |

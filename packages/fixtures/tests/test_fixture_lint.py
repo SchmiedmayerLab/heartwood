@@ -47,6 +47,13 @@ def test_linter_rejects_secret_shape(tmp_path: Path) -> None:
     assert any(finding.rule == "secret.github-token" for finding in findings)
 
 
+def test_linter_checks_toml_files(tmp_path: Path) -> None:
+    fixture = tmp_path / "bundle.toml"
+    fixture.write_text('source = "production"\n', encoding="utf-8")
+    findings = lint_fixture_tree(tmp_path)
+    assert findings[0].rule == "live-source-marker"
+
+
 def test_linter_rejects_provider_key_with_separators(tmp_path: Path) -> None:
     fixture = tmp_path / "bad.txt"
     fake_key = "sk-" + "proj-" + ("a" * 32)
