@@ -22,6 +22,7 @@ from heartwood.adapters import (
     assert_platform_adapter_conforms,
     assert_registry_adapter_conforms,
 )
+from heartwood.model_policy import normalize_endpoint
 from heartwood.schemas import JsonValue, ModelCallDecision, PolicyProfile
 
 
@@ -69,7 +70,7 @@ class FakeModelProviderAdapter:
         return ModelCallDecision(
             decision_id="decision-1",
             policy_profile_id="generic-default",
-            endpoint=request.endpoint,
+            endpoint=normalize_endpoint(request.endpoint),
             capability_tier="supervised",
             decision="deny",
             reason="synthetic provider denies egress by default",

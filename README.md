@@ -26,9 +26,9 @@ Participant-level data stays inside the platform boundary. Development and CI us
 
 ## Overview
 
-Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The project uses a Python workspace, typed contracts, platform adapters, and a shared session command/event model for all user interfaces.
+Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The project uses a Python workspace, typed contracts, platform adapters, a shared session command/event model, and deterministic offline harnesses for local development and CI.
 
-The current repository contains the Phase 0B foundation: repository health files, CI, the `uv` workspace, a deterministic platform detector, adapter protocols, versioned schemas, synthetic fixture checks, the shared session contract, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -41,17 +41,20 @@ uv run heartwood --version
 uv run heartwood detect
 ```
 
-The `detect` command inspects environment markers and prints a proposal. It does not access data and does not make model calls.
+The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. It does not read row values and does not make model calls.
 
 
 ## Repository Structure
 
 - [`design`](design) contains the project design record and implementation plan.
 - [`fixtures`](fixtures) contains synthetic test and schema-validation fixtures only.
-- [`packages/adapters`](packages/adapters) contains adapter protocols and conformance checks.
+- [`packages/adapters`](packages/adapters) contains adapter protocols, conformance checks, and generic/local adapter implementations.
+- [`packages/audit`](packages/audit) contains hash-chained audit logging and scrubbed export support.
 - [`packages/cli`](packages/cli) contains the `heartwood` command-line interface.
+- [`packages/core-adapter`](packages/core-adapter) contains session orchestration and the deterministic offline agent facade.
 - [`packages/detector`](packages/detector) contains deterministic platform detection.
 - [`packages/fixtures`](packages/fixtures) contains no-live-data fixture linting.
+- [`packages/model-policy`](packages/model-policy) contains deny-by-default model-call policy evaluation and attestation records.
 - [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
 - [`packages/session`](packages/session) contains the shared session command/event contract.
 
@@ -65,7 +68,7 @@ uv run ruff format --check .
 uv run ruff check .
 uv run mypy packages
 uv run pytest
-uv run reuse lint
+uvx reuse lint
 uv run heartwood-fixtures fixtures
 ```
 
