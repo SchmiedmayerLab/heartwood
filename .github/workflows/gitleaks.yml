@@ -35,6 +35,11 @@ jobs:
         env:
           GITLEAKS_VERSION: 8.30.1
         run: |
-          base="https://github.com/gitleaks/gitleaks/releases/download"
-          curl -sSfL "${base}/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xzf - gitleaks
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          checksums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          curl -sSfLO "${base}/${asset}"
+          curl -sSfLO "${base}/${checksums}"
+          grep " ${asset}$" "${checksums}" | sha256sum --check -
+          tar -xzf "${asset}" gitleaks
           ./gitleaks git . --no-banner --redact --exit-code 1
