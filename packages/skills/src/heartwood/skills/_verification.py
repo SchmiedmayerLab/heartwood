@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from json import JSONDecodeError
 from pathlib import Path
 from typing import Final, Literal, cast
 
@@ -136,7 +135,7 @@ def load_skill_manifest(skill_root: Path) -> SkillManifest:
         raise SkillVerificationError(msg) from error
     try:
         metadata_json = json.loads(metadata_file.read_text(encoding="utf-8"))
-    except JSONDecodeError as error:
+    except json.JSONDecodeError as error:
         msg = "metadata.json is invalid JSON"
         raise SkillVerificationError(msg) from error
     try:
