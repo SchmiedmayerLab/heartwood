@@ -26,7 +26,7 @@ The current repository contains the Phase 0A foundation: repository health files
 
 ## Usage
 
-Install [`uv`](https://docs.astral.sh/uv/) and clone this repository:
+Install [`uv`](https://docs.astral.sh/uv/) and run the local commands from a repository checkout:
 
 ```bash
 uv sync
@@ -81,7 +81,7 @@ Because Heartwood runs next to controlled data, contributors must never include 
 
 ## License
 
-This project is licensed under the MIT License. See [Licenses](LICENSES) for more information.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for more information.
 
 ## Our Research
 
