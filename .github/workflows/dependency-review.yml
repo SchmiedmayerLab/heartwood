@@ -25,5 +25,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Review dependencies
         uses: actions/dependency-review-action@v5.0.0

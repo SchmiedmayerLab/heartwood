@@ -31,6 +31,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Build the generic image and run one synthetic command
         if: ${{ hashFiles('images/generic/Dockerfile') != '' }}
         run: docker compose -f images/generic/compose.yaml run --rm heartwood heartwood --help
