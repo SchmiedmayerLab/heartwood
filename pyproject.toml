@@ -1,0 +1,98 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Virtual workspace root: shared dev tooling and configuration for every member
+# package under packages/*. The root itself is not a distributable package.
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14",
+    "mypy>=1.18",
+    "pytest>=8.4",
+    "pytest-cov>=7.0",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff — linting and formatting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # flake8-bugbear
+    "A",         # flake8-builtins
+    "C4",        # flake8-comprehensions
+    "SIM",       # flake8-simplify
+    "PTH",       # flake8-use-pathlib
+    "PT",        # flake8-pytest-style
+    "TID",       # flake8-tidy-imports
+    "ARG",       # flake8-unused-arguments
+    "ERA",       # eradicate (commented-out code)
+    "D",         # pydocstyle
+    "ANN",       # flake8-annotations
+    "RUF",       # ruff-specific
+]
+# D203/D213 conflict with D211/D212 (the ruff-recommended defaults).
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["heartwood"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# ---------------------------------------------------------------------------
+# mypy — strict static typing
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = ["packages/session/src", "packages/detector/src", "packages/cli/src"]
+
+# ---------------------------------------------------------------------------
+# pytest + coverage
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib --cov=heartwood --cov-report=term-missing"
+testpaths = ["packages"]
+
+[tool.coverage.run]
+branch = true
+source_pkgs = ["heartwood"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "if __name__ == .__main__.:",
+]

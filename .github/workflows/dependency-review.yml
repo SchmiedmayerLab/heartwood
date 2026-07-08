@@ -1,0 +1,31 @@
+#
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+#
+
+name: Dependency Review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Review dependency changes
+    runs-on: ubuntu-latest
+    # Dependency review needs the GitHub dependency graph, which requires a
+    # public repository or GitHub Advanced Security. This job is skipped while
+    # the repository is private and runs automatically once it is public.
+    if: ${{ github.event.repository.private == false }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Review dependencies
+        uses: actions/dependency-review-action@v5.0.0
