@@ -65,11 +65,12 @@ The platform-agnostic core runs end-to-end in a plain Linux/Jupyter environment 
 ### 0D — Prototype skills and replay
 
 - Implement the skill verification gate for local `SKILL.md` directories: metadata schema, trust tier, signature placeholder, network requirement, declared tools, approval copy, and approval log record.
+- Add a repository-local skill bundle catalog that lists packaged skills, resolves local checked-in skill directories through the verifier, and validates external git import specifications with semver refs, resolved commits, content hashes, `heartwood.*` metadata, and source provenance.
 - Ship three verified prototype skills: OMOP cohort summary with QC checks, aggregate export with the 20-participant floor, and a baseline model over synthetic data.
 - Add unit tests for each skill's scripts, schema, metadata, and export guards.
 - Add one replay fixture for the full synthetic workflow, including expected tool calls, policy decisions, audit events, aggregate output, and attestation.
 
-**Completion criteria:** local skill directories verify through a root-confined gate before activation; verified skills require signed-provenance placeholders, no runtime network requirement, declared tool lists, and approval copy; the three prototype skills run deterministically against synthetic OMOP-like fixtures; aggregate export tests prove sub-floor counts are suppressed; replay fixture validation ties the synthetic workflow to expected tool calls, policy decisions, audit events, outputs, and attestations; and the standard repository checks remain green.
+**Completion criteria:** local skill directories verify through a root-confined gate before activation; verified skills require signed-provenance placeholders, no runtime network requirement, declared tool lists, and approval copy; `skills/bundle.toml` resolves the checked-in verified skills and rejects unpinned or undescribed external imports; the three prototype skills run deterministically against synthetic OMOP-like fixtures; aggregate export tests prove sub-floor counts are suppressed; replay fixture validation ties the synthetic workflow to expected tool calls, policy decisions, audit events, outputs, and attestations; and the standard repository checks remain green.
 
 ### 0E — CLI, notebook bridge, image, and reviewer packet
 
@@ -163,7 +164,7 @@ No separate marketplace, registry service, or platform-specific repo is needed f
   /mcp-servers              # data gateway, omop, fhir, drs, notebook
   /cli                      # primary interaction surface
   /notebook                 # Python API + ipywidgets presentation adapter
-/skills                     # SKILL.md dirs (verified/ community/ experimental/)
+/skills                     # bundle catalog + SKILL.md dirs (verified/ community/ experimental/)
 /compliance                 # templates and generated reviewer packets
 /images                     # generic and platform Dockerfiles
 /evals                      # replay suites, skill evals, benchmark harness

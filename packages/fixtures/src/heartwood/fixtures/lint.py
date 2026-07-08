@@ -40,6 +40,7 @@ _TEXT_SUFFIXES = {
     ".jsonl",
     ".md",
     ".txt",
+    ".toml",
     ".yaml",
     ".yml",
 }
