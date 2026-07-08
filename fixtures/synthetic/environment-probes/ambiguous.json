@@ -1,0 +1,7 @@
+{
+  "description": "Synthetic ambiguous managed-platform markers.",
+  "env": {
+    "GOOGLE_PROJECT": "synthetic-heartwood-project",
+    "DX_JOB_ID": "job-synthetic"
+  }
+}

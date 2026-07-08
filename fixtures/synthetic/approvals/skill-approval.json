@@ -1,0 +1,11 @@
+{
+  "schema_version": "heartwood.approval-record.v1",
+  "approval_id": "approval-synthetic-skill",
+  "session_id": "session-synthetic-001",
+  "target_type": "skill",
+  "target_id": "heartwood.synthetic.omop-summary",
+  "decision": "approved",
+  "actor_id": "synthetic-reviewer",
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "reason": "synthetic fixture approval"
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "heartwood.policy-profile.v1",
+  "policy_id": "generic-default",
+  "platform_id": "generic",
+  "deny_egress_by_default": true,
+  "allowed_model_endpoints": [],
+  "credential_allowlist": [],
+  "aggregate_count_floor": 20,
+  "notes": "Synthetic default policy for Phase 0B schema validation."
+}
