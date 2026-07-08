@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ def _write_skill(
     metadata_requires_network: str = "false",
     frontmatter_requires_network: str = "false",
     trust_tier: str = "verified",
-    signature: str = "sigstore:synthetic-fixture",
+    signature: str | None = "sigstore:synthetic-fixture",
     tools: str = "read-local-csv",
     entrypoint: str = "scripts/run.py",
 ) -> Path:
@@ -37,18 +38,22 @@ def _write_skill(
     scripts = skill_root / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "run.py").write_text("print('offline placeholder')\n", encoding="utf-8")
-    metadata = f"""{{
-  "schema_version": "heartwood.skill-metadata.v1",
-  "heartwood.dataset-types": "omop-cdm",
-  "heartwood.platforms": "generic",
-  "heartwood.phi-risk": "none",
-  "heartwood.trust-tier": "{trust_tier}",
-  "heartwood.requires-network": "{metadata_requires_network}",
-  "heartwood.version": "0.1.0",
-  "heartwood.sig": "{signature}"
-}}
-"""
-    (skill_root / "metadata.json").write_text(metadata, encoding="utf-8")
+    metadata = {
+        "schema_version": "heartwood.skill-metadata.v1",
+        "heartwood.dataset-types": "omop-cdm",
+        "heartwood.platforms": "generic",
+        "heartwood.phi-risk": "none",
+        "heartwood.trust-tier": trust_tier,
+        "heartwood.requires-network": metadata_requires_network,
+        "heartwood.version": "0.1.0",
+    }
+    if signature is not None:
+        metadata["heartwood.sig"] = signature
+    (skill_root / "metadata.json").write_text(
+        json.dumps(metadata, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    signature_frontmatter = f'  heartwood.sig: "{signature}"\n' if signature is not None else ""
     (skill_root / "SKILL.md").write_text(
         f"""---
 id: "heartwood.synthetic.test-skill"
@@ -64,7 +69,7 @@ metadata:
   heartwood.trust-tier: "{trust_tier}"
   heartwood.requires-network: "{frontmatter_requires_network}"
   heartwood.version: "0.1.0"
-  heartwood.sig: "{signature}"
+{signature_frontmatter.rstrip()}
 ---
 
 # Synthetic Skill
@@ -112,10 +117,18 @@ def test_verifier_rejects_network_required_skill(tmp_path: Path) -> None:
 
 
 def test_verifier_rejects_community_skill_in_verified_gate(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, trust_tier="community", signature="")
+    skill_root = _write_skill(tmp_path, trust_tier="community", signature=None)
     result = LocalSkillVerifier(tmp_path).verify(skill_root)
     assert result.verified is False
     assert result.reason == "only verified skills can pass this local gate"
+
+
+def test_verifier_allows_unsigned_community_skill_when_gate_allows_it(tmp_path: Path) -> None:
+    skill_root = _write_skill(tmp_path, trust_tier="community", signature=None)
+    result = LocalSkillVerifier(tmp_path, require_verified_tier=False).verify(skill_root)
+    assert result.verified is True
+    assert result.manifest is not None
+    assert result.manifest.metadata.signature is None
 
 
 def test_verifier_rejects_non_sigstore_signature(tmp_path: Path) -> None:
@@ -161,6 +174,11 @@ def test_verifier_rejects_malformed_frontmatter(tmp_path: Path) -> None:
     (skill_root / "metadata.json").write_text("{}", encoding="utf-8")
     (skill_root / "SKILL.md").write_text("name: missing fence\n", encoding="utf-8")
     with pytest.raises(SkillVerificationError, match="YAML frontmatter"):
+        load_skill_manifest(skill_root)
+    (skill_root / "SKILL.md").write_text(
+        "# Heading\n---\nname: late fence\n---\n", encoding="utf-8"
+    )
+    with pytest.raises(SkillVerificationError, match="must start with YAML frontmatter"):
         load_skill_manifest(skill_root)
     (skill_root / "SKILL.md").write_text("---\nname without colon\n---\n", encoding="utf-8")
     with pytest.raises(SkillVerificationError, match=r"unsupported SKILL\.md"):

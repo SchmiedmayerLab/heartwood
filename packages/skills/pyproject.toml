@@ -14,6 +14,7 @@ license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "heartwood-schemas",
+    "pydantic",
 ]
 
 [build-system]

@@ -295,10 +295,14 @@ version = "0.0.0"
 source = { editable = "packages/skills" }
 dependencies = [
     { name = "heartwood-schemas" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
+requires-dist = [
+    { name = "heartwood-schemas", editable = "packages/schemas" },
+    { name = "pydantic" },
+]
 
 [[package]]
 name = "iniconfig"

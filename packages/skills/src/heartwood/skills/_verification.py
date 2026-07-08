@@ -93,8 +93,9 @@ class LocalSkillVerifier:
         if manifest.metadata.requires_network and not self.allow_network:
             msg = "skills requiring network access are not allowed in the local gate"
             raise SkillVerificationError(msg)
-        if not manifest.metadata.signature or not manifest.metadata.signature.startswith(
-            "sigstore:"
+        if manifest.metadata.trust_tier == "verified" and (
+            not manifest.metadata.signature
+            or not manifest.metadata.signature.startswith("sigstore:")
         ):
             msg = "verified skills must declare a sigstore provenance placeholder"
             raise SkillVerificationError(msg)
@@ -184,11 +185,10 @@ def build_skill_approval_record(
 def _read_skill_frontmatter(path: Path) -> dict[str, JsonValue]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
-    try:
-        start = next(index for index, line in enumerate(lines) if line.strip() == "---")
-    except StopIteration as error:
+    start = 0
+    if not lines or lines[start].strip() != "---":
         msg = "SKILL.md must start with YAML frontmatter"
-        raise SkillVerificationError(msg) from error
+        raise SkillVerificationError(msg)
     try:
         end = next(
             index
