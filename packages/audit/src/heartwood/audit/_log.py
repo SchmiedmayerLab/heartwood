@@ -99,8 +99,8 @@ class AuditLog:
 
     def export_jsonl(self) -> str:
         """Return a JSONL export of the current scrubbed audit log."""
-        self.verify()
         events = self.read()
+        self.verify(events)
         exported: list[str] = []
         for event in events:
             payload: dict[str, JsonValue] = event.model_dump(mode="json")
