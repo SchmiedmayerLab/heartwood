@@ -111,10 +111,19 @@ See the [Schmiedmayer Lab contributing guidelines](https://github.com/Schmiedmay
 | [08 · Development](design/08-development.md) | Languages, linting, licensing, CI |
 | [09 · Implementation plan](design/09-implementation-plan.md) | Phased delivery, repo layout, open questions |
 
-## Governance
+## Contributing
 
-Heartwood is maintained by the Stanford Schmiedmayer Lab under the [MIT license](LICENSE). Maintainers — listed in [CONTRIBUTORS.md](CONTRIBUTORS.md), with owned paths in [`.github/CODEOWNERS`](.github/CODEOWNERS) — review and merge changes and are accountable for the security and compliance posture. Project-direction changes update the relevant [`design/`](design) document first, and security- or compliance-relevant claims must be backed by tests, audit records, or a documented limitation. The code of conduct, contributing guide, and security policy follow the shared [Schmiedmayer Lab standards](https://github.com/SchmiedmayerLab/.github). Because Heartwood runs next to controlled data, contributors must never include PHI, credentials, or live-platform identifiers in issues, pull requests, tests, or fixtures — all fixtures are synthetic (see [security & compliance](design/05-security-compliance.md)).
+Contributions to this project are welcome. Please make sure to read the [contribution guide](https://github.com/SchmiedmayerLab/.github/blob/main/CONTRIBUTING.md) and the [Contributor Covenant Code of Conduct](https://github.com/SchmiedmayerLab/.github/blob/main/CODE_OF_CONDUCT.md) first.
 
-## Status
+Because Heartwood runs next to controlled data, contributors must never include PHI, credentials, or live-platform identifiers in issues, pull requests, tests, or fixtures; all fixtures are synthetic. Project-direction changes update the relevant [`design/`](design) document first, and security- or compliance-relevant claims must be backed by tests, audit records, or a documented limitation.
 
-Early implementation. Phase 0A (repository health, CI, and the `uv` workspace) is in place, and the first vertical slice — the deterministic detector and the `heartwood` CLI — runs on synthetic input. The phased path to the full workflow is in the [implementation plan](design/09-implementation-plan.md). MIT-licensed. Maintained by the Stanford Schmiedmayer Lab. Domain acronyms are tracked in [ACRONYMS.md](ACRONYMS.md).
+## License
+
+This project is licensed under the MIT License. See [Licenses](LICENSES) for more information.
+
+## Our Research
+
+For more information, visit the [Schmiedmayer Lab GitHub organization](https://github.com/SchmiedmayerLab).
+
+![Stanford and Stanford Medicine logos](https://raw.githubusercontent.com/SchmiedmayerLab/.github/main/assets/stanford-footer-light.png#gh-light-mode-only)
+![Stanford and Stanford Medicine logos](https://raw.githubusercontent.com/SchmiedmayerLab/.github/main/assets/stanford-footer-dark.png#gh-dark-mode-only)
