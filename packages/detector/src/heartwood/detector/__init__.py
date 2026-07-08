@@ -12,8 +12,19 @@ See ``design/04-skills.md``.
 
 from __future__ import annotations
 
-from heartwood.detector._platforms import Platform, PlatformDetection, detect_platform
+from heartwood.detector._platforms import (
+    Platform,
+    PlatformDetection,
+    detect_platform,
+    platform_detection_evidence,
+)
 
-__all__ = ["Platform", "PlatformDetection", "__version__", "detect_platform"]
+__all__ = [
+    "Platform",
+    "PlatformDetection",
+    "__version__",
+    "detect_platform",
+    "platform_detection_evidence",
+]
 
 __version__ = "0.0.0"

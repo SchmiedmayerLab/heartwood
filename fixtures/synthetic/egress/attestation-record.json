@@ -1,0 +1,11 @@
+{
+  "schema_version": "heartwood.egress-attestation-record.v1",
+  "record_id": "attestation-synthetic-denied-egress",
+  "session_id": "session-synthetic-001",
+  "decision_id": "decision-synthetic-denied-egress",
+  "policy_profile_id": "generic-default",
+  "endpoint": "https://public-egress.example.invalid/upload",
+  "decision": "deny",
+  "occurred_at": "2026-01-01T00:00:02Z",
+  "reason": "endpoint is not in the synthetic allowlist"
+}

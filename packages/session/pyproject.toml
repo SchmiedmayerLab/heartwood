@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
-dependencies = []
+dependencies = ["pydantic>=2.12"]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,9 @@
+{
+  "schema_version": "heartwood.model-call-decision.v1",
+  "decision_id": "decision-synthetic-denied-egress",
+  "policy_profile_id": "generic-default",
+  "endpoint": "https://public-egress.example.invalid/upload",
+  "capability_tier": "supervised",
+  "decision": "deny",
+  "reason": "endpoint is not in the synthetic allowlist"
+}

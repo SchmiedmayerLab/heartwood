@@ -16,6 +16,10 @@ path = [
     ".python-version",
     "uv.lock",
     "**/py.typed",
+    "**/__pycache__/**",
+    "fixtures/**/*.csv",
+    "fixtures/**/*.json",
+    "fixtures/**/*.jsonl",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"

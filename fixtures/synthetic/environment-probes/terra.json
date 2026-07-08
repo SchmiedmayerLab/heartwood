@@ -1,0 +1,8 @@
+{
+  "description": "Synthetic Terra-like environment markers.",
+  "env": {
+    "GOOGLE_PROJECT": "synthetic-heartwood-project",
+    "WORKSPACE_BUCKET": "gs://synthetic-heartwood-workspace",
+    "WORKSPACE_NAMESPACE": "synthetic-namespace"
+  }
+}

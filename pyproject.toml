@@ -73,7 +73,14 @@ warn_unused_ignores = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = ["packages/session/src", "packages/detector/src", "packages/cli/src"]
+mypy_path = [
+    "packages/adapters/src",
+    "packages/cli/src",
+    "packages/detector/src",
+    "packages/fixtures/src",
+    "packages/schemas/src",
+    "packages/session/src",
+]
 
 # ---------------------------------------------------------------------------
 # pytest + coverage

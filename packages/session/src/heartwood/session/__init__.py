@@ -17,6 +17,21 @@ See ``design/03-architecture.md`` (interaction model) and
 
 from __future__ import annotations
 
-__all__ = ["__version__"]
+from heartwood.session._contracts import (
+    CommandKind,
+    EventKind,
+    JsonValue,
+    SessionCommand,
+    SessionEvent,
+)
+
+__all__ = [
+    "CommandKind",
+    "EventKind",
+    "JsonValue",
+    "SessionCommand",
+    "SessionEvent",
+    "__version__",
+]
 
 __version__ = "0.0.0"

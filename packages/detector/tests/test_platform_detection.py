@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from heartwood.detector import Platform, PlatformDetection, detect_platform
+from heartwood.detector import (
+    Platform,
+    PlatformDetection,
+    detect_platform,
+    platform_detection_evidence,
+)
 
 
 def test_generic_when_no_markers() -> None:
@@ -55,3 +60,11 @@ def test_default_reads_process_environment() -> None:
     detection = detect_platform()
     assert isinstance(detection, PlatformDetection)
     assert isinstance(detection.platform, Platform)
+
+
+def test_platform_detection_exports_detector_evidence_schema() -> None:
+    detection = detect_platform({})
+    evidence = platform_detection_evidence(detection, detection_id="detect-synthetic")
+    assert evidence.schema_version == "heartwood.detector-evidence.v1"
+    assert evidence.detector_kind == "platform"
+    assert evidence.candidate_id == "generic"
