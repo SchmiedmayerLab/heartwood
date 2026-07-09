@@ -109,7 +109,14 @@ class ProviderConfig:
 
 def load_provider_config(path: Path) -> ProviderConfig:
     """Load and validate a provider route TOML file."""
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        msg = f"unable to read provider config {path}: {error}"
+        raise ProviderConfigError(msg) from error
+    except tomllib.TOMLDecodeError as error:
+        msg = f"invalid TOML in provider config {path}: {error}"
+        raise ProviderConfigError(msg) from error
     return provider_config_from_mapping(data)
 
 

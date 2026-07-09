@@ -25,7 +25,10 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     assert "org.opencontainers.image.source" in dockerfile
     assert 'org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}"' in dockerfile
     assert "uv sync --locked --no-dev --all-extras" in dockerfile
-    assert "--mount=type=cache,target=/home/heartwood/.cache/uv" in dockerfile
+    assert (
+        "--mount=type=cache,target=/home/heartwood/.cache/uv,"
+        "uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID}"
+    ) in dockerfile
     assert "llama-cpp-python" not in gateway_pyproject
     assert "libtmux==0.61.0" in gateway_pyproject
     assert "openhands-tools==1.33.0" in gateway_pyproject
@@ -119,6 +122,7 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers" in bake
+    assert 'cache-to = ["type=gha,mode=min"]' in bake
     assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
 
 
@@ -176,6 +180,8 @@ def test_offline_stack_smoke_runs_local_model_and_cli() -> None:
     assert "HEARTWOOD_AGENT_BACKEND" in script
     assert "HEARTWOOD_AGENT_SERVER_ENABLED" in script
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" in script
+    assert "secrets.token_urlsafe" in script
+    assert "heartwood-local-agent-server" not in script
     assert "start_agent_server.sh" in script
     assert 'grep -q "model=heartwood-local-runtime status=ok"' in script
     assert "openhands.bash.execute" in script
@@ -300,6 +306,39 @@ def test_local_model_downloader_verifies_size_and_hash(tmp_path: Path) -> None:
     assert output.read_bytes() == source.read_bytes()
 
 
+def test_local_model_downloader_cleans_temp_file_after_download_failure(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        "\n".join(
+            (
+                'source_url = "file://' + str(tmp_path / "missing.gguf") + '"',
+                'artifact_sha256 = "' + ("0" * 64) + '"',
+                "artifact_size_bytes = 1",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    output = artifact_dir / "model.gguf"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(_repo_root() / "images" / "generic" / "scripts" / "download_model_artifact.py"),
+            "--manifest",
+            str(manifest),
+            "--output",
+            str(output),
+        ],
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert not output.exists()
+    assert not artifact_dir.exists() or not list(artifact_dir.iterdir())
+
+
 def test_agent_server_launcher_keeps_openhands_localhost_only() -> None:
     launcher = (
         _repo_root() / "images" / "generic" / "scripts" / "start_agent_server.sh"
@@ -312,6 +351,8 @@ def test_agent_server_launcher_keeps_openhands_localhost_only() -> None:
     assert "OH_PRELOAD_TOOLS" in launcher
     assert "OH_SESSION_API_KEYS_0" in launcher
     assert "OPENHANDS_SUPPRESS_BANNER" in launcher
+    assert "secrets.token_urlsafe" in launcher
+    assert "heartwood-local-agent-server" not in launcher
 
 
 def test_container_image_workflow_publishes_ghcr_tags() -> None:

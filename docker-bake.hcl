@@ -26,7 +26,7 @@ target "_common" {
   platforms = ["linux/amd64", "linux/arm64"]
   pull = true
   cache-from = ["type=gha"]
-  cache-to = ["type=gha,mode=max"]
+  cache-to = ["type=gha,mode=min"]
   attest = ["type=sbom", "type=provenance,mode=max"]
 }
 

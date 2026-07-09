@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shlex
 import time
 import urllib.error
@@ -27,6 +28,22 @@ from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
 from heartwood.session import SessionCommand, SessionEvent
 
 SessionServiceFactory = Callable[[Path, str], SessionService]
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        _req: urllib.request.Request,
+        _fp: object,
+        _code: int,
+        _msg: str,
+        _headers: object,
+        _newurl: str,
+    ) -> None:
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler())
 
 
 class SessionGateway:
@@ -106,6 +123,7 @@ def _default_service_factory(workspace: Path, session_id: str) -> SessionService
 def _agent_server_from_env() -> ManagedAgentServer:
     if not _truthy(os.environ.get("HEARTWOOD_AGENT_SERVER_ENABLED")):
         return ManagedAgentServer()
+    os.environ.setdefault("HEARTWOOD_AGENT_SERVER_API_KEY", secrets.token_urlsafe(32))
     host = os.environ.get("HEARTWOOD_AGENT_SERVER_HOST", "127.0.0.1")
     port = _int_env("HEARTWOOD_AGENT_SERVER_PORT", default=8766)
     command = tuple(
@@ -137,14 +155,18 @@ def _gateway_backend_from_env(*, workspace: Path, session_id: str) -> AgentBacke
     return OpenHandsAgentServerBackend(client)
 
 
-def _http_readiness_probe(endpoint: str) -> bool:
-    deadline = time.monotonic() + 60
-    ready_url = f"{endpoint}/ready"
+def _http_readiness_probe(endpoint: str, *, timeout_seconds: float = 60) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    ready_url = f"{endpoint}/api/tools/"
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(ready_url, timeout=0.5) as response:
-                status = int(response.status)
-                return 200 <= status < 300
+            with _NO_REDIRECT_OPENER.open(ready_url, timeout=0.5):
+                return True
+        except urllib.error.HTTPError as error:
+            if 300 <= error.code < 400:
+                time.sleep(0.2)
+                continue
+            return True
         except (OSError, urllib.error.URLError):
             time.sleep(0.2)
     return False

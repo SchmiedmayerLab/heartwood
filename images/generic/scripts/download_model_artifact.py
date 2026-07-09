@@ -41,14 +41,15 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as tmp_file:
         tmp_path = Path(tmp_file.name)
-        with urllib.request.urlopen(source_url, timeout=120) as response:
-            shutil.copyfileobj(response, tmp_file)
-    try:
-        _verify_file(tmp_path, expected_sha256=expected_sha256, expected_size=expected_size)
-        tmp_path.replace(output)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        try:
+            with urllib.request.urlopen(source_url, timeout=120) as response:
+                shutil.copyfileobj(response, tmp_file)
+            tmp_file.flush()
+            _verify_file(tmp_path, expected_sha256=expected_sha256, expected_size=expected_size)
+            tmp_path.replace(output)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
     print(f"installed local model artifact: {output}")
     return 0
 

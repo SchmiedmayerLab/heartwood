@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,6 +33,7 @@ from heartwood.gateway import (
     OpenHandsHttpAgentServerClient,
     SessionGateway,
 )
+from heartwood.gateway._gateway import _http_readiness_probe
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
@@ -303,6 +305,8 @@ def test_session_gateway_can_configure_agent_server_from_environment(
         "images/generic/scripts/start_agent_server.sh",
     )
     assert gateway.agent_server.endpoint_for_gateway() == "http://127.0.0.1:8766"
+    assert (api_key := os.environ["HEARTWOOD_AGENT_SERVER_API_KEY"])
+    assert api_key != "heartwood-local-agent-server"
 
 
 def test_enabled_agent_server_is_managed_and_gateway_only() -> None:
@@ -414,6 +418,37 @@ def test_openhands_http_client_rejects_redirects(tmp_path: Path) -> None:
             client.chat_turn(session_id="session-1", prompt_length=1)
     finally:
         _stop_http_server(server, thread)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://user:pass@127.0.0.1:8766",
+        "http://127.0.0.1",
+        "http://127.0.0.1:8766/api",
+        "http://127.0.0.1:8766?x=1",
+        "http://127.0.0.1:8766#fragment",
+        "https://127.0.0.1:8766",
+        "http://public.example.invalid:8766",
+    ],
+)
+def test_openhands_http_client_rejects_non_base_loopback_endpoints(
+    tmp_path: Path,
+    endpoint: str,
+) -> None:
+    with pytest.raises(AgentServerBindingError):
+        OpenHandsHttpAgentServerClient(endpoint=endpoint, workspace=tmp_path)
+
+
+def test_http_readiness_probe_uses_openhands_tools_route(tmp_path: Path) -> None:
+    _OpenHandsHttpHandler.request_log.clear()
+    server, thread, endpoint = _start_openhands_http_server(tmp_path)
+    try:
+        assert _http_readiness_probe(endpoint, timeout_seconds=1) is True
+    finally:
+        _stop_http_server(server, thread)
+
+    assert _OpenHandsHttpHandler.request_log[-1]["path"] == "/api/tools/"
 
 
 def test_gateway_can_select_openhands_http_backend_from_environment(

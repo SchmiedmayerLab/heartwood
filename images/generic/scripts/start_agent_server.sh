@@ -10,11 +10,15 @@ set -euo pipefail
 host="${HEARTWOOD_AGENT_SERVER_HOST:-127.0.0.1}"
 port="${HEARTWOOD_AGENT_SERVER_PORT:-8766}"
 workspace_root="${HEARTWOOD_AGENT_SERVER_WORKSPACE:-/tmp/heartwood-openhands}"
-session_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-heartwood-local-agent-server}"
+session_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-}"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
   echo "agent-server must bind to loopback, got ${host}" >&2
   exit 64
+fi
+
+if [[ -z "${session_api_key}" ]]; then
+  session_api_key="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 fi
 
 python - <<'PY'

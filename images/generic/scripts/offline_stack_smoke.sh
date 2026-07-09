@@ -19,7 +19,7 @@ agent_backend="${HEARTWOOD_AGENT_BACKEND:-openhands-bash}"
 agent_server_enabled="${HEARTWOOD_AGENT_SERVER_ENABLED:-1}"
 agent_server_port="${HEARTWOOD_AGENT_SERVER_PORT:-8766}"
 agent_server_workspace="${HEARTWOOD_AGENT_SERVER_WORKSPACE:-/tmp/heartwood-openhands}"
-agent_server_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-heartwood-local-agent-server}"
+agent_server_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-$(python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 
 rm -rf "${workspace}" "${reviewer_output}" "${agent_server_workspace}"
 rm -f "${request_log}" "${audit_copy}" "${transcript}"

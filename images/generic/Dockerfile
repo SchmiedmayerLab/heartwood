@@ -73,7 +73,7 @@ COPY --chown=heartwood:heartwood images ./images
 
 USER heartwood
 
-RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=10001,gid=10001 \
+RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
     uv sync --locked --no-dev --all-extras
 
 RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \

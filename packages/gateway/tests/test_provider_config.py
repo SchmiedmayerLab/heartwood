@@ -59,6 +59,21 @@ def test_provider_config_loads_example_without_inline_secrets() -> None:
     assert "secret_file" not in openai.safe_metadata()
 
 
+def test_provider_config_wraps_missing_file_errors(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.toml"
+
+    with pytest.raises(ProviderConfigError, match="unable to read provider config"):
+        load_provider_config(missing)
+
+
+def test_provider_config_wraps_malformed_toml_errors(tmp_path: Path) -> None:
+    malformed = tmp_path / "provider-routes.toml"
+    malformed.write_text("not = [valid\n", encoding="utf-8")
+
+    with pytest.raises(ProviderConfigError, match="invalid TOML in provider config"):
+        load_provider_config(malformed)
+
+
 def test_provider_config_rejects_inline_secret_values() -> None:
     with pytest.raises(ProviderConfigError, match="inline secret field"):
         provider_config_from_mapping(

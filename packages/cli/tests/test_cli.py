@@ -156,7 +156,13 @@ def test_run_can_select_provider_route_from_config(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     workspace = tmp_path / "sessions"
-    provider_config = Path("images") / "generic" / "providers" / "provider-routes.example.toml"
+    provider_config = (
+        Path(__file__).resolve().parents[3]
+        / "images"
+        / "generic"
+        / "providers"
+        / "provider-routes.example.toml"
+    )
 
     assert (
         main(
@@ -208,6 +214,45 @@ def test_run_rejects_provider_route_with_local_model(
                 str(workspace),
                 "run",
                 "--local-model",
+                "--provider-route",
+                "local-loopback",
+            ]
+        )
+
+    assert exit_info.value.code == 2
+
+
+def test_run_requires_provider_config_for_provider_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HEARTWOOD_PROVIDER_CONFIG", raising=False)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "--workspace",
+                str(tmp_path / "sessions"),
+                "run",
+                "--provider-route",
+                "local-loopback",
+            ]
+        )
+
+    assert exit_info.value.code == 2
+
+
+def test_run_reports_missing_provider_config_as_cli_error(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "--workspace",
+                str(tmp_path / "sessions"),
+                "run",
+                "--provider-config",
+                str(tmp_path / "missing.toml"),
                 "--provider-route",
                 "local-loopback",
             ]

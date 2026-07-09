@@ -29,7 +29,6 @@ _PROG = "heartwood"
 _DEFAULT_WORKSPACE = Path(".heartwood") / "sessions"
 _DEFAULT_MODEL_ENDPOINT = "https://model.local.invalid/v1/chat/completions"
 _DEFAULT_LOOPBACK_MODEL_ENDPOINT = "http://127.0.0.1:8765/v1/chat/completions"
-_DEFAULT_PROVIDER_CONFIG = Path("images") / "generic" / "providers" / "provider-routes.example.toml"
 _DEFAULT_FIXTURE_ROOT = Path("fixtures") / "synthetic"
 
 
@@ -60,6 +59,11 @@ def _format_detection(event: SessionEvent, *, workspace: Path) -> str:
         f"  - {item}" for item in _string_list_payload(dataset["evidence"], "dataset.evidence")
     ]
     return "\n".join(lines)
+
+
+def _provider_config_default() -> Path | None:
+    value = os.environ.get("HEARTWOOD_PROVIDER_CONFIG")
+    return Path(value) if value else None
 
 
 def _format_transcript(events: Sequence[SessionEvent]) -> str:
@@ -204,7 +208,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--provider-config",
         type=Path,
-        default=Path(os.environ.get("HEARTWOOD_PROVIDER_CONFIG", str(_DEFAULT_PROVIDER_CONFIG))),
+        default=_provider_config_default(),
         help="Provider route configuration with file-based secret references.",
     )
     run.add_argument(
@@ -274,6 +278,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             provider_route: dict[str, JsonValue] | None = None
             if args.provider_route:
+                if args.provider_config is None:
+                    parser.error("--provider-config is required when --provider-route is specified")
                 try:
                     route = load_provider_config(args.provider_config).route(args.provider_route)
                 except ProviderConfigError as error:

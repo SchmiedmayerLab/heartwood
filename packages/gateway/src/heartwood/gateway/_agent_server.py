@@ -487,6 +487,14 @@ def _int_payload(payload: Mapping[str, JsonValue], key: str, *, default: int) ->
 def _validate_agent_server_endpoint(endpoint: str) -> None:
     parsed = urlsplit(endpoint)
     host = parsed.hostname or ""
-    if parsed.scheme != "http" or host not in _LOCAL_HOSTS:
+    try:
+        port = parsed.port
+    except ValueError as error:
+        msg = f"agent-server endpoint port is invalid: {endpoint}"
+        raise AgentServerBindingError(msg) from error
+    if parsed.scheme != "http" or host not in _LOCAL_HOSTS or port is None:
         msg = f"agent-server endpoint must be http loopback-only: {endpoint}"
+        raise AgentServerBindingError(msg)
+    if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+        msg = f"agent-server endpoint must be a plain loopback base URL: {endpoint}"
         raise AgentServerBindingError(msg)
