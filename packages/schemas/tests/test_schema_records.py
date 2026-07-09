@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from heartwood.schemas import (
     ApprovalRecord,
     AuditEvent,
+    ConfirmationRequest,
     DetectorEvidence,
     EgressAttestationRecord,
     ModelCallDecision,
@@ -28,6 +29,7 @@ def test_schema_inventory_is_versioned() -> None:
     expected = {
         "approval-record.v1",
         "audit-event.v1",
+        "confirmation-request.v1",
         "detector-evidence.v1",
         "egress-attestation-record.v1",
         "model-call-decision.v1",
@@ -189,3 +191,39 @@ def test_approval_record_captures_human_decision() -> None:
         reason="synthetic fixture approval",
     )
     assert approval.decision == "approved"
+
+
+def test_approval_record_accepts_tool_call_target() -> None:
+    approval = ApprovalRecord(
+        approval_id="approval-2",
+        session_id="session-1",
+        target_type="tool-call",
+        target_id="session-1-toolcall-0",
+        decision="approved",
+        actor_id="synthetic-reviewer",
+        occurred_at="2026-01-01T00:00:00Z",
+    )
+    assert approval.target_type == "tool-call"
+
+
+def test_confirmation_request_bounds_risk_tier() -> None:
+    request = ConfirmationRequest(
+        request_id="confirm-1",
+        session_id="session-1",
+        tool_call_id="session-1-toolcall-0",
+        tool_name="heartwood.synthetic.noop",
+        risk="low",
+        summary="run the synthetic aggregate no-op",
+    )
+    assert request.risk == "low"
+    with pytest.raises(ValidationError):
+        ConfirmationRequest.model_validate(
+            {
+                "request_id": "confirm-2",
+                "session_id": "session-1",
+                "tool_call_id": "session-1-toolcall-0",
+                "tool_name": "heartwood.synthetic.noop",
+                "risk": "catastrophic",
+                "summary": "invalid risk tier",
+            }
+        )

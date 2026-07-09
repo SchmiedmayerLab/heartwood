@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 ## The audit record
 
-The agent core is event-sourced: every agent message, tool call, model call, and user input is an immutable event appended to a log persisted on the workspace disk (via the SDK `FileStore`). This yields deterministic replay, pause/resume/fork, and export without extra machinery. Per session, heartwood records:
+The agent core is event-sourced: every agent message, tool call, model call, and user input is an immutable event appended to the agent-server log persisted on the workspace disk (via the SDK `FileStore`). heartwood keeps a separate hash-chained **audit log derived from the translated session events** — execution substrate versus compliance record. This yields deterministic replay, pause/resume/fork, and export without extra machinery. Per session, heartwood records:
 
 - **Model calls** — endpoint, token counts, policy decision, latency (content is not logged by default).
 - **Tool + code execution** — tool, command/code, exit status (data values are referenced, not copied).
@@ -28,7 +28,7 @@ Each event carries the hash of the prior event (a chained log), so any retroacti
 
 ## Researcher-facing activity view
 
-The CLI and notebook UI render the same plain-language trace: "detected OMOP (0.82) → loaded `omop-cohort-builder` (approved) → wrote and ran this query in the sandbox → called Claude on Vertex (in-perimeter) → returned aggregate counts." This is what makes the system inspectable for a non-technical user without reading raw logs.
+The CLI, notebook, and researcher web UI render the same plain-language trace: "detected OMOP (0.82) → loaded `omop-cohort-builder` (approved) → wrote and ran this query in the sandbox → called Claude on Vertex (in-perimeter) → returned aggregate counts." This is what makes the system inspectable for a non-technical user without reading raw logs.
 
 ## Export and improvement loop
 

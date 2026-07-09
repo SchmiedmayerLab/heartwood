@@ -16,7 +16,7 @@ heartwood defends against: PHI exfiltration (via a model call, a skill script, a
 
 ## In-boundary by default (the load-bearing control)
 
-- The network posture is **deny-egress**. Only the configured in-perimeter model endpoint is reachable — enforced by the model policy layer and the platform's own egress controls.
+- The network posture is **deny-egress**. Only the configured in-perimeter model endpoint is reachable — enforced by the gateway's model-policy egress proxy in front of the agent-server and by the platform's own egress controls.
 - **Per-platform policy profiles** encode each dataset's data-use rules (e.g. All of Us: no individual-level egress; aggregate only, ≥20 count; no dissemination of models trained on participant data) and hard-block non-compliant actions.
 - **Credentials are a per-platform allowlist**, not a blanket deny: the platforms inject data-access credentials via env vars/metadata, so exactly the sanctioned data-path credentials are allowed and nothing else.
 
@@ -24,13 +24,13 @@ heartwood defends against: PHI exfiltration (via a model call, a skill script, a
 
 1. **Curation tiers** — only `verified` skills are pre-seeded into a PHI image; `community` requires an approval step; `experimental` is opt-in only.
 2. **Signing and provenance** — Sigstore/SLSA attestations bind a skill version to its source; verified at **build time** (where transparency-log lookups work) **and at load time** (catching runtime/long-tail additions).
-3. **Sandboxing** — skill `scripts/` run under OS-level isolation (bubblewrap) via non-overridable managed settings: sandbox on, fail-closed, empty network allowlist, credential-file reads denied. The hostname-based proxy is TLS-blind, so the sandbox is defense-in-depth paired with platform egress-deny — documented, not overclaimed.
+3. **Sandboxing** — skill `scripts/` run under OS-level isolation (bubblewrap) via non-overridable managed settings: sandbox on, fail-closed, empty network allowlist, credential-file reads denied. Execution stays in the platform's own container via a non-Docker Local runtime; the agent-server binds localhost and is reachable only through the gateway, so no new network surface is opened. The hostname-based proxy is TLS-blind, so the sandbox is defense-in-depth paired with platform egress-deny — documented, not overclaimed.
 4. **Static scan + pinning + approval UX** — a security scan gates community skills in CI and re-runs on a schedule; dependencies are pinned with no runtime installs; before first use of a non-verified skill a plain-language summary ("can read the dataset mount; cannot access network; last reviewed …") is shown for a single approve/reject, recorded to the audit log.
 
 ## PHI handling
 
 - **Synthetic-only test fixtures** — recorded traces/fixtures use Synthea-style synthetic data; recording against live PHI is forbidden and a CI scrubber fails on PHI-shaped content.
-- **Logs record destinations, not content** by default; prompt/response content logging is opt-in and stays on the in-perimeter workspace disk.
+- **Logs record destinations, not content** by default; prompt/response content logging is opt-in and stays on the in-perimeter workspace disk. Content-bearing session events (assistant and user messages) are scrubbed from the exported audit log so message text never leaves the perimeter.
 - **Air-gapped image** — all dependencies vendored and pre-staged in the platform's registry; no public PyPI at runtime.
 
 ## Clinical-correctness gate
