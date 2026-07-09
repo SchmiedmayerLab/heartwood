@@ -331,7 +331,21 @@ class SessionService:
                 elif model_call_approved:
                     response = _invoke_loopback_model(
                         endpoint=endpoint,
-                        prompt_length=len(prompt),
+                        prompt=prompt,
+                        max_tokens=_env_int(
+                            self.env,
+                            "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS",
+                            default=768,
+                            minimum=1,
+                            maximum=4096,
+                        ),
+                        timeout_seconds=_env_int(
+                            self.env,
+                            "HEARTWOOD_LOCAL_MODEL_TIMEOUT_SECONDS",
+                            default=180,
+                            minimum=1,
+                            maximum=900,
+                        ),
                     )
                     policy_payload["response_metadata"] = _model_response_metadata(
                         response,
@@ -566,29 +580,32 @@ def _dict_payload(value: JsonValue | None, name: str) -> dict[str, JsonValue]:
 def _invoke_loopback_model(
     *,
     endpoint: str,
-    prompt_length: int,
+    prompt: str,
+    max_tokens: int,
+    timeout_seconds: int,
 ) -> JsonValue:
     parsed = urlsplit(endpoint)
     host = parsed.hostname or ""
     if parsed.scheme != "http" or host not in _LOOPBACK_HOSTS:
         msg = "local model demo can invoke only http loopback endpoints"
         raise LocalModelInvocationError(msg)
+    user_prompt = prompt.strip() or "Confirm that the local runtime is reachable."
     request_payload = {
         "model": "heartwood-local-runtime",
         "messages": [
             {
                 "role": "system",
-                "content": "Heartwood offline smoke test. Do not use patient data.",
+                "content": (
+                    "You are the local Heartwood coding model running inside an offline demo. "
+                    "Use only synthetic data and provide concise, actionable coding-agent output."
+                ),
             },
             {
                 "role": "user",
-                "content": (
-                    "Confirm that the local runtime is reachable for a synthetic smoke test. "
-                    f"Synthetic prompt length: {prompt_length}."
-                ),
+                "content": user_prompt,
             },
         ],
-        "max_tokens": 16,
+        "max_tokens": max_tokens,
         "temperature": 0,
     }
     request = urllib.request.Request(
@@ -598,7 +615,7 @@ def _invoke_loopback_model(
         method="POST",
     )
     try:
-        with _NO_REDIRECT_OPENER.open(request, timeout=5) as response:
+        with _NO_REDIRECT_OPENER.open(request, timeout=timeout_seconds) as response:
             decoded = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         if 300 <= error.code < 400:
@@ -613,6 +630,28 @@ def _invoke_loopback_model(
         msg = "local model returned a non-JSON response"
         raise LocalModelInvocationError(msg)
     return cast(JsonValue, decoded)
+
+
+def _env_int(
+    env: Mapping[str, str],
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = env.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        msg = f"{name} must be an integer"
+        raise LocalModelInvocationError(msg) from error
+    if parsed < minimum or parsed > maximum:
+        msg = f"{name} must be between {minimum} and {maximum}"
+        raise LocalModelInvocationError(msg)
+    return parsed
 
 
 def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> AgentBackend:

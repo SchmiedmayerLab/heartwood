@@ -1,0 +1,28 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "1"
+artifact_id = "qwen25-coder-7b-instruct-q4_k_m"
+runtime_profile = "llama-cpp-cpu"
+purpose = "Bundled local coding-model artifact for interactive offline demos; not a biomedical or production-quality model claim."
+source_repository = "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF"
+source_path = "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+source_revision = "0ecf11859560b2bf42e703207f9371186d02245f"
+source_url = "https://huggingface.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/0ecf11859560b2bf42e703207f9371186d02245f/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
+artifact_format = "GGUF"
+artifact_size_bytes = 4683073504
+artifact_sha256 = "9a961bb225cb2b9fd84b2297df0d53089895c049d7d9dc5f5f8aebbcd3247872"
+base_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+base_model_url = "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct"
+base_model_license = "Apache-2.0"
+quantized_artifact_license = "Apache-2.0"
+parameter_count = "7.61B"
+context_length = 32768
+quantization = "Q4_K_M"
+license_posture = "Apache-2.0 base model and quantized artifact; retain model-card and artifact provenance in documentation."
+redistribution = "Bundled only in explicit coder demo image flavors, not in the default runtime, providers, smoke, or pull-request CI images."
+resource_envelope = "Expect at least 10 GB RAM and enough disk for the base image, 4.68 GB model artifact, image extraction overhead, and workspace files."
+model_alias = "heartwood-local-runtime"

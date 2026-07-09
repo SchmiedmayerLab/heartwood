@@ -10,11 +10,11 @@ SPDX-License-Identifier: MIT
 
 # Terra-Style Jupyter Demo
 
-This runbook demonstrates the current Heartwood stack from a Terra-derived Jupyter image using only synthetic data. It covers the CLI, notebook API, packaged researcher web UI, gateway session routes, local smoke model path, OpenHands-backed bounded tool execution, audit export, and reviewer packet generation. Repository CI validates the same platform Dockerfile through a Terra-compatible notebook base with runtime network disabled, and the main-branch image workflow publishes the real Terra-derived tags; a real Terra workspace is still required before claiming Terra workspace launch support, platform identity binding, or controlled-data access.
+This runbook demonstrates the current Heartwood stack from a Terra-derived Jupyter image using only synthetic data. It covers the CLI, notebook API, packaged researcher web UI, gateway session routes, bundled Qwen2.5-Coder-7B local model path, OpenHands-backed bounded tool execution, audit export, and reviewer packet generation. Repository CI validates the same platform Dockerfile through a Terra-compatible notebook base with a tiny smoke model and runtime network disabled, and the main-branch image workflow publishes the real Terra-derived tags; a real Terra workspace is still required before claiming Terra workspace launch support, platform identity binding, or controlled-data access.
 
 ## Current Status
 
-Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` when the Terra demo must include the tiny bundled model artifact and the full offline smoke path. Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` when demonstrating the UI, CLI, notebook API, provider route configuration, and gateway behavior without bundled model weights. These tags publish automatically from `main`, and the image workflow verifies the public GHCR pull path through an unauthenticated Leonardo-compatible Docker schema-2 manifest request with `Accept: application/vnd.docker.distribution.manifest.v2+json` before it succeeds. This check prevents the Terra failure mode where GHCR returns an OCI index but Leonardo's Docker image auto-detection does not advertise OCI index support.
+Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` for the default Terra demo; the model-explicit alias `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b` points to the same image and is useful when the selected bundled model should be visible in the image tag. Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` only when validating the tiny-model CI smoke path. These tags publish automatically from `main`, and the image workflow verifies the public GHCR pull path through an unauthenticated Leonardo-compatible Docker schema-2 manifest request with `Accept: application/vnd.docker.distribution.manifest.v2+json` before it succeeds. This check prevents the Terra failure mode where GHCR returns an OCI index but Leonardo's Docker image auto-detection does not advertise OCI index support.
 
 Terra's current custom-environment guidance says custom Jupyter images should be based on a Terra Jupyter Notebook base image or a project-specific image, and the `DataBiosphere/terra-docker` repository states that notebook custom images need to use a Terra base image to work with Terra's notebook service. The Heartwood Terra image derives from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, installs Heartwood under `/opt/heartwood`, registers a `heartwood` Jupyter kernel, and keeps the generic `edge`, `edge-smoke`, and `edge-providers` tags out of the Terra custom-environment path.
 
@@ -27,7 +27,7 @@ Relevant Terra references reviewed for this runbook:
 
 ## Terra Image Strategy
 
-The Terra image is a platform-specific notebook image that extends the current Terra Jupyter Python base, installs the Heartwood runtime into that base, keeps Jupyter on Terra's expected notebook service path, and starts the Heartwood gateway/web UI on a loopback port such as `8767` for access through the notebook proxy. Pull-request CI builds `edge-terra-smoke-ci` from a lightweight Terra-compatible base through the same platform Dockerfile, runs the platform image smoke, and runs the full offline stack smoke with runtime network disabled. The main-branch publish workflow builds and publishes `edge-terra` and `edge-terra-smoke` from the real Terra base after freeing runner disk space, disables Buildx default attestations for those Terra-facing tags, and forces Docker media types so Leonardo sees a single `linux/amd64` Docker schema-2 manifest instead of an OCI index.
+The Terra image is a platform-specific notebook image that extends the current Terra Jupyter Python base, installs the Heartwood runtime into that base, keeps Jupyter on Terra's expected notebook service path, and starts the Heartwood gateway/web UI on a loopback port such as `8767` for access through the notebook proxy. Pull-request CI builds `edge-terra-smoke-ci` from a lightweight Terra-compatible base through the same platform Dockerfile, runs the platform image smoke, and runs the full offline stack smoke with the tiny smoke model and runtime network disabled. The main-branch publish workflow builds and publishes `edge-terra`, `edge-terra-coder-7b`, and `edge-terra-smoke` from the real Terra base after freeing runner disk space, disables Buildx default attestations for those Terra-facing tags, and forces Docker media types so Leonardo sees a single `linux/amd64` Docker schema-2 manifest instead of an OCI index.
 
 The generic image still remains the portable source runtime for local Docker reproducibility. The Terra image carries `README.md`, `ACRONYMS.md`, `docs/`, and `design/` under `/opt/heartwood` so a packaged runtime contains the tutorial notebook and design material even without a repository checkout.
 
@@ -37,7 +37,16 @@ The companion notebook [terra-jupyter-demo.ipynb](terra-jupyter-demo.ipynb) cont
 
 ## Local Terminal Smoke
 
-Run the offline stack smoke from a terminal inside the `edge-terra-smoke` image:
+Run the interactive demo from a terminal inside the `edge-terra` or `edge-terra-coder-7b` image:
+
+```bash
+cd /opt/heartwood
+bash images/generic/scripts/start_demo_stack.sh
+```
+
+Then open the notebook proxy URL for port `8767`. The demo starts the bundled Qwen2.5-Coder-7B model, requests up to 768 tokens for the local model response preview, and surfaces the same session through the web UI, CLI replay, and notebook API.
+
+Run the tiny-model smoke from a terminal inside the `edge-terra-smoke` image when validating CI behavior:
 
 ```bash
 cd /opt/heartwood
@@ -93,15 +102,14 @@ for approval in run.approval_controls:
 
 ## Live Terra End-To-End Trial
 
-Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created, and the tag must pass the Leonardo-compatible Docker schema-2 manifest check in [Container Images](container-images.md) through `images/platform/scripts/verify_registry_manifest.py`; `docker manifest inspect` alone is insufficient because it can read OCI indexes that Leonardo rejects.
+Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra` and `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b` have been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created, and the tag must pass the Leonardo-compatible Docker schema-2 manifest check in [Container Images](container-images.md) through `images/platform/scripts/verify_registry_manifest.py`; `docker manifest inspect` alone is insufficient because it can read OCI indexes that Leonardo rejects.
 
 1. Create or select a synthetic-only Terra workspace; do not use controlled data for this validation.
-2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, and enough disk for the image plus `/home/jupyter/heartwood-workspace`.
-3. Open a Jupyter terminal and run `cd /opt/heartwood && bash images/generic/scripts/offline_stack_smoke.sh`.
-4. Start the web UI with `export HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions`, `export HEARTWOOD_WEB_HOST=127.0.0.1`, `export HEARTWOOD_WEB_PORT=8767`, then `cd /opt/heartwood && bash images/generic/scripts/start_web_ui.sh`.
-5. In a notebook cell, run `from heartwood.notebook import jupyter_proxy_url; jupyter_proxy_url(port=8767)` and open the returned URL.
-6. Submit a synthetic prompt in the researcher web UI run form, confirm that the Conversation panel shows the user prompt, model preview, agent message, and trace summary through the proxy, and compare the same session in the notebook API and `heartwood --workspace /home/jupyter/heartwood-workspace/sessions --session-id terra-demo replay`.
-7. Save the terminal smoke output, gateway/web UI URL shape, one web UI conversation interaction, notebook replay count, scrubbed audit export path, reviewer packet path, Terra image digest, Terra base image digest, custom image digest, VM shape, and whether any Terra proxy headers or path behavior differ from the local stripped-proxy smoke.
+2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, and enough disk and memory for the Terra base image, Heartwood layers, the 4.68 GB GGUF artifact, image extraction overhead, and `/home/jupyter/heartwood-workspace`.
+3. Open a Jupyter terminal and run `export HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions`, `export HEARTWOOD_DEMO_WEB_HOST=127.0.0.1`, then `cd /opt/heartwood && bash images/generic/scripts/start_demo_stack.sh`.
+4. In a notebook cell, run `from heartwood.notebook import jupyter_proxy_url; jupyter_proxy_url(port=8767)` and open the returned URL.
+5. Submit a synthetic prompt in the researcher web UI run form, confirm that the Conversation panel shows the user prompt, model preview, agent message, and trace summary through the proxy, and compare the same session in the notebook API and `heartwood --workspace /home/jupyter/heartwood-workspace/sessions --session-id session-local replay`.
+6. Save the terminal demo output, gateway/web UI URL shape, one web UI conversation interaction, notebook replay count, scrubbed audit export path, reviewer packet path, Terra image digest, Terra base image digest, custom image digest, VM shape, and whether any Terra proxy headers or path behavior differ from the local stripped-proxy smoke.
 
 ## Demo Evidence
 

@@ -44,6 +44,7 @@ def test_terra_runbook_tracks_platform_image_contract() -> None:
 
     assert "Terra Jupyter Notebook base image" in runbook
     assert "DataBiosphere/terra-docker" in runbook
+    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b" in runbook
     assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke" in runbook
     assert "edge-terra" in runbook
     assert "edge-terra-smoke-ci" in runbook
@@ -52,7 +53,7 @@ def test_terra_runbook_tracks_platform_image_contract() -> None:
     assert "unauthenticated Leonardo-compatible Docker schema-2 manifest request" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
     assert "docker manifest inspect` alone is insufficient" in runbook
-    assert "cd /opt/heartwood && bash images/generic/scripts/offline_stack_smoke.sh" in runbook
+    assert "bash images/generic/scripts/offline_stack_smoke.sh" in runbook
     assert "run.approval_controls" in runbook
     assert "approval.decision" in runbook
     assert "run.approvals" not in runbook

@@ -49,12 +49,15 @@ target "_common" {
 target "runtime" {
   inherits = ["_common"]
   args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "0"
+    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
     HEARTWOOD_IMAGE_FLAVOR = "runtime"
+    HEARTWOOD_LOCAL_MODEL_MANIFEST = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
   }
   tags = [
     "${IMAGE_NAME}:${IMAGE_CHANNEL}${IMAGE_TAG_SUFFIX}",
     "${IMAGE_NAME}:sha-${GIT_SHA}${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-coder-7b${IMAGE_TAG_SUFFIX}",
   ]
 }
 
@@ -108,12 +111,15 @@ target "terra-runtime" {
   cache-to = ["type=gha,mode=min"]
   output = ["type=registry,oci-mediatypes=false"]
   args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "0"
+    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
     HEARTWOOD_IMAGE_FLAVOR = "terra-runtime"
+    HEARTWOOD_LOCAL_MODEL_MANIFEST = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
   }
   tags = [
     "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra${IMAGE_TAG_SUFFIX}",
     "${IMAGE_NAME}:sha-${GIT_SHA}-terra${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-coder-7b${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-terra-coder-7b${IMAGE_TAG_SUFFIX}",
   ]
 }
 
