@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0G complete with the web UI and provider-invocation passes implemented**. Passes 0A through 0G are implemented and must stay green while the documentation-site, project-tracking, platform-proxy, larger-model, and controlled-platform work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners. The web UI and provider-invocation slices add the Spezi-based researcher interface, Server-Sent Events fallback, static asset serving, Jupyter proxy helpers, generic image web packaging, and policy-gated OpenAI-compatible provider invocation without changing the shared session command/event contract.
+The repository is at **0G, 0I, and 0J complete; 0H remains the next implementation pass**. Passes 0A through 0G, 0I, and 0J are implemented and must stay green while the documentation-site, project-tracking, registry-governance, platform-proxy, larger-model, and controlled-platform work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners. The completed web UI and provider-invocation slices add the Spezi-based researcher interface, Server-Sent Events fallback, static asset serving, Jupyter proxy helpers, generic image web packaging, Terra-derived notebook image packaging, and policy-gated OpenAI-compatible provider invocation without changing the shared session command/event contract.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -124,7 +124,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Export only scrubbed JSONL audit artifacts and attestations.
 - Run repository validation, Python quality checks, type checks, unit tests, replay tests, fixture-lint checks, coverage gates, and REUSE checks before merge.
 
-## Completed Phase 0 Integration Pass
+## Completed Phase 0 Implementation Passes
 
 ### Implemented In 0G — End-to-End Local Runtime And Image Publication
 
@@ -217,18 +217,19 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 
 **Fit and sequencing**
 
-- Land this pass immediately after 0G so the public-facing documentation and project tracking reflect the implemented Docker, local-runtime, OpenHands, provider-route, and CI behavior before frontend work expands the surface area.
-- Keep this pass documentation- and governance-focused; do not add the researcher dashboard, platform adapters, live provider invocation, or larger model image targets here.
+- Land this pass next. It was intentionally deferred while the web UI, provider invocation, Terra-derived platform image, and published-image manifest work reached an end-to-end shape.
+- Keep this pass documentation- and governance-focused; do not add new runtime surfaces, new platform adapters, live controlled-platform validation, autonomous larger-model execution, or larger model image targets here.
 - Use only checked-in project material as site source content, and keep the generated site free of external runtime dependencies.
+- Preserve the completed CLI, notebook, web UI, provider-route, generic image, Terra image, offline smoke, and reviewer-packet behavior as the evidence base for the published documentation.
 
 **Required work**
 
 - Add a static documentation site build that renders the README, getting-started guide, container image guide, design documents, acronym glossary, project goals, current limitations, security posture, and contribution routing from checked-in Markdown.
 - Configure GitHub Pages publication from `main` only, using least-privilege workflow permissions and no repository secrets.
 - Add a pull-request documentation build job that fails on broken internal links, broken checked-in asset references, malformed Markdown where the selected tool can detect it, missing SPDX headers in new source files, and external CDN dependencies.
-- Add site navigation that exposes the offline Docker tutorial, image flavor policy, provider secret policy, local model strategy, architecture, security/compliance model, audit/reviewer-packet flow, testing/evaluation plan, development workflow, and implementation plan.
+- Add site navigation that exposes the offline Docker tutorial, Terra-style Jupyter demo, platform image extension mechanism, image flavor policy, provider secret policy, local model strategy, architecture, security/compliance model, audit/reviewer-packet flow, testing/evaluation plan, development workflow, and implementation plan.
 - Make the site build reproducible locally from the repository without requiring published images, cloud credentials, or network access after dependencies are installed.
-- Update reviewer-packet limitations so they describe the static site as the current documentation pass, not as a missing 0G exit gate.
+- Update reviewer-packet limitations so they describe the static site as the current documentation pass and acknowledge that the web UI, Server-Sent Events fallback, Jupyter-style proxy smoke, and Terra-style packaged demo smoke are already implemented synthetic paths.
 - Formalize the container tag lifecycle in documentation and CI: public `edge`, `edge-smoke`, `edge-providers`, commit-SHA, and future semver tags are unified multi-platform image indexes; architecture-specific tags are internal assembly details, not user-facing install targets.
 - Keep post-publish registry verification for every public image tag: generic unified tags must resolve to `linux/amd64` and `linux/arm64`, while platform-derived tags must match the platform manifest's supported architecture set.
 - Replace architecture-helper tags with digest-based manifest assembly where feasible; otherwise keep helper tags explicitly internal and define a retention policy that preserves manifests referenced by public indexes.
@@ -392,8 +393,8 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 
 ## Implementation Backlog
 
-1. Keep the implemented 0A through 0G baseline green while adding documentation, larger-model, and platform work.
-2. Land 0H next by publishing the static documentation site, adding documentation CI, updating reviewer-packet limitations, and moving operational tracking into GitHub Issues and a GitHub Project.
+1. Keep the implemented 0A through 0G, 0I, and 0J baseline green while adding documentation, larger-model, and platform work.
+2. Land 0H next by publishing the static documentation site, adding documentation CI, updating reviewer-packet limitations, formalizing GHCR tag cleanup, and moving operational tracking into GitHub Issues and a GitHub Project.
 3. Keep the implemented `llama-cpp-cpu` profile covered by the pinned llama.cpp server binary, model artifact provenance, hash verification, license posture, resource limits, `linux/amd64` and `linux/arm64` support, and offline load/query smoke test.
 4. Keep `edge`, `edge-smoke`, `edge-providers`, commit-SHA flavor tags, and any required temporary architecture build outputs reproducible through `docker-bake.hcl` and the native-runner publish workflow.
 5. Verify public image tags as unified multi-platform indexes, move away from permanent architecture-helper tags where feasible, and add a GHCR cleanup policy with protected tag patterns and dry-run checks.
