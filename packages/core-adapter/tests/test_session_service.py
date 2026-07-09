@@ -9,11 +9,23 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from heartwood.core_adapter import FileSessionStore, SessionService, SessionStoreBoundaryError
+from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
+from heartwood.adapters.model import FakeLocalModelProviderAdapter
+from heartwood.adapters.platform import GenericPlatformAdapter
+from heartwood.core_adapter import (
+    DeterministicAgentBackend,
+    FileSessionStore,
+    SessionService,
+    SessionStoreBoundaryError,
+)
+from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -105,6 +117,134 @@ def test_session_run_records_policy_decision_without_prompt_content(tmp_path: Pa
     assert "show me" not in json.dumps([event.model_dump(mode="json") for event in result.events])
     commands = (tmp_path / "session-synthetic-001" / "commands.jsonl").read_text(encoding="utf-8")
     assert "show me" not in commands
+
+
+def test_session_run_can_invoke_allowlisted_loopback_model(tmp_path: Path) -> None:
+    server = _LocalModelServer()
+    service = _loopback_service(tmp_path, server.endpoint)
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                prompt="invoke local model",
+                endpoint=server.endpoint,
+                invoke_model=True,
+            )
+        )
+    finally:
+        server.close()
+
+    decision = result.events[1].payload["decision"]
+    metadata = result.events[1].payload["response_metadata"]
+    assert isinstance(decision, dict)
+    assert isinstance(metadata, dict)
+    assert decision["decision"] == "allow"
+    assert metadata["model"] == "heartwood-local-demo"
+    assert metadata["status"] == "ok"
+    assert server.requests == [{"prompt_length": 18, "session_id": "session-synthetic-001"}]
+    assert "Synthetic local model response" not in json.dumps(
+        [event.model_dump(mode="json") for event in result.events]
+    )
+
+
+def test_session_run_requires_approval_before_local_model_invocation(tmp_path: Path) -> None:
+    server = _LocalModelServer()
+    service = _loopback_service(tmp_path, server.endpoint)
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                prompt="invoke local model",
+                endpoint=server.endpoint,
+                invoke_model=True,
+            )
+        )
+    finally:
+        server.close()
+
+    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
+    decision_event = next(
+        event
+        for event in result.events
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    assert server.requests == []
+    assert error.payload["reason"] == "local model invocation requires approved model-call decision"
+    assert "response_metadata" not in decision_event.payload
+    assert execution.payload["exit_code"] == 1
+
+
+def test_session_run_rejects_local_model_redirects(tmp_path: Path) -> None:
+    server = _RedirectModelServer()
+    service = _loopback_service(tmp_path, server.endpoint)
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                prompt="invoke redirecting local model",
+                endpoint=server.endpoint,
+                invoke_model=True,
+            )
+        )
+    finally:
+        server.close()
+
+    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
+    decision_event = next(
+        event
+        for event in result.events
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    assert error.payload["reason"] == "local model invocation rejected redirect"
+    assert "response_metadata" not in decision_event.payload
+    assert execution.payload["exit_code"] == 1
+
+
+def test_session_run_blocks_tool_execution_when_local_model_invocation_fails(
+    tmp_path: Path,
+) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    result = service.handle(
+        _command(
+            CommandKind.RUN,
+            prompt="invoke missing local model",
+            endpoint="https://model.local.invalid/v1/chat",
+            invoke_model=True,
+        )
+    )
+
+    assert any(event.kind == EventKind.ERROR_RECORDED.value for event in result.events)
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    assert execution.payload["exit_code"] == 1
 
 
 def test_session_denied_model_endpoint_still_records_noop_tool_failure(tmp_path: Path) -> None:
@@ -230,3 +370,122 @@ def test_local_default_uses_non_synthetic_clock(tmp_path: Path) -> None:
     result = SessionService.local_default(tmp_path, env={}).handle(command)
 
     assert result.events[0].occurred_at != "2026-01-01T00:00:00Z"
+
+
+class _LoopbackPlatform(GenericPlatformAdapter):
+    def __init__(self, endpoint: str) -> None:
+        self.endpoint = endpoint
+
+    def default_policy_profile(self) -> PolicyProfile:
+        return PolicyProfile(
+            policy_id="generic-default",
+            platform_id=self.adapter_id,
+            allowed_model_endpoints=(self.endpoint,),
+        )
+
+
+class _LocalModelHandler(BaseHTTPRequestHandler):
+    requests: ClassVar[list[dict[str, JsonValue]]] = []
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        payload = json.loads(body.decode("utf-8"))
+        assert isinstance(payload, dict)
+        metadata = payload["metadata"]
+        assert isinstance(metadata, dict)
+        self.requests.append(metadata)
+        response = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "model": "heartwood-local-demo",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "Synthetic local model response",
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        encoded = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, _fmt: str, *_args: object) -> None:
+        return None
+
+
+class _RedirectModelHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.send_response(302)
+        self.send_header("Location", "https://public.example.invalid/v1/chat")
+        self.end_headers()
+
+    def log_message(self, _fmt: str, *_args: object) -> None:
+        return None
+
+
+class _LocalModelServer:
+    def __init__(self) -> None:
+        _LocalModelHandler.requests = []
+        self.server = HTTPServer(("127.0.0.1", 0), _LocalModelHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+
+    @property
+    def endpoint(self) -> str:
+        host = self.server.server_address[0]
+        port = self.server.server_address[1]
+        if isinstance(host, bytes):
+            host = host.decode("utf-8")
+        return f"http://{host}:{port}/v1/chat"
+
+    @property
+    def requests(self) -> list[dict[str, JsonValue]]:
+        return _LocalModelHandler.requests
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+class _RedirectModelServer:
+    def __init__(self) -> None:
+        self.server = HTTPServer(("127.0.0.1", 0), _RedirectModelHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+
+    @property
+    def endpoint(self) -> str:
+        host = self.server.server_address[0]
+        port = self.server.server_address[1]
+        if isinstance(host, bytes):
+            host = host.decode("utf-8")
+        return f"http://{host}:{port}/v1/chat"
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+def _loopback_service(tmp_path: Path, endpoint: str) -> SessionService:
+    platform = _LoopbackPlatform(endpoint)
+    policy = platform.default_policy_profile()
+    return SessionService(
+        store=FileSessionStore(tmp_path, "session-synthetic-001"),
+        platform_adapter=platform,
+        data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
+        model_provider_adapter=FakeLocalModelProviderAdapter(policy),
+        backend=DeterministicAgentBackend(),
+        env={},
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )

@@ -5,21 +5,17 @@
 # SPDX-License-Identifier: MIT
 
 [project]
-name = "heartwood-cli"
+name = "heartwood-compliance"
 version = "0.0.0"
-description = "The heartwood command-line interface — the primary interaction surface."
+description = "Synthetic-only reviewer packet and audit bundle generation for Heartwood."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
-    "heartwood-compliance",
-    "heartwood-gateway",
-    "heartwood-session",
+    "heartwood-audit",
+    "heartwood-schemas",
 ]
-
-[project.scripts]
-heartwood = "heartwood.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -29,6 +25,5 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
-heartwood-compliance = { workspace = true }
-heartwood-gateway = { workspace = true }
-heartwood-session = { workspace = true }
+heartwood-audit = { workspace = true }
+heartwood-schemas = { workspace = true }

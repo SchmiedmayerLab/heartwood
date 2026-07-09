@@ -6,15 +6,16 @@
 # SPDX-License-Identifier: MIT
 #
 
-# Scaffolded in phase 0A. The generic image is built in phase 0E; until the
-# Dockerfile exists this workflow runs on manual dispatch only and the build job
-# is skipped. Once images/generic/Dockerfile lands, extend the triggers to
-# pull_request and mark this a required status check.
+# The generic image is a Phase 0F artifact. This workflow builds it and runs one
+# synthetic CLI command with runtime network disabled through Docker Compose.
 # See design/09-implementation-plan.md.
 
 name: Container Smoke Test
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -26,13 +27,12 @@ concurrency:
 
 jobs:
   smoke:
-    name: Synthetic end-to-end smoke test
+    name: Offline stack smoke test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Build the generic image and run one synthetic command
-        if: ${{ hashFiles('images/generic/Dockerfile') != '' }}
-        run: docker compose -f images/generic/compose.yaml run --rm heartwood heartwood --help
+      - name: Build the generic image and run the offline stack
+        run: docker compose -f images/generic/compose.yaml run --rm heartwood

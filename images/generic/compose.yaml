@@ -1,0 +1,15 @@
+#
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+#
+
+services:
+  heartwood:
+    build:
+      context: ../..
+      dockerfile: images/generic/Dockerfile
+    network_mode: none
+    command: bash images/generic/scripts/offline_stack_smoke.sh
