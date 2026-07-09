@@ -98,7 +98,7 @@ def test_session_run_records_policy_decision_without_prompt_content(tmp_path: Pa
         _command(
             CommandKind.RUN,
             prompt="show me the first records",
-            endpoint="https://model.local.invalid/v1/chat",
+            endpoint="https://model.local.invalid/v1/chat/completions",
         )
     )
 
@@ -146,9 +146,11 @@ def test_session_run_can_invoke_allowlisted_loopback_model(tmp_path: Path) -> No
     assert isinstance(decision, dict)
     assert isinstance(metadata, dict)
     assert decision["decision"] == "allow"
-    assert metadata["model"] == "heartwood-local-demo"
+    assert metadata["model"] == "heartwood-local-runtime"
     assert metadata["status"] == "ok"
-    assert server.requests == [{"prompt_length": 18, "session_id": "session-synthetic-001"}]
+    assert server.requests == [
+        {"max_tokens": 16, "messages_count": 2, "model": "heartwood-local-runtime"}
+    ]
     assert "Synthetic local model response" not in json.dumps(
         [event.model_dump(mode="json") for event in result.events]
     )
@@ -235,7 +237,7 @@ def test_session_run_blocks_tool_execution_when_local_model_invocation_fails(
         _command(
             CommandKind.RUN,
             prompt="invoke missing local model",
-            endpoint="https://model.local.invalid/v1/chat",
+            endpoint="https://model.local.invalid/v1/chat/completions",
             invoke_model=True,
         )
     )
@@ -253,7 +255,7 @@ def test_session_denied_model_endpoint_still_records_noop_tool_failure(tmp_path:
         _command(
             CommandKind.RUN,
             prompt="run",
-            endpoint="https://public.example.invalid/v1/chat",
+            endpoint="https://public.example.invalid/v1/chat/completions",
         )
     )
 
@@ -276,7 +278,7 @@ def test_session_run_requires_prior_model_call_approval(tmp_path: Path) -> None:
         _command(
             CommandKind.RUN,
             prompt="run",
-            endpoint="https://model.local.invalid/v1/chat",
+            endpoint="https://model.local.invalid/v1/chat/completions",
         )
     )
 
@@ -372,6 +374,40 @@ def test_local_default_uses_non_synthetic_clock(tmp_path: Path) -> None:
     assert result.events[0].occurred_at != "2026-01-01T00:00:00Z"
 
 
+def test_local_default_can_use_workspace_backend(tmp_path: Path) -> None:
+    service = SessionService.local_default(
+        tmp_path,
+        session_id="session-local",
+        env={"HEARTWOOD_AGENT_BACKEND": "local-workspace"},
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        ).model_copy(update={"session_id": "session-local"})
+    )
+    result = service.handle(
+        _command(
+            CommandKind.RUN,
+            prompt="write a bounded summary",
+            endpoint="https://model.local.invalid/v1/chat/completions",
+        ).model_copy(update={"session_id": "session-local"})
+    )
+
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    artifact = tmp_path / "session-local" / "agent-artifacts" / "synthetic-workspace-summary.md"
+    assert service.backend.backend_id == "local-workspace"
+    assert execution.payload["backend_id"] == "local-workspace"
+    assert execution.payload["tool_name"] == "heartwood.local.write_summary"
+    assert execution.payload["exit_code"] == 0
+    assert artifact.is_file()
+    assert "write a bounded summary" not in artifact.read_text(encoding="utf-8")
+
+
 class _LoopbackPlatform(GenericPlatformAdapter):
     def __init__(self, endpoint: str) -> None:
         self.endpoint = endpoint
@@ -392,13 +428,19 @@ class _LocalModelHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         payload = json.loads(body.decode("utf-8"))
         assert isinstance(payload, dict)
-        metadata = payload["metadata"]
-        assert isinstance(metadata, dict)
-        self.requests.append(metadata)
+        messages = payload["messages"]
+        assert isinstance(messages, list)
+        self.requests.append(
+            {
+                "max_tokens": payload["max_tokens"],
+                "messages_count": len(messages),
+                "model": payload["model"],
+            }
+        )
         response = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
-            "model": "heartwood-local-demo",
+            "model": "heartwood-local-runtime",
             "choices": [
                 {
                     "index": 0,
@@ -425,7 +467,7 @@ class _LocalModelHandler(BaseHTTPRequestHandler):
 class _RedirectModelHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self.send_response(302)
-        self.send_header("Location", "https://public.example.invalid/v1/chat")
+        self.send_header("Location", "https://public.example.invalid/v1/chat/completions")
         self.end_headers()
 
     def log_message(self, _fmt: str, *_args: object) -> None:
@@ -445,7 +487,7 @@ class _LocalModelServer:
         port = self.server.server_address[1]
         if isinstance(host, bytes):
             host = host.decode("utf-8")
-        return f"http://{host}:{port}/v1/chat"
+        return f"http://{host}:{port}/v1/chat/completions"
 
     @property
     def requests(self) -> list[dict[str, JsonValue]]:
@@ -469,7 +511,7 @@ class _RedirectModelServer:
         port = self.server.server_address[1]
         if isinstance(host, bytes):
             host = host.decode("utf-8")
-        return f"http://{host}:{port}/v1/chat"
+        return f"http://{host}:{port}/v1/chat/completions"
 
     def close(self) -> None:
         self.server.shutdown()

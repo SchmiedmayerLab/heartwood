@@ -17,11 +17,19 @@ from heartwood.gateway._agent_server import (
     DirectAgentServerAccessError,
     ManagedAgentServer,
     OpenHandsAgentServerBackend,
+    OpenHandsHttpAgentServerClient,
     ReadinessProbe,
 )
 from heartwood.gateway._asgi import GatewayAsgiApp
 from heartwood.gateway._egress import ModelEgressProxy, ModelProxyResult
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._provider_config import (
+    ProviderConfig,
+    ProviderConfigError,
+    ProviderRoute,
+    load_provider_config,
+    provider_config_from_mapping,
+)
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
 from heartwood.gateway._stream import GatewayEventStream
 
@@ -38,9 +46,15 @@ __all__ = [
     "ModelEgressProxy",
     "ModelProxyResult",
     "OpenHandsAgentServerBackend",
+    "OpenHandsHttpAgentServerClient",
+    "ProviderConfig",
+    "ProviderConfigError",
+    "ProviderRoute",
     "ReadinessProbe",
     "RestGateway",
     "RestRequest",
     "RestResponse",
     "SessionGateway",
+    "load_provider_config",
+    "provider_config_from_mapping",
 ]

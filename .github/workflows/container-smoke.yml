@@ -6,8 +6,8 @@
 # SPDX-License-Identifier: MIT
 #
 
-# The generic image is a Phase 0F artifact. This workflow builds it and runs one
-# synthetic CLI command with runtime network disabled through Docker Compose.
+# This workflow builds the generic image and runs the offline stack smoke test
+# with runtime network disabled through Docker Compose.
 # See design/09-implementation-plan.md.
 
 name: Container Smoke Test
@@ -27,12 +27,28 @@ concurrency:
 
 jobs:
   smoke:
-    name: Offline stack smoke test
-    runs-on: ubuntu-latest
+    name: Offline stack smoke test (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Check Dockerfile
+        run: docker buildx build --check --file images/generic/Dockerfile .
+      - name: Check image flavor targets
+        run: docker buildx bake --file docker-bake.hcl --print runtime smoke providers
       - name: Build the generic image and run the offline stack
-        run: docker compose -f images/generic/compose.yaml run --rm heartwood
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+        run: docker compose -f images/generic/compose.yaml run --rm --build heartwood

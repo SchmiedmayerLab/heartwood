@@ -18,13 +18,13 @@ def _policy() -> PolicyProfile:
     return PolicyProfile(
         policy_id="generic-default",
         platform_id="generic",
-        allowed_model_endpoints=("https://model.local.invalid/v1/chat",),
+        allowed_model_endpoints=("https://model.local.invalid/v1/chat/completions",),
     )
 
 
 def test_policy_denies_unlisted_endpoint_by_default() -> None:
     decision = ModelPolicyEngine(_policy()).evaluate(
-        endpoint="https://public.example.invalid/v1/chat",
+        endpoint="https://public.example.invalid/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",
@@ -35,13 +35,13 @@ def test_policy_denies_unlisted_endpoint_by_default() -> None:
 
 def test_policy_allows_exact_normalized_endpoint() -> None:
     decision = ModelPolicyEngine(_policy()).evaluate(
-        endpoint="HTTPS://MODEL.LOCAL.INVALID/v1/chat",
+        endpoint="HTTPS://MODEL.LOCAL.INVALID/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",
     )
     assert decision.decision == "allow"
-    assert decision.endpoint == "https://model.local.invalid/v1/chat"
+    assert decision.endpoint == "https://model.local.invalid/v1/chat/completions"
 
 
 def test_policy_allows_unlisted_endpoint_when_default_deny_disabled() -> None:
@@ -49,16 +49,16 @@ def test_policy_allows_unlisted_endpoint_when_default_deny_disabled() -> None:
         policy_id="permissive",
         platform_id="generic",
         deny_egress_by_default=False,
-        allowed_model_endpoints=("https://model.local.invalid/v1/chat",),
+        allowed_model_endpoints=("https://model.local.invalid/v1/chat/completions",),
     )
     decision = ModelPolicyEngine(profile).evaluate(
-        endpoint="https://public.example.invalid/v1/chat",
+        endpoint="https://public.example.invalid/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",
     )
     assert decision.decision == "allow"
-    assert decision.endpoint == "https://public.example.invalid/v1/chat"
+    assert decision.endpoint == "https://public.example.invalid/v1/chat/completions"
 
 
 def test_policy_allows_local_scheme_endpoint() -> None:
@@ -80,13 +80,13 @@ def test_policy_allows_local_scheme_endpoint() -> None:
 @pytest.mark.parametrize(
     "endpoint",
     [
-        "https://model.local.invalid.evil/v1/chat",
-        "http://model.local.invalid/v1/chat",
-        "https://model.local.invalid:8443/v1/chat",
-        "https://model.local.invalid:99999/v1/chat",
-        "https://model.local.invalid/v1/chat/extra",
-        "https://model.local.invalid/v1/chat?token=secret",
-        "https://token@model.local.invalid/v1/chat",
+        "https://model.local.invalid.evil/v1/chat/completions",
+        "http://model.local.invalid/v1/chat/completions",
+        "https://model.local.invalid:8443/v1/chat/completions",
+        "https://model.local.invalid:99999/v1/chat/completions",
+        "https://model.local.invalid/v1/chat/completions/extra",
+        "https://model.local.invalid/v1/chat/completions?token=secret",
+        "https://token@model.local.invalid/v1/chat/completions",
         "local://token@agent/v1/invoke",
         "not-a-url",
     ],
@@ -103,7 +103,7 @@ def test_policy_rejects_endpoint_variants(endpoint: str) -> None:
 
 def test_policy_masks_invalid_endpoint_in_decision_record() -> None:
     decision = ModelPolicyEngine(_policy()).evaluate(
-        endpoint="https://token@model.local.invalid/v1/chat",
+        endpoint="https://token@model.local.invalid/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",
@@ -116,7 +116,7 @@ def test_policy_rejects_invalid_allowlist_at_construction() -> None:
     profile = PolicyProfile(
         policy_id="bad-allowlist",
         platform_id="generic",
-        allowed_model_endpoints=("https://token@model.local.invalid/v1/chat",),
+        allowed_model_endpoints=("https://token@model.local.invalid/v1/chat/completions",),
     )
     with pytest.raises(PolicyInputError):
         ModelPolicyEngine(profile)
@@ -124,7 +124,7 @@ def test_policy_rejects_invalid_allowlist_at_construction() -> None:
 
 def test_policy_denies_experimental_autonomy() -> None:
     decision = ModelPolicyEngine(_policy()).evaluate(
-        endpoint="https://model.local.invalid/v1/chat",
+        endpoint="https://model.local.invalid/v1/chat/completions",
         capability_tier="experimental",
         decision_id="decision-1",
         purpose="synthetic model call",
@@ -136,7 +136,7 @@ def test_policy_denies_experimental_autonomy() -> None:
 def test_policy_rejects_unknown_capability_tier() -> None:
     with pytest.raises(PolicyInputError):
         ModelPolicyEngine(_policy()).evaluate(
-            endpoint="https://model.local.invalid/v1/chat",
+            endpoint="https://model.local.invalid/v1/chat/completions",
             capability_tier="unknown",
             decision_id="decision-1",
             purpose="synthetic model call",
@@ -146,7 +146,7 @@ def test_policy_rejects_unknown_capability_tier() -> None:
 def test_policy_builds_attestation_for_decision() -> None:
     engine = ModelPolicyEngine(_policy())
     decision = engine.evaluate(
-        endpoint="https://model.local.invalid/v1/chat",
+        endpoint="https://model.local.invalid/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",

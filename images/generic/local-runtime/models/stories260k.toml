@@ -1,0 +1,20 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "1"
+artifact_id = "llama-cpp-stories260k-ci"
+runtime_profile = "llama-cpp-cpu"
+purpose = "Tiny GGUF artifact for offline llama-cpp load/query smoke tests; no model-quality or production-use claim."
+source_repository = "ggml-org/models-moved"
+source_path = "tinyllamas/stories260K.gguf"
+source_revision = "96f460f"
+source_url = "https://huggingface.co/ggml-org/models-moved/resolve/main/tinyllamas/stories260K.gguf"
+artifact_format = "GGUF"
+artifact_size_bytes = 1185376
+artifact_sha256 = "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d"
+license_posture = "llama.cpp CI artifact; testing and tutorial smoke use only; do not use in production."
+redistribution = "Bundled only as a tiny runtime smoke artifact with no quality claim."
+model_alias = "heartwood-local-runtime"

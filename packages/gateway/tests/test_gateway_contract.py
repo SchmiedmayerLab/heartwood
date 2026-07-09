@@ -134,7 +134,7 @@ def test_run_streams_confirmation_request_when_policy_or_approval_blocks(tmp_pat
             body=_command(
                 CommandKind.RUN,
                 prompt="run",
-                endpoint="https://public.example.invalid/v1/chat",
+                endpoint="https://public.example.invalid/v1/chat/completions",
             ),
         )
     )
@@ -165,7 +165,7 @@ def test_run_streams_confirmation_resolution_after_model_call_approval(tmp_path:
             body=_command(
                 CommandKind.RUN,
                 prompt="run",
-                endpoint="https://model.local.invalid/v1/chat",
+                endpoint="https://model.local.invalid/v1/chat/completions",
             ),
         )
     )

@@ -19,6 +19,13 @@ dependencies = [
     "heartwood-session",
 ]
 
+[project.optional-dependencies]
+agent-server = [
+    "libtmux==0.61.0; python_version >= '3.12'",
+    "openhands-agent-server==1.33.0; python_version >= '3.12'",
+    "openhands-tools==1.33.0; python_version >= '3.12'",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

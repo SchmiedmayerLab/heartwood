@@ -28,7 +28,7 @@ Participant-level data stays inside the platform boundary. Development and CI us
 
 Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture centers on a session gateway that owns the local agent-server boundary and exposes one shared session command/event contract to shipped surfaces such as the CLI and notebook bridge, and to planned surfaces such as the researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
 
-The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, the expanded `heartwood` command-line interface, a notebook bridge, synthetic reviewer packet generation, and the generic image smoke-test configuration. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, the expanded `heartwood` command-line interface, a notebook bridge, synthetic evidence-bundle generation, generic image smoke-test configuration, the implemented `llama-cpp-cpu` smoke profile, provider route configuration, image flavor metadata, and pinned OpenHands agent-server packaging. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -40,21 +40,21 @@ uv sync
 uv run heartwood --version
 uv run heartwood detect
 uv run heartwood chat --prompt "summarize the synthetic cohort"
-uv run heartwood run --endpoint https://model.local.invalid/v1/chat
+uv run heartwood run --endpoint https://model.local.invalid/v1/chat/completions
 uv run heartwood audit export
 uv run heartwood reviewer packet
 ```
 
 The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. The `chat`, `run`, `replay`, `audit export`, and reviewer-packet commands use the same session command/event contract as the notebook bridge.
 
-Run the generic offline stack from Docker only after the main-branch image is published:
+Run the generic offline stack from Docker only after the main-branch smoke image is published. The image family is published for `linux/amd64` and `linux/arm64` where the dependency stack supports both platforms:
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:dev-main
-docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:dev-main bash images/generic/scripts/offline_stack_smoke.sh
+docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
+docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
-The current generic image does not bundle an LLM inference runtime, model weights, or a production OpenHands agent-server. Its loopback model stub exists to prove the air-gapped session, policy, approval, audit, reviewer-packet, and local-endpoint plumbing; its agent-server coverage exercises the gateway-owned localhost boundary and fake OpenHands-style event translation. A real local inference and OpenHands profile still needs a selected runtime, model artifact provenance, license review, resource limits, a pinned agent-server command, and an offline CLI-gateway-agent-server smoke test.
+The `edge` runtime image carries the CLI, gateway, notebook bridge, local inference runtime dependencies, provider route validation, pinned OpenHands agent-server package, and policy/audit stack without bundled model weights. The `edge-smoke` image adds the tiny verified GGUF artifact for offline smoke tests. The default Docker smoke path runs the local model endpoint at `127.0.0.1`, starts the OpenHands agent-server as a gateway-owned localhost child during the agentic run, calls authenticated OpenHands `/api` routes through the gateway backend, exports a scrubbed audit log, and generates the synthetic reviewer packet while runtime network access is disabled. The `edge-providers` image carries provider route configuration support with file-based runtime secret references and no provider secrets. See [Container Images](docs/container-images.md) for the tag scheme and flavor policy.
 
 From a checkout, run the same CI smoke path with Compose:
 
@@ -116,6 +116,7 @@ Do not add PHI, credentials, live-platform identifiers, or non-synthetic records
 | [07 · Testing & evaluation](design/07-testing-eval.md) | Record/replay, evals, capability gate |
 | [08 · Development](design/08-development.md) | Languages, linting, licensing, CI |
 | [09 · Implementation plan](design/09-implementation-plan.md) | Phased delivery, repo layout, open questions |
+| [Container Images](docs/container-images.md) | Image flavors, tags, provider secrets, model strategy |
 
 ## Contributing
 
