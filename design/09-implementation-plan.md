@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0G in progress**. Passes 0A through 0F are implemented and must stay green while the local-runtime, agent-server, image, CI, and documentation work lands. The first 0G slice adds the local-runtime profile contract and keeps the current deterministic stub path clearly labeled as a fixture, not a real inference runtime.
+The repository is at **0G in progress**. Passes 0A through 0F are implemented and must stay green while the local-runtime, agent-server, image, CI, and documentation work lands. The first 0G slice adds the local-runtime profile contract, multi-architecture generic-image publishing and smoke coverage, and keeps the current deterministic stub path clearly labeled as a fixture, not a real inference runtime.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -91,10 +91,10 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - The CLI supports an explicit `run --local-model` mode that invokes only allowlisted HTTP loopback endpoints, records safe response metadata, and keeps prompt/response content out of persisted session events and audit exports.
 - Docker Compose disables runtime network access for the smoke service and runs the offline stack script end to end.
 - The offline stack smoke script starts the loopback model stub, runs detection, approves the synthetic model call, runs the agentic CLI through the local model endpoint, exports the scrubbed audit log, and generates the reviewer packet.
-- The container image publish workflow builds `images/generic/Dockerfile` on `main` and publishes `dev-main`, `main`, and commit-SHA tags to GitHub Container Registry.
+- The container image publish workflow builds `images/generic/Dockerfile` on `main` for `linux/amd64` and `linux/arm64` and publishes `dev-main`, `main`, and commit-SHA tags to GitHub Container Registry.
 - `docs/getting-started-offline.md` documents pull-and-run usage from the published image and the local Compose workflow.
-- The container smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
-- Static image tests verify the generic image includes the expected runtime surfaces, declares the local-runtime profiles, disables runtime network access through Compose, runs the loopback stub profile, and publishes the expected image tags.
+- The container smoke workflow runs the offline stack smoke on `linux/amd64` and `linux/arm64` for pull requests, pushes to `main`, and manual dispatch.
+- Static image tests verify the generic image includes the expected runtime surfaces, declares the local-runtime profiles, separates CPU and GPU runtime profiles, disables runtime network access through Compose, runs the loopback stub profile, publishes the expected image tags, and covers both baseline Linux architectures.
 
 ### Current Exclusions
 
@@ -133,16 +133,17 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 **Landed in the first 0G slice**
 
 - `images/generic/local-runtime/profiles.toml` declares `stub-loopback` as the implemented deterministic fixture and `llama-cpp-cpu` as the selected real local inference profile.
-- The `llama-cpp-cpu` contract defines CPU/GPU expectations, memory floor, localhost serving API, startup and shutdown behavior, failure modes, GGUF artifact policy, checksum policy, license posture, cache location, build-time resolution, runtime resolution, and CI expectations.
+- The `llama-cpp-cpu` contract defines `linux/amd64` and `linux/arm64` support, CPU/GPU expectations, memory floor, localhost serving API, startup and shutdown behavior, failure modes, GGUF artifact policy, checksum policy, license posture, cache location, build-time resolution, runtime resolution, and CI expectations.
+- `llama-cpp-cuda` is recorded as a deferred optional NVIDIA acceleration profile, separate from the portable CPU baseline and requiring explicit host GPU runtime support.
 - The offline smoke entrypoint starts local model access through a profile-aware launcher while keeping the default PR/Compose path on `stub-loopback`.
-- Static tests verify the runtime profile contract, launcher routing, Docker network-off smoke command, and published image tags.
+- Static tests verify the runtime profile contract, launcher routing, Docker network-off smoke command, multi-architecture smoke matrix, and published image tags.
 
 **Remaining required work**
 
 1. Convert `run --local-model` from a loopback-stub smoke hook into the real local-runtime path while preserving the deterministic stub profile for fast tests and PR smoke checks.
 2. Require explicit model-call approval before any local model invocation, not only before the following tool execution.
-3. Add the pinned `llama-cpp-cpu` runtime dependency, a tiny same-runtime CI model artifact, hash verification, provenance metadata, and an offline load/query smoke test that runs without public runtime network access.
-4. Define the release model artifact strategy: source, license posture, redistribution allowance, checksums, provenance record, size limits, cache location, and build-time versus runtime resolution.
+3. Add the pinned `llama-cpp-cpu` runtime dependency, a tiny same-runtime CI model artifact, hash verification, provenance metadata, and an offline load/query smoke test that runs without public runtime network access on at least `linux/amd64`, then add `linux/arm64` once the pinned wheel and artifact path are stable.
+4. Define the release model artifact strategy: source, license posture, redistribution allowance, checksums, provenance record, size limits, cache location, build-time versus runtime resolution, and the local tutorial model choice.
 5. Pin the production OpenHands SDK and agent-server command behind the gateway facade after license and replay checks pass.
 6. Start the OpenHands agent-server as a gateway-owned localhost-only child process in the generic image and keep clients from receiving its direct endpoint.
 7. Route all model access through the gateway policy layer; the agent-server must not hold a separate public model egress path.
@@ -150,16 +151,18 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 9. Extend the generic image to include the selected local runtime profile, pinned runtime dependencies, verified skills, OpenHands runtime dependency, and all scripts needed to run without a repository checkout.
 10. Publish the generic image to GitHub Container Registry on `main` with stable development tags and commit-SHA tags.
 11. Update the checked-in Docker quick start and offline tutorial to describe the selected local-runtime path, resource requirements, generated artifacts, and limitations.
-12. Publish a self-contained GitHub Pages documentation site from checked-in project material, including design documents, goals, current limitations, and image usage instructions.
-13. Link-check the static documentation site and keep it free of external CDN dependencies.
+12. Keep optional GPU acceleration behind a separate runtime profile, Docker device configuration, and self-hosted GPU or scheduled platform checks; do not make it a requirement for the generic CPU image.
+13. Publish a self-contained GitHub Pages documentation site from checked-in project material, including design documents, goals, current limitations, and image usage instructions.
+14. Link-check the static documentation site and keep it free of external CDN dependencies.
 
 **Required tests**
 
 - Unit tests for approval-before-invocation, policy denial, loopback-only enforcement, local-runtime failure handling, response metadata extraction, and prompt/response scrubbing.
 - Contract tests for CLI, gateway, OpenHands backend translation, audit export, and reviewer packet generation over the same session command/event stream.
 - Image tests that verify the local runtime profile, OpenHands command, verified skills, tutorial scripts, and offline smoke entrypoint are present.
-- Docker Compose smoke tests that disable runtime network access and run the local-stack entrypoint end to end.
-- CI must run a small local inference artifact through the selected runtime on pull requests; if the release model is too large for PR CI, use a tiny same-runtime artifact in PR CI and validate the larger profile on `main` or scheduled release checks.
+- Docker Compose smoke tests that disable runtime network access and run the local-stack entrypoint end to end on `linux/amd64` and `linux/arm64` where the profile claims support.
+- CI must run a small local inference artifact through the selected runtime on pull requests; if the release model is too large for PR CI, use a tiny same-runtime artifact in PR CI and validate the larger local tutorial profile on `main` or scheduled release checks.
+- GPU acceleration tests require a separate CUDA profile and a GPU-capable runner; standard GitHub-hosted pull-request CI is not a GPU gate.
 - CI must verify that the offline smoke can run from the built image and that no repository checkout is required for the documented Docker path.
 - CI must build the static documentation site, run Markdown/link checks, and publish GitHub Pages only from `main`.
 - Audit and reviewer-packet tests must prove prompt text, response text, participant-level data, secrets, and non-synthetic markers are absent from persisted artifacts.
@@ -172,6 +175,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Prompt and response content are not persisted in commands, session events, audit exports, reviewer packets, or CI logs.
 - GitHub Actions covers the image smoke, local inference runtime profile, OpenHands behind-gateway path, docs build, docs link checks, and GHCR publishing path.
 - The static documentation site is available from GitHub Pages and matches the checked-in README, tutorial, design documents, goals, and limitations.
+- The generic image publishes a multi-architecture manifest for `linux/amd64` and `linux/arm64`; any architecture excluded from a runtime profile is explicitly documented in the profile.
 
 ### 0H — Researcher Web UI And Platform Surfacing
 
@@ -311,14 +315,15 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 
 1. Keep the implemented 0A through 0F baseline green while landing the rest of 0G.
 2. Land 0G as the next integration pass before frontend work.
-3. Implement the `llama-cpp-cpu` profile, including the pinned runtime dependency, model artifact provenance, hash verification, license posture, resource limits, and an offline load/query smoke test.
+3. Implement the `llama-cpp-cpu` profile, including the pinned runtime dependency, model artifact provenance, hash verification, license posture, resource limits, `linux/amd64` and `linux/arm64` support, and an offline load/query smoke test.
 4. Pin production OpenHands runtime dependencies in the image after license and replay checks pass, then add an image smoke test that starts it behind the gateway and runs a CLI-gateway-agent-server turn.
 5. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
-6. Publish a self-contained static documentation site from checked-in project material after the real local-runtime path lands.
-7. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry image without requiring a repository checkout.
-8. Land 0H after 0G by building the researcher web UI on the Spezi stack.
-9. Add Server-Sent Events fallback, proxy smoke tests for `jupyter-server-proxy`, and runtime asset tests proving no external CDN or public network dependency.
-10. Select and implement the first real platform pilot.
+6. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
+7. Publish a self-contained static documentation site from checked-in project material after the real local-runtime path lands.
+8. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry image without requiring a repository checkout.
+9. Land 0H after 0G by building the researcher web UI on the Spezi stack.
+10. Add Server-Sent Events fallback, proxy smoke tests for `jupyter-server-proxy`, and runtime asset tests proving no external CDN or public network dependency.
+11. Select and implement the first real platform pilot.
 
 ## Repository Strategy
 
@@ -336,7 +341,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Which group owns clinical/statistical review for the `verified` skill tier.
 - What long-term funding and governance model supports maintenance.
 - What exact cross-platform auth handshake binds each platform proxy identity to a gateway session key.
-- Which local model artifact can satisfy the `llama-cpp-cpu` profile without violating licensing, redistribution, runtime-resource, or controlled-data constraints.
+- Which tiny same-runtime CI model artifact and which more useful local tutorial model can satisfy the `llama-cpp-cpu` profile without violating licensing, redistribution, runtime-resource, architecture, or controlled-data constraints.
 - What final project name should be used before public launch.
 
 ## Known Limitations
@@ -344,6 +349,6 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Agentic-coding quality degrades on weak/local models; capability tiers and supervised paths mitigate but do not eliminate this risk.
 - The sandbox network proxy is TLS-blind; platform egress-deny remains a required control.
 - Dataset fingerprinting can mis-detect unusual schemas; propose-not-commit detection and human confirmation remain required.
-- The current local-model path uses the `stub-loopback` deterministic fixture rather than LLM inference; the selected real profile is `llama-cpp-cpu` and still requires runtime dependency, model artifact, checksum, license, and resource validation.
+- The current local-model path uses the `stub-loopback` deterministic fixture rather than LLM inference; the selected real profile is `llama-cpp-cpu` and still requires runtime dependency, model artifact, checksum, license, resource, and architecture validation.
 - WebSocket reliability varies across platform proxies; Server-Sent Events fallback is required.
 - The web UI adds a TypeScript supply-chain surface; pinned dependencies, Spezi shared configs, npm license gates, and CI checks are required.

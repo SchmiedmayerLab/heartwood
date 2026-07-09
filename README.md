@@ -47,14 +47,14 @@ uv run heartwood reviewer packet
 
 The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. The `chat`, `run`, `replay`, `audit export`, and reviewer-packet commands use the same session command/event contract as the notebook bridge.
 
-Run the generic offline stack from Docker only after the main-branch image is published:
+Run the generic offline stack from Docker only after the main-branch image is published. The image is published for `linux/amd64` and `linux/arm64` where the dependency stack supports both platforms:
 
 ```bash
 docker pull ghcr.io/schmiedmayerlab/heartwood:dev-main
 docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:dev-main bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
-The current generic image does not bundle an LLM inference runtime, model weights, or a production OpenHands agent-server. Its `stub-loopback` profile exists to prove the air-gapped session, policy, approval, audit, evidence-bundle, and local-endpoint plumbing; its agent-server coverage exercises the gateway-owned localhost boundary and fake OpenHands-style event translation. The selected real local-runtime profile is `llama-cpp-cpu`, which still needs the pinned runtime dependency, model artifact provenance, license review, checksum verification, resource validation, a pinned agent-server command, and an offline CLI-gateway-agent-server smoke test before the phase can close.
+The current generic image does not bundle an LLM inference runtime, model weights, or a production OpenHands agent-server. Its `stub-loopback` profile exists to prove the air-gapped session, policy, approval, audit, evidence-bundle, and local-endpoint plumbing; its agent-server coverage exercises the gateway-owned localhost boundary and fake OpenHands-style event translation. The selected real local-runtime profile is `llama-cpp-cpu`, which still needs the pinned runtime dependency, model artifact provenance, license review, checksum verification, resource validation, a pinned agent-server command, and an offline CLI-gateway-agent-server smoke test before the phase can close. Optional GPU acceleration is tracked as a separate profile because it depends on host GPU runtime support and GPU-specific image/runtime choices.
 
 From a checkout, run the same CI smoke path with Compose:
 

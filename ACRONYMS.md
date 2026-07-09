@@ -81,6 +81,8 @@ A running reference for the acronyms and named tools used across this project (m
 
 | Term | Expansion | What it is |
 |---|---|---|
+| AMD64 | 64-bit Advanced Micro Devices architecture | x86-64 CPU architecture identifier used by Linux Docker images |
+| ARM64 | 64-bit Arm architecture | CPU architecture identifier used by Apple Silicon, AWS Graviton, and Arm Linux runners |
 | GCP | Google Cloud Platform | Google's cloud |
 | AWS | Amazon Web Services | Amazon's cloud |
 | GCE | Google Compute Engine | GCP's virtual machines |
@@ -88,6 +90,7 @@ A running reference for the acronyms and named tools used across this project (m
 | EBS | Elastic Block Store | AWS's attachable disk storage |
 | VM | Virtual Machine | A virtualized computer instance |
 | CPU | Central Processing Unit | General-purpose processor used for local inference when no accelerator is available |
+| CUDA | Compute Unified Device Architecture | NVIDIA GPU runtime and programming stack used by optional accelerated inference profiles |
 | GPU | Graphics Processing Unit | Accelerator for ML / heavy compute |
 | vCPU | virtual CPU | A virtual processor core on a VM |
 | OS | Operating System | e.g. Linux / Ubuntu |
@@ -100,6 +103,7 @@ A running reference for the acronyms and named tools used across this project (m
 | WS | WebSocket | Bidirectional streaming over one TCP connection (primary transport for live agent sessions) |
 | PSC | Private Service Connect | GCP private connectivity to a service (no public internet) |
 | PE | Private Endpoint | Azure private network entry to a service (no public ingress) |
+| QEMU | Quick Emulator | CPU emulation layer used by container CI to run non-native architecture smoke tests |
 
 ## Container registries (where Docker images live)
 

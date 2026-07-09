@@ -56,18 +56,25 @@ def test_local_runtime_profiles_distinguish_stub_from_real_runtime() -> None:
     assert manifest["selected_real_profile"] == "llama-cpp-cpu"
     stub = manifest["profiles"]["stub-loopback"]
     real = manifest["profiles"]["llama-cpp-cpu"]
+    gpu = manifest["profiles"]["llama-cpp-cuda"]
     assert stub["status"] == "implemented"
     assert stub["inference_runtime"] is False
     assert stub["quality_claim"] is False
+    assert stub["supported_platforms"] == ["linux/amd64", "linux/arm64"]
     assert stub["ships_in_generic_image"] is True
     assert real["status"] == "contract"
     assert real["runtime"] == "llama.cpp through llama-cpp-python server"
     assert real["inference_runtime"] is True
     assert real["model_artifact_required"] is True
+    assert real["supported_platforms"] == ["linux/amd64", "linux/arm64"]
     assert real["artifact_format"] == "GGUF"
     assert real["artifact_checksum"].startswith("SHA-256")
     assert real["runtime_resolution"].startswith("Load only")
     assert real["ships_in_generic_image"] is False
+    assert gpu["status"] == "deferred"
+    assert gpu["base_profile"] == "llama-cpp-cpu"
+    assert gpu["supported_platforms"] == ["linux/amd64"]
+    assert gpu["ships_in_generic_image"] is False
 
 
 def test_local_runtime_launcher_keeps_real_profile_behind_explicit_contract() -> None:
@@ -90,10 +97,28 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     )
 
     assert "packages: write" in workflow
+    assert "docker/setup-qemu-action@v4" in workflow
+    assert "docker/setup-buildx-action@v4" in workflow
     assert "ghcr.io/${GITHUB_REPOSITORY,,}" in workflow
+    assert "platforms: linux/amd64,linux/arm64" in workflow
+    assert "cache-from: type=gha" in workflow
+    assert "cache-to: type=gha,mode=max" in workflow
     assert ":dev-main" in workflow
     assert ":main" in workflow
     assert "${{ github.sha }}" in workflow
+
+
+def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
+    workflow = (_repo_root() / ".github" / "workflows" / "container-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "fail-fast: false" in workflow
+    assert "platform: [linux/amd64, linux/arm64]" in workflow
+    assert "docker/setup-qemu-action@v4" in workflow
+    assert "docker/setup-buildx-action@v4" in workflow
+    assert "DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}" in workflow
+    assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in workflow
 
 
 def _repo_root() -> Path:

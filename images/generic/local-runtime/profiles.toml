@@ -20,7 +20,8 @@ endpoint = "http://127.0.0.1:8765/v1/chat"
 startup = "Start images/generic/scripts/start_local_runtime.sh with HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback."
 shutdown = "Terminate the launcher process group; no child model worker is left running."
 runtime_network = "none"
-ci_scope = "Pull requests, pushes to main, and local Compose smoke tests."
+supported_platforms = ["linux/amd64", "linux/arm64"]
+ci_scope = "Pull requests, pushes to main, and local Compose smoke tests on linux/amd64 and linux/arm64."
 ships_in_generic_image = true
 
 [profiles.llama-cpp-cpu]
@@ -34,8 +35,9 @@ serving_api = "OpenAI-compatible chat-completions endpoint on 127.0.0.1"
 endpoint = "http://127.0.0.1:8765/v1/chat"
 host = "127.0.0.1"
 port = 8765
-cpu_expectation = "Linux x86_64 CPU execution is required; GPU acceleration must be introduced as a separate profile."
-gpu_expectation = "No GPU is required for the first supported profile."
+cpu_expectation = "Linux CPU execution is required on both linux/amd64 and linux/arm64."
+gpu_expectation = "No GPU is required for this profile; hardware acceleration must be introduced as an explicit separate profile."
+supported_platforms = ["linux/amd64", "linux/arm64"]
 memory_floor = "8 GiB RAM for the release profile; PR CI may use a tiny same-runtime artifact."
 startup = "Validate the pinned runtime dependency, verify the model artifact checksum, start the server on localhost, then wait for readiness before the CLI turn."
 shutdown = "Terminate the gateway-owned local runtime process during stack cleanup."
@@ -55,5 +57,43 @@ artifact_checksum = "SHA-256 checksum recorded in the profile before the image c
 artifact_cache = "/opt/heartwood/local-runtime/models"
 build_time_resolution = "Download or copy the pinned artifact during the image build and fail if checksum or provenance validation fails."
 runtime_resolution = "Load only the checked artifact path or an explicitly mounted artifact whose checksum matches the manifest."
-ci_scope = "A tiny same-runtime artifact must run on pull requests; the release artifact runs on main or scheduled image checks."
+ci_scope = "A tiny same-runtime artifact must run on pull requests without public runtime network access; linux/amd64 is required first and linux/arm64 must be added once the pinned runtime wheel and artifact path are stable."
+ships_in_generic_image = false
+
+[profiles.llama-cpp-cuda]
+status = "deferred"
+purpose = "Optional NVIDIA GPU acceleration profile for controlled environments with host GPU runtime support."
+runtime = "llama.cpp through llama-cpp-python CUDA server"
+base_profile = "llama-cpp-cpu"
+inference_runtime = true
+model_artifact_required = true
+quality_claim = false
+serving_api = "OpenAI-compatible chat-completions endpoint on 127.0.0.1"
+endpoint = "http://127.0.0.1:8765/v1/chat"
+host = "127.0.0.1"
+port = 8765
+cpu_expectation = "The application path must match llama-cpp-cpu; CPU fallback is allowed only by explicit profile selection."
+gpu_expectation = "NVIDIA GPU access is provided by Docker through --gpus or Compose device reservations on a host with the NVIDIA container stack."
+supported_platforms = ["linux/amd64"]
+memory_floor = "Same model artifact policy as llama-cpp-cpu plus sufficient GPU memory for the selected quantization."
+startup = "Verify the CUDA-enabled runtime dependency, validate GPU visibility, verify the model artifact checksum, then start the localhost server."
+shutdown = "Terminate the gateway-owned local runtime process during stack cleanup."
+failure_modes = [
+  "missing CUDA runtime dependency",
+  "host GPU unavailable",
+  "container GPU reservation unavailable",
+  "model artifact too large for available GPU memory",
+  "checksum mismatch",
+  "server readiness timeout",
+  "non-loopback bind",
+  "model response timeout",
+]
+artifact_format = "GGUF"
+artifact_source = "Same artifact policy as llama-cpp-cpu unless a GPU-specific artifact is explicitly selected and reviewed."
+artifact_license = "Must match the llama-cpp-cpu redistribution and provenance requirements."
+artifact_checksum = "SHA-256 checksum recorded in the profile before the image can claim this profile is implemented."
+artifact_cache = "/opt/heartwood/local-runtime/models"
+build_time_resolution = "Deferred until CPU local inference is implemented and a GPU-enabled image variant is justified."
+runtime_resolution = "Load only the checked artifact path or an explicitly mounted artifact whose checksum matches the manifest."
+ci_scope = "Self-hosted GPU runner or scheduled platform check; not required on standard GitHub-hosted pull-request runners."
 ships_in_generic_image = false
