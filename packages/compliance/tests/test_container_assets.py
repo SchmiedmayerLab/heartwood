@@ -98,10 +98,12 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     assert "@stanfordspezi/spezi-web-configurations" in package["devDependencies"]
     assert "name: Web UI" in workflow
     assert "actions/setup-node@v6" in workflow
+    assert "astral-sh/setup-uv@v8.3.2" in workflow
     assert 'node-version: "24"' in workflow
     assert "npm run license:check" in workflow
     assert "npm audit --audit-level=moderate" in workflow
     assert "npx playwright install --with-deps chromium" in workflow
+    assert "uv sync --locked" in workflow
     assert "npm run test:e2e" in workflow
     assert "npm run test:gateway --prefix packages/webui" in workflow
     assert "heartwood \\" in launcher

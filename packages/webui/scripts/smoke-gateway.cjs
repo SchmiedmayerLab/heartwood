@@ -38,6 +38,7 @@ async function main() {
     "uv",
     [
       "run",
+      "--locked",
       "heartwood",
       "--workspace",
       path.join(workspace, "sessions"),
