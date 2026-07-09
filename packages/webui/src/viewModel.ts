@@ -23,6 +23,7 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
   eventCount: 0,
   activity: [],
   agentOutputs: [],
+  conversation: [],
   datasetProposals: [],
   skillProposals: [],
   approvalControls: [],
@@ -37,16 +38,29 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
   for (const event of events) {
     viewModel.activity.push(activityItem(event));
     switch (event.kind) {
-      case "agent_message.emitted":
-        viewModel.agentOutputs.push({
+      case "agent_message.emitted": {
+        const agentMessage = {
           role: "agent",
           content: stringValue(event.payload.content),
+        } as const;
+        viewModel.agentOutputs.push(agentMessage);
+        addConversationMessage(viewModel, event, "agent", {
+          content: agentMessage.content,
+          label: "Agent",
         });
         break;
-      case "detection.proposed":
-        viewModel.datasetProposals.push(datasetProposal(event.payload.dataset));
+      }
+      case "detection.proposed": {
+        const proposal = datasetProposal(event.payload.dataset);
+        viewModel.datasetProposals.push(proposal);
         break;
+      }
       case "tool_call.proposed":
+        addConversationMessage(viewModel, event, "trace", {
+          content: `Proposed tool: ${stringValue(event.payload.tool_name)}`,
+          detail: stringValue(event.payload.summary) || null,
+          label: "Trace",
+        });
         viewModel.skillProposals.push({
           targetId: stringValue(event.payload.tool_call_id),
           status: "proposed",
@@ -75,13 +89,50 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
           event.payload.approval,
         );
         break;
-      case "model_call.decision.recorded":
-        viewModel.policyStatus.push(policyStatus(event.payload));
-        viewModel.modelInvocations.push(modelInvocation(event.payload));
+      case "model_call.decision.recorded": {
+        const status = policyStatus(event.payload);
+        const invocation = modelInvocation(event.payload);
+        viewModel.policyStatus.push(status);
+        viewModel.modelInvocations.push(invocation);
+        addConversationMessage(viewModel, event, "trace", {
+          content: `${status.decision || "reviewed"} model route${
+            status.routeId ? ` via ${status.routeId}` : ""
+          }`,
+          detail:
+            [
+              status.reason,
+              invocation.responsePreview === null ?
+                "response preview not persisted by default"
+              : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
+          label: "Trace",
+          offset: 0.1,
+        });
+        if (invocation.responsePreview) {
+          addConversationMessage(viewModel, event, "model", {
+            content: invocation.responsePreview,
+            detail:
+              [invocation.model, invocation.provider, invocation.routeId]
+                .filter(Boolean)
+                .join(" · ") || null,
+            label: "Model",
+            offset: 0.2,
+          });
+        }
         addApprovalControl(
           viewModel.approvalControls,
           modelCallApproval(event.payload.decision),
         );
+        break;
+      }
+      case "error.recorded":
+        addConversationMessage(viewModel, event, "trace", {
+          content: "Error recorded",
+          detail: stringValue(event.payload.reason) || null,
+          label: "Trace",
+        });
         break;
       case "audit.export.recorded":
         viewModel.exportActions.push({
@@ -101,6 +152,31 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
   }
   viewModel.eventCount = events.length;
   return viewModel;
+};
+
+const addConversationMessage = (
+  viewModel: SessionViewModel,
+  event: SessionEvent,
+  role: SessionViewModel["conversation"][number]["role"],
+  message: {
+    content: string;
+    detail?: string | null;
+    label: string;
+    offset?: number;
+  },
+): void => {
+  if (!message.content) {
+    return;
+  }
+  const offset = message.offset ?? 0;
+  viewModel.conversation.push({
+    id: `${event.event_id}-${role}-${String(offset)}`,
+    sequence: event.sequence + offset,
+    role,
+    label: message.label,
+    content: message.content,
+    detail: message.detail ?? null,
+  });
 };
 
 const datasetProposal = (value: JsonValue | undefined): DatasetProposal => {

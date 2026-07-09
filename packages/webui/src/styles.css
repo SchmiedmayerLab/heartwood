@@ -143,11 +143,11 @@ textarea {
   gap: 8px !important;
 }
 
-.agent-output-panel {
+.conversation-panel {
   grid-row: span 2;
 }
 
-.agent-output-list,
+.conversation-list,
 .activity-list,
 .list {
   align-content: start;
@@ -155,12 +155,67 @@ textarea {
   overflow: auto;
 }
 
-.agent-output-message {
+.conversation-message {
   display: grid;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 7px;
+  max-width: 92%;
+  padding: 11px 13px;
   border: 1px solid #d9e2dc;
   background: #f7faf8;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.conversation-message.user {
+  justify-self: end;
+  border-color: #bfd2e7;
+  background: #edf5ff;
+}
+
+.conversation-message.model {
+  border-color: #c7ddd0;
+  background: #f3faf6;
+}
+
+.conversation-message.agent {
+  border-color: #d9d2bc;
+  background: #fffaf0;
+}
+
+.conversation-message.trace {
+  max-width: 100%;
+  padding: 8px 10px;
+  border-style: dashed;
+  background: #fbfcf9;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conversation-meta small {
+  flex: 0 0 auto;
+  color: #31443a;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.conversation-meta span {
+  min-width: 0;
+  color: #63736a;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.conversation-message p {
+  margin: 0;
+  color: #17211b;
+  line-height: 1.45;
 }
 
 .list-row,

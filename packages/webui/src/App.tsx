@@ -31,14 +31,23 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
-import type { ApprovalControl, JsonValue, SessionEvent } from "./types";
+import type {
+  ApprovalControl,
+  ConversationMessage,
+  JsonValue,
+  SessionEvent,
+} from "./types";
 import { buildViewModel } from "./viewModel";
 
 interface AppProps {
   client?: HeartwoodClient;
   initialSessionId?: string;
+}
+
+interface LocalConversationMessage extends ConversationMessage {
+  sessionId: string;
 }
 
 export const App = ({
@@ -58,10 +67,22 @@ export const App = ({
   );
   const [providerRouteId, setProviderRouteId] = useState("local-loopback");
   const [invokeProvider, setInvokeProvider] = useState(true);
+  const [localConversation, setLocalConversation] = useState<
+    LocalConversationMessage[]
+  >([]);
   const [status, setStatus] = useState<"idle" | "busy" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
   const viewModel = useMemo(() => buildViewModel(events), [events]);
+  const conversation = useMemo(
+    () =>
+      mergeConversationMessages(
+        localConversation.filter((message) => message.sessionId === sessionId),
+        viewModel.conversation,
+      ),
+    [localConversation, sessionId, viewModel.conversation],
+  );
   const commandSequence = events.length;
 
   useEffect(() => {
@@ -93,6 +114,10 @@ export const App = ({
     };
   }, [resolvedClient, sessionId]);
 
+  useEffect(() => {
+    scrollConversationEnd(conversationEndRef.current);
+  }, [conversation.length]);
+
   const send = async (
     kind: Parameters<typeof createCommand>[1],
     payload: Record<string, JsonValue> = {},
@@ -101,6 +126,21 @@ export const App = ({
     setError(null);
     try {
       const command = createCommand(sessionId, kind, commandSequence, payload);
+      const submittedPrompt = promptContent(payload);
+      if ((kind === "chat" || kind === "run") && submittedPrompt) {
+        setLocalConversation((current) => [
+          ...current,
+          {
+            id: `local-${command.command_id}`,
+            sequence: (events.at(-1)?.sequence ?? -1) + 0.5,
+            role: "user",
+            label: "You",
+            content: submittedPrompt,
+            detail: null,
+            sessionId,
+          },
+        ]);
+      }
       const response = await resolvedClient.postCommand(command);
       setEvents((current) => mergeEvents(current, response.events));
       setStatus("idle");
@@ -267,28 +307,38 @@ export const App = ({
             </div>
           </Card>
 
-          <Card className="panel agent-output-panel">
+          <Card className="panel conversation-panel">
             <CardHeader>
               <CardTitle asChild>
                 <h2>
                   <MessageSquare size={18} />
-                  Agent Output
+                  Conversation
                 </h2>
               </CardTitle>
             </CardHeader>
-            <div className="panel-body agent-output-list">
-              {viewModel.agentOutputs.length === 0 ?
-                <div className="empty-state">no agent output</div>
-              : viewModel.agentOutputs.map((message, index) => (
-                  <div
-                    className="agent-output-message"
-                    key={`${message.role}-${index}`}
+            <div
+              aria-label="Conversation transcript"
+              className="panel-body conversation-list"
+              role="log"
+            >
+              {conversation.length === 0 ?
+                <div className="empty-state">no conversation yet</div>
+              : conversation.map((message) => (
+                  <article
+                    className={`conversation-message ${message.role}`}
+                    key={message.id}
                   >
-                    <small>{message.role}</small>
-                    <span>{message.content}</span>
-                  </div>
+                    <div className="conversation-meta">
+                      <small>{message.label}</small>
+                      {message.detail ?
+                        <span>{message.detail}</span>
+                      : null}
+                    </div>
+                    <p>{message.content}</p>
+                  </article>
                 ))
               }
+              <div ref={conversationEndRef} aria-hidden="true" />
             </div>
           </Card>
 
@@ -301,6 +351,36 @@ export const App = ({
       </main>
     </SpeziProvider>
   );
+};
+
+const promptContent = (payload: Record<string, JsonValue>): string => {
+  const prompt = payload.prompt;
+  return typeof prompt === "string" ? prompt.trim() : "";
+};
+
+const mergeConversationMessages = (
+  localMessages: ConversationMessage[],
+  eventMessages: ConversationMessage[],
+): ConversationMessage[] =>
+  [...localMessages, ...eventMessages].sort(
+    (left, right) =>
+      left.sequence - right.sequence || left.id.localeCompare(right.id),
+  );
+
+const scrollConversationEnd = (target: unknown): void => {
+  if (hasScrollIntoView(target)) {
+    target.scrollIntoView({ block: "end" });
+  }
+};
+
+const hasScrollIntoView = (
+  value: unknown,
+): value is { scrollIntoView: (options?: ScrollIntoViewOptions) => void } => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as { scrollIntoView?: unknown };
+  return typeof candidate.scrollIntoView === "function";
 };
 
 const StatusPanels = ({

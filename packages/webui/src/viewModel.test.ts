@@ -36,6 +36,26 @@ describe("buildViewModel", () => {
       status: "ok",
       totalTokens: 2,
     });
+    expect(viewModel.conversation).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Synthetic local model response.",
+          label: "Model",
+          role: "model",
+        }),
+        expect.objectContaining({
+          content:
+            "Prepared a local workspace action over the detected synthetic dataset.",
+          label: "Agent",
+          role: "agent",
+        }),
+        expect.objectContaining({
+          content: "Proposed tool: heartwood.local.write_summary",
+          label: "Trace",
+          role: "trace",
+        }),
+      ]),
+    );
     expect(
       viewModel.approvalControls.some(
         (control) => control.targetType === "tool-call",

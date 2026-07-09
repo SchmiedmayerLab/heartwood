@@ -6,7 +6,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { HeartwoodClient, SessionEventResponse } from "./client";
@@ -90,13 +96,30 @@ describe("App", () => {
         "/opt/heartwood/images/generic/providers/provider-routes.example.toml",
       provider_route_id: "local-loopback",
     });
+    const transcript = screen.getByRole("log", {
+      name: "Conversation transcript",
+    });
+    expect(
+      await within(transcript).findByText(
+        "Summarize the synthetic cohort quality check in one sentence.",
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Replay"));
 
-    expect(await screen.findAllByText(/local-loopback/u)).toHaveLength(2);
     expect(
-      await screen.findByText("Synthetic local model response."),
+      await within(transcript).findByText("Synthetic local model response."),
     ).toBeInTheDocument();
+    expect(
+      within(transcript).getByText(
+        "Prepared a local workspace action over the detected synthetic dataset.",
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/local-loopback/u).length,
+      ).toBeGreaterThanOrEqual(2),
+    );
     await waitFor(() =>
       expect(
         screen.getAllByText("/workspace/.heartwood/audit/export.jsonl"),

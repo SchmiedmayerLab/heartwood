@@ -69,7 +69,7 @@ To run the interactive local-model demo, publish the gateway port and start the 
 docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/start_demo_stack.sh
 ```
 
-Open `http://127.0.0.1:8767/`, click **Run Local Model**, then inspect the Local Model, Policy, Approvals, Activity, and Exports panels. The demo stack starts the bundled llama.cpp smoke model, starts the gateway-managed OpenHands child server, pre-approves the synthetic model-call decision for the default local session, and enables a bounded synthetic response preview for the UI.
+Open `http://127.0.0.1:8767/`, click **Run Local Model**, then inspect the Conversation, Local Model, Policy, Approvals, Activity, and Exports panels. The Conversation panel shows the current browser-session prompt, the bounded synthetic model response preview, the agent message, and event-derived trace summaries. The demo stack starts the bundled llama.cpp smoke model, starts the gateway-managed OpenHands child server, pre-approves the synthetic model-call decision for the default local session, and enables the bounded synthetic response preview for the UI.
 
 See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
 

@@ -70,6 +70,15 @@ export interface AgentOutput {
   content: string;
 }
 
+export interface ConversationMessage {
+  id: string;
+  sequence: number;
+  role: "user" | "model" | "agent" | "trace";
+  label: string;
+  content: string;
+  detail: string | null;
+}
+
 export interface DatasetProposal {
   sourceId: string;
   datasetType: string;
@@ -118,6 +127,7 @@ export interface SessionViewModel {
   eventCount: number;
   activity: ActivityItem[];
   agentOutputs: AgentOutput[];
+  conversation: ConversationMessage[];
   datasetProposals: DatasetProposal[];
   skillProposals: SkillProposal[];
   approvalControls: ApprovalControl[];

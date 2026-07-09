@@ -57,7 +57,8 @@ def test_terra_runbook_tracks_platform_image_contract() -> None:
     assert "approval.decision" in runbook
     assert "run.approvals" not in runbook
     assert "approval.status" not in runbook
-    assert "web UI chat interaction" in runbook
+    assert "web UI conversation interaction" in runbook
+    assert "user prompt, model preview, agent message, and trace summary" in runbook
     assert "custom image digest" in runbook
     assert "real Terra workspace is still required" in runbook
     assert "configure the Cloud Environment to use the selected image directly" not in runbook

@@ -166,7 +166,7 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 ### Implemented In 0I — Researcher Web UI And Platform Surfacing
 
 - `packages/webui` contains a standalone TypeScript single-page app built on `@stanfordspezi/spezi-web-design-system`, `@stanfordspezi/spezi-web-configurations`, React, Vite, Vitest, and Playwright.
-- The web UI renders gateway events as agent output, dataset proposals, approval controls with approve/deny actions, policy status, provider route metadata, local model invocation status, bounded synthetic response previews when enabled, activity trace, and scrubbed audit export links.
+- The web UI renders gateway events as a conversation transcript with UI-local user prompt turns, bounded synthetic model response previews when enabled, highlighted agent messages, compact event-derived trace summaries, dataset proposals, approval controls with approve/deny actions, policy status, provider route metadata, local model invocation status, activity trace, and scrubbed audit export links.
 - The web UI uses WebSocket streaming as the primary transport, falls back to Server-Sent Events, and rehydrates by replaying persisted session events after reconnect.
 - The web client uses relative assets, infers `jupyter-server-proxy` API bases such as `/proxy/8767/`, and also supports an explicit gateway base through build-time configuration.
 - `packages/gateway` serves self-contained static web assets, accepts gateway REST/WebSocket/Server-Sent Events routes under the configured proxy base path, rejects `/sessions/*` static fallbacks, and exposes `GET /sessions/{session}/events/stream` as the Server-Sent Events fallback.
@@ -185,7 +185,7 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 
 **Completed verification**
 
-- Web UI unit tests cover event projection, run payload assembly, replay rehydration, command error rendering, WebSocket streaming, and Server-Sent Events fallback cleanup.
+- Web UI unit tests cover event projection, conversation transcript rendering, run payload assembly, replay rehydration, command error rendering, WebSocket streaming, and Server-Sent Events fallback cleanup.
 - Playwright loads the built app through Vite preview and verifies that mocked gateway events render through the researcher UI.
 - Gateway tests cover REST, WebSocket, Server-Sent Events replay, and static asset serving under a proxy base path.
 - The gateway-served proxy smoke test starts `heartwood serve`, loads the built web UI under `/proxy/<port>/`, and exercises prefixed command and replay routes.
@@ -271,7 +271,7 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 - Prove an autonomous OpenHands conversation turn against a larger local tutorial coding model without weakening approval, audit, scrubbed-event, or capability-tier controls.
 - Select the first optional bundled coding-model artifact, with `Qwen/Qwen2.5-Coder-1.5B-Instruct` as the current candidate, and record source revision, license posture, redistribution allowance, quantization, byte size, SHA-256, provenance, cache location, build-time versus runtime resolution, CPU/memory envelope, and architecture support before adding an image target.
 - Add the deferred `model-qwen25-coder-1_5b-q4_k_m` Bake target only after the exact artifact is selected and reviewed; keep it out of required pull-request CI if its size or runtime cost is too high.
-- Validate Terra image launch, notebook startup, `/home/jupyter` workspace behavior, GitHub Container Registry or Google Artifact Registry image access, image size/startup timing, `jupyter-server-proxy` path behavior, and web UI agent-output interaction in a synthetic Terra workspace before documenting Terra as supported in live Terra.
+- Validate Terra image launch, notebook startup, `/home/jupyter` workspace behavior, GitHub Container Registry or Google Artifact Registry image access, image size/startup timing, `jupyter-server-proxy` path behavior, and web UI conversation interaction with user prompt, model preview, agent message, and trace summary in a synthetic Terra workspace before documenting Terra as supported in live Terra.
 - Reuse the `images/platform/Dockerfile` and `images/platforms.toml` pattern for Seven Bridges and DNAnexus only after their base image, home directory, proxy path, registry access, and identity headers are validated.
 - Validate Terra and Seven Bridges proxy paths through their Jupyter or Data Studio routes.
 - Validate DNAnexus first through `jupyter-server-proxy`; keep `httpsApp` as the platform-native upgrade path.
@@ -283,7 +283,7 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 - OpenHands model-routing tests prove the agent-server cannot reach model endpoints except through the gateway policy layer.
 - Terra image tests statically verify the selected Terra base image, `/home/jupyter` assumptions, packaged Heartwood docs/notebook, loopback web UI port, Jupyter service path, Jupyter kernel registration, publication tags, and absence of baked provider secrets.
 - Platform proxy smoke tests cover Terra, Seven Bridges, and DNAnexus route prefixes when suitable test workspaces are available.
-- A live Terra workspace smoke records the custom image digest, Terra base image digest, VM shape, notebook startup result, web UI proxy URL shape, one synthetic chat-like web UI command, CLI replay count, audit export path, reviewer packet path, and any identity/proxy headers exposed to Heartwood.
+- A live Terra workspace smoke records the custom image digest, Terra base image digest, VM shape, notebook startup result, web UI proxy URL shape, one synthetic web UI conversation command with user prompt, model preview, agent message, and trace summary, CLI replay count, audit export path, reviewer packet path, and any identity/proxy headers exposed to Heartwood.
 - Larger-model tests run as optional scheduled or release checks until runtime and cost are acceptable for pull-request CI.
 - Image tests verify optional model targets are separate from `edge`, `edge-smoke`, and `edge-providers`.
 - GPU tests run only on explicit GPU-capable runners and are not baseline merge gates.
