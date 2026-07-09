@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
-from heartwood.adapters import ModelCallRequest
+from heartwood.adapters import ModelCallRequest, ModelInvocationRequest
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import ModelCallDecision, PolicyProfile
+from heartwood.schemas import JsonValue, ModelCallDecision, PolicyProfile
 
 
 class FakeLocalModelProviderAdapter:
@@ -38,3 +38,12 @@ class FakeLocalModelProviderAdapter:
             decision_id="decision-synthetic-model-call",
             purpose=request.purpose,
         )
+
+    def invoke_model_call(self, request: ModelInvocationRequest) -> JsonValue:
+        """Return a deterministic response for tests that do not need network I/O."""
+        return {
+            "id": "fake-local-model-response",
+            "model": request.model,
+            "object": "chat.completion",
+            "usage": {"prompt_length": request.prompt_length},
+        }

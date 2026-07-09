@@ -5,6 +5,19 @@
 #
 # SPDX-License-Identifier: MIT
 
+FROM node:24-trixie-slim AS webui-build
+
+WORKDIR /src/packages/webui
+
+COPY packages/webui/package.json packages/webui/package-lock.json ./
+
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --fund=false
+
+COPY packages/webui ./
+
+RUN npm run build
+
 FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
 
 ARG TARGETARCH
@@ -31,6 +44,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HEARTWOOD_LOCAL_MODEL_PATH=/opt/heartwood/local-runtime/models/model.gguf \
     HEARTWOOD_AGENT_BACKEND=openhands-bash \
     HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml \
+    HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     LD_LIBRARY_PATH=/opt/llama.cpp \
     PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"
 
@@ -53,7 +67,7 @@ RUN set -eux; \
       arm64) llama_asset="llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz"; llama_sha256="${LLAMA_CPP_UBUNTU_ARM64_SHA256}" ;; \
       *) echo "unsupported llama.cpp TARGETARCH=${TARGETARCH}" >&2; exit 64 ;; \
     esac; \
-    curl --fail --location --show-error \
+    curl --fail --location --show-error --retry 5 --retry-delay 2 --retry-connrefused --connect-timeout 15 --max-time 600 \
       "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/${llama_asset}" \
       --output /tmp/llama.cpp.tar.gz; \
     echo "${llama_sha256}  /tmp/llama.cpp.tar.gz" | sha256sum --check -; \
@@ -70,6 +84,7 @@ COPY --chown=heartwood:heartwood fixtures ./fixtures
 COPY --chown=heartwood:heartwood skills ./skills
 COPY --chown=heartwood:heartwood evals ./evals
 COPY --chown=heartwood:heartwood images ./images
+COPY --from=webui-build --chown=heartwood:heartwood /src/packages/webui/dist ./packages/webui/dist
 
 USER heartwood
 
@@ -82,5 +97,9 @@ RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \
         --output "${HEARTWOOD_LOCAL_MODEL_PATH}" \
         --skip-existing; \
     fi
+
+COPY --chown=heartwood:heartwood README.md ACRONYMS.md ./
+COPY --chown=heartwood:heartwood docs ./docs
+COPY --chown=heartwood:heartwood design ./design
 
 CMD ["heartwood", "--help"]

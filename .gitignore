@@ -27,12 +27,20 @@ venv/
 
 # Tooling caches
 .heartwood/
+.npm-cache/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.vite/
 
 # Coverage
 .coverage
 .coverage.*
 coverage.xml
+coverage/
 htmlcov/
+
+# Node
+node_modules/
+playwright-report/
+test-results/

@@ -13,10 +13,12 @@ import argparse
 import hashlib
 import shutil
 import tempfile
+import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 
 def main() -> int:
@@ -25,7 +27,16 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument("--timeout-seconds", type=float, default=60)
+    parser.add_argument("--retries", type=int, default=5)
+    parser.add_argument("--retry-delay-seconds", type=float, default=2)
     args = parser.parse_args()
+    if args.timeout_seconds <= 0:
+        raise ValueError("--timeout-seconds must be positive")
+    if args.retries <= 0:
+        raise ValueError("--retries must be positive")
+    if args.retry_delay_seconds < 0:
+        raise ValueError("--retry-delay-seconds must be non-negative")
 
     manifest = _load_manifest(args.manifest)
     expected_sha256 = _string(manifest, "artifact_sha256")
@@ -38,20 +49,45 @@ def main() -> int:
         print(f"verified existing local model artifact: {output}")
         return 0
 
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as tmp_file:
-        tmp_path = Path(tmp_file.name)
+    for attempt in range(1, args.retries + 1):
         try:
-            with urllib.request.urlopen(source_url, timeout=120) as response:
-                shutil.copyfileobj(response, tmp_file)
-            tmp_file.flush()
-            _verify_file(tmp_path, expected_sha256=expected_sha256, expected_size=expected_size)
-            tmp_path.replace(output)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
-    print(f"installed local model artifact: {output}")
-    return 0
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                try:
+                    print(
+                        f"downloading local model artifact attempt {attempt}/{args.retries}: "
+                        f"{source_url}",
+                        flush=True,
+                    )
+                    _download(source_url, tmp_file, timeout_seconds=args.timeout_seconds)
+                    tmp_file.flush()
+                    _verify_file(
+                        tmp_path,
+                        expected_sha256=expected_sha256,
+                        expected_size=expected_size,
+                    )
+                    tmp_path.replace(output)
+                finally:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+            print(f"installed local model artifact: {output}")
+            return 0
+        except (OSError, TimeoutError, ValueError, urllib.error.URLError) as error:
+            if attempt >= args.retries:
+                raise
+            print(
+                f"local model artifact download failed: {error}; retrying in "
+                f"{args.retry_delay_seconds:g}s",
+                flush=True,
+            )
+            time.sleep(args.retry_delay_seconds)
+    raise AssertionError("unreachable")
+
+
+def _download(source_url: str, tmp_file: BinaryIO, *, timeout_seconds: float) -> None:
+    with urllib.request.urlopen(source_url, timeout=timeout_seconds) as response:
+        shutil.copyfileobj(response, tmp_file)
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:

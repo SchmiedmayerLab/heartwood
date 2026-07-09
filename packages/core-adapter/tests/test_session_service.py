@@ -186,6 +186,267 @@ def test_session_run_requires_approval_before_local_model_invocation(tmp_path: P
     assert execution.payload["exit_code"] == 1
 
 
+def test_session_run_can_invoke_selected_provider_route_after_approval(tmp_path: Path) -> None:
+    server = _LocalModelServer()
+    secret = tmp_path / "provider.key"
+    secret.write_text("synthetic-provider-secret\n", encoding="utf-8")
+    provider_config = tmp_path / "provider-routes.toml"
+    provider_config.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.provider-config.v1"',
+                "",
+                "[[routes]]",
+                'route_id = "in-boundary-openai"',
+                'provider = "openai"',
+                f'endpoint = "{server.endpoint}"',
+                'model = "synthetic-provider-model"',
+                'capability_tier = "supervised"',
+                'auth = "secret-file"',
+                f'secret_file = "{secret}"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    service = _loopback_service(tmp_path, server.endpoint)
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                prompt="invoke provider",
+                provider_config_path=str(provider_config),
+                provider_route_id="in-boundary-openai",
+                invoke_provider=True,
+            )
+        )
+    finally:
+        server.close()
+
+    decision_event = next(
+        event
+        for event in result.events
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    route = decision_event.payload["provider_route"]
+    metadata = decision_event.payload["response_metadata"]
+    assert isinstance(route, dict)
+    assert isinstance(metadata, dict)
+    assert route["route_id"] == "in-boundary-openai"
+    assert route["auth"] == "secret-file"
+    assert "secret_file" not in route
+    assert metadata["status"] == "ok"
+    assert server.requests == [
+        {
+            "authorization": "Bearer synthetic-provider-secret",
+            "max_tokens": 16,
+            "messages_count": 2,
+            "model": "synthetic-provider-model",
+        }
+    ]
+    persisted = (tmp_path / "session-synthetic-001" / "commands.jsonl").read_text(encoding="utf-8")
+    event_json = json.dumps([event.model_dump(mode="json") for event in result.events])
+    assert "synthetic-provider-secret" not in persisted
+    assert "synthetic-provider-secret" not in event_json
+    assert "invoke provider" not in persisted
+
+
+def test_session_run_requires_approval_before_provider_invocation(tmp_path: Path) -> None:
+    server = _LocalModelServer()
+    provider_config = tmp_path / "provider-routes.toml"
+    provider_config.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.provider-config.v1"',
+                "",
+                "[[routes]]",
+                'route_id = "local-openai-compatible"',
+                'provider = "openai-compatible"',
+                f'endpoint = "{server.endpoint}"',
+                'model = "synthetic-provider-model"',
+                'capability_tier = "supervised"',
+                'auth = "none"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    service = _loopback_service(tmp_path, server.endpoint)
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                provider_config_path=str(provider_config),
+                provider_route_id="local-openai-compatible",
+                invoke_provider=True,
+            )
+        )
+    finally:
+        server.close()
+
+    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
+    decision_event = next(
+        event
+        for event in result.events
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    assert server.requests == []
+    assert error.payload["reason"] == "provider invocation requires approved model-call decision"
+    assert "response_metadata" not in decision_event.payload
+    assert execution.payload["exit_code"] == 1
+
+
+def test_session_run_blocks_tool_execution_when_provider_route_is_invalid(
+    tmp_path: Path,
+) -> None:
+    provider_config = tmp_path / "provider-routes.toml"
+    provider_config.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.provider-config.v1"',
+                "",
+                "[[routes]]",
+                'route_id = "local-openai-compatible"',
+                'provider = "openai-compatible"',
+                'endpoint = "http://127.0.0.1:8765/v1/chat/completions"',
+                'model = "synthetic-provider-model"',
+                'capability_tier = "supervised"',
+                'auth = "none"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+
+    result = service.handle(
+        _command(
+            CommandKind.RUN,
+            provider_config_path=str(provider_config),
+            provider_route_id="missing-route",
+        )
+    )
+
+    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    assert error.payload["reason"] == "unknown provider route: missing-route"
+    assert execution.payload["exit_code"] == 1
+
+
+def test_session_run_rejects_conflicting_model_invocation_flags_without_calling_model(
+    tmp_path: Path,
+) -> None:
+    server = _LocalModelServer()
+    service = _loopback_service(tmp_path, server.endpoint)
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                endpoint=server.endpoint,
+                invoke_model=True,
+                invoke_provider=True,
+            )
+        )
+    finally:
+        server.close()
+
+    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
+    decision_event = next(
+        event
+        for event in result.events
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    assert error.payload["reason"] == (
+        "local-model and provider-route invocation are mutually exclusive"
+    )
+    assert server.requests == []
+    assert "response_metadata" not in decision_event.payload
+    assert execution.payload["exit_code"] == 1
+
+
+def test_denied_provider_route_does_not_read_missing_secret(tmp_path: Path) -> None:
+    provider_config = tmp_path / "provider-routes.toml"
+    provider_config.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.provider-config.v1"',
+                "",
+                "[[routes]]",
+                'route_id = "external-openai"',
+                'provider = "openai"',
+                'endpoint = "https://public.example.invalid/v1/chat/completions"',
+                'model = "configured-by-platform"',
+                'capability_tier = "supervised"',
+                'auth = "secret-file"',
+                f'secret_file = "{tmp_path / "missing.key"}"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    service = _loopback_service(tmp_path, "http://127.0.0.1:8765/v1/chat/completions")
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    result = service.handle(
+        _command(
+            CommandKind.RUN,
+            provider_config_path=str(provider_config),
+            provider_route_id="external-openai",
+            invoke_provider=True,
+        )
+    )
+
+    decision_event = next(
+        event
+        for event in result.events
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    execution = next(
+        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+    )
+    event_json = json.dumps([event.model_dump(mode="json") for event in result.events])
+    decision = decision_event.payload["decision"]
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "deny"
+    assert "provider secret file is unavailable" not in event_json
+    assert "response_metadata" not in decision_event.payload
+    assert execution.payload["exit_code"] == 1
+
+
 def test_session_run_rejects_local_model_redirects(tmp_path: Path) -> None:
     server = _RedirectModelServer()
     service = _loopback_service(tmp_path, server.endpoint)
@@ -431,12 +692,15 @@ class _LocalModelHandler(BaseHTTPRequestHandler):
         messages = payload["messages"]
         assert isinstance(messages, list)
         self.requests.append(
-            {
+            request_record := {
                 "max_tokens": payload["max_tokens"],
                 "messages_count": len(messages),
                 "model": payload["model"],
             }
         )
+        authorization = self.headers.get("Authorization")
+        if authorization is not None:
+            request_record["authorization"] = authorization
         response = {
             "id": "chatcmpl-test",
             "object": "chat.completion",

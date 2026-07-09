@@ -44,6 +44,46 @@ runtime_network_default = "platform policy controlled; provider endpoints must b
 ci_required = true
 public_default = false
 
+[platform_flavors.terra_runtime]
+target = "terra-runtime"
+moving_tag = "edge-terra"
+commit_tag = "sha-<git-sha>-terra"
+purpose = "Terra-derived Jupyter notebook image built from the selected Terra Python base with Heartwood CLI, notebook bridge, gateway, web UI, OpenHands launcher, local inference runtime dependencies, provider route config support, tutorial docs, and no bundled model weights."
+platform = "terra"
+base_image = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+bundles_model_artifact = false
+runtime_network_default = "Terra policy controlled; no public runtime egress unless the workspace policy allows it"
+ci_required = true
+public_default = false
+supported_platforms = ["linux/amd64"]
+
+[platform_flavors.terra_smoke]
+target = "terra-smoke"
+moving_tag = "edge-terra-smoke"
+commit_tag = "sha-<git-sha>-terra-smoke"
+purpose = "Terra-derived Jupyter notebook image with the tiny verified GGUF smoke artifact for synthetic Terra workspace demos and local CI smoke."
+platform = "terra"
+base_image = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+bundles_model_artifact = true
+model_manifest = "images/generic/local-runtime/models/stories260k.toml"
+runtime_network_default = "disabled by CI smoke through docker run --network none; Terra runtime policy controlled in live workspaces"
+ci_required = true
+public_default = false
+supported_platforms = ["linux/amd64"]
+
+[platform_flavors.terra_smoke_ci]
+target = "terra-smoke-ci"
+moving_tag = "edge-terra-smoke-ci"
+purpose = "Local pull-request CI image built from a lightweight Terra-compatible base through the platform Dockerfile; not published as a user-facing image."
+platform = "terra"
+base_image = "heartwood-terra-ci-base:local"
+bundles_model_artifact = true
+model_manifest = "images/generic/local-runtime/models/stories260k.toml"
+runtime_network_default = "disabled by CI smoke through docker run --network none"
+ci_required = true
+published = false
+supported_platforms = ["linux/amd64"]
+
 [future_flavors.model_qwen25_coder_1_5b_q4_k_m]
 target = "model-qwen25-coder-1_5b-q4_k_m"
 moving_tag = "edge-model-qwen25-coder-1_5b-q4_k_m"

@@ -69,7 +69,7 @@ The **session gateway** is the single control point and the only public surface.
 Four interfaces are the entire platform-specific surface. Reference implementations ship for the priority platforms; the `generic` adapter is the baseline. Adding a platform means writing an adapter, not changing the core.
 
 - **`PlatformAdapter`** — detects the platform from the environment; provides data mount paths, the credential allowlist, the Docker base image, and the default egress policy.
-- **`ModelProviderAdapter`** — configures an in-perimeter endpoint through LiteLLM, reports its capability tier, and emits egress-attestation records.
+- **`ModelProviderAdapter`** — configures an in-perimeter endpoint through provider routes, reports its capability tier, invokes supported routes after approval, and emits egress-attestation records.
 - **`DataSourceAdapter`** — scoped read plus the schema/format fingerprint the detector uses.
 - **`RegistryAdapter`** — resolves and verifies skills from a source.
 
@@ -83,11 +83,11 @@ The CLI is the main product interface, the development harness, and the stable t
 
 Notebook interfaces do not own separate behavior. They attach to the same session API and event stream, rendering a friendlier view for Terra/Jupyter users: chat, detected dataset cards, proposed skills, approval controls, policy status, activity trace, and export buttons. This keeps the non-technical experience approachable without creating a second execution path.
 
-The **researcher web UI** is the primary surface for the non-technical analyst. It is a heartwood-owned, single-page app that attaches to the same gateway over REST + WebSocket and renders the same events: chat, dataset cards, proposed skills, plain-language approvals, policy status, activity trace, and count-floored export with an attestation. It is built in TypeScript on the Stanford Spezi web stack and surfaced through the platform's authenticated Jupyter proxy (see [02](02-platforms.md)). No surface owns separate execution behavior; each is a view over the one contract.
+The **researcher web UI** is the primary surface for the non-technical analyst. It is a heartwood-owned, single-page app that attaches to the same gateway over REST, WebSocket, and Server-Sent Events fallback, then renders the same events: chat, dataset cards, proposed skills, plain-language approvals, policy status, activity trace, and count-floored export with an attestation. It is built in TypeScript on the Stanford Spezi web stack and surfaced through the platform's authenticated Jupyter proxy (see [02](02-platforms.md)). No surface owns separate execution behavior; each is a view over the one contract.
 
 ## Model policy layer
 
-LiteLLM handles provider routing; on top, a per-platform **policy profile** denies egress by default, allows only the configured in-perimeter endpoint, enforces the model's **capability tier** (caps autonomous tool-loop depth for weaker models), and records every call to the audit log for the egress attestation. The gateway fronts LiteLLM as an **egress proxy**, so the policy decision gates the actual model call and the agent-server never reaches an endpoint directly.
+Provider routes handle model endpoint selection; a future LiteLLM adapter can be added behind the same `ModelProviderAdapter` boundary if a platform needs broader provider compatibility. On top, a per-platform **policy profile** denies egress by default, allows only the configured in-perimeter endpoint, enforces the model's **capability tier** (caps autonomous tool-loop depth for weaker models), and records every call to the audit log for the egress attestation. The gateway fronts provider invocation as an **egress proxy**, so the policy decision gates the actual model call and the agent-server never reaches an endpoint directly.
 
 ## Tools
 

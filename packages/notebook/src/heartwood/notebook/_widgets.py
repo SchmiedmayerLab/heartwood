@@ -67,7 +67,8 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
         WidgetSpec(
             "Policy",
             tuple(
-                f"{status.decision} {status.endpoint}: {status.reason}"
+                f"{status.decision} {status.endpoint}"
+                f"{_route_suffix(status.route_id)}: {status.reason}"
                 for status in view_model.policy_status
             ),
         ),
@@ -113,3 +114,9 @@ def _section_html(title: str, items: tuple[str, ...]) -> str:
         return f"<section><h3>{escaped_title}</h3><p>None</p></section>"
     rendered_items = "".join(f"<li>{html.escape(item)}</li>" for item in items)
     return f"<section><h3>{escaped_title}</h3><ul>{rendered_items}</ul></section>"
+
+
+def _route_suffix(route_id: str | None) -> str:
+    if route_id is None:
+        return ""
+    return f" route={route_id}"

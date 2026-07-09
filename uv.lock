@@ -1732,6 +1732,7 @@ dependencies = [
     { name = "heartwood-compliance" },
     { name = "heartwood-gateway" },
     { name = "heartwood-session" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -1739,6 +1740,7 @@ requires-dist = [
     { name = "heartwood-compliance", editable = "packages/compliance" },
     { name = "heartwood-gateway", editable = "packages/gateway" },
     { name = "heartwood-session", editable = "packages/session" },
+    { name = "uvicorn", specifier = "==0.51.0" },
 ]
 
 [[package]]
@@ -1798,6 +1800,7 @@ name = "heartwood-gateway"
 version = "0.0.0"
 source = { editable = "packages/gateway" }
 dependencies = [
+    { name = "heartwood-adapters" },
     { name = "heartwood-core-adapter" },
     { name = "heartwood-model-policy" },
     { name = "heartwood-schemas" },
@@ -1813,6 +1816,7 @@ agent-server = [
 
 [package.metadata]
 requires-dist = [
+    { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-core-adapter", editable = "packages/core-adapter" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },
     { name = "heartwood-schemas", editable = "packages/schemas" },

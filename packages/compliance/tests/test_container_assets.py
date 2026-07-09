@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import sys
 import tomllib
@@ -22,6 +23,9 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     )
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
+    assert "FROM node:24-trixie-slim AS webui-build" in dockerfile
+    assert "npm ci --no-audit --fund=false" in dockerfile
+    assert "npm run build" in dockerfile
     assert "org.opencontainers.image.source" in dockerfile
     assert 'org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}"' in dockerfile
     assert "uv sync --locked --no-dev --all-extras" in dockerfile
@@ -48,17 +52,32 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     assert "LD_LIBRARY_PATH=/opt/llama.cpp" in dockerfile
     assert "libgomp1" in dockerfile
     assert "download_model_artifact.py" in dockerfile
+    downloader = (
+        _repo_root() / "images" / "generic" / "scripts" / "download_model_artifact.py"
+    ).read_text(encoding="utf-8")
+    assert "--timeout-seconds" in downloader
+    assert "--retries" in downloader
+    assert "retrying in" in downloader
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu" in dockerfile
     assert "HEARTWOOD_AGENT_BACKEND=openhands-bash" in dockerfile
     assert (
         "HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml"
         in dockerfile
     )
+    assert "HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist" in dockerfile
+    assert (
+        "COPY --from=webui-build --chown=heartwood:heartwood "
+        "/src/packages/webui/dist ./packages/webui/dist" in dockerfile
+    )
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" not in dockerfile
     assert "ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0" in dockerfile
     assert "ARG HEARTWOOD_IMAGE_FLAVOR=runtime" in dockerfile
     assert "build-essential" not in dockerfile
     assert " cmake" not in dockerfile
+    assert (
+        "--retry 5 --retry-delay 2 --retry-connrefused --connect-timeout 15 --max-time 600"
+        in dockerfile
+    )
     assert "ARG HEARTWOOD_UID=10001" in dockerfile
     assert "ARG HEARTWOOD_GID=10001" in dockerfile
     assert "groupadd --system --gid" in dockerfile
@@ -67,9 +86,123 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     assert "COPY --chown=heartwood:heartwood fixtures ./fixtures" in dockerfile
     assert "COPY --chown=heartwood:heartwood skills ./skills" in dockerfile
     assert "COPY --chown=heartwood:heartwood images ./images" in dockerfile
+    assert "COPY --chown=heartwood:heartwood README.md ACRONYMS.md ./" in dockerfile
+    assert "COPY --chown=heartwood:heartwood docs ./docs" in dockerfile
+    assert "COPY --chown=heartwood:heartwood design ./design" in dockerfile
     assert "USER heartwood" in dockerfile
     assert 'PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"' in dockerfile
     assert 'CMD ["heartwood", "--help"]' in dockerfile
+
+
+def test_platform_image_defines_terra_runtime_contract() -> None:
+    dockerfile = (_repo_root() / "images" / "platform" / "Dockerfile").read_text(encoding="utf-8")
+    ci_base = (_repo_root() / "images" / "platform" / "terra-ci-base.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    manifest = tomllib.loads((_repo_root() / "images" / "platforms.toml").read_text("utf-8"))
+
+    assert dockerfile.startswith("# syntax=docker/dockerfile:")
+    assert "FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS webui-build" in dockerfile
+    assert (
+        "FROM --platform=${HEARTWOOD_PLATFORM_BASE_PLATFORM} "
+        "ghcr.io/astral-sh/uv:python3.12-trixie-slim AS uv-bin"
+    ) in dockerfile
+    assert (
+        "ARG HEARTWOOD_PLATFORM_BASE_IMAGE=us.gcr.io/broad-dsp-gcr-public/"
+        "terra-jupyter-python:1.1.6"
+    ) in dockerfile
+    assert "ARG HEARTWOOD_PLATFORM_BASE_PLATFORM=linux/amd64" in dockerfile
+    assert (
+        "FROM --platform=${HEARTWOOD_PLATFORM_BASE_PLATFORM} ${HEARTWOOD_PLATFORM_BASE_IMAGE}"
+        in dockerfile
+    )
+    assert "org.heartwood.platform.base" in dockerfile
+    assert "org.heartwood.platform.base.platform" in dockerfile
+    assert "UV_PROJECT_ENVIRONMENT=/opt/heartwood/.venv" in dockerfile
+    assert "UV_PYTHON_INSTALL_DIR=/opt/heartwood/python" in dockerfile
+    assert (
+        "HEARTWOOD_WORKSPACE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions" in dockerfile
+    )
+    assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/" in dockerfile
+    assert (
+        "--retry 5 --retry-delay 2 --retry-connrefused --connect-timeout 15 --max-time 600"
+        in dockerfile
+    )
+    assert "uv sync --locked --no-dev --all-extras --python 3.12" in dockerfile
+    assert "ipykernel install" in dockerfile
+    assert "--name heartwood \\" in dockerfile
+    assert "ARG HEARTWOOD_RUNTIME_ARCH=amd64" in dockerfile
+    assert 'case "${HEARTWOOD_RUNTIME_ARCH}" in' in dockerfile
+    assert "HEARTWOOD_AGENT_SERVER_API_KEY" not in dockerfile
+    assert "ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0" in dockerfile
+    assert "ARG HEARTWOOD_PLATFORM_USER=jupyter" in dockerfile
+    assert "USER ${HEARTWOOD_PLATFORM_USER}" in dockerfile
+    assert "COPY docs ./docs" in dockerfile
+    assert "COPY design ./design" in dockerfile
+    assert "COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist" in dockerfile
+    assert 'CMD ["heartwood", "--help"]' not in dockerfile
+    assert "FROM python:3.12-slim" in ci_base
+    assert "USER=jupyter" in ci_base
+    assert "HOME=/home/jupyter" in ci_base
+    assert "/opt/conda/bin/jupyter" in ci_base
+    assert "ENTRYPOINT" in ci_base
+
+    terra = manifest["platforms"]["terra"]
+    assert terra["status"] == "implemented"
+    assert terra["base_image"] == "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+    assert terra["base_image_parent"] == ("us.gcr.io/broad-dsp-gcr-public/terra-jupyter-base:1.1.4")
+    assert terra["base_platform"] == "linux/amd64"
+    assert terra["platform_home"] == "/home/jupyter"
+    assert terra["platform_user"] == "jupyter"
+    assert terra["jupyter_prefix"] == "/opt/conda"
+    assert terra["runtime_target"] == "terra-runtime"
+    assert terra["smoke_target"] == "terra-smoke"
+    assert terra["ci_smoke_target"] == "terra-smoke-ci"
+    assert terra["runtime_tag"] == "edge-terra"
+    assert terra["smoke_tag"] == "edge-terra-smoke"
+    assert terra["ci_smoke_tag"] == "edge-terra-smoke-ci"
+    assert terra["supported_platforms"] == ["linux/amd64"]
+    assert terra["unsupported_platforms"] == ["linux/arm64"]
+    assert terra["ci_required"] is True
+    assert terra["live_workspace_validation_required"] is True
+
+
+def test_web_ui_package_has_ci_and_container_launcher() -> None:
+    package = json.loads(
+        (_repo_root() / "packages" / "webui" / "package.json").read_text(encoding="utf-8")
+    )
+    workflow = (_repo_root() / ".github" / "workflows" / "web-ui.yml").read_text(encoding="utf-8")
+    launcher = (_repo_root() / "images" / "generic" / "scripts" / "start_web_ui.sh").read_text(
+        encoding="utf-8"
+    )
+    terra_smoke = (
+        _repo_root() / "images" / "generic" / "scripts" / "terra_jupyter_demo_smoke.py"
+    ).read_text(encoding="utf-8")
+
+    assert package["name"] == "@heartwood/webui"
+    assert package["scripts"]["build"] == "tsc --noEmit && vite build"
+    assert package["scripts"]["test:e2e"] == "playwright test"
+    assert package["scripts"]["test:gateway"] == "node scripts/smoke-gateway.cjs"
+    assert package["scripts"]["test:jupyter-proxy"] == "node scripts/smoke-jupyter-proxy.cjs"
+    assert "@stanfordspezi/spezi-web-design-system" in package["dependencies"]
+    assert "@stanfordspezi/spezi-web-configurations" in package["devDependencies"]
+    assert "name: Web UI" in workflow
+    assert "actions/setup-node@v6" in workflow
+    assert "astral-sh/setup-uv@v8.3.2" in workflow
+    assert 'node-version: "24"' in workflow
+    assert "npm run license:check" in workflow
+    assert "npm audit --audit-level=moderate" in workflow
+    assert "npx playwright install --with-deps chromium" in workflow
+    assert "uv sync --locked" in workflow
+    assert "npm run test:e2e" in workflow
+    assert "npm run test:gateway --prefix packages/webui" in workflow
+    assert "npm run test:jupyter-proxy --prefix packages/webui" in workflow
+    assert "heartwood \\" in launcher
+    assert '--web-root "${web_root}"' in launcher
+    assert '--base-path "${base_path}"' in launcher
+    assert "ThreadingHTTPServer" in terra_smoke
+    assert "NotebookSession" in terra_smoke
+    assert "Terra-style Jupyter demo smoke: ok" in terra_smoke
 
 
 def test_compose_smoke_runtime_disables_network() -> None:
@@ -87,6 +220,9 @@ def test_compose_smoke_runtime_disables_network() -> None:
     assert "pids_limit: 256" in compose
     assert "/tmp:rw,nosuid,nodev,size=1g" in compose
     assert "bash images/generic/scripts/offline_stack_smoke.sh" in compose
+    assert "python images/generic/scripts/terra_jupyter_demo_smoke.py" in (
+        _repo_root() / "images" / "generic" / "scripts" / "offline_stack_smoke.sh"
+    ).read_text(encoding="utf-8")
 
 
 def test_dockerignore_excludes_development_and_model_artifacts() -> None:
@@ -117,13 +253,61 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert flavors["flavors"]["providers"]["provider_config"].endswith(
         "provider-routes.example.toml"
     )
+    assert flavors["platform_flavors"]["terra_runtime"]["target"] == "terra-runtime"
+    assert flavors["platform_flavors"]["terra_runtime"]["moving_tag"] == "edge-terra"
+    assert (
+        flavors["platform_flavors"]["terra_runtime"]["base_image"]
+        == "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+    )
+    assert flavors["platform_flavors"]["terra_runtime"]["supported_platforms"] == ["linux/amd64"]
+    assert flavors["platform_flavors"]["terra_smoke"]["target"] == "terra-smoke"
+    assert flavors["platform_flavors"]["terra_smoke"]["moving_tag"] == "edge-terra-smoke"
+    assert flavors["platform_flavors"]["terra_smoke"]["bundles_model_artifact"] is True
+    assert flavors["platform_flavors"]["terra_smoke"]["supported_platforms"] == ["linux/amd64"]
+    assert flavors["platform_flavors"]["terra_smoke_ci"]["target"] == "terra-smoke-ci"
+    assert flavors["platform_flavors"]["terra_smoke_ci"]["moving_tag"] == "edge-terra-smoke-ci"
+    assert flavors["platform_flavors"]["terra_smoke_ci"]["base_image"] == (
+        "heartwood-terra-ci-base:local"
+    )
+    assert flavors["platform_flavors"]["terra_smoke_ci"]["published"] is False
     assert 'target "runtime"' in bake
     assert 'target "smoke"' in bake
     assert 'target "providers"' in bake
+    assert 'target "_platform_common"' in bake
+    assert 'target "_terra_common"' in bake
+    assert 'target "terra-runtime"' in bake
+    assert 'target "terra-smoke"' in bake
+    assert 'target "terra-smoke-ci"' in bake
+    assert (
+        'target "_platform_common" {\n  context = "."\n  dockerfile = "images/platform/Dockerfile"'
+        in bake
+    )
+    assert (
+        'target "_platform_common" {\n  context = "."\n  dockerfile = "images/platform/Dockerfile"'
+        "\n  pull = true\n}" in bake
+    )
+    assert 'cache-from = ["type=gha"]' in bake
+    assert 'cache-to = ["type=gha,mode=min"]' in bake
+    assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
+    assert 'target "terra-runtime" {\n  inherits = ["_terra_common"]' in bake
+    assert 'target "terra-smoke" {\n  inherits = ["_terra_common"]' in bake
+    assert 'target "terra-smoke-ci" {\n  inherits = ["_terra_common"]\n  pull = false' in bake
+    assert 'variable "TERRA_BASE_IMAGE"' in bake
+    assert 'variable "TERRA_BASE_PLATFORM"' in bake
+    assert 'variable "TERRA_CI_BASE_IMAGE"' in bake
+    assert "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6" in bake
+    assert "heartwood-terra-ci-base:local" in bake
+    assert 'HEARTWOOD_PLATFORM_BASE_PLATFORM = "${TERRA_BASE_PLATFORM}"' in bake
+    assert 'HEARTWOOD_RUNTIME_ARCH = "amd64"' in bake
     assert 'variable "IMAGE_TAG_SUFFIX"' in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke-ci${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:sha-${GIT_SHA}-terra${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:sha-${GIT_SHA}-terra-smoke${IMAGE_TAG_SUFFIX}" in bake
     assert 'cache-to = ["type=gha,mode=min"]' in bake
     assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
 
@@ -337,6 +521,8 @@ def test_local_model_downloader_cleans_temp_file_after_download_failure(tmp_path
             str(manifest),
             "--output",
             str(output),
+            "--retries",
+            "1",
         ],
         check=False,
     )
@@ -379,10 +565,32 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert "GIT_SHA: ${{ github.sha }}" in workflow
     assert "IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}" in workflow
     assert "docker buildx bake --file docker-bake.hcl --push" in workflow
+    assert "Build Terra image (linux/amd64)" in workflow
+    assert "Free runner disk for Terra image" in workflow
+    assert "sudo rm -rf /usr/share/dotnet" in workflow
+    assert "docker system prune --all --force" in workflow
+    assert '--set terra-runtime.platform="linux/amd64"' in workflow
+    assert '--set terra-smoke.platform="linux/amd64"' in workflow
+    assert "terra-runtime terra-smoke" in workflow
+    assert "docker buildx imagetools inspect" in workflow
+    assert "verify_single_platform_tag" in workflow
+    assert 'verify_single_platform_tag "${IMAGE_CHANNEL}-terra"' in workflow
+    assert 'verify_single_platform_tag "sha-${GIT_SHA}-terra"' in workflow
+    assert 'verify_single_platform_tag "${IMAGE_CHANNEL}-terra-smoke"' in workflow
+    assert 'verify_single_platform_tag "sha-${GIT_SHA}-terra-smoke"' in workflow
+    assert "unexpectedly includes linux/arm64" in workflow
     assert "docker buildx imagetools create \\" in workflow
+    assert "Verify image manifests" in workflow
+    assert "verify_multi_platform_tag" in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-arm64"' in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-arm64"' in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-arm64"' in workflow
+    assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}"' in workflow
+    assert 'verify_multi_platform_tag "sha-${GIT_SHA}"' in workflow
+    assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}-smoke"' in workflow
+    assert 'verify_multi_platform_tag "sha-${GIT_SHA}-smoke"' in workflow
+    assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}-providers"' in workflow
+    assert 'verify_multi_platform_tag "sha-${GIT_SHA}-providers"' in workflow
     assert ":dev-main" not in workflow
     assert ":main" not in workflow
     assert "${{ github.sha }}" in workflow
@@ -404,6 +612,26 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
     assert "docker buildx bake --file docker-bake.hcl --print runtime smoke providers" in workflow
     assert "DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}" in workflow
     assert "docker compose -f images/generic/compose.yaml run --rm --build heartwood" in workflow
+    assert "Terra image smoke test (linux/amd64)" in workflow
+    assert "driver: docker" in workflow
+    assert (
+        "docker buildx build --check --platform linux/amd64 --file images/platform/Dockerfile ."
+        in workflow
+    )
+    assert (
+        "docker buildx bake --file docker-bake.hcl --print terra-runtime terra-smoke terra-smoke-ci"
+        in workflow
+    )
+    assert "Build Terra-compatible CI base" in workflow
+    assert "images/platform/terra-ci-base.Dockerfile" in workflow
+    assert "heartwood-terra-ci-base:local" in workflow
+    assert "docker buildx bake --file docker-bake.hcl --load" in workflow
+    assert "--set terra-smoke-ci.platform=linux/amd64" in workflow
+    assert "docker run --rm --platform linux/amd64 --network none --entrypoint bash" in workflow
+    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci" in workflow
+    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke\n" not in workflow
+    assert "images/platform/scripts/terra_image_smoke.sh" in workflow
+    assert "images/generic/scripts/offline_stack_smoke.sh" in workflow
 
 
 def _repo_root() -> Path:

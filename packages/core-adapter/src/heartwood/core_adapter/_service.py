@@ -26,7 +26,14 @@ from heartwood.adapters import (
     PlatformAdapter,
 )
 from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
-from heartwood.adapters.model import FakeLocalModelProviderAdapter
+from heartwood.adapters.model import (
+    FakeLocalModelProviderAdapter,
+    ProviderConfigError,
+    ProviderInvocationError,
+    ProviderRoute,
+    invoke_provider_route,
+    load_provider_config,
+)
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.audit import AuditLog
 from heartwood.core_adapter._facade import (
@@ -244,19 +251,64 @@ class SessionService:
         endpoint = str(
             command.payload.get("endpoint", "https://model.local.invalid/v1/chat/completions")
         )
+        provider_route: ProviderRoute | None = None
+        provider_route_id = _optional_string(command.payload.get("provider_route_id"))
+        provider_config_path = _optional_string(command.payload.get("provider_config_path"))
+        error_event: SessionEvent | None = None
+        if provider_route_id is not None:
+            if provider_config_path is None:
+                error_event = self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": "provider route requires a provider config path",
+                    },
+                )
+            else:
+                try:
+                    provider_route = load_provider_config(Path(provider_config_path)).route(
+                        provider_route_id
+                    )
+                    endpoint = provider_route.endpoint
+                except ProviderConfigError as error:
+                    error_event = self._record_event(
+                        EventKind.ERROR_RECORDED,
+                        {
+                            "command": _kind_value(command.kind),
+                            "reason": str(error),
+                        },
+                    )
         request = ModelCallRequest(
             endpoint=endpoint,
-            capability_tier=self.model_provider_adapter.capability_tier,
-            purpose="synthetic core harness run",
+            capability_tier=(
+                provider_route.capability_tier
+                if provider_route is not None
+                else self.model_provider_adapter.capability_tier
+            ),
+            purpose=(
+                f"provider route {provider_route.route_id}"
+                if provider_route is not None
+                else "synthetic core harness run"
+            ),
         )
         invoke_model = bool(command.payload.get("invoke_model", False))
+        invoke_provider = bool(command.payload.get("invoke_provider", False))
+        if invoke_model and invoke_provider:
+            error_event = self._record_event(
+                EventKind.ERROR_RECORDED,
+                {
+                    "command": _kind_value(command.kind),
+                    "reason": "local-model and provider-route invocation are mutually exclusive",
+                },
+            )
         decision = self.model_provider_adapter.evaluate_model_call(request)
         policy_payload: dict[str, JsonValue] = {"decision": decision.model_dump(mode="json")}
-        error_event: SessionEvent | None = None
+        if provider_route is not None:
+            policy_payload["provider_route"] = cast(JsonValue, provider_route.safe_metadata())
         model_call_approved = (
             self._has_model_call_approval(decision.decision_id) and decision.decision == "allow"
         )
-        if invoke_model:
+        if invoke_model and error_event is None:
             try:
                 engine = ModelPolicyEngine(self.platform_adapter.default_policy_profile())
                 attestation = engine.attestation(
@@ -290,12 +342,52 @@ class SessionService:
                         "reason": str(error),
                     },
                 )
+        if invoke_provider and error_event is None:
+            try:
+                engine = ModelPolicyEngine(self.platform_adapter.default_policy_profile())
+                attestation = engine.attestation(
+                    decision=decision,
+                    record_id=f"{command.command_id}-attestation",
+                    session_id=command.session_id,
+                    occurred_at=self.clock(),
+                )
+                policy_payload["attestation"] = attestation.model_dump(mode="json")
+                if provider_route is None:
+                    error_event = self._record_event(
+                        EventKind.ERROR_RECORDED,
+                        {
+                            "command": _kind_value(command.kind),
+                            "reason": "provider invocation requires a selected provider route",
+                        },
+                    )
+                elif decision.decision == "allow" and not model_call_approved:
+                    error_event = self._record_event(
+                        EventKind.ERROR_RECORDED,
+                        {
+                            "command": _kind_value(command.kind),
+                            "reason": "provider invocation requires approved model-call decision",
+                        },
+                    )
+                elif model_call_approved:
+                    response = invoke_provider_route(
+                        provider_route,
+                        prompt_length=len(prompt),
+                    )
+                    policy_payload["response_metadata"] = _model_response_metadata(response)
+            except ProviderInvocationError as error:
+                error_event = self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": str(error),
+                    },
+                )
         policy_event = self._record_event(EventKind.MODEL_CALL_DECISION_RECORDED, policy_payload)
-        model_invocation_required = invoke_model and model_call_approved
+        model_invocation_required = (invoke_model or invoke_provider) and model_call_approved
         model_invocation_succeeded = (
             not model_invocation_required or "response_metadata" in policy_payload
         )
-        approved = model_call_approved and model_invocation_succeeded
+        approved = error_event is None and model_call_approved and model_invocation_succeeded
         stream = self.backend.run_turn(
             session_id=command.session_id,
             prompt_length=len(prompt),
