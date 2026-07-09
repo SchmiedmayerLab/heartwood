@@ -36,6 +36,9 @@
     "detection.proposed",
     "approval.recorded",
     "model_call.decision.recorded",
+    "agent_message.emitted",
+    "tool_call.proposed",
+    "confirmation.resolved",
     "tool.execution.recorded",
     "audit.export.recorded"
   ],

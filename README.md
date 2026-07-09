@@ -19,14 +19,14 @@ SPDX-License-Identifier: MIT
 
 A Docker-packaged coding harness for sensitive biomedical research data.
 
-Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and a CLI-first workflow for reproducible analyses.
+Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and a CLI-first workflow for reproducible analyses, built on one shared session model designed to drive notebook and researcher-web-UI surfaces as well.
 
 Participant-level data stays inside the platform boundary. Development and CI use synthetic fixtures only.
 
 
 ## Overview
 
-Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The project uses a Python workspace, typed contracts, platform adapters, verified local skills, a shared session command/event model, and deterministic offline harnesses for local development and CI.
+Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture is designed around a session gateway that will own the OpenHands agent-server and expose one shared session command/event contract to every surface — the CLI, a notebook bridge, and a researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
 
 The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 

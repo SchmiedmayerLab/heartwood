@@ -26,6 +26,9 @@ def test_synthetic_omop_replay_fixture_matches_verified_skills() -> None:
         "aggregate-export",
         "baseline-model",
     ]
+    assert "agent_message.emitted" in fixture.expected_audit_events
+    assert "tool_call.proposed" in fixture.expected_audit_events
+    assert "confirmation.resolved" in fixture.expected_audit_events
     assert fixture.expected_outputs["aggregate_export"] == {
         "exported": False,
         "suppressed": True,

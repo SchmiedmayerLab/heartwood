@@ -15,6 +15,7 @@ from pathlib import Path
 from heartwood.schemas import (
     ApprovalRecord,
     AuditEvent,
+    ConfirmationRequest,
     DetectorEvidence,
     EgressAttestationRecord,
     ModelCallDecision,
@@ -103,6 +104,12 @@ def test_approval_fixture_matches_approval_schema() -> None:
     payload = _read_json(_FIXTURES / "approvals" / "skill-approval.json")
     approval = ApprovalRecord.model_validate(payload)
     assert approval.target_type == "skill"
+
+
+def test_confirmation_request_fixture_matches_confirmation_schema() -> None:
+    payload = _read_json(_FIXTURES / "approvals" / "tool-confirmation-request.json")
+    request = ConfirmationRequest.model_validate(payload)
+    assert request.tool_call_id == "session-synthetic-001-toolcall-0"
 
 
 def test_expected_audit_export_matches_audit_schema() -> None:

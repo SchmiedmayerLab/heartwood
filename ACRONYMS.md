@@ -90,10 +90,13 @@ A running reference for the acronyms and named tools used across this project (m
 | GPU | Graphics Processing Unit | Accelerator for ML / heavy compute |
 | vCPU | virtual CPU | A virtual processor core on a VM |
 | OS | Operating System | e.g. Linux / Ubuntu |
+| CDN | Content Delivery Network | External static-asset hosting, forbidden for the runtime web UI |
 | DNS | Domain Name System | Resolves hostnames to network addresses |
 | HTTP(S) | HyperText Transfer Protocol (Secure) | The web request protocol |
 | PR | Pull Request | Proposed code or documentation change reviewed before merge |
-| SSE | Server-Sent Events | One-way streaming over HTTP (used for live agent output) |
+| REST | Representational State Transfer | HTTP API style used by the session gateway |
+| SSE | Server-Sent Events | One-way streaming over HTTP (fallback for live agent output) |
+| WS | WebSocket | Bidirectional streaming over one TCP connection (primary transport for live agent sessions) |
 | PSC | Private Service Connect | GCP private connectivity to a service (no public internet) |
 | PE | Private Endpoint | Azure private network entry to a service (no public ingress) |
 
@@ -140,6 +143,7 @@ A running reference for the acronyms and named tools used across this project (m
 | PyPI | Python Package Index | Public Python package registry; blocked at runtime in the air-gapped image |
 | IDE | Integrated Development Environment | Code editor + tooling (VS Code, JetBrains) |
 | JSON | JavaScript Object Notation | Lightweight structured-data format used for schemas and events |
+| JSONL | JSON Lines | One JSON object per line, used for scrubbed audit exports |
 | TOML | Tom's Obvious Minimal Language | Configuration format used for Python project metadata and the skill bundle catalog |
 | YAML | YAML Ain't Markup Language | Human-readable configuration format used for workflows and metadata |
 | NDJSON | Newline-Delimited JSON | One JSON record per line; the FHIR bulk-export format |
@@ -151,6 +155,7 @@ A running reference for the acronyms and named tools used across this project (m
 | CI/CD | Continuous Integration / Continuous Delivery | Automated build/test/release pipeline |
 | BYOD | Bring Your Own Data | A user's own dataset brought into a platform |
 | SPI | Service Provider Interface | A stable interface a platform/model/data adapter implements |
+| SPA | Single-Page Application | A web app that loads once and updates in place (the researcher web UI) |
 | UI | User Interface | The screens and controls a person uses to operate software |
 | UX | User Experience | The overall user workflow and interaction quality |
 
@@ -175,4 +180,4 @@ Also evaluated as candidate agent-harness foundations: OpenCode (sst/Anomaly), C
 
 Orchestration/agent frameworks and durability engines evaluated: LangGraph, LlamaIndex Workflows, Pydantic AI, Google ADK, smolagents, AutoGen / AG2, CrewAI, DBOS, Temporal. Evaluation & skills-testing tooling: Inspect AI, promptfoo, DeepEval, SkillsBench, skillgrade; coding-ability benchmarks SWE-bench (Verified), Terminal-Bench, and LiveCodeBench. Supply-chain & runtime: Sigstore, bubblewrap. Data & registries: Synthea (synthetic health data), nb-cli (headless notebook driver), BioContextAI and GoekeLab awesome-genomic-skills (community skill/MCP registries) — all product/project names.
 
-Development-practice tooling: Docker, Docker Compose, GitHub Actions, Dependabot, Codecov, Linkspector, Jupyter, JupyterLab, RStudio, ipywidgets, Node.js, actionlint, yamllint, REUSE (reuse.software — per-file SPDX licensing), ruff, and uv (Python) — all product/project names.
+Development-practice tooling: Docker, Docker Compose, GitHub Actions, Dependabot, Codecov, Linkspector, Jupyter, JupyterLab, jupyter-server-proxy, RStudio, ipywidgets, Node.js, Vite, Vitest, ESLint, Prettier, React, Radix UI, Tailwind CSS, Stanford Spezi (spezi-web-design-system, spezi-web-configurations, spezi-web-template-application), actionlint, yamllint, REUSE (reuse.software — per-file SPDX licensing), ruff, and uv (Python) — all product/project names.
