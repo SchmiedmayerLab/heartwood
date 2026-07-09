@@ -38,7 +38,9 @@ runtime_profile = "llama-cpp-cpu"
 quality_claim = false
 quality_claim_scope = "Demo-quality local coding output only; no biomedical, production, or benchmark claim."
 production_use = false
-resource_envelope = "At least 10 GB RAM plus enough disk for the Terra base, Heartwood layers, 4.68 GB GGUF artifact, extraction overhead, and workspace state."
+minimum_resource_envelope = "4 vCPU, 16 GB RAM, and 25 GB free Docker disk for one active local-model demo session."
+recommended_resource_envelope = "8 vCPU, 32 GB RAM, and 50 GB free Docker disk for local Docker; 75 GB persistent disk is recommended for Terra because the platform base, image layers, model artifact, extraction overhead, and workspace share the environment."
+gpu_acceleration = "Not used by the current llama-cpp-cpu image; requires a future CUDA/vLLM/SGLang profile and GPU-capable tests."
 publication_policy = [
   "Publish from main in the default runtime and Terra runtime tags so the shipped images are useful out of the box.",
   "Publish model-explicit coder-7b aliases for demos that should name the bundled model family directly.",

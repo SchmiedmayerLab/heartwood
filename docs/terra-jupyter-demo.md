@@ -31,6 +31,12 @@ The Terra image is a platform-specific notebook image that extends the current T
 
 The generic image still remains the portable source runtime for local Docker reproducibility. The Terra image carries `README.md`, `ACRONYMS.md`, `docs/`, and `design/` under `/opt/heartwood` so a packaged runtime contains the tutorial notebook and design material even without a repository checkout.
 
+## Terra Resource Requirements
+
+For a first live Terra demo with `edge-terra-coder-7b`, use a Standard VM with at least 4 vCPU, 16 GB RAM, and a 50 GB persistent disk. Prefer 8 vCPU, 32 GB RAM, and a 75 GB persistent disk when the workspace budget allows it. The disk must cover the Terra base image, Heartwood image layers, image extraction, the 4.68 GB GGUF artifact, Jupyter state, audit/reviewer exports, and `/home/jupyter/heartwood-workspace`.
+
+Do not add a GPU only for the current Heartwood local-model path. Terra supports GPUs for Jupyter Cloud Environments and the referenced Terra GPU guide lists NVIDIA Tesla T4, P4, and V100 options with Standard VM constraints, but the current Heartwood image uses the CPU-only `llama-cpp-cpu` profile and does not start a CUDA-capable llama.cpp, vLLM, or SGLang server. A Terra GPU may help unrelated notebook code that explicitly uses GPU-enabled libraries, but it will not speed up the bundled Qwen2.5-Coder-7B inference until a separate GPU image/profile is implemented and tested.
+
 ## Runnable Notebook
 
 The companion notebook [terra-jupyter-demo.ipynb](terra-jupyter-demo.ipynb) contains the synthetic notebook cells for the same demo path. Use it inside the Heartwood image after the workspace starts to calculate the Jupyter proxy URL, run detection through `NotebookSession`, submit the synthetic workflow, inspect approval controls and activity, export the scrubbed audit log, and compare the result with CLI replay and the proxied researcher web UI. In a packaged image, the notebook is available at `/opt/heartwood/docs/terra-jupyter-demo.ipynb`; copy it into the workspace home directory if Terra's notebook file browser only starts from `/home/jupyter`.
@@ -105,7 +111,7 @@ for approval in run.approval_controls:
 Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra` and `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b` have been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created, and the tag must pass the Leonardo-compatible Docker schema-2 manifest check in [Container Images](container-images.md) through `images/platform/scripts/verify_registry_manifest.py`; `docker manifest inspect` alone is insufficient because it can read OCI indexes that Leonardo rejects.
 
 1. Create or select a synthetic-only Terra workspace; do not use controlled data for this validation.
-2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, and enough disk and memory for the Terra base image, Heartwood layers, the 4.68 GB GGUF artifact, image extraction overhead, and `/home/jupyter/heartwood-workspace`.
+2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, at least 4 vCPU, 16 GB RAM, and a 50 GB persistent disk; prefer 8 vCPU, 32 GB RAM, and a 75 GB persistent disk for a smoother demo.
 3. Open a Jupyter terminal and run `export HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions`, `export HEARTWOOD_DEMO_WEB_HOST=127.0.0.1`, then `cd /opt/heartwood && bash images/generic/scripts/start_demo_stack.sh`.
 4. In a notebook cell, run `from heartwood.notebook import jupyter_proxy_url; jupyter_proxy_url(port=8767)` and open the returned URL.
 5. Submit a synthetic prompt in the researcher web UI run form, confirm that the Conversation panel shows the user prompt, model preview, agent message, and trace summary through the proxy, and compare the same session in the notebook API and `heartwood --workspace /home/jupyter/heartwood-workspace/sessions --session-id session-local replay`.

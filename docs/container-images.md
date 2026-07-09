@@ -57,6 +57,21 @@ Registry maintenance must protect public moving tags, commit-SHA tags retained b
 
 The default runtime images intentionally bundle the Qwen2.5-Coder-7B Q4_K_M artifact so Docker and Terra demos produce useful local model output without mounting weights or configuring an external provider. The smoke flavor exists to prove the stack runs air-gapped with a small artifact in CI; it is not a coding-quality, biomedical, or production model.
 
+## Resource Requirements
+
+These requirements describe one active local-model demo session using the bundled Qwen2.5-Coder-7B Q4_K_M artifact and the current `llama-cpp-cpu` runtime with a 4096-token context and 768-token response budget. They are operational starting points, not benchmark claims.
+
+| Deployment | Minimum | Recommended | Notes |
+|---|---|---|---|
+| Local Docker demo on `edge` or `edge-coder-7b` | 4 vCPU, 16 GB RAM, 25 GB free Docker disk | 8 vCPU, 32 GB RAM, 50 GB free Docker disk | Docker Desktop should be configured with enough CPU, memory, and disk before pulling the image. Lower memory may start the gateway but fail or swap heavily once llama.cpp loads the 4.68 GB GGUF artifact and KV cache. |
+| Terra demo on `edge-terra` or `edge-terra-coder-7b` | Standard VM, 4 vCPU, 16 GB RAM, 50 GB persistent disk | Standard VM, 8 vCPU, 32 GB RAM, 75 GB persistent disk | Disk must cover the Terra base, Heartwood layers, pulled image layers, image extraction, the 4.68 GB model artifact, Jupyter state, audit/reviewer exports, and the workspace. |
+| CI smoke on `edge-smoke`, `edge-terra-smoke`, or `edge-terra-smoke-ci` | 2 vCPU, 4 GB RAM, 10 GB free disk | 4 vCPU, 8 GB RAM, 20 GB free disk | Smoke images use the tiny checked GGUF artifact and are not representative of coding-model output quality. |
+| Provider-route image `edge-providers` | 2 vCPU, 4 GB RAM, 10 GB free disk | 4 vCPU, 8 GB RAM, 20 GB free disk | No local model weights are bundled; capacity is dominated by the gateway, OpenHands process, notebook/web serving, and provider latency. |
+
+The current default model path is single-session oriented. For a multi-user hosted setup, run one local-model worker per active session or scale the container horizontally; do not assume several concurrent Qwen2.5-Coder-7B generations will fit in the minimum memory envelope. Increase `HEARTWOOD_LOCAL_MODEL_CONTEXT`, `HEARTWOOD_LOCAL_MODEL_MAX_TOKENS`, or concurrent sessions only after measuring memory and latency in the target platform.
+
+Attaching a GPU to the current image does not accelerate the bundled local model. The shipped runtime uses the CPU-only `llama-cpp-cpu` profile and an Ubuntu CPU `llama-server` binary, and the launchers do not request Docker GPU devices. Terra supports GPUs for Jupyter Cloud Environments, but Heartwood will use them only after a separate GPU runtime profile, CUDA-capable llama.cpp or vLLM/SGLang image, device configuration, and GPU-capable tests are implemented. Until then, choose CPU and memory first; a Terra GPU may help unrelated notebook code that uses PyTorch or TensorFlow, but it will not improve Heartwood local-model inference.
+
 ## Platform Notebook Images
 
 The generic image family is the portable Heartwood runtime baseline. It is suitable for local Docker, Docker Compose, CI, and as the source runtime for platform-specific images, but it is not the Terra custom notebook image users should select in Terra. The repeatable mechanism for adding or adapting a platform-derived notebook image is defined in [Platform Image Extension Guide](platform-images.md).

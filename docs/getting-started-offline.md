@@ -40,6 +40,12 @@ The image family is expected to publish and smoke-test `linux/amd64` and `linux/
 
 Docker can expose GPUs to containers, but GPU support is a host capability, not something a portable CPU image can guarantee. The baseline real runtime therefore remains `llama-cpp-cpu`; NVIDIA acceleration is tracked separately as `llama-cpp-cuda`, requiring an explicit CUDA-enabled runtime, Docker GPU device exposure, and self-hosted GPU CI or scheduled platform checks. The CPU profile must keep working without a GPU.
 
+## Local Resource Requirements
+
+For the default `edge` demo with Qwen2.5-Coder-7B Q4_K_M, configure Docker for at least 4 vCPU, 16 GB RAM, and 25 GB free Docker disk. Use 8 vCPU, 32 GB RAM, and 50 GB free Docker disk when possible; this avoids heavy swapping while llama.cpp loads the 4.68 GB GGUF artifact, allocates runtime buffers and KV cache, serves the gateway, and runs the OpenHands child process. The tiny `edge-smoke` CI image can run on substantially smaller machines, but it is only a load/query diagnostic and should not be used to judge demo model quality.
+
+These numbers describe one active local-model generation. If the host needs multiple simultaneous sessions, scale out with one local-model worker per active session or raise CPU, memory, and disk based on measured peak usage. A GPU attached to the host will not improve the current `edge` demo unless a future GPU profile is selected; the shipped launcher uses the CPU-only llama.cpp binary.
+
 ## Agent-Server Scope
 
 The generic image installs `openhands-agent-server==1.34.0`, `openhands-tools==1.34.0`, and `libtmux==0.61.0` for Python 3.12 and includes `images/generic/scripts/start_agent_server.sh`, which binds only to loopback, configures a local session key, disables VSCode/VNC/tool-preload services for the smoke path, and stores OpenHands state under a temporary workspace. The offline smoke run enables `HEARTWOOD_AGENT_SERVER_ENABLED=1` for the agentic CLI turn so the session gateway starts and stops the OpenHands process as a managed localhost child. `HEARTWOOD_AGENT_BACKEND=openhands-bash` then lists registered OpenHands tools and executes a bounded bash command through authenticated OpenHands `/api` routes after approval.

@@ -61,6 +61,9 @@ def test_terra_runbook_tracks_platform_image_contract() -> None:
     assert "web UI conversation interaction" in runbook
     assert "user prompt, model preview, agent message, and trace summary" in runbook
     assert "custom image digest" in runbook
+    assert "4 vCPU, 16 GB RAM" in runbook
+    assert "8 vCPU, 32 GB RAM" in runbook
+    assert "will not speed up the bundled Qwen2.5-Coder-7B inference" in runbook
     assert "real Terra workspace is still required" in runbook
     assert "configure the Cloud Environment to use the selected image directly" not in runbook
 
@@ -100,6 +103,9 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "Run Local Model" in readme
     assert "bounded synthetic response preview" in container_docs
     assert "gateway-managed localhost OpenHands child server" in container_docs
+    assert "Resource Requirements" in container_docs
+    assert "4 vCPU, 16 GB RAM" in container_docs
+    assert "Attaching a GPU to the current image does not accelerate" in container_docs
     assert "images/platform/scripts/verify_registry_manifest.py" in container_docs
     assert (
         "Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests"

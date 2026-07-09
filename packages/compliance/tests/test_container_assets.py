@@ -560,6 +560,9 @@ def test_model_catalog_records_smoke_model_and_deferred_coding_candidates() -> N
         "terra-coder-7b",
     ]
     assert qwen_default["quality_claim"] is False
+    assert qwen_default["minimum_resource_envelope"].startswith("4 vCPU, 16 GB RAM")
+    assert qwen_default["recommended_resource_envelope"].startswith("8 vCPU, 32 GB RAM")
+    assert "Not used by the current llama-cpp-cpu image" in qwen_default["gpu_acceleration"]
     assert qwen_agent["status"] == "deferred-high-memory"
     assert qwen_agent["reviewed_q4_k_m_sha256"] == (
         "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad"
@@ -714,6 +717,9 @@ def test_local_model_manifest_records_verified_gguf_artifact() -> None:
     assert coder_manifest["artifact_sha256"] == (
         "9a961bb225cb2b9fd84b2297df0d53089895c049d7d9dc5f5f8aebbcd3247872"
     )
+    assert coder_manifest["minimum_resource_envelope"].startswith("4 vCPU, 16 GB RAM")
+    assert coder_manifest["recommended_resource_envelope"].startswith("8 vCPU, 32 GB RAM")
+    assert "does not use attached GPUs" in coder_manifest["gpu_acceleration"]
     assert coder_manifest["model_alias"] == "heartwood-local-runtime"
 
 
