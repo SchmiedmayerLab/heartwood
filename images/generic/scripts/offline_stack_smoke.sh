@@ -15,12 +15,13 @@ request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.
 audit_copy="${HEARTWOOD_AUDIT_EXPORT:-/tmp/heartwood-audit-export.jsonl}"
 reviewer_output="${HEARTWOOD_REVIEWER_PACKET:-/tmp/heartwood-reviewer-packet}"
 transcript="${HEARTWOOD_TRANSCRIPT:-/tmp/heartwood-offline-transcript.txt}"
+heartwood_python="${HEARTWOOD_PYTHON:-python}"
 agent_backend="${HEARTWOOD_AGENT_BACKEND:-openhands-bash}"
 agent_server_enabled="${HEARTWOOD_AGENT_SERVER_ENABLED:-1}"
 agent_server_port="${HEARTWOOD_AGENT_SERVER_PORT:-8766}"
 agent_server_ready_timeout="${HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS:-180}"
 agent_server_workspace="${HEARTWOOD_AGENT_SERVER_WORKSPACE:-/tmp/heartwood-openhands}"
-agent_server_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-$(python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+agent_server_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-$("${heartwood_python}" -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 
 export HEARTWOOD_LOCAL_MODEL_CONTEXT="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-512}"
 export HEARTWOOD_LOCAL_MODEL_MAX_TOKENS="${HEARTWOOD_LOCAL_MODEL_MAX_TOKENS:-16}"
@@ -40,7 +41,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python - <<'PY'
+"${heartwood_python}" - <<'PY'
 import socket
 import time
 
@@ -95,5 +96,5 @@ test -s "${reviewer_output}/reviewer-packet.md"
 grep -q "model=heartwood-local-runtime status=ok" "${transcript}"
 grep -q "Tool execution: openhands.bash.execute exit=0" "${transcript}"
 test -s "${workspace}/${session_id}/agent-artifacts/synthetic-workspace-summary.md"
-python images/generic/scripts/terra_jupyter_demo_smoke.py | tee -a "${transcript}"
+"${heartwood_python}" images/generic/scripts/terra_jupyter_demo_smoke.py | tee -a "${transcript}"
 grep -q "Terra-style Jupyter demo smoke: ok" "${transcript}"

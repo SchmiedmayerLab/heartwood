@@ -162,12 +162,20 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert (
         "HEARTWOOD_WORKSPACE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions" in dockerfile
     )
+    assert "HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python" in dockerfile
+    assert 'JUPYTER_PATH="${HEARTWOOD_JUPYTER_PREFIX}/share/jupyter"' in dockerfile
+    assert 'PATH="/opt/llama.cpp:${PATH}"' in dockerfile
+    assert "/opt/heartwood/.venv/bin:${PATH}" not in dockerfile
+    assert 'LD_LIBRARY_PATH="/opt/llama.cpp:${LD_LIBRARY_PATH}"' in dockerfile
     assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/" in dockerfile
     assert (
         "--retry 5 --retry-delay 2 --retry-connrefused --connect-timeout 15 --max-time 600"
         in dockerfile
     )
     assert "uv sync --locked --no-dev --all-extras --python 3.12" in dockerfile
+    assert "ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood" in dockerfile
+    assert "ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python" in dockerfile
+    assert "ln -sf /opt/heartwood/.venv/bin/agent-server /usr/local/bin/agent-server" in dockerfile
     assert "ipykernel install" in dockerfile
     assert "--name heartwood \\" in dockerfile
     assert "ARG HEARTWOOD_RUNTIME_ARCH=amd64" in dockerfile
@@ -175,7 +183,13 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" not in dockerfile
     assert "ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0" in dockerfile
     assert "ARG HEARTWOOD_PLATFORM_USER=jupyter" in dockerfile
+    assert "WORKDIR ${HEARTWOOD_PLATFORM_HOME}" in dockerfile
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in dockerfile
+    assert "HOME=/tmp IPYTHONDIR=/tmp/heartwood-ipython" in dockerfile
+    assert (
+        'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood '
+        '"${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace"' in dockerfile
+    )
     assert "COPY docs ./docs" in dockerfile
     assert "COPY design ./design" in dockerfile
     assert "COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist" in dockerfile
@@ -183,8 +197,42 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert "FROM python:3.12-slim" in ci_base
     assert "USER=jupyter" in ci_base
     assert "HOME=/home/jupyter" in ci_base
+    assert "JUPYTER_PORT=8000" in ci_base
+    assert "JUPYTER_HOME=/etc/jupyter" in ci_base
+    assert 'PATH="/opt/conda/bin:${PATH}"' in ci_base
+    assert "notebook==6.5.4" in ci_base
+    assert "jupyter_server==1.24.0" in ci_base
+    assert "jupyter_server_proxy==4.0.0" in ci_base
+    assert "setuptools==80.9.0" in ci_base
+    assert "Pull-request-only surrogate for Terra's notebook base" in ci_base
     assert "/opt/conda/bin/jupyter" in ci_base
-    assert "ENTRYPOINT" in ci_base
+    assert "/opt/conda/bin/jupyter-notebook" in ci_base
+    assert "c.NotebookApp.port = 8000" in ci_base
+    assert 'c.NotebookApp.base_url = "/notebooks" + fragment' in ci_base
+    assert "GOOGLE_PROJECT" in ci_base
+    assert "CLUSTER_NAME" in ci_base
+    assert "${JUPYTER_HOME}/scripts/run-jupyter.sh" in ci_base
+    assert "/opt/conda/bin/python3 /opt/conda/bin/jupyter-notebook" in ci_base
+    assert 'ENTRYPOINT ["/opt/conda/bin/jupyter", "notebook"]' in ci_base
+    terra_image_smoke = (
+        _repo_root() / "images" / "platform" / "scripts" / "terra_image_smoke.sh"
+    ).read_text(encoding="utf-8")
+    jupyter_contract_smoke = (
+        _repo_root() / "images" / "platform" / "scripts" / "terra_jupyter_contract_smoke.sh"
+    ).read_text(encoding="utf-8")
+    jupyter_launch_smoke = (
+        _repo_root() / "images" / "platform" / "scripts" / "terra_jupyter_launch_smoke.sh"
+    ).read_text(encoding="utf-8")
+    assert "HEARTWOOD_PYTHON" in terra_image_smoke
+    assert "Heartwood venv must not shadow the platform Python" in jupyter_contract_smoke
+    assert ".ipython/heartwood-jupyter-contract-write" in jupyter_contract_smoke
+    assert "kernelspec list --json" in jupyter_contract_smoke
+    assert "Heartwood Jupyter kernel is not registered" in jupyter_contract_smoke
+    assert "terra-jupyter-contract" in jupyter_contract_smoke
+    assert "HEARTWOOD_TERRA_JUPYTER_MODE" in jupyter_launch_smoke
+    assert "GOOGLE_PROJECT" in jupyter_launch_smoke
+    assert "CLUSTER_NAME" in jupyter_launch_smoke
+    assert "--entrypoint /etc/jupyter/scripts/run-jupyter.sh" in jupyter_launch_smoke
     assert "WWW-Authenticate" in verifier
     assert "parse_bearer_challenge" in verifier
     assert 'registry != "localhost"' in verifier
@@ -193,6 +241,8 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert "allow_non_platform_manifests" in verifier
     assert "manifest_media_type" in verifier
     assert "supported_platforms" in verifier
+    assert "verify_image_config_contract" in verifier
+    assert "forbidden_path_entries" in verifier
 
     terra = manifest["platforms"]["terra"]
     assert terra["status"] == "implemented"
@@ -202,6 +252,19 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert terra["platform_home"] == "/home/jupyter"
     assert terra["platform_user"] == "jupyter"
     assert terra["jupyter_prefix"] == "/opt/conda"
+    assert terra["image_user"] == "jupyter"
+    assert terra["working_dir"] == "/home/jupyter"
+    assert terra["entrypoint"] == ["/opt/conda/bin/jupyter", "notebook"]
+    assert terra["exposed_ports"] == ["8000/tcp"]
+    assert terra["required_env"] == ["HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python"]
+    assert terra["forbidden_path_entries"] == ["/opt/heartwood/.venv/bin"]
+    assert terra["required_env_contains"]["PATH"] == [
+        "/opt/llama.cpp",
+        "/opt/conda/bin",
+        "/usr/local/bin",
+    ]
+    assert terra["required_env_contains"]["LD_LIBRARY_PATH"] == ["/opt/llama.cpp"]
+    assert terra["required_env_contains"]["JUPYTER_PATH"] == ["/opt/conda/share/jupyter"]
     assert terra["runtime_target"] == "terra-runtime"
     assert terra["smoke_target"] == "terra-smoke"
     assert terra["coder_target"] == "terra-runtime"
@@ -224,6 +287,49 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert terra["unsupported_platforms"] == ["linux/arm64"]
     assert terra["ci_required"] is True
     assert terra["live_workspace_validation_required"] is True
+
+
+def test_generic_and_terra_runtime_targets_keep_heartwood_payloads_aligned() -> None:
+    generic = (_repo_root() / "images" / "generic" / "Dockerfile").read_text(encoding="utf-8")
+    platform = (_repo_root() / "images" / "platform" / "Dockerfile").read_text(encoding="utf-8")
+    bake = (_repo_root() / "docker-bake.hcl").read_text(encoding="utf-8")
+    runtime_target = _bake_target_block(bake, "runtime")
+    terra_runtime_target = _bake_target_block(bake, "terra-runtime")
+    shared_model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
+
+    assert f'HEARTWOOD_LOCAL_MODEL_MANIFEST = "{shared_model_manifest}"' in runtime_target
+    assert f'HEARTWOOD_LOCAL_MODEL_MANIFEST = "{shared_model_manifest}"' in terra_runtime_target
+
+    for source_path in (
+        "pyproject.toml uv.lock",
+        "packages",
+        "fixtures",
+        "skills",
+        "evals",
+        "images",
+        "README.md ACRONYMS.md",
+        "docs",
+        "design",
+    ):
+        assert source_path in generic
+        assert source_path in platform
+
+    for runtime_fragment in (
+        "npm ci --no-audit --fund=false",
+        "npm run build",
+        "uv sync --locked --no-dev --all-extras",
+        "HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu",
+        "HEARTWOOD_LOCAL_MODEL_PATH=/opt/heartwood/local-runtime/models/model.gguf",
+        "HEARTWOOD_AGENT_BACKEND=openhands-bash",
+        "HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml",
+        "HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist",
+        "ARG LLAMA_CPP_VERSION=b9937",
+        "LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3",
+        "LLAMA_CPP_UBUNTU_ARM64_SHA256=c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4",
+        "download_model_artifact.py",
+    ):
+        assert runtime_fragment in generic
+        assert runtime_fragment in platform
 
 
 def test_platform_registry_manifest_verifier_uses_platform_contract(tmp_path: Path) -> None:
@@ -254,12 +360,23 @@ config_media_type = "application/vnd.docker.container.image.v1+json"
 publish_attestations = false
 allow_non_platform_manifests = false
 supported_platforms = ["linux/amd64"]
+image_user = "jupyter"
+working_dir = "/home/jupyter"
+entrypoint = ["/opt/conda/bin/jupyter", "notebook"]
+exposed_ports = ["8000/tcp"]
+required_env = ["HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python"]
+forbidden_path_entries = ["/opt/heartwood/.venv/bin"]
 runtime_tag = "edge-terra"
 smoke_tag = "edge-terra-smoke"
 coder_tag = "edge-terra-coder-7b"
 commit_runtime_tag = "sha-<git-sha>-terra"
 commit_smoke_tag = "sha-<git-sha>-terra-smoke"
 commit_coder_tag = "sha-<git-sha>-terra-coder-7b"
+
+[platforms.terra.required_env_contains]
+PATH = ["/opt/llama.cpp", "/opt/conda/bin", "/usr/local/bin"]
+LD_LIBRARY_PATH = ["/opt/llama.cpp"]
+JUPYTER_PATH = ["/opt/conda/share/jupyter"]
 """,
             encoding="utf-8",
         )
@@ -371,7 +488,7 @@ def test_compose_smoke_runtime_disables_network() -> None:
     assert "pids_limit: 256" in compose
     assert "/tmp:rw,nosuid,nodev,size=1g" in compose
     assert "bash images/generic/scripts/offline_stack_smoke.sh" in compose
-    assert "python images/generic/scripts/terra_jupyter_demo_smoke.py" in (
+    assert '"${heartwood_python}" images/generic/scripts/terra_jupyter_demo_smoke.py' in (
         _repo_root() / "images" / "generic" / "scripts" / "offline_stack_smoke.sh"
     ).read_text(encoding="utf-8")
 
@@ -582,6 +699,7 @@ def test_offline_stack_smoke_runs_local_model_and_cli() -> None:
     assert "HEARTWOOD_AGENT_BACKEND" in script
     assert "HEARTWOOD_AGENT_SERVER_ENABLED" in script
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" in script
+    assert "HEARTWOOD_PYTHON" in script
     assert "HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS" in script
     assert "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS" in script
     assert "HEARTWOOD_LOCAL_MODEL_TIMEOUT_SECONDS" in script
@@ -898,11 +1016,16 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
     assert "heartwood-terra-ci-base:local" in workflow
     assert "docker buildx bake --file docker-bake.hcl --load" in workflow
     assert "--set terra-smoke-ci.platform=linux/amd64" in workflow
-    assert "docker run --rm --platform linux/amd64 --network none --entrypoint bash" in workflow
+    assert (
+        "docker run --rm --platform linux/amd64 --network none\n"
+        "          --workdir /opt/heartwood --entrypoint bash" in workflow
+    )
     assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci" in workflow
     assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke\n" not in workflow
     assert "images/platform/scripts/terra_image_smoke.sh" in workflow
     assert "images/generic/scripts/offline_stack_smoke.sh" in workflow
+    assert "Run Terra Jupyter launch smoke" in workflow
+    assert "images/platform/scripts/terra_jupyter_launch_smoke.sh" in workflow
 
 
 def _repo_root() -> Path:
@@ -967,7 +1090,29 @@ class _RegistryHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/v2/test/heartwood/blobs/sha256:config":
-            self._write_json(200, "application/json", {"os": "linux", "architecture": "amd64"})
+            self._write_json(
+                200,
+                "application/json",
+                {
+                    "os": "linux",
+                    "architecture": "amd64",
+                    "config": {
+                        "User": "jupyter",
+                        "WorkingDir": "/home/jupyter",
+                        "Entrypoint": ["/opt/conda/bin/jupyter", "notebook"],
+                        "ExposedPorts": {"8000/tcp": {}},
+                        "Env": [
+                            (
+                                "PATH=/opt/llama.cpp:/opt/conda/bin:/usr/local/bin:"
+                                "/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+                            ),
+                            "LD_LIBRARY_PATH=/opt/llama.cpp:/usr/local/nvidia/lib",
+                            "JUPYTER_PATH=/opt/conda/share/jupyter",
+                            "HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python",
+                        ],
+                    },
+                },
+            )
             return
         self._write_json(404, "application/json", {"error": "unknown path"})
 

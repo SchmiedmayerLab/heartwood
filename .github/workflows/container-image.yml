@@ -123,6 +123,36 @@ jobs:
           --image-name "${IMAGE_NAME}"
           --image-channel "${IMAGE_CHANNEL}"
           --git-sha "${GIT_SHA}"
+      - name: Pull published Terra runtime image
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_CHANNEL: edge
+        run: docker pull "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"
+      - name: Run published Terra Jupyter contract smoke
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_CHANNEL: edge
+        run: >-
+          docker run --rm --platform linux/amd64 --network none
+          --entrypoint bash
+          "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"
+          /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
+      - name: Run published Terra Jupyter launch smoke
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_CHANNEL: edge
+        run: >-
+          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
+          "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"
+      - name: Run published Terra Leonardo Jupyter launch smoke
+        env:
+          HEARTWOOD_TERRA_HOST_PORT: "8001"
+          HEARTWOOD_TERRA_JUPYTER_MODE: leonardo
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_CHANNEL: edge
+        run: >-
+          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
+          "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"
 
   publish:
     name: Publish multi-architecture image manifests

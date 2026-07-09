@@ -10,6 +10,7 @@ set -euo pipefail
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-/opt/heartwood}"
 platform_home="${HEARTWOOD_PLATFORM_HOME:-/home/jupyter}"
 jupyter_prefix="${HEARTWOOD_JUPYTER_PREFIX:-/opt/conda}"
+heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
 
 cd "${runtime_root}"
 
@@ -23,7 +24,7 @@ test -f "${runtime_root}/images/generic/scripts/start_web_ui.sh"
 test -d "${platform_home}"
 
 heartwood --version
-python - <<'PY'
+"${heartwood_python}" - <<'PY'
 from pathlib import Path
 
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
