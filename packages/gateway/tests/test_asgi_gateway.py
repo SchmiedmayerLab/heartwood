@@ -252,7 +252,7 @@ def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
         )
         await _wait_for_sent(sent, 2)
         await incoming.put({"type": "http.disconnect"})
-        await task
+        await asyncio.wait_for(task, timeout=1)
         return sent
 
     sent = asyncio.run(scenario())

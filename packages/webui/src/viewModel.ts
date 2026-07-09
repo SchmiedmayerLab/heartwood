@@ -125,20 +125,30 @@ const recordApproval = (
 ): void => {
   const approval = recordValue(value);
   const targetType = stringValue(approval.target_type);
+  const targetId = stringValue(approval.target_id);
   const decision = stringValue(approval.decision);
   if (targetType === "skill") {
     skills.push({
-      targetId: stringValue(approval.target_id),
+      targetId,
       status: decision === "denied" ? "denied" : "approved",
       detail: stringValue(approval.reason),
     });
   }
-  approvals.push({
-    targetType,
-    targetId: stringValue(approval.target_id),
-    label: `${decision} ${targetType}`,
-    decision,
-  });
+  const existing = approvals.find(
+    (control) =>
+      control.targetType === targetType && control.targetId === targetId,
+  );
+  if (existing) {
+    existing.decision = decision;
+    existing.label = `${decision} ${targetType}`;
+  } else {
+    approvals.push({
+      targetType,
+      targetId,
+      label: `${decision} ${targetType}`,
+      decision,
+    });
+  }
 };
 
 const policyStatus = (payload: Record<string, JsonValue>): PolicyStatus => {

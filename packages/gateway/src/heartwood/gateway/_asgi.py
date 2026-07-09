@@ -275,7 +275,8 @@ async def _send_static_response(
             ],
         }
     )
-    await send({"type": "http.response.body", "body": resolved.read_bytes()})
+    body = await asyncio.to_thread(resolved.read_bytes)
+    await send({"type": "http.response.body", "body": body})
 
 
 async def _drain_cancelled(task: asyncio.Future[Any]) -> None:

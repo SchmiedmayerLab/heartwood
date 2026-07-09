@@ -116,4 +116,31 @@ describe("buildViewModel", () => {
       routeId: null,
     });
   });
+
+  it("updates existing approval controls for recorded decisions", () => {
+    const viewModel = buildViewModel([
+      event(0, "tool_call.proposed", {
+        summary: "write synthetic output",
+        tool_call_id: "toolcall-1",
+        tool_name: "heartwood.local.write_summary",
+      }),
+      event(1, "approval.recorded", {
+        approval: {
+          decision: "approved",
+          reason: "synthetic approval",
+          target_id: "toolcall-1",
+          target_type: "tool-call",
+        },
+      }),
+    ]);
+
+    const controls = viewModel.approvalControls.filter(
+      (control) => control.targetId === "toolcall-1",
+    );
+    expect(controls).toHaveLength(1);
+    expect(controls[0]).toMatchObject({
+      decision: "approved",
+      label: "approved tool-call",
+    });
+  });
 });
