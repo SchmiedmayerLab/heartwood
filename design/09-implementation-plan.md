@@ -385,7 +385,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 4. Keep `edge`, `edge-smoke`, `edge-providers`, commit-SHA flavor tags, and any required temporary architecture build outputs reproducible through `docker-bake.hcl` and the native-runner publish workflow.
 5. Verify public image tags as unified multi-platform indexes, move away from permanent architecture-helper tags where feasible, and add a GHCR cleanup policy with protected tag patterns and dry-run checks.
 6. Keep the implemented web UI as a presentation adapter over the gateway; do not add browser-only policy or a second session contract.
-7. Keep Server-Sent Events fallback, browser smoke tests, `jupyter-server-proxy` route tests, and runtime asset tests green as the UI expands.
+7. Keep Server-Sent Events fallback, browser smoke tests, preserved-prefix gateway smokes, stripped `jupyter-server-proxy` route tests, and runtime asset tests green as the UI expands.
 8. Keep provider invocation behind validated provider routes and the gateway policy layer without storing provider secrets in image layers or persisted artifacts.
 9. Extend the OpenHands-backed path from bounded bash execution to an autonomous conversation turn with a useful local tutorial model after replay and policy checks pass.
 10. Select, pin, and review the first larger coding-model artifact before implementing the optional bundled coding-model image target.

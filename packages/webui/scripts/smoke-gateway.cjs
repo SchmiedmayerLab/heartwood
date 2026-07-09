@@ -16,6 +16,7 @@ const path = require("node:path");
 const scriptDir = __dirname;
 const packageRoot = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(packageRoot, "../..");
+const heartwoodExecutable = path.join(repoRoot, ".venv", "bin", "heartwood");
 const webRoot = path.join(packageRoot, "dist");
 const workspace = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-web-gateway-"),
@@ -37,11 +38,8 @@ async function main() {
   }
 
   const server = spawn(
-    "uv",
+    heartwoodExecutable,
     [
-      "run",
-      "--locked",
-      "heartwood",
       "--workspace",
       path.join(workspace, "sessions"),
       "serve",
@@ -56,6 +54,7 @@ async function main() {
     ],
     {
       cwd: repoRoot,
+      detached: true,
       env: Object.assign({}, process.env, {
         UV_CACHE_DIR: path.join(repoRoot, ".uv-cache"),
       }),
@@ -69,7 +68,7 @@ async function main() {
   const spawnError = new Promise((_, reject) => {
     server.on("error", (error) => {
       if (error.code === "ENOENT") {
-        reject(new Error("'uv' command not found; ensure uv is installed"));
+        reject(new Error("heartwood executable missing; run uv sync --locked"));
       } else {
         reject(error);
       }
@@ -133,7 +132,7 @@ async function main() {
       );
     }
   } finally {
-    server.kill("SIGTERM");
+    terminateProcessGroup(server);
     await waitForExit(server);
     fs.rmSync(workspace, { force: true, recursive: true });
   }
@@ -206,4 +205,16 @@ async function waitForExit(child) {
     child.once("error", finish);
     child.once("exit", finish);
   });
+}
+
+function terminateProcessGroup(child) {
+  if (child.pid === undefined) {
+    child.kill("SIGTERM");
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill("SIGTERM");
+  }
 }

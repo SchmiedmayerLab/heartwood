@@ -94,6 +94,7 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
     assert package["scripts"]["test:e2e"] == "playwright test"
     assert package["scripts"]["test:gateway"] == "node scripts/smoke-gateway.cjs"
+    assert package["scripts"]["test:jupyter-proxy"] == "node scripts/smoke-jupyter-proxy.cjs"
     assert "@stanfordspezi/spezi-web-design-system" in package["dependencies"]
     assert "@stanfordspezi/spezi-web-configurations" in package["devDependencies"]
     assert "name: Web UI" in workflow
@@ -106,6 +107,7 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     assert "uv sync --locked" in workflow
     assert "npm run test:e2e" in workflow
     assert "npm run test:gateway --prefix packages/webui" in workflow
+    assert "npm run test:jupyter-proxy --prefix packages/webui" in workflow
     assert "heartwood \\" in launcher
     assert '--web-root "${web_root}"' in launcher
     assert '--base-path "${base_path}"' in launcher

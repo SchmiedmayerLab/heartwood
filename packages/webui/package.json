@@ -18,6 +18,7 @@
     "test": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:gateway": "node scripts/smoke-gateway.cjs",
+    "test:jupyter-proxy": "node scripts/smoke-jupyter-proxy.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

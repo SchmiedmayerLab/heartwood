@@ -76,3 +76,5 @@ jobs:
         run: uv sync --locked
       - name: Run gateway-served proxy smoke test
         run: npm run test:gateway --prefix packages/webui
+      - name: Run Jupyter proxy smoke test
+        run: npm run test:jupyter-proxy --prefix packages/webui

@@ -64,7 +64,7 @@ docker pull ghcr.io/schmiedmayerlab/heartwood:edge
 docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
 ```
 
-Open `http://127.0.0.1:8767/`. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects. In Jupyter environments, set `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` before starting the launcher and open the corresponding `jupyter-server-proxy` route; the UI infers the proxy API base and the gateway accepts prefixed REST, WebSocket, and Server-Sent Events routes.
+Open `http://127.0.0.1:8767/`. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects. Heartwood supports both common notebook proxy shapes: preserved-prefix routes such as `/proxy/8767/`, where `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` is passed to the launcher, and stripped `jupyter-server-proxy` routes such as `/user/<name>/proxy/8767/`, where the gateway serves `/` and the proxy strips the browser prefix before forwarding. CI smoke tests both the preserved-prefix gateway route and the stripped Jupyter-style route used by Terra-like notebook environments. See [Terra-Style Jupyter Demo](terra-jupyter-demo.md) for the synthetic workspace walkthrough.
 
 ## Run From A Checkout
 
@@ -85,6 +85,7 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - The OpenHands-backed backend emits tool proposal, confirmation, and execution events after the model call, calls authenticated OpenHands `/api` routes, and writes a bounded synthetic artifact through the agent-server bash service.
 - The audit export and reviewer packet can be produced from the same offline session.
 - The packaged web UI can be served by the gateway from self-contained assets without a CDN, and the same session event stream can be surfaced through WebSocket or Server-Sent Events under local or Jupyter-style proxy routes.
+- The Jupyter-style smoke path serves the UI through an external `/user/synthetic/proxy/<port>/` route, strips that prefix before forwarding to the gateway, and verifies static assets, command submission, event replay, and Server-Sent Events through the external notebook URL shape.
 
 ## What It Does Not Prove Yet
 
