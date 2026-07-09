@@ -24,7 +24,7 @@ Run the offline stack smoke from a Jupyter terminal inside the `edge-smoke` imag
 bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
-The smoke starts the local `llama-cpp-cpu` profile, runs detection, records an explicit model approval, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process, executes the bounded synthetic tool path, exports a scrubbed audit log, and writes a synthetic reviewer packet.
+The smoke starts the local `llama-cpp-cpu` profile, runs detection, records an explicit model approval, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process, executes the bounded synthetic tool path, exports a scrubbed audit log, writes a synthetic reviewer packet, and runs the packaged Terra-style Jupyter proxy smoke. The proxy smoke starts `heartwood serve`, exposes a local `/user/synthetic/proxy/<port>/` route, strips that prefix before forwarding to the gateway, verifies static assets, command submission, event replay, Server-Sent Events, and checks the notebook API in the same workspace.
 
 ## Researcher Web UI
 

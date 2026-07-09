@@ -89,6 +89,9 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     launcher = (_repo_root() / "images" / "generic" / "scripts" / "start_web_ui.sh").read_text(
         encoding="utf-8"
     )
+    terra_smoke = (
+        _repo_root() / "images" / "generic" / "scripts" / "terra_jupyter_demo_smoke.py"
+    ).read_text(encoding="utf-8")
 
     assert package["name"] == "@heartwood/webui"
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
@@ -111,6 +114,9 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     assert "heartwood \\" in launcher
     assert '--web-root "${web_root}"' in launcher
     assert '--base-path "${base_path}"' in launcher
+    assert "ThreadingHTTPServer" in terra_smoke
+    assert "NotebookSession" in terra_smoke
+    assert "Terra-style Jupyter demo smoke: ok" in terra_smoke
 
 
 def test_compose_smoke_runtime_disables_network() -> None:
@@ -128,6 +134,9 @@ def test_compose_smoke_runtime_disables_network() -> None:
     assert "pids_limit: 256" in compose
     assert "/tmp:rw,nosuid,nodev,size=1g" in compose
     assert "bash images/generic/scripts/offline_stack_smoke.sh" in compose
+    assert "python images/generic/scripts/terra_jupyter_demo_smoke.py" in (
+        _repo_root() / "images" / "generic" / "scripts" / "offline_stack_smoke.sh"
+    ).read_text(encoding="utf-8")
 
 
 def test_dockerignore_excludes_development_and_model_artifacts() -> None:

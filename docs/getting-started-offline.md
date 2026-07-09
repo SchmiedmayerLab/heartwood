@@ -55,7 +55,7 @@ docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
 docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
-The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves the synthetic model call, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, and writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`.
+The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves the synthetic model call, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`, then runs the Python-only Terra-style Jupyter demo smoke against the packaged web UI and notebook API.
 
 To open the packaged researcher UI from the runtime image, publish the gateway port and start the web launcher:
 
@@ -86,6 +86,7 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - The audit export and reviewer packet can be produced from the same offline session.
 - The packaged web UI can be served by the gateway from self-contained assets without a CDN, and the same session event stream can be surfaced through WebSocket or Server-Sent Events under local or Jupyter-style proxy routes.
 - The Jupyter-style smoke path serves the UI through an external `/user/synthetic/proxy/<port>/` route, strips that prefix before forwarding to the gateway, and verifies static assets, command submission, event replay, and Server-Sent Events through the external notebook URL shape.
+- The packaged runtime image can execute the same Jupyter-style smoke without Node.js or a repository checkout; the smoke uses only Python, the installed `heartwood` executable, packaged static assets, and the notebook bridge.
 
 ## What It Does Not Prove Yet
 
