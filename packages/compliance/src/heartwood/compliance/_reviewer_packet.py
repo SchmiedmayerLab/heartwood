@@ -128,19 +128,19 @@ class ReviewerPacketGenerator:
                 "",
                 "- Phase 0 uses synthetic fixtures only and does not validate controlled data.",
                 (
-                    "- The generic model path is deterministic; production provider wiring "
-                    "remains behind the gateway egress proxy."
+                    "- The generic model path uses a local synthetic smoke artifact; "
+                    "production provider wiring remains behind the gateway egress proxy."
                 ),
                 (
-                    "- The generic image does not bundle an LLM inference runtime, model "
-                    "weights, or a production OpenHands agent-server."
+                    "- The generic image bundles a tiny llama-cpp-cpu smoke artifact; it "
+                    "does not make a production model-quality or biomedical reasoning claim."
                 ),
                 (
-                    "- The selected real local-runtime profile is llama-cpp-cpu; runtime "
-                    "dependency pinning, model artifact verification, production "
-                    "OpenHands-in-image coverage, and the static documentation site remain "
-                    "required for 0G exit."
+                    "- The production OpenHands agent-server package is pinned, "
+                    "gateway-managed, and used for bounded bash execution; autonomous "
+                    "coding quality with a larger local model remains future validation work."
                 ),
+                ("- The static documentation site remains required for the 0G exit gate."),
                 (
                     "- The web UI, Server-Sent Events fallback, and platform proxy smoke tests "
                     "are planned for 0H."

@@ -1,31 +1,86 @@
+# syntax=docker/dockerfile:1.7
 # This source file is part of the Heartwood open-source project
 #
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 #
 # SPDX-License-Identifier: MIT
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
 
-WORKDIR /opt/heartwood
+ARG TARGETARCH
+ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0
+ARG HEARTWOOD_IMAGE_FLAVOR=runtime
+ARG HEARTWOOD_LOCAL_MODEL_MANIFEST=images/generic/local-runtime/models/stories260k.toml
+ARG LLAMA_CPP_VERSION=b9937
+ARG LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3
+ARG LLAMA_CPP_UBUNTU_ARM64_SHA256=c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4
+ARG HEARTWOOD_UID=10001
+ARG HEARTWOOD_GID=10001
+
+LABEL org.opencontainers.image.title="Heartwood Generic Runtime" \
+    org.opencontainers.image.description="Offline Heartwood runtime with local inference, CLI, gateway, notebook bridge, and OpenHands smoke path." \
+    org.opencontainers.image.source="https://github.com/SchmiedmayerLab/heartwood" \
+    org.opencontainers.image.licenses="MIT" \
+    org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    PATH="/opt/heartwood/.venv/bin:${PATH}"
+    HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu \
+    HEARTWOOD_LOCAL_MODEL_PATH=/opt/heartwood/local-runtime/models/model.gguf \
+    HEARTWOOD_AGENT_BACKEND=openhands-bash \
+    HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml \
+    LD_LIBRARY_PATH=/opt/llama.cpp \
+    PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"
 
-COPY pyproject.toml uv.lock ./
-COPY packages ./packages
-COPY fixtures ./fixtures
-COPY skills ./skills
-COPY evals ./evals
-COPY images ./images
+RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
+    && useradd --system --uid "${HEARTWOOD_UID}" --gid heartwood --create-home --home-dir /home/heartwood --shell /bin/bash heartwood \
+    && mkdir -p /opt/heartwood \
+    && chown heartwood:heartwood /opt/heartwood \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      libgomp1 \
+      tmux \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --shell /bin/bash heartwood \
-    && chown -R heartwood:heartwood /opt/heartwood
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) llama_asset="llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.tar.gz"; llama_sha256="${LLAMA_CPP_UBUNTU_X64_SHA256}" ;; \
+      arm64) llama_asset="llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz"; llama_sha256="${LLAMA_CPP_UBUNTU_ARM64_SHA256}" ;; \
+      *) echo "unsupported llama.cpp TARGETARCH=${TARGETARCH}" >&2; exit 64 ;; \
+    esac; \
+    curl --fail --location --show-error \
+      "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/${llama_asset}" \
+      --output /tmp/llama.cpp.tar.gz; \
+    echo "${llama_sha256}  /tmp/llama.cpp.tar.gz" | sha256sum --check -; \
+    mkdir -p /opt/llama.cpp; \
+    tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
+    rm /tmp/llama.cpp.tar.gz; \
+    chown -R heartwood:heartwood /opt/llama.cpp
+
+WORKDIR /opt/heartwood
+
+COPY --chown=heartwood:heartwood pyproject.toml uv.lock ./
+COPY --chown=heartwood:heartwood packages ./packages
+COPY --chown=heartwood:heartwood fixtures ./fixtures
+COPY --chown=heartwood:heartwood skills ./skills
+COPY --chown=heartwood:heartwood evals ./evals
+COPY --chown=heartwood:heartwood images ./images
 
 USER heartwood
 
-RUN uv sync --locked --no-dev --all-extras
+RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=10001,gid=10001 \
+    uv sync --locked --no-dev --all-extras
+
+RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \
+      python images/generic/scripts/download_model_artifact.py \
+        --manifest "${HEARTWOOD_LOCAL_MODEL_MANIFEST}" \
+        --output "${HEARTWOOD_LOCAL_MODEL_PATH}" \
+        --skip-existing; \
+    fi
 
 CMD ["heartwood", "--help"]

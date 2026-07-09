@@ -45,16 +45,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: images/generic/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: |
-            ${{ steps.image.outputs.name }}:dev-main
-            ${{ steps.image.outputs.name }}:main
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
+      - name: Build and push image flavors
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_CHANNEL: edge
+          GIT_SHA: ${{ github.sha }}
+        run: docker buildx bake --file docker-bake.hcl --push runtime smoke providers

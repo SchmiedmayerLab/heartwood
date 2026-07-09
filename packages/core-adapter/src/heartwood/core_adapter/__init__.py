@@ -13,6 +13,7 @@ from heartwood.core_adapter._facade import (
     BackendEvent,
     BackendEventKind,
     DeterministicAgentBackend,
+    LocalWorkspaceAgentBackend,
     ProposedToolCall,
     ToolExecution,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "BackendEventKind",
     "DeterministicAgentBackend",
     "FileSessionStore",
+    "LocalWorkspaceAgentBackend",
     "ProposedToolCall",
     "SessionResult",
     "SessionService",

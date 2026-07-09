@@ -25,7 +25,7 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
             session_id,
             CommandKind.RUN,
             prompt="participant-level prompt must not appear",
-            endpoint="https://public.example.invalid/v1/chat",
+            endpoint="https://public.example.invalid/v1/chat/completions",
         )
     )
     gateway.handle(_command(session_id, CommandKind.AUDIT_EXPORT))
@@ -54,7 +54,9 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     assert "Data-Flow Diagram" in packet_text
     assert "participant-level prompt must not appear" not in audit_text
     assert "[scrubbed]" in audit_text
-    assert "production OpenHands agent-server" in limitations_text
+    assert "local synthetic smoke artifact" in limitations_text
+    assert "bounded bash execution" in limitations_text
+    assert "larger local model" in limitations_text
     assert "llama-cpp-cpu" in limitations_text
     assert "planned for 0H" in limitations_text
 

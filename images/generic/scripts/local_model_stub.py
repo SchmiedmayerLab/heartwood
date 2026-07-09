@@ -23,10 +23,14 @@ class LocalModelHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Return a deterministic stub response."""
+        if self.path != "/v1/chat/completions":
+            self.send_response(404)
+            self.end_headers()
+            return
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         payload = json.loads(body.decode("utf-8")) if body else {}
-        metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+        messages = payload.get("messages", []) if isinstance(payload, dict) else []
         self.request_log.parent.mkdir(parents=True, exist_ok=True)
         with self.request_log.open("a", encoding="utf-8") as log_file:
             log_file.write(
@@ -34,16 +38,16 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                     {
                         "path": self.path,
                         "model": payload.get("model") if isinstance(payload, dict) else None,
-                        "metadata": metadata if isinstance(metadata, dict) else {},
+                        "messages_count": len(messages) if isinstance(messages, list) else 0,
                     },
                     sort_keys=True,
                 )
                 + "\n"
             )
         response = {
-            "id": "chatcmpl-heartwood-local-demo",
+            "id": "chatcmpl-heartwood-local-runtime",
             "object": "chat.completion",
-            "model": "heartwood-local-demo",
+            "model": "heartwood-local-runtime",
             "choices": [
                 {
                     "index": 0,

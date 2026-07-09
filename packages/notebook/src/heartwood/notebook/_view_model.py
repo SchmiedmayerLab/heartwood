@@ -124,7 +124,7 @@ class NotebookSession:
         self,
         prompt: str = "run the synthetic workflow",
         *,
-        endpoint: str = "https://model.local.invalid/v1/chat",
+        endpoint: str = "https://model.local.invalid/v1/chat/completions",
         invoke_model: bool = False,
     ) -> NotebookViewModel:
         """Run the synthetic workflow through the policy-gated session path."""

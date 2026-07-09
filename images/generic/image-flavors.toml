@@ -1,0 +1,54 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "heartwood.image-flavors.v1"
+image_name = "ghcr.io/schmiedmayerlab/heartwood"
+moving_channel = "edge"
+commit_tag_pattern = "sha-<git-sha>"
+release_tag_pattern = "v<semver>"
+latest_policy = "Publish latest only after the first stable release; do not use latest for unreleased main-branch builds."
+
+[flavors.runtime]
+target = "runtime"
+moving_tag = "edge"
+commit_tag = "sha-<git-sha>"
+purpose = "Default platform-ready runtime image with CLI, gateway, notebook bridge, policy/audit stack, OpenHands launcher, local inference runtime dependencies, provider route config support, and no bundled model weights."
+bundles_model_artifact = false
+runtime_network_default = "platform policy controlled; no public egress unless the platform policy allowlists it"
+ci_required = true
+public_default = true
+
+[flavors.smoke]
+target = "smoke"
+moving_tag = "edge-smoke"
+commit_tag = "sha-<git-sha>-smoke"
+purpose = "Tiny-model offline stack image for pull-request CI and Docker-only tutorials."
+bundles_model_artifact = true
+model_manifest = "images/generic/local-runtime/models/stories260k.toml"
+runtime_network_default = "disabled by Compose smoke through network_mode: none"
+ci_required = true
+public_default = false
+
+[flavors.providers]
+target = "providers"
+moving_tag = "edge-providers"
+commit_tag = "sha-<git-sha>-providers"
+purpose = "Provider-route image for platform embedding and external in-boundary model endpoints. It includes route validation and file-based secret references, but no provider secrets and no model weights."
+bundles_model_artifact = false
+provider_config = "images/generic/providers/provider-routes.example.toml"
+runtime_network_default = "platform policy controlled; provider endpoints must be allowlisted before invocation"
+ci_required = true
+public_default = false
+
+[future_flavors.model_qwen25_coder_1_5b_q4_k_m]
+target = "model-qwen25-coder-1_5b-q4_k_m"
+moving_tag = "edge-model-qwen25-coder-1_5b-q4_k_m"
+commit_tag = "sha-<git-sha>-model-qwen25-coder-1_5b-q4_k_m"
+purpose = "Deferred optional local coding-model image after artifact, license, checksum, redistribution, and resource envelope review."
+bundles_model_artifact = true
+model_candidate = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+ci_required = false
+public_default = false

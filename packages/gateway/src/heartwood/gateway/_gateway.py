@@ -8,11 +8,21 @@
 
 from __future__ import annotations
 
+import os
+import shlex
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-from heartwood.core_adapter import SessionResult, SessionService
-from heartwood.gateway._agent_server import ManagedAgentServer
+from heartwood.core_adapter import AgentBackend, SessionResult, SessionService
+from heartwood.gateway._agent_server import (
+    AgentServerConfig,
+    ManagedAgentServer,
+    OpenHandsAgentServerBackend,
+    OpenHandsHttpAgentServerClient,
+)
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
 from heartwood.session import SessionCommand, SessionEvent
 
@@ -30,7 +40,7 @@ class SessionGateway:
         agent_server: ManagedAgentServer | None = None,
     ) -> None:
         self.workspace = workspace
-        self.agent_server = ManagedAgentServer() if agent_server is None else agent_server
+        self.agent_server = _agent_server_from_env() if agent_server is None else agent_server
         self._service_factory = service_factory or _default_service_factory
         self._services: dict[str, SessionService] = {}
         self._streams = EventStreamHub()
@@ -86,4 +96,70 @@ class SessionGateway:
 
 
 def _default_service_factory(workspace: Path, session_id: str) -> SessionService:
-    return SessionService.local_default(workspace, session_id=session_id)
+    return SessionService.local_default(
+        workspace,
+        session_id=session_id,
+        backend=_gateway_backend_from_env(workspace=workspace, session_id=session_id),
+    )
+
+
+def _agent_server_from_env() -> ManagedAgentServer:
+    if not _truthy(os.environ.get("HEARTWOOD_AGENT_SERVER_ENABLED")):
+        return ManagedAgentServer()
+    host = os.environ.get("HEARTWOOD_AGENT_SERVER_HOST", "127.0.0.1")
+    port = _int_env("HEARTWOOD_AGENT_SERVER_PORT", default=8766)
+    command = tuple(
+        shlex.split(
+            os.environ.get(
+                "HEARTWOOD_AGENT_SERVER_COMMAND",
+                f"agent-server --host {host} --port {port}",
+            )
+        )
+    )
+    return ManagedAgentServer(
+        AgentServerConfig(command=command, host=host, port=port, enabled=True),
+        readiness_probe=_http_readiness_probe,
+    )
+
+
+def _gateway_backend_from_env(*, workspace: Path, session_id: str) -> AgentBackend | None:
+    backend_id = os.environ.get("HEARTWOOD_AGENT_BACKEND", "deterministic-local")
+    if backend_id not in {"openhands-bash", "openhands-agent-server"}:
+        return None
+    host = os.environ.get("HEARTWOOD_AGENT_SERVER_HOST", "127.0.0.1")
+    port = _int_env("HEARTWOOD_AGENT_SERVER_PORT", default=8766)
+    endpoint = os.environ.get("HEARTWOOD_AGENT_SERVER_ENDPOINT", f"http://{host}:{port}")
+    client = OpenHandsHttpAgentServerClient(
+        endpoint=endpoint,
+        api_key=os.environ.get("HEARTWOOD_AGENT_SERVER_API_KEY"),
+        workspace=workspace / session_id,
+    )
+    return OpenHandsAgentServerBackend(client)
+
+
+def _http_readiness_probe(endpoint: str) -> bool:
+    deadline = time.monotonic() + 60
+    ready_url = f"{endpoint}/ready"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(ready_url, timeout=0.5) as response:
+                status = int(response.status)
+                return 200 <= status < 300
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.2)
+    return False
+
+
+def _truthy(value: str | None) -> bool:
+    return value is not None and value.lower() in {"1", "true", "yes", "on"}
+
+
+def _int_env(name: str, *, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        msg = f"{name} must be an integer"
+        raise ValueError(msg) from error

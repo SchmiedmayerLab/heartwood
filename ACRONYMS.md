@@ -91,7 +91,9 @@ A running reference for the acronyms and named tools used across this project (m
 | VM | Virtual Machine | A virtualized computer instance |
 | CPU | Central Processing Unit | General-purpose processor used for local inference when no accelerator is available |
 | CUDA | Compute Unified Device Architecture | NVIDIA GPU runtime and programming stack used by optional accelerated inference profiles |
+| GID | Group Identifier | Numeric Unix group id used to run containers as a stable non-root group |
 | GPU | Graphics Processing Unit | Accelerator for ML / heavy compute |
+| UID | User Identifier | Numeric Unix user id used to run containers as a stable non-root user |
 | vCPU | virtual CPU | A virtual processor core on a VM |
 | OS | Operating System | e.g. Linux / Ubuntu |
 | CDN | Content Delivery Network | External static-asset hosting, forbidden for the runtime web UI |

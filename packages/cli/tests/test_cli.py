@@ -104,7 +104,7 @@ def test_run_transcript_reports_policy_and_tool_events(
             "--prompt",
             "synthetic run",
             "--endpoint",
-            "https://model.local.invalid/v1/chat",
+            "https://model.local.invalid/v1/chat/completions",
         ]
     )
     captured = capsys.readouterr()
@@ -112,7 +112,9 @@ def test_run_transcript_reports_policy_and_tool_events(
     assert approve == 0
     assert run == 0
     assert "Approval recorded: model-call decision-synthetic-model-call approved" in captured.out
-    assert "Model call: allow endpoint=https://model.local.invalid/v1/chat" in captured.out
+    assert (
+        "Model call: allow endpoint=https://model.local.invalid/v1/chat/completions" in captured.out
+    )
     assert "Tool proposed: heartwood.synthetic.noop" in captured.out
     assert "Confirmation resolved:" in captured.out
     assert "Tool execution: heartwood.synthetic.noop exit=0" in captured.out
@@ -135,15 +137,83 @@ def test_denied_run_transcript_reports_confirmation_request(
             "cli-denied",
             "run",
             "--endpoint",
-            "https://public.example.invalid/v1/chat",
+            "https://public.example.invalid/v1/chat/completions",
         ]
     )
     captured = capsys.readouterr()
 
     assert code == 0
-    assert "Model call: deny endpoint=https://public.example.invalid/v1/chat" in captured.out
+    assert (
+        "Model call: deny endpoint=https://public.example.invalid/v1/chat/completions"
+        in captured.out
+    )
     assert "Confirmation requested:" in captured.out
     assert "Tool execution: heartwood.synthetic.noop exit=1" in captured.out
+
+
+def test_run_can_select_provider_route_from_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "sessions"
+    provider_config = Path("images") / "generic" / "providers" / "provider-routes.example.toml"
+
+    assert (
+        main(
+            [
+                "--workspace",
+                str(workspace),
+                "--session-id",
+                "cli-provider",
+                "approve",
+                "--target-type",
+                "model-call",
+                "--target-id",
+                "decision-synthetic-model-call",
+            ]
+        )
+        == 0
+    )
+    code = main(
+        [
+            "--workspace",
+            str(workspace),
+            "--session-id",
+            "cli-provider",
+            "run",
+            "--provider-config",
+            str(provider_config),
+            "--provider-route",
+            "local-loopback",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert "Model call: allow endpoint=http://127.0.0.1:8765/v1/chat/completions" in captured.out
+    persisted = (workspace / "cli-provider" / "commands.jsonl").read_text(encoding="utf-8")
+    assert '"provider":"openai-compatible"' in persisted
+    assert "secret_file" not in persisted
+
+
+def test_run_rejects_provider_route_with_local_model(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "sessions"
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "--workspace",
+                str(workspace),
+                "run",
+                "--local-model",
+                "--provider-route",
+                "local-loopback",
+            ]
+        )
+
+    assert exit_info.value.code == 2
 
 
 def test_deny_pause_resume_and_empty_replay_are_rendered(
