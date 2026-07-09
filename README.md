@@ -19,16 +19,16 @@ SPDX-License-Identifier: MIT
 
 A Docker-packaged coding harness for sensitive biomedical research data.
 
-Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and a CLI-first workflow for reproducible analyses, built on one shared session model designed to drive notebook and researcher-web-UI surfaces as well.
+Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and a CLI-first workflow for reproducible analyses, built on one session command/event contract that drives current CLI and notebook surfaces and planned researcher-web-UI surfaces.
 
 Participant-level data stays inside the platform boundary. Development and CI use synthetic fixtures only.
 
 
 ## Overview
 
-Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture centers on a session gateway that owns the local agent-server boundary and exposes one shared session command/event contract to every surface: the CLI, a notebook bridge, and a researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
+Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture centers on a session gateway that owns the local agent-server boundary and exposes one shared session command/event contract to shipped surfaces such as the CLI and notebook bridge, and to planned surfaces such as the researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
 
-The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, the expanded `heartwood` command-line interface, a notebook bridge, synthetic reviewer packet generation, and the generic image smoke-test configuration. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -39,27 +39,52 @@ Install [`uv`](https://docs.astral.sh/uv/) and run the local commands from a rep
 uv sync
 uv run heartwood --version
 uv run heartwood detect
+uv run heartwood chat --prompt "summarize the synthetic cohort"
+uv run heartwood run --endpoint https://model.local.invalid/v1/chat
+uv run heartwood audit export
+uv run heartwood reviewer packet
 ```
 
-The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. It does not read row values and does not make model calls.
+The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. The `chat`, `run`, `replay`, `audit export`, and reviewer-packet commands use the same session command/event contract as the notebook bridge.
+
+Run the generic offline stack from Docker only after the main-branch image is published:
+
+```bash
+docker pull ghcr.io/schmiedmayerlab/heartwood:dev-main
+docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:dev-main bash images/generic/scripts/offline_stack_smoke.sh
+```
+
+The current generic image does not bundle an LLM inference runtime, model weights, or a production OpenHands agent-server. Its loopback model stub exists to prove the air-gapped session, policy, approval, audit, reviewer-packet, and local-endpoint plumbing; its agent-server coverage exercises the gateway-owned localhost boundary and fake OpenHands-style event translation. A real local inference and OpenHands profile still needs a selected runtime, model artifact provenance, license review, resource limits, a pinned agent-server command, and an offline CLI-gateway-agent-server smoke test.
+
+From a checkout, run the same CI smoke path with Compose:
+
+```bash
+docker compose -f images/generic/compose.yaml run --rm heartwood
+```
+
+See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
 
 
 ## Repository Structure
 
 - [`design`](design) contains the project design record and implementation plan.
+- [`docs`](docs) contains tutorial-style project documentation.
 - [`evals`](evals) contains synthetic replay fixtures.
 - [`fixtures`](fixtures) contains synthetic test and schema-validation fixtures only.
 - [`packages/adapters`](packages/adapters) contains adapter protocols, conformance checks, and generic/local adapter implementations.
 - [`packages/audit`](packages/audit) contains hash-chained audit logging and scrubbed export support.
 - [`packages/cli`](packages/cli) contains the `heartwood` command-line interface.
+- [`packages/compliance`](packages/compliance) contains synthetic reviewer packet and audit bundle generation.
 - [`packages/core-adapter`](packages/core-adapter) contains session orchestration and the deterministic offline agent facade.
 - [`packages/detector`](packages/detector) contains deterministic platform detection.
 - [`packages/fixtures`](packages/fixtures) contains no-live-data fixture linting.
 - [`packages/gateway`](packages/gateway) contains ASGI HTTP command handling, replayable WebSocket event streams, managed local agent-server binding, and model egress gating.
 - [`packages/model-policy`](packages/model-policy) contains deny-by-default model-call policy evaluation and attestation records.
+- [`packages/notebook`](packages/notebook) contains the notebook Python API and optional widget bridge.
 - [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
 - [`packages/session`](packages/session) contains the shared session command/event contract.
 - [`packages/skills`](packages/skills) contains local `SKILL.md` verification, the package-time skill bundle catalog loader, and deterministic skill test helpers.
+- [`images`](images) contains the generic image and Compose smoke-test configuration.
 - [`skills`](skills) contains the checked-in skill bundle catalog and verified prototype skills.
 
 

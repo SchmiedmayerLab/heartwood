@@ -56,7 +56,10 @@ class GenericPlatformAdapter:
             policy_id="generic-default",
             platform_id=self.adapter_id,
             deny_egress_by_default=True,
-            allowed_model_endpoints=("https://model.local.invalid/v1/chat",),
+            allowed_model_endpoints=(
+                "https://model.local.invalid/v1/chat",
+                "http://127.0.0.1:8765/v1/chat",
+            ),
             credential_allowlist=self.credential_allowlist(),
             notes="Generic local policy for synthetic development and replay.",
         )

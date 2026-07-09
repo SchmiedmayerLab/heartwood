@@ -5,21 +5,23 @@
 # SPDX-License-Identifier: MIT
 
 [project]
-name = "heartwood-cli"
+name = "heartwood-notebook"
 version = "0.0.0"
-description = "The heartwood command-line interface — the primary interaction surface."
+description = "Notebook-facing Python API and widget bridge for Heartwood sessions."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
-    "heartwood-compliance",
     "heartwood-gateway",
     "heartwood-session",
 ]
 
-[project.scripts]
-heartwood = "heartwood.cli:main"
+[project.optional-dependencies]
+widgets = [
+    "ipywidgets>=8.1",
+    "jupyterlab>=4.5",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -29,6 +31,5 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
-heartwood-compliance = { workspace = true }
 heartwood-gateway = { workspace = true }
 heartwood-session = { workspace = true }
