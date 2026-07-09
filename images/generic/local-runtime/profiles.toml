@@ -59,20 +59,21 @@ failure_modes = [
   "model response timeout",
 ]
 artifact_format = "GGUF"
-artifact_source = "ggml-org/models-moved tinyllamas/stories260K.gguf, resolved during image build, never at runtime."
-artifact_source_url = "https://huggingface.co/ggml-org/models-moved/resolve/main/tinyllamas/stories260K.gguf"
-artifact_source_revision = "96f460f"
-artifact_license = "llama.cpp CI artifact; testing and tutorial smoke use only; do not use in production."
-artifact_checksum = "SHA-256 270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d"
-artifact_size_bytes = 1185376
+default_artifact_manifest = "images/generic/local-runtime/models/stories260k.toml"
+demo_coding_artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
+artifact_source = "Build-selected GGUF artifact manifest. Smoke uses ggml-org/models-moved tinyllamas/stories260K.gguf; coder demos use unsloth/Qwen2.5-Coder-7B-Instruct-GGUF Q4_K_M."
+artifact_source_url = "Build-selected source_url from the selected model manifest."
+artifact_license = "Build-selected license_posture from the selected model manifest."
+artifact_checksum_policy = "Use the artifact_sha256 recorded in the selected model manifest."
+artifact_size_policy = "Use the artifact_size_bytes recorded in the selected model manifest."
 artifact_cache = "/opt/heartwood/local-runtime/models"
 build_time_resolution = "Download the pinned artifact only for image flavors that opt into HEARTWOOD_BUNDLE_LOCAL_MODEL=1; fail if checksum, size, or provenance validation fails."
-runtime_resolution = "The runtime flavor expects an explicitly mounted artifact or future selected model pack; the smoke flavor loads only the checked artifact path whose checksum matches the manifest."
+runtime_resolution = "Bundled local-model flavors load only the checked artifact path whose checksum matches the selected manifest; provider-only or externally supplied deployments must mount an explicit artifact or select a provider route."
 ci_scope = "Pull-request and main-branch container smoke tests run the bundled GGUF artifact without public runtime network access on linux/amd64 and linux/arm64."
 ships_in_generic_image = true
-image_flavors = ["runtime", "smoke", "providers"]
-artifact_bundled_in_flavors = ["smoke"]
-artifact_not_bundled_in_flavors = ["runtime", "providers"]
+image_flavors = ["runtime", "smoke", "providers", "coder-7b", "terra-runtime", "terra-smoke", "terra-coder-7b"]
+artifact_bundled_in_flavors = ["runtime", "smoke", "coder-7b", "terra-runtime", "terra-smoke", "terra-coder-7b"]
+artifact_not_bundled_in_flavors = ["providers"]
 
 [agent_server.openhands]
 status = "implemented"

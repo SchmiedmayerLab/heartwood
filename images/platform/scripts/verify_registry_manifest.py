@@ -262,6 +262,8 @@ def expected_tags(platform: dict[str, Any], image_channel: str, git_sha: str) ->
         ("commit_runtime_tag", "runtime commit tag"),
         ("smoke_tag", "smoke moving tag"),
         ("commit_smoke_tag", "smoke commit tag"),
+        ("coder_tag", "coder moving tag"),
+        ("commit_coder_tag", "coder commit tag"),
     ):
         value = platform.get(key)
         if not isinstance(value, str):

@@ -51,6 +51,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Free runner disk for generic image
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          docker system prune --all --force
+          df -h
       - name: Build and push architecture image flavors
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
@@ -144,6 +152,11 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_CHANNEL}-amd64" \
             "${IMAGE_NAME}:${IMAGE_CHANNEL}-arm64"
           docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b" \
+            --tag "${IMAGE_NAME}:sha-${GIT_SHA}-coder-7b" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b-amd64" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b-arm64"
+          docker buildx imagetools create \
             --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke" \
             --tag "${IMAGE_NAME}:sha-${GIT_SHA}-smoke" \
             "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-amd64" \
@@ -180,6 +193,8 @@ jobs:
           }
           verify_multi_platform_tag "${IMAGE_CHANNEL}"
           verify_multi_platform_tag "sha-${GIT_SHA}"
+          verify_multi_platform_tag "${IMAGE_CHANNEL}-coder-7b"
+          verify_multi_platform_tag "sha-${GIT_SHA}-coder-7b"
           verify_multi_platform_tag "${IMAGE_CHANNEL}-smoke"
           verify_multi_platform_tag "sha-${GIT_SHA}-smoke"
           verify_multi_platform_tag "${IMAGE_CHANNEL}-providers"

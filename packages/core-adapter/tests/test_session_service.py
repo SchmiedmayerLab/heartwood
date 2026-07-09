@@ -149,11 +149,84 @@ def test_session_run_can_invoke_allowlisted_loopback_model(tmp_path: Path) -> No
     assert metadata["model"] == "heartwood-local-runtime"
     assert metadata["status"] == "ok"
     assert server.requests == [
-        {"max_tokens": 16, "messages_count": 2, "model": "heartwood-local-runtime"}
+        {
+            "max_tokens": 768,
+            "messages_count": 2,
+            "model": "heartwood-local-runtime",
+            "user_prompt": "invoke local model",
+        }
     ]
     assert "Synthetic local model response" not in json.dumps(
         [event.model_dump(mode="json") for event in result.events]
     )
+
+
+def test_session_run_can_include_demo_response_preview_when_enabled(tmp_path: Path) -> None:
+    server = _LocalModelServer()
+    service = _loopback_service(
+        tmp_path,
+        server.endpoint,
+        env={"HEARTWOOD_DEMO_RESPONSE_PREVIEW": "1"},
+    )
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    try:
+        result = service.handle(
+            _command(
+                CommandKind.RUN,
+                prompt="invoke local model",
+                endpoint=server.endpoint,
+                invoke_model=True,
+            )
+        )
+    finally:
+        server.close()
+
+    metadata = result.events[1].payload["response_metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["response_preview"] == "Synthetic local model response"
+    assert metadata["response_preview_truncated"] is False
+
+
+def test_session_run_can_override_local_model_response_budget(tmp_path: Path) -> None:
+    server = _LocalModelServer()
+    service = _loopback_service(
+        tmp_path,
+        server.endpoint,
+        env={"HEARTWOOD_LOCAL_MODEL_MAX_TOKENS": "32"},
+    )
+    service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="model-call",
+            target_id="decision-synthetic-model-call",
+        )
+    )
+    try:
+        service.handle(
+            _command(
+                CommandKind.RUN,
+                prompt="short smoke call",
+                endpoint=server.endpoint,
+                invoke_model=True,
+            )
+        )
+    finally:
+        server.close()
+
+    assert server.requests == [
+        {
+            "max_tokens": 32,
+            "messages_count": 2,
+            "model": "heartwood-local-runtime",
+            "user_prompt": "short smoke call",
+        }
+    ]
 
 
 def test_session_run_requires_approval_before_local_model_invocation(tmp_path: Path) -> None:
@@ -249,6 +322,10 @@ def test_session_run_can_invoke_selected_provider_route_after_approval(tmp_path:
             "max_tokens": 16,
             "messages_count": 2,
             "model": "synthetic-provider-model",
+            "user_prompt": (
+                "Confirm that the configured provider route is reachable for a synthetic "
+                "policy-gated call. Synthetic prompt length: 15."
+            ),
         }
     ]
     persisted = (tmp_path / "session-synthetic-001" / "commands.jsonl").read_text(encoding="utf-8")
@@ -696,6 +773,7 @@ class _LocalModelHandler(BaseHTTPRequestHandler):
                 "max_tokens": payload["max_tokens"],
                 "messages_count": len(messages),
                 "model": payload["model"],
+                "user_prompt": messages[-1]["content"],
             }
         )
         authorization = self.headers.get("Authorization")
@@ -783,7 +861,12 @@ class _RedirectModelServer:
         self.thread.join(timeout=5)
 
 
-def _loopback_service(tmp_path: Path, endpoint: str) -> SessionService:
+def _loopback_service(
+    tmp_path: Path,
+    endpoint: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> SessionService:
     platform = _LoopbackPlatform(endpoint)
     policy = platform.default_policy_profile()
     return SessionService(
@@ -792,6 +875,6 @@ def _loopback_service(tmp_path: Path, endpoint: str) -> SessionService:
         data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
         model_provider_adapter=FakeLocalModelProviderAdapter(policy),
         backend=DeterministicAgentBackend(),
-        env={},
+        env={} if env is None else env,
         clock=lambda: "2026-01-01T00:00:00Z",
     )

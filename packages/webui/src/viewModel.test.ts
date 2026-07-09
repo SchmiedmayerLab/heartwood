@@ -28,6 +28,34 @@ describe("buildViewModel", () => {
       provider: "openai-compatible",
       routeId: "local-loopback",
     });
+    expect(viewModel.modelInvocations[0]).toMatchObject({
+      choicesCount: 1,
+      model: "heartwood-local-runtime",
+      responsePreview: "Synthetic local model response.",
+      routeId: "local-loopback",
+      status: "ok",
+      totalTokens: 2,
+    });
+    expect(viewModel.conversation).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Synthetic local model response.",
+          label: "Model",
+          role: "model",
+        }),
+        expect.objectContaining({
+          content:
+            "Prepared a local workspace action over the detected synthetic dataset.",
+          label: "Agent",
+          role: "agent",
+        }),
+        expect.objectContaining({
+          content: "Proposed tool: heartwood.local.write_summary",
+          label: "Trace",
+          role: "trace",
+        }),
+      ]),
+    );
     expect(
       viewModel.approvalControls.some(
         (control) => control.targetType === "tool-call",
@@ -54,6 +82,8 @@ describe("buildViewModel", () => {
       }),
       event(7, "confirmation.resolved", {
         command_id: "session-test-approve-000007",
+        decision: "approved",
+        tool_call_id: "session-test-toolcall-1",
       }),
       event(8, "tool.execution.recorded", { exit_code: 0 }),
       event(9, "audit.export.recorded", {
@@ -73,7 +103,10 @@ describe("buildViewModel", () => {
     });
     expect(viewModel.approvalControls).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ targetId: "session-test-toolcall-1" }),
+        expect.objectContaining({
+          decision: "approved",
+          targetId: "session-test-toolcall-1",
+        }),
         expect.objectContaining({ targetType: "skill" }),
       ]),
     );
@@ -115,6 +148,10 @@ describe("buildViewModel", () => {
       provider: null,
       routeId: null,
     });
+    expect(viewModel.modelInvocations[0]).toMatchObject({
+      responsePreview: null,
+      status: "pending",
+    });
   });
 
   it("updates existing approval controls for recorded decisions", () => {
@@ -131,6 +168,35 @@ describe("buildViewModel", () => {
           target_id: "toolcall-1",
           target_type: "tool-call",
         },
+      }),
+    ]);
+
+    const controls = viewModel.approvalControls.filter(
+      (control) => control.targetId === "toolcall-1",
+    );
+    expect(controls).toHaveLength(1);
+    expect(controls[0]).toMatchObject({
+      decision: "approved",
+      label: "approved tool-call",
+    });
+  });
+
+  it("resolves tool-call controls from confirmation events without duplicates", () => {
+    const viewModel = buildViewModel([
+      event(0, "tool_call.proposed", {
+        summary: "write synthetic output",
+        tool_call_id: "toolcall-1",
+        tool_name: "heartwood.local.write_summary",
+      }),
+      event(1, "confirmation.requested", {
+        request: {
+          tool_call_id: "toolcall-1",
+          tool_name: "heartwood.local.write_summary",
+        },
+      }),
+      event(2, "confirmation.resolved", {
+        decision: "approved",
+        tool_call_id: "toolcall-1",
       }),
     ]);
 

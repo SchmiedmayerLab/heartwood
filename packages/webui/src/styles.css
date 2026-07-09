@@ -143,11 +143,11 @@ textarea {
   gap: 8px !important;
 }
 
-.chat-panel {
+.conversation-panel {
   grid-row: span 2;
 }
 
-.chat-list,
+.conversation-list,
 .activity-list,
 .list {
   align-content: start;
@@ -155,10 +155,67 @@ textarea {
   overflow: auto;
 }
 
-.chat-message {
-  padding: 10px 12px;
+.conversation-message {
+  display: grid;
+  gap: 7px;
+  max-width: 92%;
+  padding: 11px 13px;
   border: 1px solid #d9e2dc;
   background: #f7faf8;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.conversation-message.user {
+  justify-self: end;
+  border-color: #bfd2e7;
+  background: #edf5ff;
+}
+
+.conversation-message.model {
+  border-color: #c7ddd0;
+  background: #f3faf6;
+}
+
+.conversation-message.agent {
+  border-color: #d9d2bc;
+  background: #fffaf0;
+}
+
+.conversation-message.trace {
+  max-width: 100%;
+  padding: 8px 10px;
+  border-style: dashed;
+  background: #fbfcf9;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conversation-meta small {
+  flex: 0 0 auto;
+  color: #31443a;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.conversation-meta span {
+  min-width: 0;
+  color: #63736a;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.conversation-message p {
+  margin: 0;
+  color: #17211b;
+  line-height: 1.45;
 }
 
 .list-row,
@@ -177,6 +234,42 @@ textarea {
 
 .list-row.stacked {
   grid-template-columns: 1fr;
+}
+
+.approval-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.approval-row > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.approval-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approval-actions button {
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.empty-state {
+  color: #5d6f65;
+  font-size: 0.86rem;
+}
+
+.model-preview {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #d9e2dc;
+  background: #f7faf8;
+  color: #17211b;
+  overflow-wrap: anywhere;
 }
 
 .activity-row {
