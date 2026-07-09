@@ -14,7 +14,7 @@ This runbook demonstrates the current Heartwood stack from a Terra-derived Jupyt
 
 ## Current Status
 
-Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` when the Terra demo must include the tiny bundled model artifact and the full offline smoke path. Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` when demonstrating the UI, CLI, notebook API, provider route configuration, and gateway behavior without bundled model weights. These tags publish automatically from `main`, and the image workflow verifies the public GHCR pull path through unauthenticated registry inspection before it succeeds.
+Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` when the Terra demo must include the tiny bundled model artifact and the full offline smoke path. Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` when demonstrating the UI, CLI, notebook API, provider route configuration, and gateway behavior without bundled model weights. These tags publish automatically from `main`, and the image workflow verifies the public GHCR pull path through an unauthenticated Leonardo-compatible Docker schema-2 manifest request with `Accept: application/vnd.docker.distribution.manifest.v2+json` before it succeeds. This check prevents the Terra failure mode where GHCR returns an OCI index but Leonardo's Docker image auto-detection does not advertise OCI index support.
 
 Terra's current custom-environment guidance says custom Jupyter images should be based on a Terra Jupyter Notebook base image or a project-specific image, and the `DataBiosphere/terra-docker` repository states that notebook custom images need to use a Terra base image to work with Terra's notebook service. The Heartwood Terra image derives from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, installs Heartwood under `/opt/heartwood`, registers a `heartwood` Jupyter kernel, and keeps the generic `edge`, `edge-smoke`, and `edge-providers` tags out of the Terra custom-environment path.
 
@@ -27,7 +27,7 @@ Relevant Terra references reviewed for this runbook:
 
 ## Terra Image Strategy
 
-The Terra image is a platform-specific notebook image that extends the current Terra Jupyter Python base, installs the Heartwood runtime into that base, keeps Jupyter on Terra's expected notebook service path, and starts the Heartwood gateway/web UI on a loopback port such as `8767` for access through the notebook proxy. Pull-request CI builds `edge-terra-smoke-ci` from a lightweight Terra-compatible base through the same platform Dockerfile, runs the platform image smoke, and runs the full offline stack smoke with runtime network disabled. The main-branch publish workflow builds and publishes `edge-terra` and `edge-terra-smoke` from the real Terra base after freeing runner disk space.
+The Terra image is a platform-specific notebook image that extends the current Terra Jupyter Python base, installs the Heartwood runtime into that base, keeps Jupyter on Terra's expected notebook service path, and starts the Heartwood gateway/web UI on a loopback port such as `8767` for access through the notebook proxy. Pull-request CI builds `edge-terra-smoke-ci` from a lightweight Terra-compatible base through the same platform Dockerfile, runs the platform image smoke, and runs the full offline stack smoke with runtime network disabled. The main-branch publish workflow builds and publishes `edge-terra` and `edge-terra-smoke` from the real Terra base after freeing runner disk space, disables Buildx default attestations for those Terra-facing tags, and forces Docker media types so Leonardo sees a single `linux/amd64` Docker schema-2 manifest instead of an OCI index.
 
 The generic image still remains the portable source runtime for local Docker reproducibility. The Terra image carries `README.md`, `ACRONYMS.md`, `docs/`, and `design/` under `/opt/heartwood` so a packaged runtime contains the tutorial notebook and design material even without a repository checkout.
 
@@ -93,7 +93,7 @@ for approval in run.approval_controls:
 
 ## Live Terra End-To-End Trial
 
-Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created; verify that an unauthenticated Docker client can inspect the tag from outside the workflow login with `DOCKER_CONFIG="$(mktemp -d)" docker manifest inspect ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke`.
+Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created, and the tag must pass the Leonardo-compatible Docker schema-2 manifest check in [Container Images](container-images.md) through `images/platform/scripts/verify_registry_manifest.py`; `docker manifest inspect` alone is insufficient because it can read OCI indexes that Leonardo rejects.
 
 1. Create or select a synthetic-only Terra workspace; do not use controlled data for this validation.
 2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, and enough disk for the image plus `/home/jupyter/heartwood-workspace`.

@@ -97,8 +97,9 @@ jobs:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
+          BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
         run: >-
-          docker buildx bake --file docker-bake.hcl --push
+          docker buildx bake --file docker-bake.hcl
           --set terra-runtime.platform="linux/amd64"
           --set terra-smoke.platform="linux/amd64"
           terra-runtime terra-smoke
@@ -107,33 +108,13 @@ jobs:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
-        run: |
-          public_manifest_raw() {
-            local image_ref="${IMAGE_NAME}:$1"
-            local docker_config
-            local raw
-            docker_config="$(mktemp -d)"
-            echo "Verifying public GHCR access for ${image_ref}" >&2
-            if ! raw="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw "${image_ref}")"; then
-              rm -rf "${docker_config}"
-              return 1
-            fi
-            rm -rf "${docker_config}"
-            printf '%s\n' "${raw}"
-          }
-          verify_single_platform_tag() {
-            image_ref="${IMAGE_NAME}:$1"
-            raw="$(public_manifest_raw "$1")"
-            printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"amd64"'
-            if printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"arm64"'; then
-              echo "${image_ref} unexpectedly includes linux/arm64" >&2
-              exit 1
-            fi
-          }
-          verify_single_platform_tag "${IMAGE_CHANNEL}-terra"
-          verify_single_platform_tag "sha-${GIT_SHA}-terra"
-          verify_single_platform_tag "${IMAGE_CHANNEL}-terra-smoke"
-          verify_single_platform_tag "sha-${GIT_SHA}-terra-smoke"
+        run: >-
+          python3 images/platform/scripts/verify_registry_manifest.py
+          --manifest images/platforms.toml
+          --platform terra
+          --image-name "${IMAGE_NAME}"
+          --image-channel "${IMAGE_CHANNEL}"
+          --git-sha "${GIT_SHA}"
 
   publish:
     name: Publish multi-architecture image manifests
