@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tiny loopback model stub used by the generic image offline smoke test."""
+"""Deterministic loopback stub used by the generic image smoke test."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ from typing import ClassVar
 
 
 class LocalModelHandler(BaseHTTPRequestHandler):
-    """Handle one content-free chat-completion request."""
+    """Handle one content-free chat-completion request for the stub profile."""
 
     request_log: ClassVar[Path]
 
     def do_POST(self) -> None:
-        """Return a deterministic local-model response."""
+        """Return a deterministic stub response."""
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         payload = json.loads(body.decode("utf-8")) if body else {}
@@ -72,7 +72,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    """Run the local model stub."""
+    """Run the loopback stub."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)

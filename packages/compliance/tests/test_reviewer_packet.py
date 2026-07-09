@@ -55,7 +55,7 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     assert "participant-level prompt must not appear" not in audit_text
     assert "[scrubbed]" in audit_text
     assert "production OpenHands agent-server" in limitations_text
-    assert "planned for 0G" in limitations_text
+    assert "llama-cpp-cpu" in limitations_text
     assert "planned for 0H" in limitations_text
 
 

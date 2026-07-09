@@ -117,6 +117,7 @@ A running reference for the acronyms and named tools used across this project (m
 |---|---|---|
 | AI | Artificial Intelligence | Broad term for systems that perform tasks associated with human intelligence |
 | LLM | Large Language Model | The model (e.g. Claude) |
+| GGUF | GPT-Generated Unified Format | llama.cpp model artifact format used for local inference profiles |
 | MCP | Model Context Protocol | Open standard for giving agents tools/data |
 | ML | Machine Learning | Statistical/modeling techniques that learn patterns from data |
 | RAG | Retrieval-Augmented Generation | Feeding retrieved docs into the model to ground answers |

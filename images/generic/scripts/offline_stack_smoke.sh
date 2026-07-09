@@ -9,6 +9,7 @@ set -euo pipefail
 
 workspace="${HEARTWOOD_WORKSPACE:-/tmp/heartwood-sessions}"
 session_id="${HEARTWOOD_SESSION_ID:-session-offline-stack}"
+runtime_profile="${HEARTWOOD_LOCAL_RUNTIME_PROFILE:-stub-loopback}"
 model_endpoint="${HEARTWOOD_LOCAL_MODEL_ENDPOINT:-http://127.0.0.1:8765/v1/chat}"
 request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.jsonl}"
 audit_copy="${HEARTWOOD_AUDIT_EXPORT:-/tmp/heartwood-audit-export.jsonl}"
@@ -18,10 +19,9 @@ transcript="${HEARTWOOD_TRANSCRIPT:-/tmp/heartwood-offline-transcript.txt}"
 rm -rf "${workspace}" "${reviewer_output}"
 rm -f "${request_log}" "${audit_copy}" "${transcript}"
 
-python images/generic/scripts/local_model_stub.py \
-  --host 127.0.0.1 \
-  --port 8765 \
-  --request-log "${request_log}" &
+HEARTWOOD_LOCAL_RUNTIME_PROFILE="${runtime_profile}" \
+HEARTWOOD_MODEL_REQUEST_LOG="${request_log}" \
+  bash images/generic/scripts/start_local_runtime.sh &
 model_pid="$!"
 
 cleanup() {
@@ -41,7 +41,7 @@ while time.time() < deadline:
             raise SystemExit(0)
     except OSError:
         time.sleep(0.1)
-raise SystemExit("local model stub did not become ready")
+raise SystemExit("local runtime did not become ready")
 PY
 
 heartwood --workspace "${workspace}" --session-id "${session_id}" detect | tee -a "${transcript}"
@@ -69,9 +69,11 @@ heartwood \
   reviewer packet \
   --output "${reviewer_output}" | tee -a "${transcript}"
 
-test -s "${request_log}"
+if [[ "${runtime_profile}" == "stub-loopback" ]]; then
+  test -s "${request_log}"
+  grep -q '"path": "/v1/chat"' "${request_log}"
+fi
 test -s "${audit_copy}"
 test -s "${reviewer_output}/reviewer-packet.md"
-grep -q '"path": "/v1/chat"' "${request_log}"
 grep -q "model=heartwood-local-demo status=ok" "${transcript}"
 grep -q "Tool execution: heartwood.synthetic.noop exit=0" "${transcript}"

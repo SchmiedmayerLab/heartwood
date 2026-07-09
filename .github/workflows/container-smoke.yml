@@ -6,8 +6,8 @@
 # SPDX-License-Identifier: MIT
 #
 
-# The generic image is a Phase 0F artifact. This workflow builds it and runs one
-# synthetic CLI command with runtime network disabled through Docker Compose.
+# This workflow builds the generic image and runs the offline stack smoke test
+# with runtime network disabled through Docker Compose.
 # See design/09-implementation-plan.md.
 
 name: Container Smoke Test

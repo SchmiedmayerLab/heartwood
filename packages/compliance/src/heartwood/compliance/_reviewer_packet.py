@@ -136,8 +136,10 @@ class ReviewerPacketGenerator:
                     "weights, or a production OpenHands agent-server."
                 ),
                 (
-                    "- Real local inference, production OpenHands-in-image coverage, and the "
-                    "static documentation site are planned for 0G."
+                    "- The selected real local-runtime profile is llama-cpp-cpu; runtime "
+                    "dependency pinning, model artifact verification, production "
+                    "OpenHands-in-image coverage, and the static documentation site remain "
+                    "required for 0G exit."
                 ),
                 (
                     "- The web UI, Server-Sent Events fallback, and platform proxy smoke tests "
