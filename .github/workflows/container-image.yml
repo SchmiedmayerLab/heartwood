@@ -22,9 +22,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build and publish generic image
-    runs-on: ubuntu-latest
+  build:
+    name: Build generic image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -33,10 +43,6 @@ jobs:
       - name: Set image name
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry
@@ -45,9 +51,54 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push image flavors
+      - name: Build and push architecture image flavors
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
-        run: docker buildx bake --file docker-bake.hcl --push runtime smoke providers
+          IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          docker buildx bake --file docker-bake.hcl --push
+          --set runtime.platform="${DOCKER_PLATFORM}"
+          --set smoke.platform="${DOCKER_PLATFORM}"
+          --set providers.platform="${DOCKER_PLATFORM}"
+          runtime smoke providers
+
+  publish:
+    name: Publish multi-architecture image manifests
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish image manifests
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_CHANNEL: edge
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
+            --tag "${IMAGE_NAME}:sha-${GIT_SHA}" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-arm64"
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke" \
+            --tag "${IMAGE_NAME}:sha-${GIT_SHA}-smoke" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-amd64" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-arm64"
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers" \
+            --tag "${IMAGE_NAME}:sha-${GIT_SHA}-providers" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-amd64" \
+            "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-arm64"

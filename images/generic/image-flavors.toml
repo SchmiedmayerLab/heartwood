@@ -9,6 +9,7 @@ image_name = "ghcr.io/schmiedmayerlab/heartwood"
 moving_channel = "edge"
 commit_tag_pattern = "sha-<git-sha>"
 release_tag_pattern = "v<semver>"
+architecture_helper_tag_pattern = "<moving-or-commit-tag>-<amd64|arm64>"
 latest_policy = "Publish latest only after the first stable release; do not use latest for unreleased main-branch builds."
 
 [flavors.runtime]

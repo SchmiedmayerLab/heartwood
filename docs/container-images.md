@@ -27,6 +27,8 @@ Heartwood publishes one image family from one Dockerfile and one Buildx Bake fil
 
 Do not use `latest` until the first stable release exists. Do not use branch names such as `main` or informal tags such as `dev-main` for user-facing image references.
 
+The publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64` and `edge-arm64`, then creates the public multi-architecture tags listed above with `docker buildx imagetools create`. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references.
+
 ## Current Flavors
 
 | Flavor | Bake Target | Moving Tag | Bundled Model Artifact | Intended Use |

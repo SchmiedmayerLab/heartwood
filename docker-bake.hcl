@@ -16,6 +16,10 @@ variable "GIT_SHA" {
   default = "local"
 }
 
+variable "IMAGE_TAG_SUFFIX" {
+  default = ""
+}
+
 group "default" {
   targets = ["runtime"]
 }
@@ -37,8 +41,8 @@ target "runtime" {
     HEARTWOOD_IMAGE_FLAVOR = "runtime"
   }
   tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:sha-${GIT_SHA}${IMAGE_TAG_SUFFIX}",
   ]
 }
 
@@ -49,8 +53,8 @@ target "smoke" {
     HEARTWOOD_IMAGE_FLAVOR = "smoke"
   }
   tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-smoke",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-smoke${IMAGE_TAG_SUFFIX}",
   ]
 }
 
@@ -61,7 +65,7 @@ target "providers" {
     HEARTWOOD_IMAGE_FLAVOR = "providers"
   }
   tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-providers",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-providers${IMAGE_TAG_SUFFIX}",
   ]
 }

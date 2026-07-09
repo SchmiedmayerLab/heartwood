@@ -108,6 +108,7 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     bake = (_repo_root() / "docker-bake.hcl").read_text(encoding="utf-8")
 
     assert flavors["moving_channel"] == "edge"
+    assert flavors["architecture_helper_tag_pattern"] == "<moving-or-commit-tag>-<amd64|arm64>"
     assert flavors["flavors"]["runtime"]["moving_tag"] == "edge"
     assert flavors["flavors"]["runtime"]["bundles_model_artifact"] is False
     assert flavors["flavors"]["smoke"]["moving_tag"] == "edge-smoke"
@@ -119,9 +120,10 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert 'target "runtime"' in bake
     assert 'target "smoke"' in bake
     assert 'target "providers"' in bake
-    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}" in bake
-    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke" in bake
-    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers" in bake
+    assert 'variable "IMAGE_TAG_SUFFIX"' in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers${IMAGE_TAG_SUFFIX}" in bake
     assert 'cache-to = ["type=gha,mode=min"]' in bake
     assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
 
@@ -366,12 +368,21 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     )
 
     assert "packages: write" in workflow
-    assert "docker/setup-qemu-action@v4" in workflow
+    assert "docker/setup-qemu-action@v4" not in workflow
+    assert "platform: linux/amd64" in workflow
+    assert "runner: ubuntu-24.04" in workflow
+    assert "platform: linux/arm64" in workflow
+    assert "runner: ubuntu-24.04-arm" in workflow
     assert "docker/setup-buildx-action@v4" in workflow
     assert "ghcr.io/${GITHUB_REPOSITORY,,}" in workflow
     assert "IMAGE_CHANNEL: edge" in workflow
     assert "GIT_SHA: ${{ github.sha }}" in workflow
-    assert "docker buildx bake --file docker-bake.hcl --push runtime smoke providers" in workflow
+    assert "IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}" in workflow
+    assert "docker buildx bake --file docker-bake.hcl --push" in workflow
+    assert "docker buildx imagetools create \\" in workflow
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-arm64"' in workflow
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-arm64"' in workflow
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-arm64"' in workflow
     assert ":dev-main" not in workflow
     assert ":main" not in workflow
     assert "${{ github.sha }}" in workflow

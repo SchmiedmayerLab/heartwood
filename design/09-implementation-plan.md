@@ -94,7 +94,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - The CLI can select a provider route from a validated provider configuration without reading provider secrets or invoking live provider APIs in synthetic tests.
 - Docker Compose disables runtime network access for the smoke service and runs the offline stack script end to end.
 - The offline stack smoke script starts the default `llama-cpp-cpu` runtime, runs detection, approves the synthetic model call, runs the agentic CLI through the local model endpoint, starts the gateway-managed OpenHands process during the agentic turn, writes a bounded synthetic workspace artifact through authenticated OpenHands bash execution, exports the scrubbed audit log, and generates the reviewer packet.
-- The container image publish workflow builds `docker-bake.hcl` targets on `main` for `linux/amd64` and `linux/arm64` and publishes `edge`, `edge-smoke`, `edge-providers`, and commit-SHA flavor tags to GitHub Container Registry.
+- The container image publish workflow builds `docker-bake.hcl` targets on native `linux/amd64` and `linux/arm64` runners on `main`, merges the architecture outputs into multi-architecture manifests, and publishes `edge`, `edge-smoke`, `edge-providers`, and commit-SHA flavor tags to GitHub Container Registry.
 - `docs/getting-started-offline.md` documents pull-and-run usage from the published smoke image and the local Compose workflow.
 - `docs/container-images.md` records the image naming scheme, flavor policy, provider secret posture, local model strategy, and future GitHub Issues/Projects migration.
 - The container smoke workflow runs the offline stack smoke on native GitHub-hosted `linux/amd64` and `linux/arm64` runners for pull requests, pushes to `main`, and manual dispatch.
@@ -148,6 +148,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - The Docker Compose smoke runs with an explicit non-root UID/GID, runtime network disabled, a read-only root filesystem, tmpfs write points, dropped Linux capabilities, `no-new-privileges`, and a process limit.
 - CI runs Buildx Dockerfile checks before the container smoke path so secret-like `ARG` or `ENV` warnings fail in pull requests.
 - CI runs the `linux/arm64` offline smoke on a native GitHub-hosted ARM runner instead of QEMU runtime emulation, while keeping the required check name `Offline stack smoke test (linux/arm64)`.
+- Main-branch image publication builds each architecture on a native GitHub-hosted runner and creates the public multi-architecture image tags through a final manifest merge job.
 - `docker-bake.hcl` defines `runtime`, `smoke`, and `providers` image targets from one Dockerfile.
 - Main-branch image publication pulls the current base image tag, uses BuildKit cache, and attaches SBOM and provenance attestations to the GitHub Container Registry image flavors.
 - `images/generic/image-flavors.toml` records the `edge`, `edge-smoke`, `edge-providers`, and commit-SHA tag scheme and reserves `latest` for a future stable release.
