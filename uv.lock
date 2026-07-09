@@ -14,6 +14,7 @@ members = [
     "heartwood-core-adapter",
     "heartwood-detector",
     "heartwood-fixtures",
+    "heartwood-gateway",
     "heartwood-model-policy",
     "heartwood-schemas",
     "heartwood-session",
@@ -255,6 +256,25 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 name = "heartwood-fixtures"
 version = "0.0.0"
 source = { editable = "packages/fixtures" }
+
+[[package]]
+name = "heartwood-gateway"
+version = "0.0.0"
+source = { editable = "packages/gateway" }
+dependencies = [
+    { name = "heartwood-core-adapter" },
+    { name = "heartwood-model-policy" },
+    { name = "heartwood-schemas" },
+    { name = "heartwood-session" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "heartwood-core-adapter", editable = "packages/core-adapter" },
+    { name = "heartwood-model-policy", editable = "packages/model-policy" },
+    { name = "heartwood-schemas", editable = "packages/schemas" },
+    { name = "heartwood-session", editable = "packages/session" },
+]
 
 [[package]]
 name = "heartwood-model-policy"

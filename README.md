@@ -26,9 +26,9 @@ Participant-level data stays inside the platform boundary. Development and CI us
 
 ## Overview
 
-Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture is designed around a session gateway that will own the OpenHands agent-server and expose one shared session command/event contract to every surface — the CLI, a notebook bridge, and a researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
+Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture centers on a session gateway that owns the local agent-server boundary and exposes one shared session command/event contract to every surface: the CLI, a notebook bridge, and a researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
 
-The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, and the `heartwood` command-line interface. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -55,6 +55,7 @@ The `detect` command inspects environment markers, fingerprints the local synthe
 - [`packages/core-adapter`](packages/core-adapter) contains session orchestration and the deterministic offline agent facade.
 - [`packages/detector`](packages/detector) contains deterministic platform detection.
 - [`packages/fixtures`](packages/fixtures) contains no-live-data fixture linting.
+- [`packages/gateway`](packages/gateway) contains REST command handling, replayable event streams, managed local agent-server binding, and model egress gating.
 - [`packages/model-policy`](packages/model-policy) contains deny-by-default model-call policy evaluation and attestation records.
 - [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
 - [`packages/session`](packages/session) contains the shared session command/event contract.

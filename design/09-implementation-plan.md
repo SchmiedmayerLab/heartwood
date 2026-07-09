@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0D — Prototype skills and replay**. The baseline includes passes 0A through 0D and must stay green while later passes are added.
+The repository is at **0E — Gateway and agent-server binding**. The baseline includes passes 0A through 0E and must stay green while later passes are added.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -58,17 +58,32 @@ The repository is at **0D — Prototype skills and replay**. The baseline includ
 - The full synthetic replay fixture includes expected tool calls, policy decisions, streamed session/audit events, aggregate outputs, and attestations.
 - Replay validation includes the 0C event-stream additions: agent message, tool-call proposal, and confirmation resolution.
 
-### Current 0D Exclusions
+### Implemented In 0E — Gateway And Agent-Server Binding
 
-- No REST/WebSocket gateway package exists yet.
-- No OpenHands agent-server binding exists yet.
-- No LiteLLM egress proxy exists yet.
-- CLI support beyond detection is not complete.
+- `packages/gateway` exists and is registered in the Python workspace.
+- REST-style command handling accepts the existing session command contract and returns session events.
+- Replayable WebSocket-style streams expose the existing session event contract and support reconnect replay.
+- Gateway command handling routes through the session service and preserves disk-backed session events and audit records.
+- Pause, resume, confirmation request, confirmation resolution, policy denial, and malformed command paths are covered through gateway contract tests.
+- The managed agent-server boundary owns a configurable child process, rejects non-local bindings, requires the Local runtime, and blocks direct client endpoint exposure.
+- The agent-server binding can be disabled for offline CI and synthetic replay.
+- OpenHands-style message, tool-call, confirmation, and tool-result events are translated behind the core-adapter backend facade.
+- The default gateway path remains deterministic and in-process for offline commands and tests.
+- The model egress proxy evaluates policy before invoking the downstream model path and records attestation data.
+- Tests cover REST command handling, replayable streaming, gateway lifecycle, fake agent-server translation through the session contract, localhost-only binding, policy denial, denied egress invocation, and invalid requests.
+
+### Current 0E Exclusions
+
+- No expanded interactive CLI exists beyond the current detection command.
 - No notebook API or widget bridge exists yet.
-- No generic Docker image or Docker Compose smoke test exists yet.
+- No generic Docker image packages the configured agent-server command or runtime dependencies yet.
+- No Docker Compose smoke test exists yet.
 - No reviewer packet generator exists yet.
 - No TypeScript web UI exists yet.
+- No Server-Sent Events fallback exists yet.
 - No real-platform adapter or controlled-data validation exists yet.
+- No production LiteLLM provider integration is wired; the gateway exposes the policy-gated invocation point.
+- No production OpenHands package/client command is pinned in an image; the gateway exposes the managed localhost-only process boundary and backend facade.
 
 ## Phase 0 Requirements
 
@@ -83,36 +98,6 @@ The repository is at **0D — Prototype skills and replay**. The baseline includ
 - Run repository validation, Python quality checks, type checks, unit tests, replay tests, fixture-lint checks, coverage gates, and REUSE checks before merge.
 
 ## Remaining Phase 0 Passes
-
-### 0E — Gateway And Agent-Server Binding
-
-**Required work**
-
-- Add `packages/gateway`.
-- Implement REST commands over the existing session command contract.
-- Implement WebSocket streaming over the existing session event contract.
-- Add Server-Sent Events support only if needed for gateway-level streaming tests; web UI fallback is completed in 0G.
-- Own the OpenHands agent-server as a managed child process.
-- Bind the agent-server to localhost only.
-- Block direct client access to the agent-server; all commands and streamed events must pass through the gateway.
-- Bind `openhands-agent-server` behind the core-adapter facade after dependency versions, policy gates, and replay behavior are pinned.
-- Run the agent-server in the non-Docker Local runtime inside the platform container; the sandbox boundary is bubblewrap plus platform egress-deny.
-- Add the model-policy egress proxy in front of LiteLLM so the policy decision gates actual model calls and the agent-server never reaches model endpoints directly.
-- Preserve the deterministic in-process service path for offline commands and tests.
-
-**Required tests**
-
-- Gateway contract tests for REST command handling, WebSocket event streaming, reconnect replay, pause/resume, confirmation request/resolution, policy denial, audit persistence, and malformed command errors.
-- Fake-agent-server tests proving translation between OpenHands-style events and Heartwood session events.
-- Localhost-binding tests proving the agent-server is reachable only through the gateway path.
-- Egress-proxy tests proving denied model calls do not reach LiteLLM or provider endpoints.
-
-**Exit gates**
-
-- Gateway tests pass without network access.
-- Existing 0D deterministic tests remain green.
-- The agent-server binding can be disabled for offline CI.
-- No surface can bypass the gateway to reach the agent-server.
 
 ### 0F — CLI, Notebook Bridge, Image, And Reviewer Packet
 
@@ -273,17 +258,16 @@ The repository is at **0D — Prototype skills and replay**. The baseline includ
 
 ## Implementation Backlog
 
-1. Keep the current 0D baseline green while landing later passes.
-2. Add the REST/WebSocket gateway.
-3. Bind the OpenHands agent-server behind the facade in a Local runtime.
-4. Add the model-policy egress proxy in front of LiteLLM.
-5. Expand the CLI into an interactive surface.
-6. Add the notebook API and widget bridge.
-7. Package the generic Docker image and add Docker Compose smoke tests.
-8. Add audit bundle, attestation, and reviewer packet generation.
-9. Build the researcher web UI on the Spezi stack.
-10. Add proxy surfacing and smoke tests for `jupyter-server-proxy`.
-11. Select and implement the first real platform pilot.
+1. Keep the current 0E baseline green while landing later passes.
+2. Expand the CLI into an interactive surface.
+3. Add the notebook API and widget bridge.
+4. Package the generic Docker image with the configured agent-server command, Local runtime dependencies, and Docker Compose smoke tests.
+5. Add audit bundle, attestation, and reviewer packet generation.
+6. Build the researcher web UI on the Spezi stack.
+7. Add Server-Sent Events fallback and proxy smoke tests for `jupyter-server-proxy`.
+8. Wire production LiteLLM provider configuration only through the gateway egress proxy.
+9. Pin production OpenHands runtime dependencies in the image after license and replay checks pass.
+10. Select and implement the first real platform pilot.
 
 ## Repository Strategy
 
