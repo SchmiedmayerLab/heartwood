@@ -180,6 +180,11 @@ def test_offline_stack_smoke_runs_local_model_and_cli() -> None:
     assert "HEARTWOOD_AGENT_BACKEND" in script
     assert "HEARTWOOD_AGENT_SERVER_ENABLED" in script
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" in script
+    assert "HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS" in script
+    assert (
+        'agent_server_ready_timeout="${HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS:-180}"'
+        in script
+    )
     assert "secrets.token_urlsafe" in script
     assert "heartwood-local-agent-server" not in script
     assert "start_agent_server.sh" in script
@@ -378,8 +383,11 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
     )
 
     assert "fail-fast: false" in workflow
-    assert "platform: [linux/amd64, linux/arm64]" in workflow
-    assert "docker/setup-qemu-action@v4" in workflow
+    assert "platform: linux/amd64" in workflow
+    assert "runner: ubuntu-24.04" in workflow
+    assert "platform: linux/arm64" in workflow
+    assert "runner: ubuntu-24.04-arm" in workflow
+    assert "docker/setup-qemu-action@v4" not in workflow
     assert "docker/setup-buildx-action@v4" in workflow
     assert "docker buildx build --check --file images/generic/Dockerfile ." in workflow
     assert "docker buildx bake --file docker-bake.hcl --print runtime smoke providers" in workflow

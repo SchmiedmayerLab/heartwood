@@ -97,7 +97,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - The container image publish workflow builds `docker-bake.hcl` targets on `main` for `linux/amd64` and `linux/arm64` and publishes `edge`, `edge-smoke`, `edge-providers`, and commit-SHA flavor tags to GitHub Container Registry.
 - `docs/getting-started-offline.md` documents pull-and-run usage from the published smoke image and the local Compose workflow.
 - `docs/container-images.md` records the image naming scheme, flavor policy, provider secret posture, local model strategy, and future GitHub Issues/Projects migration.
-- The container smoke workflow runs the offline stack smoke on `linux/amd64` and `linux/arm64` for pull requests, pushes to `main`, and manual dispatch.
+- The container smoke workflow runs the offline stack smoke on native GitHub-hosted `linux/amd64` and `linux/arm64` runners for pull requests, pushes to `main`, and manual dispatch.
 - Static image tests verify the generic image family includes the expected runtime surfaces, declares the local-runtime profiles, separates CPU and GPU runtime profiles, records the verified GGUF artifact, includes the OpenHands launcher, disables runtime network access through Compose, uses the smoke flavor for bundled model CI, publishes the expected image tags, validates provider route examples, and covers both baseline Linux architectures.
 
 ### Current Exclusions
@@ -147,6 +147,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - The generic Dockerfile avoids baking API-key-like values into image `ARG` or `ENV`; the OpenHands smoke key is runtime-only and overridable.
 - The Docker Compose smoke runs with an explicit non-root UID/GID, runtime network disabled, a read-only root filesystem, tmpfs write points, dropped Linux capabilities, `no-new-privileges`, and a process limit.
 - CI runs Buildx Dockerfile checks before the container smoke path so secret-like `ARG` or `ENV` warnings fail in pull requests.
+- CI runs the `linux/arm64` offline smoke on a native GitHub-hosted ARM runner instead of QEMU runtime emulation, while keeping the required check name `Offline stack smoke test (linux/arm64)`.
 - `docker-bake.hcl` defines `runtime`, `smoke`, and `providers` image targets from one Dockerfile.
 - Main-branch image publication pulls the current base image tag, uses BuildKit cache, and attaches SBOM and provenance attestations to the GitHub Container Registry image flavors.
 - `images/generic/image-flavors.toml` records the `edge`, `edge-smoke`, `edge-providers`, and commit-SHA tag scheme and reserves `latest` for a future stable release.
@@ -175,7 +176,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Image tests that verify the local runtime profile, model manifest, OpenHands command, verified skills, tutorial scripts, and offline smoke entrypoint are present.
 - Image tests that verify Bake targets, image flavor metadata, tag naming, provider route examples, and model catalog records.
 - Provider config tests that reject inline secrets, relative secret paths, unknown routes, malformed endpoints, and external providers without `secret-file` or `managed-identity` auth.
-- Docker Compose smoke tests disable runtime network access and run the local-stack entrypoint end to end on `linux/amd64` and `linux/arm64` where the profile claims support.
+- Docker Compose smoke tests disable runtime network access and run the local-stack entrypoint end to end on native `linux/amd64` and `linux/arm64` CI runners where the profile claims support.
 - CI runs a tiny local inference artifact through the selected runtime on pull requests; larger local tutorial profiles require separate manifests and release or scheduled checks.
 - GPU acceleration tests require a separate CUDA profile and a GPU-capable runner; standard GitHub-hosted pull-request CI is not a GPU gate.
 - CI must verify that the offline smoke can run from the built image and that no repository checkout is required for the documented Docker path.

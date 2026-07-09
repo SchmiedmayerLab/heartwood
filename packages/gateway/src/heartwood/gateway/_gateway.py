@@ -126,6 +126,7 @@ def _agent_server_from_env() -> ManagedAgentServer:
     os.environ.setdefault("HEARTWOOD_AGENT_SERVER_API_KEY", secrets.token_urlsafe(32))
     host = os.environ.get("HEARTWOOD_AGENT_SERVER_HOST", "127.0.0.1")
     port = _int_env("HEARTWOOD_AGENT_SERVER_PORT", default=8766)
+    readiness_timeout = _float_env("HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS", default=60)
     command = tuple(
         shlex.split(
             os.environ.get(
@@ -136,7 +137,10 @@ def _agent_server_from_env() -> ManagedAgentServer:
     )
     return ManagedAgentServer(
         AgentServerConfig(command=command, host=host, port=port, enabled=True),
-        readiness_probe=_http_readiness_probe,
+        readiness_probe=lambda endpoint: _http_readiness_probe(
+            endpoint,
+            timeout_seconds=readiness_timeout,
+        ),
     )
 
 
@@ -184,4 +188,15 @@ def _int_env(name: str, *, default: int) -> int:
         return int(value)
     except ValueError as error:
         msg = f"{name} must be an integer"
+        raise ValueError(msg) from error
+
+
+def _float_env(name: str, *, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError as error:
+        msg = f"{name} must be a number"
         raise ValueError(msg) from error

@@ -18,6 +18,7 @@ transcript="${HEARTWOOD_TRANSCRIPT:-/tmp/heartwood-offline-transcript.txt}"
 agent_backend="${HEARTWOOD_AGENT_BACKEND:-openhands-bash}"
 agent_server_enabled="${HEARTWOOD_AGENT_SERVER_ENABLED:-1}"
 agent_server_port="${HEARTWOOD_AGENT_SERVER_PORT:-8766}"
+agent_server_ready_timeout="${HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS:-180}"
 agent_server_workspace="${HEARTWOOD_AGENT_SERVER_WORKSPACE:-/tmp/heartwood-openhands}"
 agent_server_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-$(python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 
@@ -60,6 +61,7 @@ HEARTWOOD_AGENT_BACKEND="${agent_backend}" \
 HEARTWOOD_AGENT_SERVER_ENABLED="${agent_server_enabled}" \
 HEARTWOOD_AGENT_SERVER_PORT="${agent_server_port}" \
 HEARTWOOD_AGENT_SERVER_COMMAND="bash images/generic/scripts/start_agent_server.sh" \
+HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS="${agent_server_ready_timeout}" \
 HEARTWOOD_AGENT_SERVER_WORKSPACE="${agent_server_workspace}" \
 HEARTWOOD_AGENT_SERVER_API_KEY="${agent_server_api_key}" \
 heartwood \
