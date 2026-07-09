@@ -29,6 +29,12 @@ platform_home = "/home/jupyter"
 platform_user = "jupyter"
 jupyter_prefix = "/opt/conda"
 notebook_kernel = "heartwood"
+image_user = "jupyter"
+working_dir = "/home/jupyter"
+entrypoint = ["/opt/conda/bin/jupyter", "notebook"]
+exposed_ports = ["8000/tcp"]
+required_env = ["HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python"]
+forbidden_path_entries = ["/opt/heartwood/.venv/bin"]
 proxy = "jupyter-server-proxy under the Terra Leonardo proxy"
 registry_policy = "Publish public GHCR tags for demos as single-platform Docker schema-2 manifests because Terra Leonardo image auto-detection accepts Docker manifest v2 media types but not OCI indexes; use GAR or another Terra-accessible private registry for private controlled-platform deployments."
 manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
@@ -57,13 +63,18 @@ coder_model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k
 ci_required = true
 live_workspace_validation_required = true
 
+[platforms.terra.required_env_contains]
+PATH = ["/opt/llama.cpp", "/opt/conda/bin", "/usr/local/bin"]
+LD_LIBRARY_PATH = ["/opt/llama.cpp"]
+JUPYTER_PATH = ["/opt/conda/share/jupyter"]
+
 [[platforms.terra.required_evidence]]
 name = "local-ci-smoke"
-description = "Build the Terra-compatible CI base, build the Terra smoke image through the same platform Dockerfile, run the Heartwood platform image smoke, and run the offline stack smoke with runtime network disabled."
+description = "Build the Terra-compatible CI base with real Jupyter notebook packages and Terra-style config, build the Terra smoke image through the same platform Dockerfile, verify the image user/workdir/PATH/kernel/Jupyter contract, run the Heartwood platform image smoke, run the offline stack smoke with runtime network disabled, and launch both the inherited entrypoint and Leonardo-style run-jupyter.sh paths to verify the /notebooks/ routes."
 
 [[platforms.terra.required_evidence]]
 name = "main-publish-real-terra"
-description = "Build and publish the Terra runtime, smoke, and coder demo images from the real Terra base on main after freeing runner disk, then verify the published GHCR tags."
+description = "Build and publish the Terra runtime, smoke, and coder demo images from the real Terra base on main after freeing runner disk, verify the published GHCR tags and launch-critical image config, then pull the published Terra runtime image and run the Jupyter contract, entrypoint route, and Leonardo-style route smokes."
 
 [[platforms.terra.required_evidence]]
 name = "live-terra-smoke"

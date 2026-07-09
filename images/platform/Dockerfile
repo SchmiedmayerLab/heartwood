@@ -61,10 +61,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml \
     HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     HEARTWOOD_WORKSPACE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions \
+    HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python \
     HEARTWOOD_WEB_HOST=127.0.0.1 \
     HEARTWOOD_WEB_PORT=8767 \
-    LD_LIBRARY_PATH=/opt/llama.cpp \
-    PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"
+    JUPYTER_PATH="${HEARTWOOD_JUPYTER_PREFIX}/share/jupyter" \
+    LD_LIBRARY_PATH="/opt/llama.cpp:${LD_LIBRARY_PATH}" \
+    PATH="/opt/llama.cpp:${PATH}"
 
 USER root
 
@@ -109,7 +111,12 @@ COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-extras --python 3.12
 
+RUN ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood \
+    && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python \
+    && ln -sf /opt/heartwood/.venv/bin/agent-server /usr/local/bin/agent-server
+
 RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
+      HOME=/tmp IPYTHONDIR=/tmp/heartwood-ipython \
       /opt/heartwood/.venv/bin/python -m ipykernel install \
         --prefix "${HEARTWOOD_JUPYTER_PREFIX}" \
         --name heartwood \
@@ -117,7 +124,7 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
     fi
 
 RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \
-      python images/generic/scripts/download_model_artifact.py \
+      /opt/heartwood/.venv/bin/python images/generic/scripts/download_model_artifact.py \
         --manifest "${HEARTWOOD_LOCAL_MODEL_MANIFEST}" \
         --output "${HEARTWOOD_LOCAL_MODEL_PATH}" \
         --skip-existing; \
@@ -125,5 +132,7 @@ RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \
 
 RUN mkdir -p "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace" \
     && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace"
+
+WORKDIR ${HEARTWOOD_PLATFORM_HOME}
 
 USER ${HEARTWOOD_PLATFORM_USER}
