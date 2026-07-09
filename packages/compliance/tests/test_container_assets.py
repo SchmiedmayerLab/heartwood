@@ -278,6 +278,19 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert 'target "terra-runtime"' in bake
     assert 'target "terra-smoke"' in bake
     assert 'target "terra-smoke-ci"' in bake
+    assert (
+        'target "_platform_common" {\n  context = "."\n  dockerfile = "images/platform/Dockerfile"'
+        in bake
+    )
+    assert (
+        'target "terra-runtime" {\n  inherits = ["_terra_common"]\n  attest = '
+        '["type=sbom", "type=provenance,mode=max"]' in bake
+    )
+    assert (
+        'target "terra-smoke" {\n  inherits = ["_terra_common"]\n  attest = '
+        '["type=sbom", "type=provenance,mode=max"]' in bake
+    )
+    assert 'target "terra-smoke-ci" {\n  inherits = ["_terra_common"]\n  pull = false' in bake
     assert 'variable "TERRA_BASE_IMAGE"' in bake
     assert 'variable "TERRA_BASE_PLATFORM"' in bake
     assert 'variable "TERRA_CI_BASE_IMAGE"' in bake

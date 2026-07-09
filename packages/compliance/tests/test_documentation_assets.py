@@ -73,7 +73,11 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert ".github/workflows/container-image.yml" in guide
     assert "Add Or Adapt A Platform Image" in guide
     assert "Keep `--set <target>.platform=<architecture>`" in guide
-    assert "Docker's local image exporter does not load manifest lists" in guide
+    assert "local-only CI load targets without attestations" in guide
+    assert (
+        "Docker's local image exporter does not load manifest lists or attested image indexes"
+        in guide
+    )
     assert "Required Live Evidence" in guide
     assert "custom image digest" in guide
     assert "Synthetic data only" in guide

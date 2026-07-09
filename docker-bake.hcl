@@ -88,7 +88,6 @@ target "_platform_common" {
   pull = true
   cache-from = ["type=gha"]
   cache-to = ["type=gha,mode=min"]
-  attest = ["type=sbom", "type=provenance,mode=max"]
 }
 
 target "_terra_common" {
@@ -107,6 +106,7 @@ target "_terra_common" {
 
 target "terra-runtime" {
   inherits = ["_terra_common"]
+  attest = ["type=sbom", "type=provenance,mode=max"]
   args = {
     HEARTWOOD_BUNDLE_LOCAL_MODEL = "0"
     HEARTWOOD_IMAGE_FLAVOR = "terra-runtime"
@@ -119,6 +119,7 @@ target "terra-runtime" {
 
 target "terra-smoke" {
   inherits = ["_terra_common"]
+  attest = ["type=sbom", "type=provenance,mode=max"]
   args = {
     HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
     HEARTWOOD_IMAGE_FLAVOR = "terra-smoke"
