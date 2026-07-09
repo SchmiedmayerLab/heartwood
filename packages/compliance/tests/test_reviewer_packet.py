@@ -58,7 +58,8 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     assert "bounded bash execution" in limitations_text
     assert "larger local model" in limitations_text
     assert "llama-cpp-cpu" in limitations_text
-    assert "planned for 0H" in limitations_text
+    assert "next documentation pass" in limitations_text
+    assert "planned after the documentation-site pass" in limitations_text
 
 
 def test_reviewer_packet_can_fall_back_to_checked_in_audit_fixture(tmp_path: Path) -> None:

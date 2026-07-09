@@ -82,4 +82,4 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - It does not yet validate optional GPU acceleration; that belongs to a separate CUDA profile and a GPU-capable runner.
 - It does not yet prove autonomous coding quality from a larger local tutorial model; the bundled tiny model is only a load/query artifact, while the tool-execution smoke is intentionally bounded and deterministic after approval.
 - It does not run the researcher web UI or platform proxy routes.
-- It does not publish the static documentation site; that belongs with the web/documentation pass.
+- It does not publish the static documentation site; that belongs with the next documentation-site pass.

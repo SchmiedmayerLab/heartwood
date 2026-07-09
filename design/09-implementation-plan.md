@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0G in progress**. Passes 0A through 0F are implemented and must stay green while the local-runtime, agent-server, image, CI, and documentation work lands. The current 0G slice implements the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, and adds authenticated OpenHands-backed bash execution for the Docker-only offline stack.
+The repository is at **0G complete**. Passes 0A through 0G are implemented and must stay green while the documentation-site, project-tracking, web-UI, platform-proxy, provider-invocation, and larger-model work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -105,11 +105,14 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - No TypeScript web UI exists yet.
 - No Server-Sent Events fallback exists yet.
 - No `jupyter-server-proxy` route validation exists yet.
-- No static documentation site is published yet; tutorial documentation is checked in as Markdown.
+- No static documentation site is published yet; tutorial and design documentation are checked in as Markdown.
 - No real-platform adapter or controlled-data validation exists yet.
 - No production LiteLLM provider integration is wired; provider routes are validated and selectable, while live provider invocation still must route through the policy-gated invocation point.
 - Autonomous OpenHands conversation turns driven by a larger local coding model are not yet proven; the current OpenHands path executes a bounded bash-backed workspace action after the Heartwood approval gate.
 - The bundled local model exists only in the smoke flavor, is a tiny smoke-test artifact, and is not a production coding or biomedical model.
+- No optional larger bundled coding-model image target exists yet.
+- No GPU runtime profile is implemented yet; CUDA support is documented as deferred.
+- No automated post-publish registry manifest verification or GHCR tag cleanup exists yet; public image tags are created as multi-architecture manifests, but the registry state and stale helper tags are not independently checked after publication.
 
 ## Phase 0 Requirements
 
@@ -123,18 +126,12 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Export only scrubbed JSONL audit artifacts and attestations.
 - Run repository validation, Python quality checks, type checks, unit tests, replay tests, fixture-lint checks, coverage gates, and REUSE checks before merge.
 
-## Remaining Phase 0 Passes
+## Completed Phase 0 Integration Pass
 
-### 0G — End-to-End Local Runtime And Published Documentation
+### Implemented In 0G — End-to-End Local Runtime And Image Publication
 
-**Fit and sequencing**
-
-- Land this pass before the web UI because it proves the execution substrate the web UI will drive: local inference, the managed OpenHands agent-server, the gateway, the CLI, policy, audit, reviewer packet, image packaging, and CI.
-- Keep this pass integration-focused; do not add the researcher dashboard or platform proxy UI in 0G.
-- Keep synthetic fixtures only; the local model test proves offline load, query, policy gating, event flow, and scrubbing, not biomedical quality.
-
-**Landed in 0G**
-
+- This pass proves the execution substrate the web UI and platform adapters will drive: local inference, the managed OpenHands agent-server, the gateway, the CLI, policy, audit, reviewer packet, image packaging, and CI.
+- This pass stays synthetic-only; the local model test proves offline load, query, policy gating, event flow, and scrubbing, not biomedical quality or production coding quality.
 - `images/generic/local-runtime/profiles.toml` declares `stub-loopback` as the implemented deterministic fixture and `llama-cpp-cpu` as the selected real local inference profile.
 - The `llama-cpp-cpu` profile defines `linux/amd64` and `linux/arm64` support, CPU/GPU expectations, memory floor, localhost serving API, startup and shutdown behavior, failure modes, GGUF artifact policy, checksum policy, license posture, cache location, build-time resolution, runtime resolution, and CI expectations.
 - `ggml-org/llama.cpp` release `b9937` is pinned as the CPU runtime dependency through architecture-specific Ubuntu binary archives for `linux/amd64` and `linux/arm64`, each verified by SHA-256 during the Docker build.
@@ -158,49 +155,68 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - `llama-cpp-cuda` is recorded as a deferred optional NVIDIA acceleration profile, separate from the portable CPU baseline and requiring explicit host GPU runtime support.
 - Static tests verify the runtime profile, model manifest, model catalog, provider route examples, launcher routing, Docker network-off smoke command, multi-architecture smoke matrix, OpenHands launcher, Bake targets, and published image tags.
 
-**Remaining required work**
-
-1. Prove an autonomous OpenHands conversation turn against a larger local tutorial coding model without weakening the current approval, audit, and scrubbed-event controls.
-2. Select the first optional bundled coding-model artifact, with `Qwen/Qwen2.5-Coder-1.5B-Instruct` as the current candidate, and record source revision, license posture, redistribution allowance, quantization, byte size, SHA-256, provenance, cache location, build-time versus runtime resolution, and CPU/memory envelope before adding an image target.
-3. Add the deferred `model-qwen25-coder-1_5b-q4_k_m` Bake target only after the exact artifact is selected and reviewed; keep it out of required pull-request CI if its size or runtime cost is too high.
-4. Wire production provider invocation through the gateway policy layer and provider route config, likely using a provider compatibility layer such as LiteLLM where it fits, while keeping all provider secrets outside images and persisted artifacts.
-5. Route any OpenHands model access through the gateway policy layer; the agent-server must not hold a separate public model egress path.
-6. Keep optional GPU acceleration behind a separate runtime profile, Docker device configuration, and self-hosted GPU or scheduled platform checks; do not make it a requirement for the generic CPU image.
-7. Publish a self-contained GitHub Pages documentation site from checked-in project material, including design documents, goals, current limitations, image usage instructions, and provider secret guidance.
-8. Link-check the static documentation site and keep it free of external CDN dependencies.
-9. After the documentation site and image flavor scheme stabilize, move operational backlog items from Markdown into GitHub Issues and a GitHub Project with fields for phase, risk, platform, owner, status, and required evidence.
-
-**Required tests**
-
-- Unit tests for approval-before-invocation, policy denial, loopback-only enforcement, local-runtime failure handling, response metadata extraction, local workspace fallback execution, OpenHands bash execution, and prompt/response scrubbing.
-- Contract tests for CLI, gateway, OpenHands process configuration, OpenHands HTTP client routing, OpenHands backend translation, audit export, and reviewer packet generation over the same session command/event stream.
-- Image tests that verify the local runtime profile, model manifest, OpenHands command, verified skills, tutorial scripts, and offline smoke entrypoint are present.
-- Image tests that verify Bake targets, image flavor metadata, tag naming, provider route examples, and model catalog records.
-- Provider config tests that reject inline secrets, relative secret paths, unknown routes, malformed endpoints, and external providers without `secret-file` or `managed-identity` auth.
-- Docker Compose smoke tests disable runtime network access and run the local-stack entrypoint end to end on native `linux/amd64` and `linux/arm64` CI runners where the profile claims support.
-- CI runs a tiny local inference artifact through the selected runtime on pull requests; larger local tutorial profiles require separate manifests and release or scheduled checks.
-- GPU acceleration tests require a separate CUDA profile and a GPU-capable runner; standard GitHub-hosted pull-request CI is not a GPU gate.
-- CI must verify that the offline smoke can run from the built image and that no repository checkout is required for the documented Docker path.
-- CI must build the static documentation site, run Markdown/link checks, and publish GitHub Pages only from `main`.
-- Audit and reviewer-packet tests must prove prompt text, response text, participant-level data, secrets, and non-synthetic markers are absent from persisted artifacts.
-
-**Exit gates**
+**Completed verification**
 
 - A documented Docker-only command can pull the `edge-smoke` image and run the offline local-stack smoke test without public runtime network access.
 - The smoke test starts a real local inference runtime, runs a model call after explicit approval, starts the managed OpenHands agent-server behind the gateway, completes one synthetic agentic CLI turn with authenticated OpenHands bash execution, exports a scrubbed audit log, and generates the synthetic evidence bundle.
 - The same session command/event contract drives the CLI, notebook bridge, gateway, and OpenHands backend path.
 - The default `edge` runtime image does not bundle model weights; the `edge-smoke` image bundles only the tiny verified smoke artifact; provider secrets are runtime file or identity inputs only.
 - Prompt and response content are not persisted in commands, session events, audit exports, reviewer packets, or CI logs.
-- GitHub Actions covers the image smoke, local inference runtime profile, OpenHands behind-gateway path, docs build, docs link checks, and GHCR publishing path.
-- The static documentation site is available from GitHub Pages and matches the checked-in README, tutorial, design documents, goals, and limitations.
+- GitHub Actions covers the image smoke, local inference runtime profile, OpenHands behind-gateway path, and GHCR publishing path.
 - The generic image family publishes multi-architecture manifests for `edge`, `edge-smoke`, and `edge-providers` on `linux/amd64` and `linux/arm64`; any architecture excluded from a runtime profile is explicitly documented in the profile.
 
-### 0H — Researcher Web UI And Platform Surfacing
+## Remaining Phase 0 Passes
+
+### 0H — Static Documentation Site And Project Tracking
 
 **Fit and sequencing**
 
-- Start this pass after 0G so the web UI is only an additional presentation adapter over a proven local-runtime and agent-server stack.
+- Land this pass immediately after 0G so the public-facing documentation and project tracking reflect the implemented Docker, local-runtime, OpenHands, provider-route, and CI behavior before frontend work expands the surface area.
+- Keep this pass documentation- and governance-focused; do not add the researcher dashboard, platform adapters, live provider invocation, or larger model image targets here.
+- Use only checked-in project material as site source content, and keep the generated site free of external runtime dependencies.
+
+**Required work**
+
+- Add a static documentation site build that renders the README, getting-started guide, container image guide, design documents, acronym glossary, project goals, current limitations, security posture, and contribution routing from checked-in Markdown.
+- Configure GitHub Pages publication from `main` only, using least-privilege workflow permissions and no repository secrets.
+- Add a pull-request documentation build job that fails on broken internal links, broken checked-in asset references, malformed Markdown where the selected tool can detect it, missing SPDX headers in new source files, and external CDN dependencies.
+- Add site navigation that exposes the offline Docker tutorial, image flavor policy, provider secret policy, local model strategy, architecture, security/compliance model, audit/reviewer-packet flow, testing/evaluation plan, development workflow, and implementation plan.
+- Make the site build reproducible locally from the repository without requiring published images, cloud credentials, or network access after dependencies are installed.
+- Update reviewer-packet limitations so they describe the static site as the current documentation pass, not as a missing 0G exit gate.
+- Formalize the container tag lifecycle in documentation and CI: public `edge`, `edge-smoke`, `edge-providers`, commit-SHA, and future semver tags are unified multi-platform image indexes; architecture-specific tags are internal assembly details, not user-facing install targets.
+- Add post-publish manifest verification for every public image tag using registry inspection, proving that each unified tag resolves to `linux/amd64` and `linux/arm64` before it is documented as usable.
+- Replace architecture-helper tags with digest-based manifest assembly where feasible; otherwise keep helper tags explicitly internal and define a retention policy that preserves manifests referenced by public indexes.
+- Define a GHCR cleanup policy that keeps current moving tags, semver release tags, a bounded history of commit-SHA tags, SBOM/provenance artifacts, and any digest referenced by public multi-platform indexes, while cleaning stale helper tags and unreferenced package versions only after a dry-run report.
+- Move operational implementation items from long Markdown backlog lists into GitHub Issues and a GitHub Project after the site structure is stable; use fields for phase, risk, platform, owner, status, required evidence, and dependency.
+- Keep the Markdown design documents as canonical architecture records, and link from the static site and GitHub Project back to the owning design sections.
+
+**Required tests**
+
+- Documentation site build runs in CI on pull requests and `main`.
+- Link checks cover README, docs, design documents, and generated site routes.
+- Static asset checks prove no external CDN or public network dependency is required at runtime.
+- GitHub Pages publish workflow runs only from `main` and uses read-only contents permissions plus the minimum Pages deployment permissions.
+- Reviewer-packet tests assert that current limitations no longer name 0G as blocked by the documentation site.
+- Image publication checks inspect public unified tags after manifest creation and fail if any required platform is missing.
+- Registry cleanup tests run in dry-run mode and assert that current moving tags, semver tags, retained commit-SHA tags, and manifests referenced by public indexes are never selected for deletion.
+
+**Exit gates**
+
+- The static documentation site is available from GitHub Pages and matches the checked-in README, tutorial, design documents, goals, and limitations.
+- The site can be built locally from a checkout with one documented command.
+- CI blocks broken links, missing generated-site routes, and external runtime assets.
+- Public image references use only unified multi-platform tags or explicit digests; no user-facing documentation instructs users to pull architecture-helper tags.
+- The publish workflow verifies `edge`, `edge-smoke`, `edge-providers`, and retained commit-SHA tags as multi-platform indexes for `linux/amd64` and `linux/arm64`.
+- GHCR tag cleanup has a documented policy, dry-run output, required permissions, retention window, protected tag patterns, and rollback procedure.
+- A GitHub Project exists for implementation tracking, and remaining operational backlog items have issues with phase, risk, platform, owner, status, required evidence, and dependency metadata.
+
+### 0I — Researcher Web UI And Platform Surfacing
+
+**Fit and sequencing**
+
+- Start this pass after 0H so the web UI is only an additional presentation adapter over a proven local-runtime, agent-server, documentation, and project-tracking baseline.
 - Do not introduce a second session contract, separate agent-server path, or browser-only policy implementation.
+- Keep this pass focused on the generic web UI, proxy surfacing, and frontend supply-chain controls; do not wire live provider invocation or larger local coding models here.
 
 **Required work**
 
@@ -218,6 +234,8 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Inherit identity from the platform proxy; do not add a Heartwood-owned login.
 - Keep the agent-server localhost-only behind the gateway and session key.
 - Add npm-side license compatibility checks.
+- Add a container entrypoint or documented command that starts the gateway plus web UI inside the generic image for local smoke tests.
+- Add web UI documentation to the static site, including local Docker usage, Jupyter proxy usage, current limitations, and expected approval flow.
 
 **Required tests**
 
@@ -226,6 +244,8 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Component tests for event rendering, approval decisions, policy denial, reconnect replay, count-floor export, and attestation display.
 - Proxy smoke tests for `jupyter-server-proxy` sub-path serving.
 - Runtime asset tests proving no external CDN or public network dependency.
+- Playwright or equivalent browser smoke tests for the local synthetic workflow, reconnect replay, approval controls, and transcript/audit visibility.
+- CI verifies the web UI build artifact is packaged in the generic image without requiring runtime dependency installation.
 
 **Exit gates**
 
@@ -233,6 +253,40 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 - Web UI, notebook bridge, and CLI observe the same session event semantics.
 - Web assets require no public network access at runtime.
 - Proxy smoke tests pass.
+
+### 0J — Provider Invocation And Larger Local Model Evaluation
+
+**Fit and sequencing**
+
+- Start this pass after the generic UI surface exists, unless a platform pilot requires provider invocation earlier.
+- Keep live provider invocation, larger local models, and optional GPU acceleration out of required pull-request CI until artifact size, runtime, licensing, and runner capacity are reviewed.
+- Preserve the 0G safety baseline: explicit approval before model invocation, policy-gated endpoints, loopback-only local runtime defaults, scrubbed persisted artifacts, and gateway-owned agent-server access.
+
+**Required work**
+
+- Wire production provider invocation through the gateway policy layer and provider route config, likely using a provider compatibility layer such as LiteLLM where it fits.
+- Keep provider secrets outside images, Docker build arguments, Docker environment defaults, checked-in examples, logs, session events, audit exports, reviewer packets, and docs output.
+- Route any OpenHands model access through the gateway policy layer; the agent-server must not hold a separate public model egress path.
+- Add provider invocation adapters for at least the local OpenAI-compatible endpoint and one external in-boundary provider route, with all live calls disabled in default synthetic CI.
+- Prove an autonomous OpenHands conversation turn against a larger local tutorial coding model without weakening approval, audit, scrubbed-event, or capability-tier controls.
+- Select the first optional bundled coding-model artifact, with `Qwen/Qwen2.5-Coder-1.5B-Instruct` as the current candidate, and record source revision, license posture, redistribution allowance, quantization, byte size, SHA-256, provenance, cache location, build-time versus runtime resolution, CPU/memory envelope, and architecture support before adding an image target.
+- Add the deferred `model-qwen25-coder-1_5b-q4_k_m` Bake target only after the exact artifact is selected and reviewed; keep it out of required pull-request CI if its size or runtime cost is too high.
+- Keep optional GPU acceleration behind a separate runtime profile, Docker device configuration, and self-hosted GPU or scheduled platform checks; do not make it a requirement for the generic CPU image.
+
+**Required tests**
+
+- Provider invocation tests cover approval-before-invocation, policy denial, endpoint allowlisting, secret loading from files, managed-identity metadata, malformed provider routes, prompt/response scrubbing, and denied public egress.
+- OpenHands model-routing tests prove the agent-server cannot reach model endpoints except through the gateway policy layer.
+- Larger-model tests run as optional scheduled or release checks until runtime and cost are acceptable for pull-request CI.
+- Image tests verify optional model targets are separate from `edge`, `edge-smoke`, and `edge-providers`.
+- GPU tests run only on explicit GPU-capable runners and are not baseline merge gates.
+
+**Exit gates**
+
+- A policy-gated provider route can execute a synthetic model call without leaking secrets or prompt/response content into persisted artifacts.
+- OpenHands autonomous model access is mediated by the gateway and respects capability-tier limits.
+- The optional larger coding-model target has reviewed provenance, licensing, checksums, resource envelopes, and CI scope.
+- Baseline CPU images and pull-request CI remain portable on native `linux/amd64` and `linux/arm64` runners.
 
 ## Phase 1 — First Reference Platform And Controlled-data Validation
 
@@ -275,7 +329,7 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 
 - Emit Dockstore-registered CWL, WDL, or Nextflow workflows for batch scale.
 - Operationalize the export, validate, improve loop across consenting sites.
-- Add local-model support as an explicit supervised tier.
+- Expand local-model support beyond the Phase 0 smoke profile under explicit supervised capability tiers.
 - Add additional platform adapters based on demand and maintenance capacity.
 
 **Exit gates**
@@ -331,28 +385,27 @@ The repository is at **0G in progress**. Passes 0A through 0F are implemented an
 
 ## Implementation Backlog
 
-1. Keep the implemented 0A through 0F baseline green while landing the rest of 0G.
-2. Land 0G as the next integration pass before frontend work.
+1. Keep the implemented 0A through 0G baseline green while adding documentation, web UI, provider invocation, larger-model, and platform work.
+2. Land 0H next by publishing the static documentation site, adding documentation CI, updating reviewer-packet limitations, and moving operational tracking into GitHub Issues and a GitHub Project.
 3. Keep the implemented `llama-cpp-cpu` profile covered by the pinned llama.cpp server binary, model artifact provenance, hash verification, license posture, resource limits, `linux/amd64` and `linux/arm64` support, and offline load/query smoke test.
-4. Keep `edge`, `edge-smoke`, `edge-providers`, and commit-SHA flavor tags reproducible through `docker-bake.hcl`.
-5. Extend the OpenHands-backed path from bounded bash execution to an autonomous conversation turn with a useful local tutorial model after replay and policy checks pass.
-6. Select, pin, and review the first larger coding-model artifact before implementing the optional bundled coding-model image target.
-7. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
-8. Wire live provider invocation through validated provider routes and the gateway policy layer without storing provider secrets in image layers or persisted artifacts.
-9. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
-10. Publish a self-contained static documentation site from checked-in project material after the real local-runtime path lands.
-11. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry smoke image without requiring a repository checkout.
-12. Move detailed implementation tracking to GitHub Issues and a GitHub Project after the initial Markdown-driven bootstrap plan stabilizes.
-13. Land 0H after 0G by building the researcher web UI on the Spezi stack.
-14. Add Server-Sent Events fallback, proxy smoke tests for `jupyter-server-proxy`, and runtime asset tests proving no external CDN or public network dependency.
-15. Select and implement the first real platform pilot.
+4. Keep `edge`, `edge-smoke`, `edge-providers`, commit-SHA flavor tags, and any required temporary architecture build outputs reproducible through `docker-bake.hcl` and the native-runner publish workflow.
+5. Verify public image tags as unified multi-platform indexes, move away from permanent architecture-helper tags where feasible, and add a GHCR cleanup policy with protected tag patterns and dry-run checks.
+6. Land 0I after 0H by building the researcher web UI on the Spezi stack and packaging it into the generic image as a presentation adapter over the existing gateway.
+7. Add Server-Sent Events fallback, browser smoke tests, proxy smoke tests for `jupyter-server-proxy`, and runtime asset tests proving no external CDN or public network dependency.
+8. Land 0J by wiring live provider invocation through validated provider routes and the gateway policy layer without storing provider secrets in image layers or persisted artifacts.
+9. Extend the OpenHands-backed path from bounded bash execution to an autonomous conversation turn with a useful local tutorial model after replay and policy checks pass.
+10. Select, pin, and review the first larger coding-model artifact before implementing the optional bundled coding-model image target.
+11. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
+12. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
+13. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry smoke image without requiring a repository checkout.
+14. Select and implement the first real platform pilot only after synthetic replay, documentation, web UI, provider policy, and reviewer-packet controls are green.
 
 ## Repository Strategy
 
 - Keep this repository as the system of record through Phase 1.
 - Publish signed generic and platform-specific images from this repository only after the generic image passes smoke tests.
-- Publish the Phase 0 static documentation site from this repository through GitHub Pages once the local-runtime path is implemented, documented, and link-checked.
-- Keep Markdown design docs as the bootstrap source of truth; move execution tracking to GitHub Issues and a GitHub Project once the documentation site and image flavor scheme are stable.
+- Publish the Phase 0 static documentation site from this repository through GitHub Pages during 0H.
+- Keep Markdown design docs as canonical architecture records; move operational execution tracking to GitHub Issues and a GitHub Project during 0H while linking issues back to the owning design sections.
 - Create a separate `heartwood-skills` repository only after local skill metadata, trust tiers, and skill eval harnesses are stable.
 - Split platform adapters only when a platform requires a different release cadence, private validation fixtures, or platform-specific maintainers.
 - Split large replay suites or benchmark data only when they become too large or too sensitive for the core repository.

@@ -29,6 +29,8 @@ Do not use `latest` until the first stable release exists. Do not use branch nam
 
 The publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64` and `edge-arm64`, then creates the public multi-architecture tags listed above with `docker buildx imagetools create`. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references.
 
+Registry maintenance must protect public moving tags, commit-SHA tags retained by policy, future semver tags, SBOM/provenance artifacts, and any manifest referenced by a public multi-architecture index. Cleanup automation should begin with dry-run reports, delete only stale helper tags or unreferenced versions outside the retention window, and record the GHCR permissions required to perform deletions. The next documentation and governance pass must add post-publish registry inspection that proves each public tag resolves to both `linux/amd64` and `linux/arm64`.
+
 ## Current Flavors
 
 | Flavor | Bake Target | Moving Tag | Bundled Model Artifact | Intended Use |
