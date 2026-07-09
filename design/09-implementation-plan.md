@@ -379,7 +379,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 
 ## Implementation Backlog
 
-1. Keep the implemented 0A through 0G baseline green while adding documentation, web UI, provider invocation, larger-model, and platform work.
+1. Keep the implemented 0A through 0G baseline green while adding documentation, larger-model, and platform work.
 2. Land 0H next by publishing the static documentation site, adding documentation CI, updating reviewer-packet limitations, and moving operational tracking into GitHub Issues and a GitHub Project.
 3. Keep the implemented `llama-cpp-cpu` profile covered by the pinned llama.cpp server binary, model artifact provenance, hash verification, license posture, resource limits, `linux/amd64` and `linux/arm64` support, and offline load/query smoke test.
 4. Keep `edge`, `edge-smoke`, `edge-providers`, commit-SHA flavor tags, and any required temporary architecture build outputs reproducible through `docker-bake.hcl` and the native-runner publish workflow.

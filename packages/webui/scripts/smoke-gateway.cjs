@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* global clearTimeout */
+
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -64,8 +66,18 @@ async function main() {
   server.stdout.on("data", (chunk) => logs.push(String(chunk)));
   server.stderr.on("data", (chunk) => logs.push(String(chunk)));
 
+  const spawnError = new Promise((_, reject) => {
+    server.on("error", (error) => {
+      if (error.code === "ENOENT") {
+        reject(new Error("'uv' command not found; ensure uv is installed"));
+      } else {
+        reject(error);
+      }
+    });
+  });
+
   try {
-    await waitForServer(proxiedBaseUrl);
+    await Promise.race([waitForServer(proxiedBaseUrl), spawnError]);
     const html = await fetchText(proxiedBaseUrl);
     if (!html.includes('<div id="root"></div>')) {
       throw new Error(
@@ -173,6 +185,25 @@ async function waitForExit(child) {
     return;
   }
   await new Promise((resolve) => {
-    child.once("exit", resolve);
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(killTimer);
+      clearTimeout(resolveTimer);
+      child.off("close", finish);
+      child.off("error", finish);
+      child.off("exit", finish);
+      resolve();
+    };
+    const resolveTimer = setTimeout(finish, 6000);
+    const killTimer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 5000);
+    child.once("close", finish);
+    child.once("error", finish);
+    child.once("exit", finish);
   });
 }

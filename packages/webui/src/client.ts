@@ -86,14 +86,25 @@ export class GatewayClient implements HeartwoodClient {
     };
     if ("WebSocket" in window) {
       const socket = new WebSocket(this.websocketUrl(path));
+      let fallbackOpen = false;
+      const openFallback = (): void => {
+        if (closed || fallbackOpen) {
+          return;
+        }
+        fallbackOpen = true;
+        cleanup = this.openSse(sessionId, afterSequence, onEvents);
+      };
       socket.onmessage = (message): void => {
         onEvents(parseEventPayload(String(message.data)).events);
       };
+      socket.onclose = (event): void => {
+        if (event.code !== 1000) {
+          openFallback();
+        }
+      };
       socket.onerror = (): void => {
         socket.close();
-        if (!closed) {
-          cleanup = this.openSse(sessionId, afterSequence, onEvents);
-        }
+        openFallback();
       };
       cleanup = (): void => {
         closed = true;
@@ -147,14 +158,19 @@ export class GatewayClient implements HeartwoodClient {
 const parseResponse = async (
   response: Response,
 ): Promise<SessionEventResponse> => {
+  if (!response.ok) {
+    let error = `Gateway request failed with status ${response.status}`;
+    try {
+      const payload = (await response.json()) as { error?: string };
+      error = payload.error ?? error;
+    } catch {
+      // Preserve the gateway status when an upstream proxy returns HTML/text.
+    }
+    throw new Error(error);
+  }
   const payload = (await response.json()) as Partial<SessionEventResponse> & {
     error?: string;
   };
-  if (!response.ok) {
-    throw new Error(
-      payload.error ?? `Gateway request failed with status ${response.status}`,
-    );
-  }
   return { events: payload.events ?? [] };
 };
 

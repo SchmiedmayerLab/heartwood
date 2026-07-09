@@ -15,6 +15,7 @@ class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
 
   onerror: (() => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
   onmessage: ((message: MessageEvent<string>) => void) | null = null;
   readonly close = vi.fn();
 
@@ -24,6 +25,10 @@ class FakeWebSocket {
 
   fail(): void {
     this.onerror?.();
+  }
+
+  closeWith(code: number): void {
+    this.onclose?.(new CloseEvent("close", { code }));
   }
 
   emit(events: SessionEvent[]): void {
@@ -125,6 +130,25 @@ describe("GatewayClient", () => {
     ).rejects.toThrowErrorMatchingInlineSnapshot(`[Error: denied]`);
   });
 
+  it("preserves gateway status for non-JSON error responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("<html>bad gateway</html>", { status: 502 }),
+        ),
+    );
+
+    const client = new GatewayClient();
+
+    await expect(
+      client.replayEvents("session-test"),
+    ).rejects.toThrowErrorMatchingInlineSnapshot(
+      `[Error: Gateway request failed with status 502]`,
+    );
+  });
+
   it("infers the Jupyter proxy base path from the browser location", async () => {
     window.history.pushState({}, "", "/user/synthetic/proxy/8767/");
     const fetch = vi.fn().mockResolvedValue(
@@ -163,6 +187,25 @@ describe("GatewayClient", () => {
     );
     expect(received[0]?.[0]?.kind).toBe("model_call.decision.recorded");
     expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
+  });
+
+  it("falls back to server-sent events after an abnormal WebSocket close", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const received: SessionEvent[][] = [];
+    const client = new GatewayClient("/proxy/8767");
+
+    const cleanup = client.streamEvents("session-test", 2, (events) => {
+      received.push(events);
+    });
+    FakeWebSocket.instances[0]?.closeWith(1011);
+    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(2, 3));
+    cleanup();
+
+    expect(FakeEventSource.instances[0]?.url).toBe(
+      "/proxy/8767/sessions/session-test/events/stream?after=2",
+    );
+    expect(received[0]?.[0]?.kind).toBe("model_call.decision.recorded");
   });
 
   it("streams events over WebSocket when the upgrade succeeds", () => {

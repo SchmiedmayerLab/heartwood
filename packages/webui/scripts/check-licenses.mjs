@@ -20,8 +20,12 @@ const incompatibleMarkers = [
   "SSPL",
 ];
 
-const isAllowedPackage = (name, license) =>
-  name.startsWith("@img/sharp-libvips-") && license.includes("LGPL");
+const hasIncompatibleLicense = (license) => {
+  if (license.includes("LGPL")) {
+    return false;
+  }
+  return incompatibleMarkers.some((marker) => license.includes(marker));
+};
 
 const packageFiles = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -51,10 +55,7 @@ const main = async () => {
       const parsed = JSON.parse(await readFile(path, "utf8"));
       const name = String(parsed.name || "");
       const license = String(parsed.license || parsed.licenses || "");
-      if (
-        !isAllowedPackage(name, license) &&
-        incompatibleMarkers.some((marker) => license.includes(marker))
-      ) {
+      if (hasIncompatibleLicense(license)) {
         failures.push(`${name}@${parsed.version}: ${license}`);
       }
     } catch (error) {
