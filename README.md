@@ -55,7 +55,7 @@ The `detect` command inspects environment markers, fingerprints the local synthe
 - [`packages/core-adapter`](packages/core-adapter) contains session orchestration and the deterministic offline agent facade.
 - [`packages/detector`](packages/detector) contains deterministic platform detection.
 - [`packages/fixtures`](packages/fixtures) contains no-live-data fixture linting.
-- [`packages/gateway`](packages/gateway) contains REST command handling, replayable event streams, managed local agent-server binding, and model egress gating.
+- [`packages/gateway`](packages/gateway) contains ASGI HTTP command handling, replayable WebSocket event streams, managed local agent-server binding, and model egress gating.
 - [`packages/model-policy`](packages/model-policy) contains deny-by-default model-call policy evaluation and attestation records.
 - [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
 - [`packages/session`](packages/session) contains the shared session command/event contract.

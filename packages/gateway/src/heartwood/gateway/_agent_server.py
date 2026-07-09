@@ -45,6 +45,7 @@ class _ManagedProcess(Protocol):
 
 
 ProcessFactory = Callable[[tuple[str, ...]], _ManagedProcess]
+ReadinessProbe = Callable[[str], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +95,10 @@ def _default_process_factory(command: tuple[str, ...]) -> _ManagedProcess:
     )
 
 
+def _default_readiness_probe(endpoint: str) -> bool:
+    return bool(endpoint)
+
+
 class ManagedAgentServer:
     """Own the local agent-server process and keep it gateway-only."""
 
@@ -102,10 +107,12 @@ class ManagedAgentServer:
         config: AgentServerConfig | None = None,
         *,
         process_factory: ProcessFactory = _default_process_factory,
+        readiness_probe: ReadinessProbe = _default_readiness_probe,
     ) -> None:
         self.config = AgentServerConfig() if config is None else config
         self.config.validate()
         self._process_factory = process_factory
+        self._readiness_probe = readiness_probe
         self._process: _ManagedProcess | None = None
 
     def start(self) -> AgentServerProcessStatus:
@@ -114,10 +121,15 @@ class ManagedAgentServer:
             return AgentServerProcessStatus(enabled=False, running=False, endpoint=None)
         if self._process is None or self._process.poll() is not None:
             self._process = self._process_factory(self.config.command)
+        endpoint = self.endpoint_for_gateway()
+        if not self._readiness_probe(endpoint):
+            self.stop()
+            msg = f"agent-server did not become ready at {endpoint}"
+            raise AgentServerUnavailableError(msg)
         return AgentServerProcessStatus(
             enabled=True,
             running=True,
-            endpoint=self.endpoint_for_gateway(),
+            endpoint=endpoint,
         )
 
     def stop(self) -> None:

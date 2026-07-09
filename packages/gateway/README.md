@@ -12,4 +12,4 @@ SPDX-License-Identifier: MIT
 
 Session gateway for Heartwood command and event streams.
 
-The package owns session command handling, replayable event streaming, the managed local agent-server boundary, and the policy-gated model-call path. The default path is deterministic and offline for tests and synthetic replay.
+The package owns ASGI HTTP command handling, replayable ASGI WebSocket event streaming, the managed local agent-server boundary, and the policy-gated model-call path. The default path is deterministic and offline for tests and synthetic replay.

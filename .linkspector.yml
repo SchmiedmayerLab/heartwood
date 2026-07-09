@@ -12,6 +12,7 @@ useGitIgnore: true
 ignorePatterns:
   - pattern: '^doc:.*$'
   - pattern: '^http://localhost.*$'
+  - pattern: '^https://raw\.githubusercontent\.com/SchmiedmayerLab/\.github/main/assets/stanford-footer-(light|dark)\.png.*$'
 replacementPatterns:
   - pattern: '(.*)#gh-dark-mode-only'
     replacement: '$1'

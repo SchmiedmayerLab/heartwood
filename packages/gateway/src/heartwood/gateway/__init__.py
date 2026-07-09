@@ -17,7 +17,9 @@ from heartwood.gateway._agent_server import (
     DirectAgentServerAccessError,
     ManagedAgentServer,
     OpenHandsAgentServerBackend,
+    ReadinessProbe,
 )
+from heartwood.gateway._asgi import GatewayAsgiApp
 from heartwood.gateway._egress import ModelEgressProxy, ModelProxyResult
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
@@ -30,11 +32,13 @@ __all__ = [
     "AgentServerProcessStatus",
     "AgentServerUnavailableError",
     "DirectAgentServerAccessError",
+    "GatewayAsgiApp",
     "GatewayEventStream",
     "ManagedAgentServer",
     "ModelEgressProxy",
     "ModelProxyResult",
     "OpenHandsAgentServerBackend",
+    "ReadinessProbe",
     "RestGateway",
     "RestRequest",
     "RestResponse",

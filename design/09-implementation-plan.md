@@ -61,8 +61,8 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 ### Implemented In 0E — Gateway And Agent-Server Binding
 
 - `packages/gateway` exists and is registered in the Python workspace.
-- REST-style command handling accepts the existing session command contract and returns session events.
-- Replayable WebSocket-style streams expose the existing session event contract and support reconnect replay.
+- ASGI HTTP command handling accepts the existing session command contract and returns session events.
+- Replayable ASGI WebSocket streams expose the existing session event contract and support reconnect replay.
 - Gateway command handling routes through the session service and preserves disk-backed session events and audit records.
 - Pause, resume, confirmation request, confirmation resolution, policy denial, and malformed command paths are covered through gateway contract tests.
 - The managed agent-server boundary owns a configurable child process, rejects non-local bindings, requires the Local runtime, and blocks direct client endpoint exposure.
@@ -70,7 +70,7 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 - OpenHands-style message, tool-call, confirmation, and tool-result events are translated behind the core-adapter backend facade.
 - The default gateway path remains deterministic and in-process for offline commands and tests.
 - The model egress proxy evaluates policy before invoking the downstream model path and records attestation data.
-- Tests cover REST command handling, replayable streaming, gateway lifecycle, fake agent-server translation through the session contract, localhost-only binding, policy denial, denied egress invocation, and invalid requests.
+- Tests cover HTTP command handling, WebSocket streaming and replay, gateway lifecycle, fake agent-server translation through the session contract, localhost-only binding, policy denial, denied egress invocation, and invalid requests.
 
 ### Current 0E Exclusions
 

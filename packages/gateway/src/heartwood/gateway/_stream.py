@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Iterable
 
@@ -21,6 +22,9 @@ class GatewayEventStream:
         self.session_id = session_id
         self._pending = list(initial_events)
         self._closed = False
+        self._ready = asyncio.Event()
+        if self._pending:
+            self._ready.set()
 
     @property
     def closed(self) -> bool:
@@ -29,19 +33,30 @@ class GatewayEventStream:
 
     def push(self, events: Iterable[SessionEvent]) -> None:
         """Push events to the stream."""
-        if not self._closed:
-            self._pending.extend(events)
+        event_tuple = tuple(events)
+        if not self._closed and event_tuple:
+            self._pending.extend(event_tuple)
+            self._ready.set()
 
     def receive(self) -> tuple[SessionEvent, ...]:
         """Drain currently available events."""
         events = tuple(self._pending)
         self._pending.clear()
+        if not self._pending:
+            self._ready.clear()
         return events
+
+    async def receive_next(self) -> tuple[SessionEvent, ...]:
+        """Wait for and drain the next available event batch."""
+        while not self._pending and not self._closed:
+            await self._ready.wait()
+        return self.receive()
 
     def close(self) -> None:
         """Close the stream."""
         self._closed = True
         self._pending.clear()
+        self._ready.set()
 
 
 class EventStreamHub:

@@ -193,6 +193,25 @@ def test_enabled_agent_server_is_managed_and_gateway_only() -> None:
     assert process.terminated is True
 
 
+def test_enabled_agent_server_fails_closed_when_readiness_probe_fails() -> None:
+    process = _FakeProcess()
+
+    def process_factory(command: tuple[str, ...]) -> _FakeProcess:
+        assert command == ("agent-server", "--local")
+        return process
+
+    server = ManagedAgentServer(
+        AgentServerConfig(command=("agent-server", "--local"), port=8765, enabled=True),
+        process_factory=process_factory,
+        readiness_probe=lambda endpoint: endpoint.endswith(":9999"),
+    )
+
+    with pytest.raises(AgentServerUnavailableError, match="did not become ready"):
+        server.start()
+    assert process.terminated is True
+    assert server.status().running is False
+
+
 def test_openhands_backend_requires_running_enabled_agent_server() -> None:
     server = ManagedAgentServer(
         AgentServerConfig(command=("agent-server", "--local"), port=8765, enabled=True)
