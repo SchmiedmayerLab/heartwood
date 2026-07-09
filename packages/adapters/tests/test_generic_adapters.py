@@ -86,6 +86,14 @@ def test_fake_local_model_provider_allows_only_policy_endpoint() -> None:
         )
     )
     assert decision.decision == "allow"
+    loopback_decision = provider.evaluate_model_call(
+        ModelCallRequest(
+            endpoint="http://127.0.0.1:8765/v1/chat",
+            capability_tier="supervised",
+            purpose="synthetic loopback model call",
+        )
+    )
+    assert loopback_decision.decision == "allow"
 
 
 def test_local_registry_adapter_conforms() -> None:

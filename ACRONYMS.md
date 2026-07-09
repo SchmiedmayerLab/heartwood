@@ -87,6 +87,7 @@ A running reference for the acronyms and named tools used across this project (m
 | GKE | Google Kubernetes Engine | GCP's managed Kubernetes |
 | EBS | Elastic Block Store | AWS's attachable disk storage |
 | VM | Virtual Machine | A virtualized computer instance |
+| CPU | Central Processing Unit | General-purpose processor used for local inference when no accelerator is available |
 | GPU | Graphics Processing Unit | Accelerator for ML / heavy compute |
 | vCPU | virtual CPU | A virtual processor core on a VM |
 | OS | Operating System | e.g. Linux / Ubuntu |
@@ -138,6 +139,7 @@ A running reference for the acronyms and named tools used across this project (m
 | Term | Expansion | What it is |
 |---|---|---|
 | API | Application Programming Interface | How programs talk to a service |
+| ASGI | Asynchronous Server Gateway Interface | Python interface used for async web servers and applications |
 | CLI | Command-Line Interface | Terminal-driven tool |
 | SDK | Software Development Kit | Libraries/tools for building on a platform |
 | PyPI | Python Package Index | Public Python package registry; blocked at runtime in the air-gapped image |

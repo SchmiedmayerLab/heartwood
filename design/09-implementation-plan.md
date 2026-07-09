@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0E — Gateway and agent-server binding**. The baseline includes passes 0A through 0E and must stay green while later passes are added.
+The repository is at **0F — CLI, notebook bridge, image, and reviewer packet**. The baseline includes passes 0A through 0F and must stay green while later passes are added.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -72,18 +72,40 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 - The model egress proxy evaluates policy before invoking the downstream model path and records attestation data.
 - Tests cover HTTP command handling, WebSocket streaming and replay, gateway lifecycle, fake agent-server translation through the session contract, localhost-only binding, policy denial, denied egress invocation, and invalid requests.
 
-### Current 0E Exclusions
+### Implemented In 0F — CLI, Notebook Bridge, Image, And Reviewer Packet
 
-- No expanded interactive CLI exists beyond the current detection command.
-- No notebook API or widget bridge exists yet.
-- No generic Docker image packages the configured agent-server command or runtime dependencies yet.
-- No Docker Compose smoke test exists yet.
-- No reviewer packet generator exists yet.
+- The CLI routes `detect`, `chat`, `run`, `approve`, `deny`, `pause`, `resume`, `replay`, `audit export`, and `reviewer packet` through the session gateway and shared session command/event contract.
+- CLI transcript rendering exposes detection proposals, policy decisions, agent messages, tool proposals, confirmation requests/resolutions, tool execution, lifecycle events, and audit export events.
+- CLI tests cover detection, chat, run transcripts, replay, audit export, reviewer packet generation, and scrubbed command persistence.
+- `packages/notebook` exists and is registered in the Python workspace.
+- The notebook API exposes the same gateway-backed operations as the CLI and projects session events into typed notebook view models for chat, activity, dataset proposals, skill/tool proposals, approval controls, policy status, export actions, and paused state.
+- The notebook widget bridge renders deterministic widget specifications without a notebook runtime and optional `ipywidgets` sections when the runtime is available.
+- Notebook tests derive view models from the same session event stream used by the CLI.
+- `packages/compliance` exists and is registered in the Python workspace.
+- The reviewer packet generator validates the synthetic policy profile and egress attestation through shared schemas, exports scrubbed audit JSONL, and writes the reviewer index, data-flow diagram, fixture statement, dependency/license summary, and limitations.
+- Reviewer packet tests use checked-in synthetic fixtures and scrubbed session audit records only.
+- `images/generic` contains the generic Linux/Jupyter-capable image definition and Docker Compose smoke-test configuration.
+- The generic image packages the Python workspace, CLI, gateway, notebook bridge, synthetic fixtures, verified skills, runtime dependencies, and a deterministic loopback model stub.
+- The generic image does not contain an LLM inference runtime or model weights; 0F proves the policy-gated local endpoint integration path, not model inference quality or local model performance.
+- The generic image does not pin or launch a production OpenHands agent-server; current OpenHands coverage is the gateway-owned localhost process boundary and fake event translation through the backend facade.
+- The CLI supports an explicit `run --local-model` mode that invokes only allowlisted HTTP loopback endpoints, records safe response metadata, and keeps prompt/response content out of persisted session events and audit exports.
+- Docker Compose disables runtime network access for the smoke service and runs the offline stack script end to end.
+- The offline stack smoke script starts the loopback model stub, runs detection, approves the synthetic model call, runs the agentic CLI through the local model endpoint, exports the scrubbed audit log, and generates the reviewer packet.
+- The container image publish workflow builds `images/generic/Dockerfile` on `main` and publishes `dev-main`, `main`, and commit-SHA tags to GitHub Container Registry.
+- `docs/getting-started-offline.md` documents pull-and-run usage from the published image and the local Compose workflow.
+- The container smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
+- Static image tests verify the generic image includes the expected runtime surfaces, disables runtime network access through Compose, runs the loopback local-model smoke script, and publishes the expected image tags.
+
+### Current 0F Exclusions
+
 - No TypeScript web UI exists yet.
 - No Server-Sent Events fallback exists yet.
+- No `jupyter-server-proxy` route validation exists yet.
+- No static documentation site is published yet; tutorial documentation is checked in as Markdown.
 - No real-platform adapter or controlled-data validation exists yet.
 - No production LiteLLM provider integration is wired; the gateway exposes the policy-gated invocation point.
-- No production OpenHands package/client command is pinned in an image; the gateway exposes the managed localhost-only process boundary and backend facade.
+- No production OpenHands package/client command is pinned in an image or launched by container CI; the gateway exposes the managed localhost-only process boundary and backend facade.
+- No LLM inference runtime, model-serving process, or model weights are bundled; the generic image uses a deterministic loopback stub to prove the integration path.
 
 ## Phase 0 Requirements
 
@@ -99,37 +121,57 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 
 ## Remaining Phase 0 Passes
 
-### 0F — CLI, Notebook Bridge, Image, And Reviewer Packet
+### 0G — End-to-End Local Runtime And Published Documentation
+
+**Fit and sequencing**
+
+- Land this pass before the web UI because it proves the execution substrate the web UI will drive: local inference, the managed OpenHands agent-server, the gateway, the CLI, policy, audit, reviewer packet, image packaging, and CI.
+- Keep this pass integration-focused; do not add the researcher dashboard or platform proxy UI in 0G.
+- Keep synthetic fixtures only; the local model test proves offline load, query, policy gating, event flow, and scrubbing, not biomedical quality.
 
 **Required work**
 
-- Expand the CLI to support `heartwood detect`, `heartwood chat`, `heartwood run`, `heartwood replay`, and `heartwood audit export`.
-- Make `heartwood chat` an interactive terminal session with chat turns, visible tool/code events, approve/deny prompts, pause/resume, replay, and audit export.
-- Add CLI transcript or snapshot tests generated from synthetic session events.
-- Add `packages/notebook` with a Python API and minimal `ipywidgets` bridge.
-- Notebook widgets must render chat, activity, dataset proposals, skill proposals, approval controls, policy status, and export actions.
-- Build one self-contained generic Linux/Jupyter image with gateway, agent-server Local runtime, CLI, notebook bridge, synthetic fixtures, verified skills, and all runtime dependencies.
-- Add Docker Compose smoke tests for the generic image.
-- Generate a scrubbed audit bundle and egress-attestation report from the synthetic workflow.
-- Add a reviewer packet generator.
-- Reviewer packet contents must include threat model summary, data-flow diagram, policy profile, fixture statement, sample audit log, sample attestation, dependency/license summary, and current limitations.
+- Convert `run --local-model` from a loopback-stub smoke hook into a real local-runtime profile while preserving a deterministic stub path for fast unit tests.
+- Require explicit model-call approval before any local model invocation, not only before the following tool execution.
+- Select the first supported local inference runtime and define its CPU/GPU expectations, memory floor, startup behavior, model-serving API, shutdown behavior, and failure modes.
+- Define the local model artifact strategy: source, license posture, redistribution allowance, checksums, provenance record, size limits, cache location, and build-time versus runtime resolution.
+- Pin the production OpenHands SDK and agent-server command behind the gateway facade after license and replay checks pass.
+- Start the OpenHands agent-server as a gateway-owned localhost-only child process in the generic image and keep clients from receiving its direct endpoint.
+- Route all model access through the gateway policy layer; the agent-server must not hold a separate public model egress path.
+- Add an offline local-stack entrypoint that starts the local model runtime, starts the gateway-managed agent-server, runs the agentic CLI turn, exports the audit log, and generates the reviewer packet.
+- Keep the current deterministic loopback model stub as a lightweight CI and unit-test fixture, but label it as a stub everywhere it appears.
+- Extend the generic image to include the selected local runtime profile, pinned runtime dependencies, verified skills, OpenHands runtime dependency, and all scripts needed to run without a repository checkout.
+- Publish the generic image to GitHub Container Registry on `main` with stable development tags and commit-SHA tags.
+- Update the checked-in Docker quick start and offline tutorial to describe the selected local-runtime path, resource requirements, generated artifacts, and limitations.
+- Publish a self-contained GitHub Pages documentation site from checked-in project material, including design documents, goals, current limitations, and image usage instructions.
+- Link-check the static documentation site and keep it free of external CDN dependencies.
 
 **Required tests**
 
-- CLI command tests and interactive transcript snapshots.
-- Notebook view-model tests generated from the same session events as the CLI.
-- Docker Compose smoke tests for the generic image.
-- Audit bundle and attestation golden-output tests.
-- Reviewer packet generation tests that use checked-in synthetic fixtures only.
+- Unit tests for approval-before-invocation, policy denial, loopback-only enforcement, local-runtime failure handling, response metadata extraction, and prompt/response scrubbing.
+- Contract tests for CLI, gateway, OpenHands backend translation, audit export, and reviewer packet generation over the same session command/event stream.
+- Image tests that verify the local runtime profile, OpenHands command, verified skills, tutorial scripts, and offline smoke entrypoint are present.
+- Docker Compose smoke tests that disable runtime network access and run the local-stack entrypoint end to end.
+- CI must run a small local inference artifact through the selected runtime on pull requests; if the release model is too large for PR CI, use a tiny same-runtime artifact in PR CI and validate the larger profile on `main` or scheduled release checks.
+- CI must verify that the offline smoke can run from the built image and that no repository checkout is required for the documented Docker path.
+- CI must build the static documentation site, run Markdown/link checks, and publish GitHub Pages only from `main`.
+- Audit and reviewer-packet tests must prove prompt text, response text, participant-level data, secrets, and non-synthetic markers are absent from persisted artifacts.
 
 **Exit gates**
 
-- The synthetic workflow runs end-to-end from the CLI in the generic image with no external network access.
-- The notebook bridge observes the same gateway session events as the CLI.
-- The reviewer packet is generated from synthetic fixtures only.
-- Container smoke tests pass in CI.
+- A documented Docker-only command can pull the generic image and run the offline local-stack smoke test without public runtime network access.
+- The smoke test starts a real local inference runtime, runs a model call after explicit approval, starts the managed OpenHands agent-server behind the gateway, completes one synthetic agentic CLI turn, exports a scrubbed audit log, and generates a reviewer packet.
+- The same session command/event contract drives the CLI, notebook bridge, gateway, and OpenHands backend path.
+- Prompt and response content are not persisted in commands, session events, audit exports, reviewer packets, or CI logs.
+- GitHub Actions covers the image smoke, local inference runtime profile, OpenHands behind-gateway path, docs build, docs link checks, and GHCR publishing path.
+- The static documentation site is available from GitHub Pages and matches the checked-in README, tutorial, design documents, goals, and limitations.
 
-### 0G — Researcher Web UI And Platform Surfacing
+### 0H — Researcher Web UI And Platform Surfacing
+
+**Fit and sequencing**
+
+- Start this pass after 0G so the web UI is only an additional presentation adapter over a proven local-runtime and agent-server stack.
+- Do not introduce a second session contract, separate agent-server path, or browser-only policy implementation.
 
 **Required work**
 
@@ -158,7 +200,7 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 
 **Exit gates**
 
-- The full synthetic workflow runs from the web UI on the generic image.
+- The full local-runtime synthetic workflow from 0G runs from the web UI on the generic image.
 - Web UI, notebook bridge, and CLI observe the same session event semantics.
 - Web assets require no public network access at runtime.
 - Proxy smoke tests pass.
@@ -231,10 +273,12 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 /README.md  /ACRONYMS.md  /AGENTS.md  /CONTRIBUTORS.md  /LICENSE  /LICENSES/
 /.github                    # CODEOWNERS, workflow callers, codecov, dependabot
 /design                     # this documentation set
+/docs                       # tutorial-style docs and future static site source
 /pyproject.toml  /uv.lock  /.pre-commit-config.yaml   # Python workspace + local hooks
 /packages
   /core-adapter             # session orchestration and event-streaming agent backend facade
   /gateway                  # REST/WS session gateway; owns the agent-server
+  /compliance               # synthetic reviewer packet and audit bundle generation
   /adapters                 # adapter SPI protocols, conformance checks, and generic/local adapters
   /schemas                  # versioned policy, audit, detection, skill, confirmation, approval, and attestation schemas
   /session                  # command/event API shared by all interfaces
@@ -258,25 +302,25 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 
 ## Implementation Backlog
 
-1. Keep the current 0E baseline green while landing later passes.
-2. Expand the CLI into an interactive surface.
-3. Add the notebook API and widget bridge.
-4. Package the generic Docker image with the configured agent-server command, Local runtime dependencies, and Docker Compose smoke tests.
-5. Add audit bundle, attestation, and reviewer packet generation.
-6. Build the researcher web UI on the Spezi stack.
-7. Add Server-Sent Events fallback and proxy smoke tests for `jupyter-server-proxy`.
-8. Wire production LiteLLM provider configuration only through the gateway egress proxy.
-9. Pin production OpenHands runtime dependencies in the image after license and replay checks pass.
+1. Keep the current 0F baseline green while landing later passes.
+2. Land 0G as the next integration pass before frontend work.
+3. Define and implement the real local-inference profile, including runtime selection, model artifact provenance, hash verification, license posture, resource limits, and an offline load/query smoke test.
+4. Pin production OpenHands runtime dependencies in the image after license and replay checks pass, then add an image smoke test that starts it behind the gateway and runs a CLI-gateway-agent-server turn.
+5. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
+6. Publish a self-contained static documentation site from checked-in project material after the real local-runtime path lands.
+7. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry image without requiring a repository checkout.
+8. Land 0H after 0G by building the researcher web UI on the Spezi stack.
+9. Add Server-Sent Events fallback, proxy smoke tests for `jupyter-server-proxy`, and runtime asset tests proving no external CDN or public network dependency.
 10. Select and implement the first real platform pilot.
 
 ## Repository Strategy
 
 - Keep this repository as the system of record through Phase 1.
 - Publish signed generic and platform-specific images from this repository only after the generic image passes smoke tests.
+- Publish the Phase 0 static documentation site from this repository through GitHub Pages once the local-runtime path is implemented, documented, and link-checked.
 - Create a separate `heartwood-skills` repository only after local skill metadata, trust tiers, and skill eval harnesses are stable.
 - Split platform adapters only when a platform requires a different release cadence, private validation fixtures, or platform-specific maintainers.
 - Split large replay suites or benchmark data only when they become too large or too sensitive for the core repository.
-- Publish a documentation site only when external user documentation becomes release-managed.
 - Do not create a separate marketplace, registry service, or platform-specific repository for Phase 0.
 
 ## Open Questions
@@ -285,6 +329,7 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 - Which group owns clinical/statistical review for the `verified` skill tier.
 - What long-term funding and governance model supports maintenance.
 - What exact cross-platform auth handshake binds each platform proxy identity to a gateway session key.
+- Which local LLM inference runtime and model artifact strategy can be supported without violating licensing, redistribution, runtime-resource, or controlled-data constraints.
 - What final project name should be used before public launch.
 
 ## Known Limitations
@@ -292,5 +337,6 @@ The repository is at **0E — Gateway and agent-server binding**. The baseline i
 - Agentic-coding quality degrades on weak/local models; capability tiers and supervised paths mitigate but do not eliminate this risk.
 - The sandbox network proxy is TLS-blind; platform egress-deny remains a required control.
 - Dataset fingerprinting can mis-detect unusual schemas; propose-not-commit detection and human confirmation remain required.
+- The 0F local-model path uses a deterministic loopback stub rather than LLM inference; real local inference requires runtime and model artifact decisions.
 - WebSocket reliability varies across platform proxies; Server-Sent Events fallback is required.
 - The web UI adds a TypeScript supply-chain surface; pinned dependencies, Spezi shared configs, npm license gates, and CI checks are required.

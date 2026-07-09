@@ -3,8 +3,11 @@
   "policy_id": "generic-default",
   "platform_id": "generic",
   "deny_egress_by_default": true,
-  "allowed_model_endpoints": [],
+  "allowed_model_endpoints": [
+    "https://model.local.invalid/v1/chat",
+    "http://127.0.0.1:8765/v1/chat"
+  ],
   "credential_allowlist": [],
   "aggregate_count_floor": 20,
-  "notes": "Synthetic default policy for Phase 0B schema validation."
+  "notes": "Synthetic default policy for schema validation and the offline loopback model demo."
 }

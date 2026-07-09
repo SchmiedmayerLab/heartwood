@@ -8,12 +8,16 @@
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
+from urllib.parse import urlsplit
 
 from heartwood.adapters import (
     DataSourceAdapter,
@@ -34,6 +38,7 @@ from heartwood.core_adapter._facade import (
     ToolExecution,
 )
 from heartwood.core_adapter._state import FileSessionStore
+from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ApprovalRecord, ConfirmationRequest, JsonValue
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
@@ -41,6 +46,27 @@ ApprovalDecision: TypeAlias = Literal["approved", "denied"]
 ApprovalTargetType: TypeAlias = Literal["skill", "egress", "model-call", "tool-call"]
 
 _APPROVAL_TARGET_TYPES = {"skill", "egress", "model-call", "tool-call"}
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        _req: urllib.request.Request,
+        _fp: object,
+        _code: int,
+        _msg: str,
+        _headers: object,
+        _newurl: str,
+    ) -> None:
+        return None
+
+
+class LocalModelInvocationError(RuntimeError):
+    """Raised when the local model demo endpoint cannot be invoked safely."""
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler())
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,20 +243,65 @@ class SessionService:
             capability_tier=self.model_provider_adapter.capability_tier,
             purpose="synthetic core harness run",
         )
+        invoke_model = bool(command.payload.get("invoke_model", False))
         decision = self.model_provider_adapter.evaluate_model_call(request)
-        policy_event = self._record_event(
-            EventKind.MODEL_CALL_DECISION_RECORDED,
-            {"decision": decision.model_dump(mode="json")},
-        )
-        approved = (
+        policy_payload: dict[str, JsonValue] = {"decision": decision.model_dump(mode="json")}
+        error_event: SessionEvent | None = None
+        model_call_approved = (
             self._has_model_call_approval(decision.decision_id) and decision.decision == "allow"
         )
+        if invoke_model:
+            try:
+                engine = ModelPolicyEngine(self.platform_adapter.default_policy_profile())
+                attestation = engine.attestation(
+                    decision=decision,
+                    record_id=f"{command.command_id}-attestation",
+                    session_id=command.session_id,
+                    occurred_at=self.clock(),
+                )
+                policy_payload["attestation"] = attestation.model_dump(mode="json")
+                if decision.decision == "allow" and not model_call_approved:
+                    error_event = self._record_event(
+                        EventKind.ERROR_RECORDED,
+                        {
+                            "command": _kind_value(command.kind),
+                            "reason": (
+                                "local model invocation requires approved model-call decision"
+                            ),
+                        },
+                    )
+                elif model_call_approved:
+                    response = _invoke_loopback_model(
+                        endpoint=endpoint,
+                        session_id=command.session_id,
+                        prompt_length=len(prompt),
+                    )
+                    policy_payload["response_metadata"] = _model_response_metadata(response)
+            except LocalModelInvocationError as error:
+                error_event = self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": str(error),
+                    },
+                )
+        policy_event = self._record_event(EventKind.MODEL_CALL_DECISION_RECORDED, policy_payload)
+        model_invocation_required = invoke_model and model_call_approved
+        model_invocation_succeeded = (
+            not model_invocation_required or "response_metadata" in policy_payload
+        )
+        approved = model_call_approved and model_invocation_succeeded
         stream = self.backend.run_turn(
             session_id=command.session_id,
             prompt_length=len(prompt),
             approved=approved,
         )
-        return (policy_event, *self._translate_backend_events(command.session_id, stream))
+        events: list[SessionEvent] = []
+        if error_event is not None:
+            events.append(error_event)
+        events.append(policy_event)
+        events.extend(self._translate_backend_events(command.session_id, stream))
+        return tuple(events)
 
     def _translate_backend_events(
         self, session_id: str, stream: tuple[BackendEvent, ...]
@@ -387,3 +458,67 @@ def _dict_payload(value: JsonValue | None, name: str) -> dict[str, JsonValue]:
         return value
     msg = f"expected {name} payload to be an object"
     raise TypeError(msg)
+
+
+def _invoke_loopback_model(
+    *,
+    endpoint: str,
+    session_id: str,
+    prompt_length: int,
+) -> JsonValue:
+    parsed = urlsplit(endpoint)
+    host = parsed.hostname or ""
+    if parsed.scheme != "http" or host not in _LOOPBACK_HOSTS:
+        msg = "local model demo can invoke only http loopback endpoints"
+        raise LocalModelInvocationError(msg)
+    request_payload = {
+        "model": "heartwood-local-demo",
+        "messages": [{"role": "user", "content": "[scrubbed]"}],
+        "metadata": {
+            "session_id": session_id,
+            "prompt_length": prompt_length,
+        },
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(request_payload, sort_keys=True).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _NO_REDIRECT_OPENER.open(request, timeout=5) as response:
+            decoded = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        if 300 <= error.code < 400:
+            msg = "local model invocation rejected redirect"
+        else:
+            msg = f"local model invocation failed: {error}"
+        raise LocalModelInvocationError(msg) from error
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        msg = f"local model invocation failed: {error}"
+        raise LocalModelInvocationError(msg) from error
+    if not isinstance(decoded, str | int | float | bool | list | dict) and decoded is not None:
+        msg = "local model returned a non-JSON response"
+        raise LocalModelInvocationError(msg)
+    return cast(JsonValue, decoded)
+
+
+def _model_response_metadata(response: JsonValue) -> dict[str, JsonValue]:
+    if not isinstance(response, dict):
+        return {"status": "ok", "response_type": type(response).__name__}
+    metadata: dict[str, JsonValue] = {"status": "ok"}
+    for key in ("id", "model", "object"):
+        value = response.get(key)
+        if isinstance(value, str):
+            metadata[key] = value
+    choices = response.get("choices")
+    if isinstance(choices, list):
+        metadata["choices_count"] = len(choices)
+    usage = response.get("usage")
+    if isinstance(usage, dict):
+        safe_usage: dict[str, JsonValue] = {}
+        for key, value in usage.items():
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                safe_usage[key] = value
+        metadata["usage"] = safe_usage
+    return metadata
