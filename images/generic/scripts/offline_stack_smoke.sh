@@ -22,6 +22,10 @@ agent_server_ready_timeout="${HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS:-180}
 agent_server_workspace="${HEARTWOOD_AGENT_SERVER_WORKSPACE:-/tmp/heartwood-openhands}"
 agent_server_api_key="${HEARTWOOD_AGENT_SERVER_API_KEY:-$(python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 
+export HEARTWOOD_LOCAL_MODEL_CONTEXT="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-512}"
+export HEARTWOOD_LOCAL_MODEL_MAX_TOKENS="${HEARTWOOD_LOCAL_MODEL_MAX_TOKENS:-16}"
+export HEARTWOOD_LOCAL_MODEL_TIMEOUT_SECONDS="${HEARTWOOD_LOCAL_MODEL_TIMEOUT_SECONDS:-30}"
+
 rm -rf "${workspace}" "${reviewer_output}" "${agent_server_workspace}"
 rm -f "${request_log}" "${audit_copy}" "${transcript}"
 

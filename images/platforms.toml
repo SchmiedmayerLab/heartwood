@@ -40,13 +40,20 @@ unsupported_platforms = ["linux/arm64"]
 unsupported_reason = "The selected Terra Jupyter base image is documented and validated as an amd64 notebook base; do not publish ARM tags until the base image supports ARM."
 runtime_target = "terra-runtime"
 smoke_target = "terra-smoke"
+coder_target = "terra-runtime"
 ci_smoke_target = "terra-smoke-ci"
 runtime_tag = "edge-terra"
 smoke_tag = "edge-terra-smoke"
+coder_tag = "edge-terra-coder-7b"
 ci_smoke_tag = "edge-terra-smoke-ci"
 commit_runtime_tag = "sha-<git-sha>-terra"
 commit_smoke_tag = "sha-<git-sha>-terra-smoke"
+commit_coder_tag = "sha-<git-sha>-terra-coder-7b"
 bundles_model_artifact_in_smoke = true
+bundles_model_artifact_in_runtime = true
+bundles_model_artifact_in_coder = true
+runtime_model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
+coder_model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
 ci_required = true
 live_workspace_validation_required = true
 
@@ -56,11 +63,15 @@ description = "Build the Terra-compatible CI base, build the Terra smoke image t
 
 [[platforms.terra.required_evidence]]
 name = "main-publish-real-terra"
-description = "Build and publish the Terra runtime and smoke images from the real Terra base on main after freeing runner disk, then verify the published GHCR tags."
+description = "Build and publish the Terra runtime, smoke, and coder demo images from the real Terra base on main after freeing runner disk, then verify the published GHCR tags."
 
 [[platforms.terra.required_evidence]]
 name = "live-terra-smoke"
 description = "Launch the published Terra smoke image in a synthetic Terra workspace, open the proxied web UI, submit one synthetic chat command, replay the same session through CLI/notebook APIs, and record image/base digests plus proxy behavior."
+
+[[platforms.terra.required_evidence]]
+name = "live-terra-coder-demo"
+description = "Launch the published Terra coder image in a synthetic Terra workspace with sufficient disk and memory, open the proxied web UI, submit one synthetic coding prompt, replay the same session through CLI/notebook APIs, and record model latency, image/base digests, proxy behavior, audit export path, and reviewer packet path."
 
 [future_platforms.seven_bridges]
 base_image = "to-be-selected"

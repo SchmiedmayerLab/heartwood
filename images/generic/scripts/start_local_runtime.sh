@@ -13,8 +13,9 @@ port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.jsonl}"
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-/opt/heartwood/local-runtime/models/model.gguf}"
 model_alias="${HEARTWOOD_LOCAL_MODEL_ALIAS:-heartwood-local-runtime}"
-n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-512}"
-n_threads="${HEARTWOOD_LOCAL_MODEL_THREADS:-2}"
+default_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-4096}"
+n_threads="${HEARTWOOD_LOCAL_MODEL_THREADS:-${default_threads}}"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
   echo "local runtime must bind to loopback, got ${host}" >&2

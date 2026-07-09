@@ -18,6 +18,7 @@ import { Textarea } from "@stanfordspezi/spezi-web-design-system/components/Text
 import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
 import {
   Activity,
+  BrainCircuit,
   Check,
   Database,
   Download,
@@ -30,14 +31,23 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
-import type { JsonValue, SessionEvent } from "./types";
-import { buildViewModel, emptyViewModel } from "./viewModel";
+import type {
+  ApprovalControl,
+  ConversationMessage,
+  JsonValue,
+  SessionEvent,
+} from "./types";
+import { buildViewModel } from "./viewModel";
 
 interface AppProps {
   client?: HeartwoodClient;
   initialSessionId?: string;
+}
+
+interface LocalConversationMessage extends ConversationMessage {
+  sessionId: string;
 }
 
 export const App = ({
@@ -46,17 +56,33 @@ export const App = ({
 }: AppProps) => {
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [events, setEvents] = useState<SessionEvent[]>([]);
-  const [prompt, setPrompt] = useState("run the synthetic workflow");
-  const [endpoint, setEndpoint] = useState(
-    "https://model.local.invalid/v1/chat/completions",
+  const [prompt, setPrompt] = useState(
+    "Summarize the synthetic cohort quality check in one sentence.",
   );
-  const [providerConfigPath, setProviderConfigPath] = useState("");
-  const [providerRouteId, setProviderRouteId] = useState("");
-  const [invokeProvider, setInvokeProvider] = useState(false);
+  const [endpoint, setEndpoint] = useState(
+    "http://127.0.0.1:8765/v1/chat/completions",
+  );
+  const [providerConfigPath, setProviderConfigPath] = useState(
+    "/opt/heartwood/images/generic/providers/provider-routes.example.toml",
+  );
+  const [providerRouteId, setProviderRouteId] = useState("local-loopback");
+  const [invokeProvider, setInvokeProvider] = useState(true);
+  const [localConversation, setLocalConversation] = useState<
+    LocalConversationMessage[]
+  >([]);
   const [status, setStatus] = useState<"idle" | "busy" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
   const viewModel = useMemo(() => buildViewModel(events), [events]);
+  const conversation = useMemo(
+    () =>
+      mergeConversationMessages(
+        localConversation.filter((message) => message.sessionId === sessionId),
+        viewModel.conversation,
+      ),
+    [localConversation, sessionId, viewModel.conversation],
+  );
   const commandSequence = events.length;
 
   useEffect(() => {
@@ -88,6 +114,10 @@ export const App = ({
     };
   }, [resolvedClient, sessionId]);
 
+  useEffect(() => {
+    scrollConversationEnd(conversationEndRef.current);
+  }, [conversation.length]);
+
   const send = async (
     kind: Parameters<typeof createCommand>[1],
     payload: Record<string, JsonValue> = {},
@@ -96,6 +126,21 @@ export const App = ({
     setError(null);
     try {
       const command = createCommand(sessionId, kind, commandSequence, payload);
+      const submittedPrompt = promptContent(payload);
+      if ((kind === "chat" || kind === "run") && submittedPrompt) {
+        setLocalConversation((current) => [
+          ...current,
+          {
+            id: `local-${command.command_id}`,
+            sequence: (events.at(-1)?.sequence ?? -1) + 0.5,
+            role: "user",
+            label: "You",
+            content: submittedPrompt,
+            detail: null,
+            sessionId,
+          },
+        ]);
+      }
       const response = await resolvedClient.postCommand(command);
       setEvents((current) => mergeEvents(current, response.events));
       setStatus("idle");
@@ -104,6 +149,13 @@ export const App = ({
       setStatus("error");
     }
   };
+
+  const decideApproval = (kind: "approve" | "deny", control: ApprovalControl) =>
+    send(kind, {
+      reason: "web UI demo decision",
+      target_id: control.targetId,
+      target_type: control.targetType,
+    });
 
   const runPayload = (): Record<string, JsonValue> => {
     const payload: Record<string, JsonValue> = {
@@ -241,7 +293,7 @@ export const App = ({
                   onClick={() => void send("run", runPayload())}
                 >
                   <Play size={16} />
-                  Run
+                  {invokeProvider ? "Run Local Model" : "Run"}
                 </Button>
                 <Button variant="outline" onClick={() => void send("pause")}>
                   <Pause size={16} />
@@ -255,35 +307,94 @@ export const App = ({
             </div>
           </Card>
 
-          <Card className="panel chat-panel">
+          <Card className="panel conversation-panel">
             <CardHeader>
               <CardTitle asChild>
                 <h2>
                   <MessageSquare size={18} />
-                  Chat
+                  Conversation
                 </h2>
               </CardTitle>
             </CardHeader>
-            <div className="panel-body chat-list">
-              {(viewModel.chat.length === 0 ?
-                emptyViewModel(sessionId).chat
-              : viewModel.chat
-              ).map((message, index) => (
-                <div className="chat-message" key={`${message.role}-${index}`}>
-                  {message.content}
-                </div>
-              ))}
+            <div
+              aria-label="Conversation transcript"
+              className="panel-body conversation-list"
+              role="log"
+            >
+              {conversation.length === 0 ?
+                <div className="empty-state">no conversation yet</div>
+              : conversation.map((message) => (
+                  <article
+                    className={`conversation-message ${message.role}`}
+                    key={message.id}
+                  >
+                    <div className="conversation-meta">
+                      <small>{message.label}</small>
+                      {message.detail ?
+                        <span>{message.detail}</span>
+                      : null}
+                    </div>
+                    <p>{message.content}</p>
+                  </article>
+                ))
+              }
+              <div ref={conversationEndRef} aria-hidden="true" />
             </div>
           </Card>
 
-          <StatusPanels events={events} />
+          <StatusPanels
+            events={events}
+            isBusy={status === "busy"}
+            onApprovalDecision={decideApproval}
+          />
         </section>
       </main>
     </SpeziProvider>
   );
 };
 
-const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
+const promptContent = (payload: Record<string, JsonValue>): string => {
+  const prompt = payload.prompt;
+  return typeof prompt === "string" ? prompt.trim() : "";
+};
+
+const mergeConversationMessages = (
+  localMessages: ConversationMessage[],
+  eventMessages: ConversationMessage[],
+): ConversationMessage[] =>
+  [...localMessages, ...eventMessages].sort(
+    (left, right) =>
+      left.sequence - right.sequence || left.id.localeCompare(right.id),
+  );
+
+const scrollConversationEnd = (target: unknown): void => {
+  if (hasScrollIntoView(target)) {
+    target.scrollIntoView({ block: "end" });
+  }
+};
+
+const hasScrollIntoView = (
+  value: unknown,
+): value is { scrollIntoView: (options?: ScrollIntoViewOptions) => void } => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as { scrollIntoView?: unknown };
+  return typeof candidate.scrollIntoView === "function";
+};
+
+const StatusPanels = ({
+  events,
+  isBusy,
+  onApprovalDecision,
+}: {
+  events: SessionEvent[];
+  isBusy: boolean;
+  onApprovalDecision: (
+    kind: "approve" | "deny",
+    control: ApprovalControl,
+  ) => Promise<void>;
+}) => {
   const viewModel = buildViewModel(events);
   return (
     <>
@@ -303,6 +414,50 @@ const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
               <Badge variant="outline">{proposal.confidence.toFixed(2)}</Badge>
             </div>
           ))}
+        </div>
+      </Card>
+
+      <Card className="panel model-panel">
+        <CardHeader>
+          <CardTitle asChild>
+            <h2>
+              <BrainCircuit size={18} />
+              Local Model
+            </h2>
+          </CardTitle>
+        </CardHeader>
+        <div className="panel-body list">
+          {viewModel.modelInvocations.length === 0 ?
+            <div className="empty-state">pending</div>
+          : viewModel.modelInvocations.map((invocation, index) => (
+              <div
+                className="list-row stacked"
+                key={`${invocation.routeId ?? invocation.model ?? "model"}-${index}`}
+              >
+                <span>
+                  {invocation.status}
+                  {invocation.routeId ? ` via ${invocation.routeId}` : ""}
+                </span>
+                {invocation.responsePreview ?
+                  <p className="model-preview">{invocation.responsePreview}</p>
+                : null}
+                <small>
+                  {[
+                    invocation.provider,
+                    invocation.model,
+                    invocation.choicesCount === null ?
+                      null
+                    : `${invocation.choicesCount} choices`,
+                    invocation.totalTokens === null ?
+                      null
+                    : `${invocation.totalTokens} tokens`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </small>
+              </div>
+            ))
+          }
         </div>
       </Card>
 
@@ -343,10 +498,13 @@ const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
         <div className="panel-body list">
           {viewModel.approvalControls.map((control) => (
             <div
-              className="list-row"
+              className="list-row approval-row"
               key={`${control.targetType}-${control.targetId}-${control.decision}`}
             >
-              <span>{control.targetId}</span>
+              <span>
+                {control.label}
+                <small>{control.targetId}</small>
+              </span>
               <Badge
                 variant={
                   control.decision === "denied" ?
@@ -356,6 +514,30 @@ const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
               >
                 {control.decision ?? control.targetType}
               </Badge>
+              {control.decision === null ?
+                <div className="approval-actions">
+                  <Button
+                    aria-label={`Approve ${control.targetId}`}
+                    disabled={isBusy}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onApprovalDecision("approve", control)}
+                  >
+                    <Check size={14} />
+                    Approve
+                  </Button>
+                  <Button
+                    aria-label={`Deny ${control.targetId}`}
+                    disabled={isBusy}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onApprovalDecision("deny", control)}
+                  >
+                    <X size={14} />
+                    Deny
+                  </Button>
+                </div>
+              : null}
             </div>
           ))}
         </div>

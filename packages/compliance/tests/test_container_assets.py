@@ -204,10 +204,17 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert terra["jupyter_prefix"] == "/opt/conda"
     assert terra["runtime_target"] == "terra-runtime"
     assert terra["smoke_target"] == "terra-smoke"
+    assert terra["coder_target"] == "terra-runtime"
     assert terra["ci_smoke_target"] == "terra-smoke-ci"
     assert terra["runtime_tag"] == "edge-terra"
     assert terra["smoke_tag"] == "edge-terra-smoke"
+    assert terra["coder_tag"] == "edge-terra-coder-7b"
     assert terra["ci_smoke_tag"] == "edge-terra-smoke-ci"
+    assert terra["commit_coder_tag"] == "sha-<git-sha>-terra-coder-7b"
+    assert terra["bundles_model_artifact_in_runtime"] is True
+    assert terra["bundles_model_artifact_in_coder"] is True
+    assert terra["runtime_model_manifest"].endswith("qwen25-coder-7b-q4_k_m.toml")
+    assert terra["coder_model_manifest"].endswith("qwen25-coder-7b-q4_k_m.toml")
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
     assert terra["config_media_type"] == "application/vnd.docker.container.image.v1+json"
     assert terra["publish_attestations"] is False
@@ -223,8 +230,10 @@ def test_platform_registry_manifest_verifier_uses_platform_contract(tmp_path: Pa
     _RegistryHandler.accepted_tags = {
         "edge-terra",
         "edge-terra-smoke",
+        "edge-terra-coder-7b",
         "sha-abc123-terra",
         "sha-abc123-terra-smoke",
+        "sha-abc123-terra-coder-7b",
     }
     _RegistryHandler.requested_accept_headers = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _RegistryHandler)
@@ -247,8 +256,10 @@ allow_non_platform_manifests = false
 supported_platforms = ["linux/amd64"]
 runtime_tag = "edge-terra"
 smoke_tag = "edge-terra-smoke"
+coder_tag = "edge-terra-coder-7b"
 commit_runtime_tag = "sha-<git-sha>-terra"
 commit_smoke_tag = "sha-<git-sha>-terra-smoke"
+commit_coder_tag = "sha-<git-sha>-terra-coder-7b"
 """,
             encoding="utf-8",
         )
@@ -281,7 +292,10 @@ commit_smoke_tag = "sha-<git-sha>-terra-smoke"
     assert result.returncode == 0, result.stdout + result.stderr
     assert "runtime moving tag" in result.stdout
     assert "smoke commit tag" in result.stdout
+    assert "coder commit tag" in result.stdout
     assert _RegistryHandler.requested_accept_headers == [
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
         "application/vnd.docker.distribution.manifest.v2+json",
         "application/vnd.docker.distribution.manifest.v2+json",
         "application/vnd.docker.distribution.manifest.v2+json",
@@ -297,6 +311,9 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     launcher = (_repo_root() / "images" / "generic" / "scripts" / "start_web_ui.sh").read_text(
         encoding="utf-8"
     )
+    demo_launcher = (
+        _repo_root() / "images" / "generic" / "scripts" / "start_demo_stack.sh"
+    ).read_text(encoding="utf-8")
     terra_smoke = (
         _repo_root() / "images" / "generic" / "scripts" / "terra_jupyter_demo_smoke.py"
     ).read_text(encoding="utf-8")
@@ -320,8 +337,20 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     assert "npm run test:gateway --prefix packages/webui" in workflow
     assert "npm run test:jupyter-proxy --prefix packages/webui" in workflow
     assert "heartwood \\" in launcher
+    assert "HEARTWOOD_AGENT_BACKEND:-deterministic-local" in launcher
+    assert 'HEARTWOOD_AGENT_SERVER_ENABLED="${HEARTWOOD_AGENT_SERVER_ENABLED:-1}"' in launcher
+    assert "bash images/generic/scripts/start_agent_server.sh" in launcher
+    assert "HEARTWOOD_AGENT_SERVER_WORKSPACE" in launcher
     assert '--web-root "${web_root}"' in launcher
     assert '--base-path "${base_path}"' in launcher
+    assert "HEARTWOOD_DEMO_RESPONSE_PREVIEW" in demo_launcher
+    assert "HEARTWOOD_DEMO_SEED_APPROVALS" in demo_launcher
+    assert "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS" in demo_launcher
+    assert "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS:-768" in demo_launcher
+    assert "HEARTWOOD_DEMO_WEB_HOST:-0.0.0.0" in demo_launcher
+    assert "start_local_runtime.sh" in demo_launcher
+    assert "start_web_ui.sh" in demo_launcher
+    assert "--target-type model-call" in demo_launcher
     assert "ThreadingHTTPServer" in terra_smoke
     assert "NotebookSession" in terra_smoke
     assert "Terra-style Jupyter demo smoke: ok" in terra_smoke
@@ -368,18 +397,27 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert flavors["moving_channel"] == "edge"
     assert flavors["architecture_helper_tag_pattern"] == "<moving-or-commit-tag>-<amd64|arm64>"
     assert flavors["flavors"]["runtime"]["moving_tag"] == "edge"
-    assert flavors["flavors"]["runtime"]["bundles_model_artifact"] is False
+    assert flavors["flavors"]["runtime"]["bundles_model_artifact"] is True
+    assert flavors["flavors"]["runtime"]["model_manifest"].endswith("qwen25-coder-7b-q4_k_m.toml")
     assert flavors["flavors"]["smoke"]["moving_tag"] == "edge-smoke"
     assert flavors["flavors"]["smoke"]["bundles_model_artifact"] is True
     assert flavors["flavors"]["providers"]["moving_tag"] == "edge-providers"
     assert flavors["flavors"]["providers"]["provider_config"].endswith(
         "provider-routes.example.toml"
     )
+    assert flavors["flavors"]["coder_7b"]["target"] == "runtime"
+    assert flavors["flavors"]["coder_7b"]["moving_tag"] == "edge-coder-7b"
+    assert flavors["flavors"]["coder_7b"]["tag_alias_of"] == "runtime"
+    assert flavors["flavors"]["coder_7b"]["bundles_model_artifact"] is True
     assert flavors["platform_flavors"]["terra_runtime"]["target"] == "terra-runtime"
     assert flavors["platform_flavors"]["terra_runtime"]["moving_tag"] == "edge-terra"
     assert (
         flavors["platform_flavors"]["terra_runtime"]["base_image"]
         == "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+    )
+    assert flavors["platform_flavors"]["terra_runtime"]["bundles_model_artifact"] is True
+    assert flavors["platform_flavors"]["terra_runtime"]["model_manifest"].endswith(
+        "qwen25-coder-7b-q4_k_m.toml"
     )
     assert flavors["platform_flavors"]["terra_runtime"]["supported_platforms"] == ["linux/amd64"]
     assert (
@@ -406,6 +444,11 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     )
     assert flavors["platform_flavors"]["terra_smoke"]["publish_attestations"] is False
     assert flavors["platform_flavors"]["terra_smoke"]["allow_non_platform_manifests"] is False
+    assert flavors["platform_flavors"]["terra_coder_7b"]["target"] == "terra-runtime"
+    assert flavors["platform_flavors"]["terra_coder_7b"]["moving_tag"] == "edge-terra-coder-7b"
+    assert flavors["platform_flavors"]["terra_coder_7b"]["tag_alias_of"] == "terra-runtime"
+    assert flavors["platform_flavors"]["terra_coder_7b"]["bundles_model_artifact"] is True
+    assert flavors["platform_flavors"]["terra_coder_7b"]["supported_platforms"] == ["linux/amd64"]
     assert flavors["platform_flavors"]["terra_smoke_ci"]["target"] == "terra-smoke-ci"
     assert flavors["platform_flavors"]["terra_smoke_ci"]["moving_tag"] == "edge-terra-smoke-ci"
     assert flavors["platform_flavors"]["terra_smoke_ci"]["base_image"] == (
@@ -420,6 +463,8 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert 'target "terra-runtime"' in bake
     assert 'target "terra-smoke"' in bake
     assert 'target "terra-smoke-ci"' in bake
+    assert 'target "coder-7b"' not in bake
+    assert 'target "terra-coder-7b"' not in bake
     assert (
         'target "_platform_common" {\n  context = "."\n  dockerfile = "images/platform/Dockerfile"'
         in bake
@@ -449,12 +494,16 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert 'HEARTWOOD_RUNTIME_ARCH = "amd64"' in bake
     assert 'variable "IMAGE_TAG_SUFFIX"' in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-coder-7b${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke-ci${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:sha-${GIT_SHA}-coder-7b${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:sha-${GIT_SHA}-terra${IMAGE_TAG_SUFFIX}" in bake
+    assert "${IMAGE_NAME}:sha-${GIT_SHA}-terra-coder-7b${IMAGE_TAG_SUFFIX}" in bake
     assert "${IMAGE_NAME}:sha-${GIT_SHA}-terra-smoke${IMAGE_TAG_SUFFIX}" in bake
     assert 'cache-to = ["type=gha,mode=min"]' in bake
     assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
@@ -489,16 +538,35 @@ def test_model_catalog_records_smoke_model_and_deferred_coding_candidates() -> N
     )
 
     assert catalog["default_smoke_model"] == "llama-cpp-stories260k-ci"
+    assert catalog["default_demo_coding_model"] == "qwen25-coder-7b-instruct-q4_k_m"
     smoke = catalog["models"]["llama-cpp-stories260k-ci"]
-    qwen_small = catalog["models"]["qwen25-coder-1_5b-instruct"]
+    qwen_default = catalog["models"]["qwen25-coder-7b-instruct-q4_k_m"]
     qwen_agent = catalog["models"]["qwen3-coder-30b-a3b-instruct"]
     assert smoke["status"] == "implemented"
-    assert smoke["image_flavors"] == ["smoke"]
+    assert smoke["image_flavors"] == ["smoke", "terra-smoke", "terra-smoke-ci"]
     assert smoke["quality_claim"] is False
-    assert qwen_small["status"] == "candidate"
-    assert qwen_small["license"] == "Apache-2.0"
-    assert qwen_small["expected_artifact_format"] == "GGUF"
-    assert qwen_agent["status"] == "candidate"
+    assert qwen_default["status"] == "implemented"
+    assert qwen_default["license"] == "Apache-2.0"
+    assert qwen_default["artifact_format"] == "GGUF"
+    assert qwen_default["quantization"] == "Q4_K_M"
+    assert qwen_default["artifact_size_bytes"] == 4683073504
+    assert qwen_default["artifact_sha256"] == (
+        "9a961bb225cb2b9fd84b2297df0d53089895c049d7d9dc5f5f8aebbcd3247872"
+    )
+    assert qwen_default["image_flavors"] == [
+        "runtime",
+        "coder-7b",
+        "terra-runtime",
+        "terra-coder-7b",
+    ]
+    assert qwen_default["quality_claim"] is False
+    assert qwen_default["minimum_resource_envelope"].startswith("4 vCPU, 16 GB RAM")
+    assert qwen_default["recommended_resource_envelope"].startswith("8 vCPU, 32 GB RAM")
+    assert "Not used by the current llama-cpp-cpu image" in qwen_default["gpu_acceleration"]
+    assert qwen_agent["status"] == "deferred-high-memory"
+    assert qwen_agent["reviewed_q4_k_m_sha256"] == (
+        "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad"
+    )
     assert "GPU" in " ".join(qwen_agent["implementation_requirements"])
 
 
@@ -515,6 +583,9 @@ def test_offline_stack_smoke_runs_local_model_and_cli() -> None:
     assert "HEARTWOOD_AGENT_SERVER_ENABLED" in script
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" in script
     assert "HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS" in script
+    assert "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS" in script
+    assert "HEARTWOOD_LOCAL_MODEL_TIMEOUT_SECONDS" in script
+    assert "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS:-16" in script
     assert (
         'agent_server_ready_timeout="${HEARTWOOD_AGENT_SERVER_READY_TIMEOUT_SECONDS:-180}"'
         in script
@@ -557,15 +628,30 @@ def test_local_runtime_profiles_distinguish_stub_from_real_runtime() -> None:
     assert real["model_artifact_required"] is True
     assert real["supported_platforms"] == ["linux/amd64", "linux/arm64"]
     assert real["artifact_format"] == "GGUF"
-    assert real["artifact_checksum"] == (
-        "SHA-256 270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d"
-    )
-    assert real["artifact_size_bytes"] == 1185376
-    assert real["runtime_resolution"].startswith("The runtime flavor expects")
+    assert real["default_artifact_manifest"].endswith("stories260k.toml")
+    assert real["demo_coding_artifact_manifest"].endswith("qwen25-coder-7b-q4_k_m.toml")
+    assert real["artifact_checksum_policy"].startswith("Use the artifact_sha256")
+    assert real["artifact_size_policy"].startswith("Use the artifact_size_bytes")
+    assert real["runtime_resolution"].startswith("Bundled local-model flavors")
     assert real["ships_in_generic_image"] is True
-    assert real["image_flavors"] == ["runtime", "smoke", "providers"]
-    assert real["artifact_bundled_in_flavors"] == ["smoke"]
-    assert real["artifact_not_bundled_in_flavors"] == ["runtime", "providers"]
+    assert real["image_flavors"] == [
+        "runtime",
+        "smoke",
+        "providers",
+        "coder-7b",
+        "terra-runtime",
+        "terra-smoke",
+        "terra-coder-7b",
+    ]
+    assert real["artifact_bundled_in_flavors"] == [
+        "runtime",
+        "smoke",
+        "coder-7b",
+        "terra-runtime",
+        "terra-smoke",
+        "terra-coder-7b",
+    ]
+    assert real["artifact_not_bundled_in_flavors"] == ["providers"]
     assert agent_server["status"] == "implemented"
     assert "openhands-agent-server==1.34.0" in agent_server["runtime_dependency"]
     assert "openhands-tools==1.34.0" in agent_server["runtime_dependency"]
@@ -592,24 +678,49 @@ def test_local_runtime_launcher_keeps_real_profile_behind_explicit_contract() ->
     assert "llama-server" in launcher
     assert "requires llama-server on PATH" in launcher
     assert "HEARTWOOD_LOCAL_MODEL_PATH" in launcher
+    assert "HEARTWOOD_LOCAL_MODEL_CONTEXT:-4096" in launcher
     assert "--alias" in launcher
     assert "--ctx-size" in launcher
 
 
 def test_local_model_manifest_records_verified_gguf_artifact() -> None:
-    manifest = tomllib.loads(
+    smoke_manifest = tomllib.loads(
         (
             _repo_root() / "images" / "generic" / "local-runtime" / "models" / "stories260k.toml"
         ).read_text(encoding="utf-8")
     )
+    coder_manifest = tomllib.loads(
+        (
+            _repo_root()
+            / "images"
+            / "generic"
+            / "local-runtime"
+            / "models"
+            / "qwen25-coder-7b-q4_k_m.toml"
+        ).read_text(encoding="utf-8")
+    )
 
-    assert manifest["runtime_profile"] == "llama-cpp-cpu"
-    assert manifest["artifact_format"] == "GGUF"
-    assert manifest["artifact_size_bytes"] == 1185376
-    assert manifest["artifact_sha256"] == (
+    assert smoke_manifest["runtime_profile"] == "llama-cpp-cpu"
+    assert smoke_manifest["artifact_format"] == "GGUF"
+    assert smoke_manifest["artifact_size_bytes"] == 1185376
+    assert smoke_manifest["artifact_sha256"] == (
         "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d"
     )
-    assert manifest["model_alias"] == "heartwood-local-runtime"
+    assert smoke_manifest["model_alias"] == "heartwood-local-runtime"
+    assert coder_manifest["artifact_id"] == "qwen25-coder-7b-instruct-q4_k_m"
+    assert coder_manifest["runtime_profile"] == "llama-cpp-cpu"
+    assert coder_manifest["base_model"] == "Qwen/Qwen2.5-Coder-7B-Instruct"
+    assert coder_manifest["base_model_license"] == "Apache-2.0"
+    assert coder_manifest["quantized_artifact_license"] == "Apache-2.0"
+    assert coder_manifest["artifact_format"] == "GGUF"
+    assert coder_manifest["artifact_size_bytes"] == 4683073504
+    assert coder_manifest["artifact_sha256"] == (
+        "9a961bb225cb2b9fd84b2297df0d53089895c049d7d9dc5f5f8aebbcd3247872"
+    )
+    assert coder_manifest["minimum_resource_envelope"].startswith("4 vCPU, 16 GB RAM")
+    assert coder_manifest["recommended_resource_envelope"].startswith("8 vCPU, 32 GB RAM")
+    assert "does not use attached GPUs" in coder_manifest["gpu_acceleration"]
+    assert coder_manifest["model_alias"] == "heartwood-local-runtime"
 
 
 def test_local_model_downloader_verifies_size_and_hash(tmp_path: Path) -> None:
@@ -713,6 +824,7 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert "GIT_SHA: ${{ github.sha }}" in workflow
     assert "IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}" in workflow
     assert "docker buildx bake --file docker-bake.hcl --push" in workflow
+    assert "Free runner disk for generic image" in workflow
     terra_build_step = workflow.split("- name: Build and push Terra image flavors", 1)[1].split(
         "- name: Verify Terra image tags", 1
     )[0]
@@ -739,10 +851,13 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert "Verify image manifests" in workflow
     assert "verify_multi_platform_tag" in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-arm64"' in workflow
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b-arm64"' in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-arm64"' in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-arm64"' in workflow
     assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}"' in workflow
     assert 'verify_multi_platform_tag "sha-${GIT_SHA}"' in workflow
+    assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}-coder-7b"' in workflow
+    assert 'verify_multi_platform_tag "sha-${GIT_SHA}-coder-7b"' in workflow
     assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}-smoke"' in workflow
     assert 'verify_multi_platform_tag "sha-${GIT_SHA}-smoke"' in workflow
     assert 'verify_multi_platform_tag "${IMAGE_CHANNEL}-providers"' in workflow

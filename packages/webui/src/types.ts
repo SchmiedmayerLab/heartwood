@@ -65,9 +65,18 @@ export interface ActivityItem {
   detail: string;
 }
 
-export interface ChatMessage {
-  role: "assistant" | "system";
+export interface AgentOutput {
+  role: "agent" | "system";
   content: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  sequence: number;
+  role: "user" | "model" | "agent" | "trace";
+  label: string;
+  content: string;
+  detail: string | null;
 }
 
 export interface DatasetProposal {
@@ -98,6 +107,16 @@ export interface PolicyStatus {
   provider: string | null;
 }
 
+export interface ModelInvocation {
+  status: string;
+  model: string | null;
+  routeId: string | null;
+  provider: string | null;
+  responsePreview: string | null;
+  choicesCount: number | null;
+  totalTokens: number | null;
+}
+
 export interface ExportAction {
   label: string;
   path: string;
@@ -107,11 +126,13 @@ export interface SessionViewModel {
   sessionId: string;
   eventCount: number;
   activity: ActivityItem[];
-  chat: ChatMessage[];
+  agentOutputs: AgentOutput[];
+  conversation: ConversationMessage[];
   datasetProposals: DatasetProposal[];
   skillProposals: SkillProposal[];
   approvalControls: ApprovalControl[];
   policyStatus: PolicyStatus[];
+  modelInvocations: ModelInvocation[];
   exportActions: ExportAction[];
   paused: boolean;
 }

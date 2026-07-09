@@ -48,14 +48,18 @@ uv run heartwood serve --web-root packages/webui/dist
 
 The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. The `chat`, `run`, `replay`, `audit export`, reviewer-packet, notebook, and web UI paths use the same session command/event contract.
 
-Run the generic offline stack from Docker only after the main-branch smoke image is published. The image family is published for `linux/amd64` and `linux/arm64` where the dependency stack supports both platforms:
+Run the generic offline stack from Docker only after the main-branch images are published. The default image family is published for `linux/amd64` and `linux/arm64` where the dependency stack supports both platforms:
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
-docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
+docker pull ghcr.io/schmiedmayerlab/heartwood:edge
+docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_demo_stack.sh
 ```
 
-The `edge` runtime image carries the CLI, gateway, notebook bridge, built researcher web UI, local inference runtime dependencies, provider route validation/invocation support, pinned OpenHands agent-server package, and policy/audit stack without bundled model weights. The `edge-smoke` image adds the tiny verified GGUF artifact for offline smoke tests. The default Docker smoke path runs the local model endpoint at `127.0.0.1`, starts the OpenHands agent-server as a gateway-owned localhost child during the agentic run, calls authenticated OpenHands `/api` routes through the gateway backend, exports a scrubbed audit log, and generates the synthetic reviewer packet while runtime network access is disabled. The `edge-providers` image carries provider route configuration support with file-based runtime secret references and no provider secrets. See [Container Images](docs/container-images.md) for the tag scheme and flavor policy.
+Open `http://127.0.0.1:8767/`, click **Run Local Model**, then inspect the Conversation, Local Model, Policy, Approvals, Activity, and Exports panels. The Conversation panel shows the current browser-session prompt, the local model response preview, the agent message, and event-derived trace summaries. The demo stack starts the bundled Qwen2.5-Coder-7B llama.cpp model, starts the gateway-managed OpenHands child server, pre-approves the synthetic model-call decision for the default local session, and enables the bounded synthetic response preview for the UI.
+
+For the default 7B local-model demo, allocate at least 4 vCPU, 16 GB RAM, and 25 GB free Docker disk; 8 vCPU, 32 GB RAM, and 50 GB free Docker disk is the recommended local setup. A GPU attached to the host or Terra VM does not accelerate the current image because the shipped runtime is CPU-only. See [Container Images](docs/container-images.md) for the resource envelope and GPU plan.
+
+The `edge` runtime image carries the CLI, gateway, notebook bridge, built researcher web UI, local inference runtime dependencies, provider route validation/invocation support, pinned OpenHands agent-server package, policy/audit stack, and the bundled Qwen2.5-Coder-7B-Instruct Q4_K_M local coding model. The model-specific `edge-coder-7b` tag is an alias for the same default image. The `edge-smoke` image keeps the tiny verified GGUF artifact for CI smoke only. The `edge-providers` image carries provider route configuration support with file-based runtime secret references and no provider secrets or model weights. See [Container Images](docs/container-images.md) for the tag scheme and flavor policy.
 
 From a checkout, run the same CI smoke path with Compose:
 
@@ -63,15 +67,16 @@ From a checkout, run the same CI smoke path with Compose:
 docker compose -f images/generic/compose.yaml run --rm heartwood
 ```
 
-To serve the packaged web UI from the image, publish the gateway port and start the launcher:
+To run the CI smoke path with the tiny model artifact instead, use the smoke image with runtime network disabled:
 
 ```bash
-docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
+docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
+docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
 See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
 
-For Terra-like notebook demonstrations, see [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md). The main-branch image workflow publishes public Terra-derived `edge-terra` and `edge-terra-smoke` notebook images, verifies anonymous registry access before succeeding, and CI validates the same platform Dockerfile through a lightweight Terra-compatible base plus local Terra-style proxy mechanics; a live Terra workspace smoke is still required before claiming supported Terra launch behavior with platform identity binding. The extension mechanism for Terra variants and future platform-derived notebook images is documented in [Platform Image Extension Guide](docs/platform-images.md).
+For Terra-like notebook demonstrations, see [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md). The main-branch image workflow publishes public Terra-derived `edge-terra` and model-specific alias `edge-terra-coder-7b` notebook images with the bundled Qwen2.5-Coder-7B model, publishes `edge-terra-smoke` for tiny-model CI smoke, verifies anonymous registry access before succeeding, and CI validates the same platform Dockerfile through a lightweight Terra-compatible base plus local Terra-style proxy mechanics; a live Terra workspace smoke is still required before claiming supported Terra launch behavior with platform identity binding. The extension mechanism for Terra variants and future platform-derived notebook images is documented in [Platform Image Extension Guide](docs/platform-images.md).
 
 
 ## Repository Structure

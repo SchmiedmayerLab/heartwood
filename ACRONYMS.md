@@ -100,6 +100,7 @@ A running reference for the acronyms and named tools used across this project (m
 | DNS | Domain Name System | Resolves hostnames to network addresses |
 | HTTP(S) | HyperText Transfer Protocol (Secure) | The web request protocol |
 | PR | Pull Request | Proposed code or documentation change reviewed before merge |
+| RAM | Random Access Memory | Volatile memory required to load local model weights, runtime buffers, and active sessions |
 | REST | Representational State Transfer | HTTP API style used by the session gateway |
 | SSE | Server-Sent Events | One-way streaming over HTTP (fallback for live agent output) |
 | WS | WebSocket | Bidirectional streaming over one TCP connection (primary transport for live agent sessions) |
