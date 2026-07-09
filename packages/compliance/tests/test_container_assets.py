@@ -194,6 +194,9 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert terra["runtime_tag"] == "edge-terra"
     assert terra["smoke_tag"] == "edge-terra-smoke"
     assert terra["ci_smoke_tag"] == "edge-terra-smoke-ci"
+    assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
+    assert terra["publish_attestations"] is False
+    assert "Terra Leonardo image auto-detection" in terra["registry_policy"]
     assert terra["supported_platforms"] == ["linux/amd64"]
     assert terra["unsupported_platforms"] == ["linux/arm64"]
     assert terra["ci_required"] is True
@@ -293,10 +296,20 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
         == "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
     )
     assert flavors["platform_flavors"]["terra_runtime"]["supported_platforms"] == ["linux/amd64"]
+    assert (
+        flavors["platform_flavors"]["terra_runtime"]["manifest_media_type"]
+        == "application/vnd.docker.distribution.manifest.v2+json"
+    )
+    assert flavors["platform_flavors"]["terra_runtime"]["publish_attestations"] is False
     assert flavors["platform_flavors"]["terra_smoke"]["target"] == "terra-smoke"
     assert flavors["platform_flavors"]["terra_smoke"]["moving_tag"] == "edge-terra-smoke"
     assert flavors["platform_flavors"]["terra_smoke"]["bundles_model_artifact"] is True
     assert flavors["platform_flavors"]["terra_smoke"]["supported_platforms"] == ["linux/amd64"]
+    assert (
+        flavors["platform_flavors"]["terra_smoke"]["manifest_media_type"]
+        == "application/vnd.docker.distribution.manifest.v2+json"
+    )
+    assert flavors["platform_flavors"]["terra_smoke"]["publish_attestations"] is False
     assert flavors["platform_flavors"]["terra_smoke_ci"]["target"] == "terra-smoke-ci"
     assert flavors["platform_flavors"]["terra_smoke_ci"]["moving_tag"] == "edge-terra-smoke-ci"
     assert flavors["platform_flavors"]["terra_smoke_ci"]["base_image"] == (
@@ -322,8 +335,14 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
     assert 'cache-from = ["type=gha"]' in bake
     assert 'cache-to = ["type=gha,mode=min"]' in bake
     assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
-    assert 'target "terra-runtime" {\n  inherits = ["_terra_common"]' in bake
-    assert 'target "terra-smoke" {\n  inherits = ["_terra_common"]' in bake
+    terra_runtime_block = _bake_target_block(bake, "terra-runtime")
+    terra_smoke_block = _bake_target_block(bake, "terra-smoke")
+    assert 'target "terra-runtime" {\n  inherits = ["_terra_common"]' in terra_runtime_block
+    assert 'target "terra-smoke" {\n  inherits = ["_terra_common"]' in terra_smoke_block
+    assert 'output = ["type=registry,oci-mediatypes=false"]' in terra_runtime_block
+    assert 'output = ["type=registry,oci-mediatypes=false"]' in terra_smoke_block
+    assert "attest" not in terra_runtime_block
+    assert "attest" not in terra_smoke_block
     assert 'target "terra-smoke-ci" {\n  inherits = ["_terra_common"]\n  pull = false' in bake
     assert 'variable "TERRA_BASE_IMAGE"' in bake
     assert 'variable "TERRA_BASE_PLATFORM"' in bake
@@ -598,23 +617,32 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert "GIT_SHA: ${{ github.sha }}" in workflow
     assert "IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}" in workflow
     assert "docker buildx bake --file docker-bake.hcl --push" in workflow
+    terra_build_step = workflow.split("- name: Build and push Terra image flavors", 1)[1].split(
+        "- name: Verify Terra image tags", 1
+    )[0]
+    assert "--push" not in terra_build_step
+    assert "docker buildx bake --file docker-bake.hcl\n          --set terra-runtime.platform" in (
+        terra_build_step
+    )
     assert "Build Terra image (linux/amd64)" in workflow
     assert "Free runner disk for Terra image" in workflow
     assert "sudo rm -rf /usr/share/dotnet" in workflow
     assert "docker system prune --all --force" in workflow
+    assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
     assert '--set terra-runtime.platform="linux/amd64"' in workflow
     assert '--set terra-smoke.platform="linux/amd64"' in workflow
     assert "terra-runtime terra-smoke" in workflow
     assert "docker buildx imagetools inspect" in workflow
-    assert "public_manifest_raw" in workflow
-    assert 'DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw' in workflow
-    assert "Verifying public GHCR access" in workflow
-    assert "verify_single_platform_tag" in workflow
-    assert 'verify_single_platform_tag "${IMAGE_CHANNEL}-terra"' in workflow
-    assert 'verify_single_platform_tag "sha-${GIT_SHA}-terra"' in workflow
-    assert 'verify_single_platform_tag "${IMAGE_CHANNEL}-terra-smoke"' in workflow
-    assert 'verify_single_platform_tag "sha-${GIT_SHA}-terra-smoke"' in workflow
-    assert "unexpectedly includes linux/arm64" in workflow
+    assert "expected_manifest_media_type" in workflow
+    assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
+    assert "application/vnd.docker.container.image.v1+json" in workflow
+    assert "Verifying Leonardo-compatible Docker manifest" in workflow
+    assert "returned an image index instead of one image manifest" in workflow
+    assert 'f"{image_channel}-terra"' in workflow
+    assert 'f"sha-{git_sha}-terra"' in workflow
+    assert 'f"{image_channel}-terra-smoke"' in workflow
+    assert 'f"sha-{git_sha}-terra-smoke"' in workflow
+    assert "expected linux/amd64" in workflow
     assert "docker buildx imagetools create \\" in workflow
     assert "Verify image manifests" in workflow
     assert "verify_multi_platform_tag" in workflow
@@ -672,6 +700,15 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _bake_target_block(bake: str, target: str) -> str:
+    marker = f'target "{target}" {{'
+    start = bake.index(marker)
+    next_target = bake.find("\ntarget ", start + len(marker))
+    if next_target == -1:
+        return bake[start:]
+    return bake[start:next_target]
 
 
 def _exact_package_pin(requirement: str) -> tuple[str, str]:

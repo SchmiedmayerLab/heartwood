@@ -56,6 +56,8 @@ runtime_network_default = "Terra policy controlled; no public runtime egress unl
 ci_required = true
 public_default = false
 supported_platforms = ["linux/amd64"]
+manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
+publish_attestations = false
 
 [platform_flavors.terra_smoke]
 target = "terra-smoke"
@@ -70,6 +72,8 @@ runtime_network_default = "disabled by CI smoke through docker run --network non
 ci_required = true
 public_default = false
 supported_platforms = ["linux/amd64"]
+manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
+publish_attestations = false
 
 [platform_flavors.terra_smoke_ci]
 target = "terra-smoke-ci"

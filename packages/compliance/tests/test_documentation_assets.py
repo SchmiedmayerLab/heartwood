@@ -49,7 +49,9 @@ def test_terra_runbook_tracks_platform_image_contract() -> None:
     assert "edge-terra-smoke-ci" in runbook
     assert "Terra-compatible notebook base" in runbook
     assert "publish automatically from `main`" in runbook
-    assert "unauthenticated Docker client can inspect" in runbook
+    assert "unauthenticated Leonardo-compatible Docker schema-2 manifest request" in runbook
+    assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
+    assert "docker manifest inspect` alone is insufficient" in runbook
     assert "cd /opt/heartwood && bash images/generic/scripts/offline_stack_smoke.sh" in runbook
     assert "run.approval_controls" in runbook
     assert "approval.decision" in runbook
@@ -77,6 +79,8 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "use the Docker driver when the build depends on a locally tagged base image" in guide
     assert "empty Docker config" in guide
     assert "anonymous registry access" in guide
+    assert "manifest media type" in guide
+    assert "Terra tags must return `application/vnd.docker.distribution.manifest.v2+json`" in guide
     assert "local-only CI load targets without attestations" in guide
     assert (
         "Docker's local image exporter does not load manifest lists or attested image indexes"
@@ -87,6 +91,11 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "Synthetic data only" in guide
     assert "Platform Image Extension Guide](docs/platform-images.md)" in readme
     assert "Platform Image Extension Guide](platform-images.md)" in container_docs
+    assert (
+        "Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests"
+        in container_docs
+    )
+    assert "Leonardo rejects" in container_docs
 
 
 def _repo_root() -> Path:

@@ -97,8 +97,9 @@ jobs:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
+          BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
         run: >-
-          docker buildx bake --file docker-bake.hcl --push
+          docker buildx bake --file docker-bake.hcl
           --set terra-runtime.platform="linux/amd64"
           --set terra-smoke.platform="linux/amd64"
           terra-runtime terra-smoke
@@ -108,32 +109,80 @@ jobs:
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
         run: |
-          public_manifest_raw() {
-            local image_ref="${IMAGE_NAME}:$1"
-            local docker_config
-            local raw
-            docker_config="$(mktemp -d)"
-            echo "Verifying public GHCR access for ${image_ref}" >&2
-            if ! raw="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw "${image_ref}")"; then
-              rm -rf "${docker_config}"
-              return 1
-            fi
-            rm -rf "${docker_config}"
-            printf '%s\n' "${raw}"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          image_name = os.environ["IMAGE_NAME"]
+          image_channel = os.environ["IMAGE_CHANNEL"]
+          git_sha = os.environ["GIT_SHA"]
+          repository = image_name.removeprefix("ghcr.io/")
+          repository_path = urllib.parse.quote(repository, safe="/")
+          expected_manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
+          expected_config_media_type = "application/vnd.docker.container.image.v1+json"
+          tags = [
+              f"{image_channel}-terra",
+              f"sha-{git_sha}-terra",
+              f"{image_channel}-terra-smoke",
+              f"sha-{git_sha}-terra-smoke",
+          ]
+
+          def fetch_json(url: str, headers: dict[str, str]) -> tuple[str, dict[str, object]]:
+              request = urllib.request.Request(url, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      content_type = response.headers.get_content_type()
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  details = error.read().decode("utf-8", "replace")
+                  raise SystemExit(f"{url} returned HTTP {error.code}: {details}") from error
+              return content_type, payload
+
+          token_url = "https://ghcr.io/token?" + urllib.parse.urlencode(
+              {"service": "ghcr.io", "scope": f"repository:{repository}:pull"}
+          )
+          _, token_payload = fetch_json(token_url, {})
+          token = token_payload["token"]
+          headers = {
+              "Accept": expected_manifest_media_type,
+              "Authorization": f"Bearer {token}",
           }
-          verify_single_platform_tag() {
-            image_ref="${IMAGE_NAME}:$1"
-            raw="$(public_manifest_raw "$1")"
-            printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"amd64"'
-            if printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"arm64"'; then
-              echo "${image_ref} unexpectedly includes linux/arm64" >&2
-              exit 1
-            fi
-          }
-          verify_single_platform_tag "${IMAGE_CHANNEL}-terra"
-          verify_single_platform_tag "sha-${GIT_SHA}-terra"
-          verify_single_platform_tag "${IMAGE_CHANNEL}-terra-smoke"
-          verify_single_platform_tag "sha-${GIT_SHA}-terra-smoke"
+
+          for tag in tags:
+              image_ref = f"{image_name}:{tag}"
+              tag_path = urllib.parse.quote(tag, safe="")
+              manifest_url = f"https://ghcr.io/v2/{repository_path}/manifests/{tag_path}"
+              print(f"Verifying Leonardo-compatible Docker manifest for {image_ref}")
+              content_type, manifest = fetch_json(manifest_url, headers)
+              if content_type != expected_manifest_media_type:
+                  raise SystemExit(
+                      f"{image_ref} returned {content_type}, expected {expected_manifest_media_type}"
+                  )
+              if manifest.get("mediaType") != expected_manifest_media_type:
+                  raise SystemExit(f"{image_ref} is not a Docker schema-2 image manifest")
+              if "manifests" in manifest:
+                  raise SystemExit(f"{image_ref} returned an image index instead of one image manifest")
+              config = manifest.get("config")
+              if not isinstance(config, dict):
+                  raise SystemExit(f"{image_ref} has no config descriptor")
+              if config.get("mediaType") != expected_config_media_type:
+                  raise SystemExit(f"{image_ref} has non-Docker config media type {config.get('mediaType')}")
+              digest = config.get("digest")
+              if not isinstance(digest, str):
+                  raise SystemExit(f"{image_ref} has no config digest")
+              config_url = f"https://ghcr.io/v2/{repository_path}/blobs/{urllib.parse.quote(digest, safe=':')}"
+              _, image_config = fetch_json(config_url, {"Authorization": f"Bearer {token}"})
+              if image_config.get("os") != "linux" or image_config.get("architecture") != "amd64":
+                  raise SystemExit(
+                      f"{image_ref} is {image_config.get('os')}/{image_config.get('architecture')}, expected linux/amd64"
+                  )
+
+          sys.exit(0)
+          PY
 
   publish:
     name: Publish multi-architecture image manifests
