@@ -143,11 +143,11 @@ textarea {
   gap: 8px !important;
 }
 
-.chat-panel {
+.agent-output-panel {
   grid-row: span 2;
 }
 
-.chat-list,
+.agent-output-list,
 .activity-list,
 .list {
   align-content: start;
@@ -155,7 +155,9 @@ textarea {
   overflow: auto;
 }
 
-.chat-message {
+.agent-output-message {
+  display: grid;
+  gap: 6px;
   padding: 10px 12px;
   border: 1px solid #d9e2dc;
   background: #f7faf8;

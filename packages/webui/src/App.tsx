@@ -34,7 +34,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
 import type { ApprovalControl, JsonValue, SessionEvent } from "./types";
-import { buildViewModel, emptyViewModel } from "./viewModel";
+import { buildViewModel } from "./viewModel";
 
 interface AppProps {
   client?: HeartwoodClient;
@@ -267,24 +267,28 @@ export const App = ({
             </div>
           </Card>
 
-          <Card className="panel chat-panel">
+          <Card className="panel agent-output-panel">
             <CardHeader>
               <CardTitle asChild>
                 <h2>
                   <MessageSquare size={18} />
-                  Chat
+                  Agent Output
                 </h2>
               </CardTitle>
             </CardHeader>
-            <div className="panel-body chat-list">
-              {(viewModel.chat.length === 0 ?
-                emptyViewModel(sessionId).chat
-              : viewModel.chat
-              ).map((message, index) => (
-                <div className="chat-message" key={`${message.role}-${index}`}>
-                  {message.content}
-                </div>
-              ))}
+            <div className="panel-body agent-output-list">
+              {viewModel.agentOutputs.length === 0 ?
+                <div className="empty-state">no agent output</div>
+              : viewModel.agentOutputs.map((message, index) => (
+                  <div
+                    className="agent-output-message"
+                    key={`${message.role}-${index}`}
+                  >
+                    <small>{message.role}</small>
+                    <span>{message.content}</span>
+                  </div>
+                ))
+              }
             </div>
           </Card>
 

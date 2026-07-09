@@ -65,8 +65,8 @@ export interface ActivityItem {
   detail: string;
 }
 
-export interface ChatMessage {
-  role: "assistant" | "system";
+export interface AgentOutput {
+  role: "agent" | "system";
   content: string;
 }
 
@@ -117,7 +117,7 @@ export interface SessionViewModel {
   sessionId: string;
   eventCount: number;
   activity: ActivityItem[];
-  chat: ChatMessage[];
+  agentOutputs: AgentOutput[];
   datasetProposals: DatasetProposal[];
   skillProposals: SkillProposal[];
   approvalControls: ApprovalControl[];

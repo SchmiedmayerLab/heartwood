@@ -101,7 +101,7 @@ Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` ha
 4. Start the web UI with `export HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions`, `export HEARTWOOD_WEB_HOST=127.0.0.1`, `export HEARTWOOD_WEB_PORT=8767`, then `cd /opt/heartwood && bash images/generic/scripts/start_web_ui.sh`.
 5. In a notebook cell, run `from heartwood.notebook import jupyter_proxy_url; jupyter_proxy_url(port=8767)` and open the returned URL.
 6. Submit a synthetic prompt in the researcher web UI chat form, confirm that the event stream updates through the proxy, and compare the same session in the notebook API and `heartwood --workspace /home/jupyter/heartwood-workspace/sessions --session-id terra-demo replay`.
-7. Save the terminal smoke output, gateway/web UI URL shape, one web UI chat interaction, notebook replay count, scrubbed audit export path, reviewer packet path, Terra image digest, Terra base image digest, custom image digest, VM shape, and whether any Terra proxy headers or path behavior differ from the local stripped-proxy smoke.
+7. Save the terminal smoke output, gateway/web UI URL shape, one web UI agent-output interaction, notebook replay count, scrubbed audit export path, reviewer packet path, Terra image digest, Terra base image digest, custom image digest, VM shape, and whether any Terra proxy headers or path behavior differ from the local stripped-proxy smoke.
 
 ## Demo Evidence
 

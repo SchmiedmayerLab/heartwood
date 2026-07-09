@@ -22,7 +22,7 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
   sessionId,
   eventCount: 0,
   activity: [],
-  chat: [],
+  agentOutputs: [],
   datasetProposals: [],
   skillProposals: [],
   approvalControls: [],
@@ -38,8 +38,8 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
     viewModel.activity.push(activityItem(event));
     switch (event.kind) {
       case "agent_message.emitted":
-        viewModel.chat.push({
-          role: "assistant",
+        viewModel.agentOutputs.push({
+          role: "agent",
           content: stringValue(event.payload.content),
         });
         break;
