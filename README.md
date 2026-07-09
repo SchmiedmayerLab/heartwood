@@ -138,7 +138,7 @@ Do not add PHI, credentials, live-platform identifiers, or non-synthetic records
 | [08 · Development](design/08-development.md) | Languages, linting, licensing, CI |
 | [09 · Implementation plan](design/09-implementation-plan.md) | Phased delivery, repo layout, open questions |
 | [Container Images](docs/container-images.md) | Image flavors, tags, provider secrets, model strategy |
-| [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md) | Synthetic CLI, notebook, and web UI demo path for Terra-like workspaces |
+| [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md) | Synthetic CLI, notebook, and web UI demo path for Terra-like workspaces, with a companion [notebook](docs/terra-jupyter-demo.ipynb) |
 
 ## Contributing
 

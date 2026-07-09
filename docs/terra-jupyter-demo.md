@@ -16,6 +16,10 @@ This runbook demonstrates the current Heartwood stack from a Terra-like Jupyter 
 
 Use `ghcr.io/schmiedmayerlab/heartwood:edge-smoke` when the demo must include the tiny bundled model artifact and the full offline smoke path. Use `ghcr.io/schmiedmayerlab/heartwood:edge` when demonstrating the UI, CLI, notebook API, provider route configuration, and gateway behavior without bundled model weights. In Terra, configure the Cloud Environment to use the selected image directly as the notebook container; do not run nested Docker inside the workspace.
 
+## Runnable Notebook
+
+The companion notebook [terra-jupyter-demo.ipynb](terra-jupyter-demo.ipynb) contains the synthetic notebook cells for the same demo path. Use it inside the Heartwood image after the workspace starts to calculate the Jupyter proxy URL, run detection through `NotebookSession`, submit the synthetic workflow, inspect approval controls and activity, export the scrubbed audit log, and compare the result with CLI replay and the proxied researcher web UI.
+
 ## Terminal Smoke
 
 Run the offline stack smoke from a Jupyter terminal inside the `edge-smoke` image:

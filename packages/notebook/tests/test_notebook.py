@@ -60,6 +60,35 @@ def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     assert exported.event_count == len(session.gateway.replay_events(session_id="notebook-session"))
 
 
+def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
+    session = NotebookSession(workspace=tmp_path, session_id="notebook-approvals")
+
+    run = session.run(endpoint="https://model.local.invalid/v1/chat/completions")
+
+    keys = [(control.target_type, control.target_id) for control in run.approval_controls]
+    assert len(keys) == len(set(keys))
+    tool_control = next(
+        control for control in run.approval_controls if control.target_type == "tool-call"
+    )
+    assert tool_control.label.startswith("Review")
+
+    approved = session.approve(
+        target_type=tool_control.target_type,
+        target_id=tool_control.target_id,
+    )
+    matching = [
+        control
+        for control in approved.approval_controls
+        if (
+            control.target_type == tool_control.target_type
+            and control.target_id == tool_control.target_id
+        )
+    ]
+
+    assert len(matching) == 1
+    assert matching[0].decision == "approved"
+
+
 def test_notebook_session_projects_provider_route_metadata(tmp_path: Path) -> None:
     provider_config = tmp_path / "provider-routes.toml"
     provider_config.write_text(

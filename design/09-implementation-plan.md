@@ -176,6 +176,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - The web UI dependency tree is pinned by `package-lock.json`, checked by ESLint, Prettier, strict TypeScript, Vitest coverage, Playwright browser smoke tests, npm audit, and an npm license compatibility check.
 - The `Web UI` GitHub Actions workflow runs the TypeScript, unit, coverage, build, license, audit, browser smoke, and gateway-served proxy smoke checks on pull requests and `main`.
 - Documentation records local Docker serving and Jupyter proxy serving through the packaged web UI.
+- `docs/terra-jupyter-demo.ipynb` provides a runnable synthetic Jupyter walkthrough for Terra-like workspaces, including proxy URL calculation, notebook API detection, synthetic workflow execution, approval/activity inspection, audit export, CLI replay comparison, and packaged web UI launch instructions.
 
 **Completed verification**
 
@@ -184,6 +185,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Gateway tests cover REST, WebSocket, Server-Sent Events replay, and static asset serving under a proxy base path.
 - The gateway-served proxy smoke test starts `heartwood serve`, loads the built web UI under `/proxy/<port>/`, and exercises prefixed command and replay routes.
 - Static image tests verify that the Dockerfile builds and copies web assets and that the image includes the web UI launcher.
+- Static documentation asset tests verify that the Terra Jupyter notebook remains synthetic-only, has no saved outputs, and covers the CLI, notebook API, audit export, widget projection, offline stack smoke, and packaged web UI launcher paths.
 
 ### Implemented In 0J — Provider Invocation
 

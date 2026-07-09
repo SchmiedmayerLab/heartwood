@@ -257,21 +257,23 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
                     detail=str(event.payload.get("summary", "")),
                 )
             )
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type="tool-call",
                     target_id=target_id,
                     label=f"Approve {event.payload.get('tool_name', 'tool call')}",
-                )
+                ),
             )
         elif kind == EventKind.CONFIRMATION_REQUESTED.value:
             request = _mapping_payload(event.payload["request"], "request")
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type="tool-call",
                     target_id=str(request["tool_call_id"]),
                     label=f"Review {request['tool_name']}",
-                )
+                ),
             )
         elif kind == EventKind.APPROVAL_RECORDED.value:
             approval = _mapping_payload(event.payload["approval"], "approval")
@@ -283,13 +285,14 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
                         detail=str(approval.get("reason", "")),
                     )
                 )
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type=str(approval["target_type"]),
                     target_id=str(approval["target_id"]),
                     label=f"{approval['decision']} {approval['target_type']}",
                     decision=str(approval["decision"]),
-                )
+                ),
             )
         elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
             decision = _mapping_payload(event.payload["decision"], "decision")
@@ -303,12 +306,13 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
                     provider=None if route is None else str(route["provider"]),
                 )
             )
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type="model-call",
                     target_id=str(decision["decision_id"]),
                     label=f"Review model call to {decision['endpoint']}",
-                )
+                ),
             )
         elif kind == EventKind.AUDIT_EXPORT_RECORDED.value:
             exports.append(
@@ -333,6 +337,14 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
         export_actions=tuple(exports),
         paused=paused,
     )
+
+
+def _upsert_approval(approvals: list[ApprovalControl], control: ApprovalControl) -> None:
+    for index, existing in enumerate(approvals):
+        if existing.target_type == control.target_type and existing.target_id == control.target_id:
+            approvals[index] = control
+            return
+    approvals.append(control)
 
 
 def jupyter_proxy_url(*, port: int, env: dict[str, str] | None = None) -> str:
