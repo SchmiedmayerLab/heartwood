@@ -71,7 +71,7 @@ docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/
 
 See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
 
-For Terra-like notebook demonstrations, see [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md). The main-branch image workflow publishes Terra-derived `edge-terra` and `edge-terra-smoke` notebook images, and CI validates the same platform Dockerfile through a lightweight Terra-compatible base plus local Terra-style proxy mechanics; a live Terra workspace smoke is still required before claiming supported Terra launch behavior with platform identity binding.
+For Terra-like notebook demonstrations, see [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md). The main-branch image workflow publishes Terra-derived `edge-terra` and `edge-terra-smoke` notebook images, and CI validates the same platform Dockerfile through a lightweight Terra-compatible base plus local Terra-style proxy mechanics; a live Terra workspace smoke is still required before claiming supported Terra launch behavior with platform identity binding. The extension mechanism for Terra variants and future platform-derived notebook images is documented in [Platform Image Extension Guide](docs/platform-images.md).
 
 
 ## Repository Structure
@@ -140,6 +140,7 @@ Do not add PHI, credentials, live-platform identifiers, or non-synthetic records
 | [08 · Development](design/08-development.md) | Languages, linting, licensing, CI |
 | [09 · Implementation plan](design/09-implementation-plan.md) | Phased delivery, repo layout, open questions |
 | [Container Images](docs/container-images.md) | Image flavors, tags, provider secrets, model strategy |
+| [Platform Image Extension Guide](docs/platform-images.md) | Mechanism for adding or adapting Terra-like platform notebook images |
 | [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md) | Synthetic CLI, notebook, and web UI demo path for Terra-like workspaces, with a companion [notebook](docs/terra-jupyter-demo.ipynb) |
 
 ## Contributing

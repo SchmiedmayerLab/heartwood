@@ -60,5 +60,26 @@ def test_terra_runbook_tracks_platform_image_contract() -> None:
     assert "configure the Cloud Environment to use the selected image directly" not in runbook
 
 
+def test_platform_image_extension_guide_defines_mechanism() -> None:
+    guide = (_repo_root() / "docs" / "platform-images.md").read_text(encoding="utf-8")
+    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
+    container_docs = (_repo_root() / "docs" / "container-images.md").read_text(encoding="utf-8")
+
+    assert "Platform Image Extension Guide" in guide
+    assert "images/platforms.toml" in guide
+    assert "images/platform/Dockerfile" in guide
+    assert "docker-bake.hcl" in guide
+    assert ".github/workflows/container-smoke.yml" in guide
+    assert ".github/workflows/container-image.yml" in guide
+    assert "Add Or Adapt A Platform Image" in guide
+    assert "Keep `--set <target>.platform=<architecture>`" in guide
+    assert "Docker's local image exporter does not load manifest lists" in guide
+    assert "Required Live Evidence" in guide
+    assert "custom image digest" in guide
+    assert "Synthetic data only" in guide
+    assert "Platform Image Extension Guide](docs/platform-images.md)" in readme
+    assert "Platform Image Extension Guide](platform-images.md)" in container_docs
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]

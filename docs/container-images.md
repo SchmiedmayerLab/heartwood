@@ -49,7 +49,7 @@ The smoke flavor is intentionally not the default image because the default imag
 
 ## Platform Notebook Images
 
-The generic image family is the portable Heartwood runtime baseline. It is suitable for local Docker, Docker Compose, CI, and as the source runtime for platform-specific images, but it is not the Terra custom notebook image users should select in Terra.
+The generic image family is the portable Heartwood runtime baseline. It is suitable for local Docker, Docker Compose, CI, and as the source runtime for platform-specific images, but it is not the Terra custom notebook image users should select in Terra. The repeatable mechanism for adding or adapting a platform-derived notebook image is defined in [Platform Image Extension Guide](platform-images.md).
 
 Terra's current Jupyter custom-environment documentation directs custom notebook images to extend a Terra Jupyter base image or a project-specific image accepted by Terra's notebook service. The implemented Terra target derives from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, installs Heartwood under `/opt/heartwood`, preserves `/opt/heartwood/docs/terra-jupyter-demo.ipynb`, registers a `heartwood` Jupyter kernel under `/opt/conda`, keeps Jupyter on the Terra base image's expected notebook service path, and exposes the Heartwood gateway on loopback for notebook-proxy access.
 

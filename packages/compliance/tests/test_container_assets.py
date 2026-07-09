@@ -610,7 +610,8 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
     assert "Build Terra-compatible CI base" in workflow
     assert "images/platform/terra-ci-base.Dockerfile" in workflow
     assert "heartwood-terra-ci-base:local" in workflow
-    assert "docker buildx bake --file docker-bake.hcl --load terra-smoke-ci" in workflow
+    assert "docker buildx bake --file docker-bake.hcl --load" in workflow
+    assert "--set terra-smoke-ci.platform=linux/amd64" in workflow
     assert "docker run --rm --platform linux/amd64 --network none --entrypoint bash" in workflow
     assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci" in workflow
     assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke\n" not in workflow

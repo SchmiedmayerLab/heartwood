@@ -74,7 +74,10 @@ jobs:
           --file images/platform/terra-ci-base.Dockerfile
           images/platform
       - name: Build Terra smoke image with CI base
-        run: docker buildx bake --file docker-bake.hcl --load terra-smoke-ci
+        run: >-
+          docker buildx bake --file docker-bake.hcl --load
+          --set terra-smoke-ci.platform=linux/amd64
+          terra-smoke-ci
       - name: Run Terra platform image smoke
         run: >-
           docker run --rm --platform linux/amd64 --network none --entrypoint bash
