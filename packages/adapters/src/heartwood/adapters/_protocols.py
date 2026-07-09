@@ -44,6 +44,16 @@ class ModelCallRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelInvocationRequest:
+    """A content-free model invocation request after policy approval."""
+
+    endpoint: str
+    model: str
+    prompt_length: int
+    purpose: str
+
+
+@dataclass(frozen=True, slots=True)
 class SkillReference:
     """Resolved skill reference before verification and activation."""
 
@@ -93,6 +103,9 @@ class ModelProviderAdapter(Protocol):
 
     def evaluate_model_call(self, request: ModelCallRequest) -> ModelCallDecision:
         """Return the policy decision for a proposed model call."""
+
+    def invoke_model_call(self, request: ModelInvocationRequest) -> JsonValue:
+        """Invoke an approved model call and return a JSON provider response."""
 
 
 class DataSourceAdapter(Protocol):

@@ -8,7 +8,21 @@
 # package under packages/*. The root itself is not a distributable package.
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = [
+    "packages/adapters",
+    "packages/audit",
+    "packages/cli",
+    "packages/compliance",
+    "packages/core-adapter",
+    "packages/detector",
+    "packages/fixtures",
+    "packages/gateway",
+    "packages/model-policy",
+    "packages/notebook",
+    "packages/schemas",
+    "packages/session",
+    "packages/skills",
+]
 
 [dependency-groups]
 dev = [

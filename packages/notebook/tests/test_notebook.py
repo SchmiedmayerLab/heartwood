@@ -15,7 +15,7 @@ import pytest
 
 from heartwood.core_adapter import SessionResult
 from heartwood.gateway import SessionGateway
-from heartwood.notebook import NotebookSession, build_widget_spec, render_widgets
+from heartwood.notebook import NotebookSession, build_widget_spec, jupyter_proxy_url, render_widgets
 from heartwood.notebook._widgets import WidgetSpec
 from heartwood.session import SessionCommand, SessionEvent
 
@@ -58,6 +58,46 @@ def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     assert any(control.target_type == "model-call" for control in run.approval_controls)
     assert exported.export_actions[-1].path.endswith("audit-export.jsonl")
     assert exported.event_count == len(session.gateway.replay_events(session_id="notebook-session"))
+
+
+def test_notebook_session_projects_provider_route_metadata(tmp_path: Path) -> None:
+    provider_config = tmp_path / "provider-routes.toml"
+    provider_config.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.provider-config.v1"',
+                "",
+                "[[routes]]",
+                'route_id = "local-loopback"',
+                'provider = "openai-compatible"',
+                'endpoint = "http://127.0.0.1:8765/v1/chat/completions"',
+                'model = "heartwood-local-runtime"',
+                'capability_tier = "supervised"',
+                'auth = "none"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    session = NotebookSession(workspace=tmp_path / "sessions", session_id="notebook-provider")
+
+    view_model = session.run(
+        provider_config_path=provider_config,
+        provider_route_id="local-loopback",
+    )
+
+    assert view_model.policy_status[-1].route_id == "local-loopback"
+    assert view_model.policy_status[-1].provider == "openai-compatible"
+
+
+def test_jupyter_proxy_url_uses_service_prefix() -> None:
+    assert (
+        jupyter_proxy_url(
+            port=8767,
+            env={"JUPYTERHUB_SERVICE_PREFIX": "/user/synthetic/"},
+        )
+        == "/user/synthetic/proxy/8767/"
+    )
 
 
 def test_notebook_session_tracks_command_sequence_without_duplicate_replay(

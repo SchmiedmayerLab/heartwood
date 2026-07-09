@@ -26,7 +26,10 @@ from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._provider_config import (
     ProviderConfig,
     ProviderConfigError,
+    ProviderInvocationError,
     ProviderRoute,
+    ProviderRouteModelProviderAdapter,
+    invoke_provider_route,
     load_provider_config,
     provider_config_from_mapping,
 )
@@ -49,12 +52,15 @@ __all__ = [
     "OpenHandsHttpAgentServerClient",
     "ProviderConfig",
     "ProviderConfigError",
+    "ProviderInvocationError",
     "ProviderRoute",
+    "ProviderRouteModelProviderAdapter",
     "ReadinessProbe",
     "RestGateway",
     "RestRequest",
     "RestResponse",
     "SessionGateway",
+    "invoke_provider_route",
     "load_provider_config",
     "provider_config_from_mapping",
 ]

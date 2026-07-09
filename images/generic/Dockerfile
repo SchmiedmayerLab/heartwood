@@ -5,6 +5,19 @@
 #
 # SPDX-License-Identifier: MIT
 
+FROM node:24-trixie-slim AS webui-build
+
+WORKDIR /src/packages/webui
+
+COPY packages/webui/package.json packages/webui/package-lock.json ./
+
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --fund=false
+
+COPY packages/webui ./
+
+RUN npm run build
+
 FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
 
 ARG TARGETARCH
@@ -31,6 +44,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HEARTWOOD_LOCAL_MODEL_PATH=/opt/heartwood/local-runtime/models/model.gguf \
     HEARTWOOD_AGENT_BACKEND=openhands-bash \
     HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml \
+    HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     LD_LIBRARY_PATH=/opt/llama.cpp \
     PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"
 
@@ -70,6 +84,7 @@ COPY --chown=heartwood:heartwood fixtures ./fixtures
 COPY --chown=heartwood:heartwood skills ./skills
 COPY --chown=heartwood:heartwood evals ./evals
 COPY --chown=heartwood:heartwood images ./images
+COPY --from=webui-build --chown=heartwood:heartwood /src/packages/webui/dist ./packages/webui/dist
 
 USER heartwood
 

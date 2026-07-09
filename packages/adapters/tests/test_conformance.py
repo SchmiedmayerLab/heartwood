@@ -17,6 +17,7 @@ from heartwood.adapters import (
     AdapterDetection,
     DatasetFingerprint,
     ModelCallRequest,
+    ModelInvocationRequest,
     RegistryVerification,
     SkillReference,
     assert_data_source_adapter_conforms,
@@ -77,6 +78,10 @@ class FakeModelProviderAdapter:
             decision="deny",
             reason="synthetic provider denies egress by default",
         )
+
+    def invoke_model_call(self, request: ModelInvocationRequest) -> JsonValue:
+        """Return a deterministic synthetic response."""
+        return {"model": request.model, "prompt_length": request.prompt_length}
 
 
 class BadInvalidEndpointModelProviderAdapter(FakeModelProviderAdapter):

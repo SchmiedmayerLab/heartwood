@@ -35,7 +35,7 @@ Registry maintenance must protect public moving tags, commit-SHA tags retained b
 
 | Flavor | Bake Target | Moving Tag | Bundled Model Artifact | Intended Use |
 |---|---|---|---|---|
-| Runtime | `runtime` | `edge` | No | Default platform-ready image for CLI, gateway, notebook bridge, OpenHands launcher, local inference runtime dependencies, provider route config support, and externally mounted model artifacts. |
+| Runtime | `runtime` | `edge` | No | Default platform-ready image for CLI, gateway, notebook bridge, built researcher web UI, OpenHands launcher, local inference runtime dependencies, provider route config/invocation support, and externally mounted model artifacts. |
 | Smoke | `smoke` | `edge-smoke` | Yes, tiny checked GGUF | Pull-request CI, main-branch CI, and Docker-only tutorials proving offline load/query, gateway policy, OpenHands bash execution, audit export, and reviewer packet generation. |
 | Providers | `providers` | `edge-providers` | No | Platform embedding where model access is supplied by in-boundary provider endpoints and credentials are mounted at runtime. |
 
@@ -58,7 +58,19 @@ auth = "secret-file"
 secret_file = "/run/secrets/openai_api_key"
 ```
 
-Docker Compose mounts secrets under `/run/secrets/<name>`. Terra, Seven Bridges, DNAnexus, and other controlled platforms should map their own secret or identity mechanisms into a runtime file path or managed identity route, then the active policy profile must explicitly allowlist the endpoint before any invocation.
+Docker Compose mounts secrets under `/run/secrets/<name>`. Terra, Seven Bridges, DNAnexus, and other controlled platforms should map their own secret or identity mechanisms into a runtime file path or managed identity route, then the active policy profile must explicitly allowlist the endpoint before any invocation. The implemented provider invocation path supports OpenAI-compatible chat-completions routes, including local loopback, OpenAI, Azure OpenAI, llama.cpp, and vLLM routes; managed identity routes are validated as metadata and require a platform adapter before invocation.
+
+## Researcher Web UI
+
+The generic image builds `packages/webui` during the Docker build and copies the static `dist` assets into `/opt/heartwood/packages/webui/dist`. The final image does not carry `node_modules`; runtime serving uses the Python gateway only.
+
+Start the gateway and UI inside the image with:
+
+```bash
+bash images/generic/scripts/start_web_ui.sh
+```
+
+The launcher reads `HEARTWOOD_WORKSPACE`, `HEARTWOOD_WEB_HOST`, `HEARTWOOD_WEB_PORT`, `HEARTWOOD_WEB_ROOT`, and `HEARTWOOD_WEB_BASE_PATH`. Use `HEARTWOOD_WEB_BASE_PATH=/proxy/<port>/` for `jupyter-server-proxy` style routes. The web UI infers that proxy base for gateway calls, and the gateway accepts REST, WebSocket, and Server-Sent Events routes under the same prefix. The web UI is a presentation adapter over the same session command/event contract as the CLI and notebook bridge, uses WebSocket as the primary stream, falls back to Server-Sent Events, and replays persisted events after reconnect.
 
 ## Local Model Strategy
 

@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Getting Started With The Offline Stack
 
-This guide runs the Phase 0 generic Heartwood smoke stack without public runtime network access. It demonstrates the intended shipping shape: one multi-architecture image family with a default runtime image, a smoke image with a tiny verified model artifact, a provider-route image for platform embedding, the CLI, gateway-backed session flow, notebook package, synthetic fixtures, verified skills, policy-gated local model path, a pinned OpenHands agent-server package, audit export, and a synthetic evidence bundle.
+This guide runs the Phase 0 generic Heartwood smoke stack without public runtime network access. It demonstrates the intended shipping shape: one multi-architecture image family with a default runtime image, a smoke image with a tiny verified model artifact, a provider-route image for platform embedding, the CLI, gateway-backed session flow, notebook package, researcher web UI, synthetic fixtures, verified skills, policy-gated local model path, a pinned OpenHands agent-server package, audit export, and a synthetic evidence bundle.
 
 The default local-runtime profile in this guide is `llama-cpp-cpu`. The smoke image starts the pinned llama.cpp `llama-server` binary on `127.0.0.1`, loads a tiny verified GGUF artifact bundled into that smoke flavor, runs one approved local model call through the gateway policy path, starts the gateway-managed OpenHands agent-server, and writes a bounded synthetic workspace artifact through authenticated OpenHands `/api/bash/execute_bash_command` execution. The model artifact exists to prove offline load/query behavior and has no production or biomedical quality claim. The deterministic `stub-loopback` profile remains available for fixture checks by setting `HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback`.
 
@@ -32,7 +32,7 @@ The bundled artifact is intentionally tiny so pull-request CI can exercise the s
 
 ## Architecture And Acceleration Scope
 
-The image family is expected to publish and smoke-test `linux/amd64` and `linux/arm64` variants. The current technology stack is Python-first and uses portable container tooling, so both architectures are reasonable baseline targets. GitHub-hosted CI uses standard `ubuntu-latest` runners with QEMU for the `linux/arm64` smoke path until native hosted `arm64` runners are stable enough for this repository's required checks.
+The image family is expected to publish and smoke-test `linux/amd64` and `linux/arm64` variants. The current technology stack is Python-first with a built static web UI and portable container tooling, so both architectures are reasonable baseline targets. GitHub-hosted CI uses native `ubuntu-24.04` and `ubuntu-24.04-arm` runners for the smoke path so the ARM image is not validated through QEMU runtime emulation.
 
 Docker can expose GPUs to containers, but GPU support is a host capability, not something a portable CPU image can guarantee. The baseline real runtime therefore remains `llama-cpp-cpu`; NVIDIA acceleration is tracked separately as `llama-cpp-cuda`, requiring an explicit CUDA-enabled runtime, Docker GPU device exposure, and self-hosted GPU CI or scheduled platform checks. The CPU profile must keep working without a GPU.
 
@@ -57,6 +57,15 @@ docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash
 
 The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves the synthetic model call, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, and writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`.
 
+To open the packaged researcher UI from the runtime image, publish the gateway port and start the web launcher:
+
+```bash
+docker pull ghcr.io/schmiedmayerlab/heartwood:edge
+docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
+```
+
+Open `http://127.0.0.1:8767/`. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects. In Jupyter environments, set `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` before starting the launcher and open the corresponding `jupyter-server-proxy` route; the UI infers the proxy API base and the gateway accepts prefixed REST, WebSocket, and Server-Sent Events routes.
+
 ## Run From A Checkout
 
 From a repository checkout, run the same smoke test through Docker Compose:
@@ -75,11 +84,12 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - The model response content is not persisted into session events or audit exports; only response metadata is recorded.
 - The OpenHands-backed backend emits tool proposal, confirmation, and execution events after the model call, calls authenticated OpenHands `/api` routes, and writes a bounded synthetic artifact through the agent-server bash service.
 - The audit export and reviewer packet can be produced from the same offline session.
+- The packaged web UI can be served by the gateway from self-contained assets without a CDN, and the same session event stream can be surfaced through WebSocket or Server-Sent Events under local or Jupyter-style proxy routes.
 
 ## What It Does Not Prove Yet
 
 - It does not validate controlled data.
 - It does not yet validate optional GPU acceleration; that belongs to a separate CUDA profile and a GPU-capable runner.
 - It does not yet prove autonomous coding quality from a larger local tutorial model; the bundled tiny model is only a load/query artifact, while the tool-execution smoke is intentionally bounded and deterministic after approval.
-- It does not run the researcher web UI or platform proxy routes.
+- It does not validate Terra, Seven Bridges, or DNAnexus controlled-platform identity binding; local and Jupyter proxy routes are synthetic smoke paths.
 - It does not publish the static documentation site; that belongs with the next documentation-site pass.

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,6 +72,8 @@ class PolicyStatus:
     decision: str
     endpoint: str
     reason: str
+    route_id: str | None = None
+    provider: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,16 +129,26 @@ class NotebookSession:
         *,
         endpoint: str = "https://model.local.invalid/v1/chat/completions",
         invoke_model: bool = False,
+        provider_config_path: Path | None = None,
+        provider_route_id: str | None = None,
+        invoke_provider: bool = False,
     ) -> NotebookViewModel:
         """Run the synthetic workflow through the policy-gated session path."""
-        return self._handle(
-            CommandKind.RUN,
-            {
-                "prompt": prompt,
-                "endpoint": endpoint,
-                "invoke_model": invoke_model,
-            },
-        )
+        payload: dict[str, JsonValue] = {
+            "prompt": prompt,
+            "endpoint": endpoint,
+            "invoke_model": invoke_model,
+            "invoke_provider": invoke_provider,
+        }
+        if provider_config_path is not None:
+            payload["provider_config_path"] = str(provider_config_path)
+        if provider_route_id is not None:
+            payload["provider_route_id"] = provider_route_id
+        return self._handle(CommandKind.RUN, payload)
+
+    def web_proxy_url(self, *, port: int = 8767) -> str:
+        """Return the proxied web UI URL for Jupyter-style environments."""
+        return jupyter_proxy_url(port=port)
 
     def approve(
         self,
@@ -280,11 +293,14 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
             )
         elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
             decision = _mapping_payload(event.payload["decision"], "decision")
+            route = _optional_mapping_payload(event.payload.get("provider_route"))
             policies.append(
                 PolicyStatus(
                     decision=str(decision["decision"]),
                     endpoint=str(decision["endpoint"]),
                     reason=str(decision["reason"]),
+                    route_id=None if route is None else str(route["route_id"]),
+                    provider=None if route is None else str(route["provider"]),
                 )
             )
             approvals.append(
@@ -317,6 +333,14 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
         export_actions=tuple(exports),
         paused=paused,
     )
+
+
+def jupyter_proxy_url(*, port: int, env: dict[str, str] | None = None) -> str:
+    """Build a `jupyter-server-proxy` URL for the current notebook server."""
+    active_env = os.environ if env is None else env
+    prefix = active_env.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    normalized = prefix if prefix.startswith("/") else f"/{prefix}"
+    return f"{normalized.rstrip('/')}/proxy/{port}/"
 
 
 def _activity_item(event: SessionEvent) -> ActivityItem:
@@ -366,6 +390,12 @@ def _mapping_payload(value: JsonValue, name: str) -> dict[str, JsonValue]:
         msg = f"expected {name} payload to be an object"
         raise TypeError(msg)
     return value
+
+
+def _optional_mapping_payload(value: JsonValue | None) -> dict[str, JsonValue] | None:
+    if value is None:
+        return None
+    return _mapping_payload(value, "optional mapping")
 
 
 def _float_payload(value: JsonValue, name: str) -> float:

@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0G complete**. Passes 0A through 0G are implemented and must stay green while the documentation-site, project-tracking, web-UI, platform-proxy, provider-invocation, and larger-model work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners.
+The repository is at **0G complete with the web UI and provider-invocation passes implemented**. Passes 0A through 0G are implemented and must stay green while the documentation-site, project-tracking, platform-proxy, larger-model, and controlled-platform work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners. The web UI and provider-invocation slices add the Spezi-based researcher interface, Server-Sent Events fallback, static asset serving, Jupyter proxy helpers, generic image web packaging, and policy-gated OpenAI-compatible provider invocation without changing the shared session command/event contract.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -102,15 +102,12 @@ The repository is at **0G complete**. Passes 0A through 0G are implemented and m
 
 ### Current Exclusions
 
-- No TypeScript web UI exists yet.
-- No Server-Sent Events fallback exists yet.
-- No `jupyter-server-proxy` route validation exists yet.
 - No static documentation site is published yet; tutorial and design documentation are checked in as Markdown.
-- No real-platform adapter or controlled-data validation exists yet.
-- No production LiteLLM provider integration is wired; provider routes are validated and selectable, while live provider invocation still must route through the policy-gated invocation point.
+- No real-platform adapter, proxy identity binding, or controlled-data validation exists yet.
+- Terra, Seven Bridges, and DNAnexus proxy paths are documented as targets and covered by local `jupyter-server-proxy` style routing only; platform-native validation still requires platform workspaces.
 - Autonomous OpenHands conversation turns driven by a larger local coding model are not yet proven; the current OpenHands path executes a bounded bash-backed workspace action after the Heartwood approval gate.
 - The bundled local model exists only in the smoke flavor, is a tiny smoke-test artifact, and is not a production coding or biomedical model.
-- No optional larger bundled coding-model image target exists yet.
+- No optional larger bundled coding-model image target exists yet because no larger GGUF artifact has completed provenance, license, checksum, redistribution, and resource-envelope review.
 - No GPU runtime profile is implemented yet; CUDA support is documented as deferred.
 - No automated post-publish registry manifest verification or GHCR tag cleanup exists yet; public image tags are created as multi-architecture manifests, but the registry state and stale helper tags are not independently checked after publication.
 
@@ -165,6 +162,47 @@ The repository is at **0G complete**. Passes 0A through 0G are implemented and m
 - GitHub Actions covers the image smoke, local inference runtime profile, OpenHands behind-gateway path, and GHCR publishing path.
 - The generic image family publishes multi-architecture manifests for `edge`, `edge-smoke`, and `edge-providers` on `linux/amd64` and `linux/arm64`; any architecture excluded from a runtime profile is explicitly documented in the profile.
 
+### Implemented In 0I — Researcher Web UI And Platform Surfacing
+
+- `packages/webui` contains a standalone TypeScript single-page app built on `@stanfordspezi/spezi-web-design-system`, `@stanfordspezi/spezi-web-configurations`, React, Vite, Vitest, and Playwright.
+- The web UI renders gateway events as chat messages, dataset proposals, approval controls, policy status, provider route metadata, activity trace, and scrubbed audit export links.
+- The web UI uses WebSocket streaming as the primary transport, falls back to Server-Sent Events, and rehydrates by replaying persisted session events after reconnect.
+- The web client uses relative assets, infers `jupyter-server-proxy` API bases such as `/proxy/8767/`, and also supports an explicit gateway base through build-time configuration.
+- `packages/gateway` serves self-contained static web assets, accepts gateway REST/WebSocket/Server-Sent Events routes under the configured proxy base path, rejects `/sessions/*` static fallbacks, and exposes `GET /sessions/{session}/events/stream` as the Server-Sent Events fallback.
+- The notebook bridge exposes `web_proxy_url()` and `jupyter_proxy_url()` helpers for Jupyter-style proxy routes and projects provider route metadata into notebook policy status.
+- The CLI exposes `heartwood serve` to run the gateway and packaged web UI from one command.
+- `images/generic/scripts/start_web_ui.sh` starts the gateway and web UI inside the generic image with runtime-configurable workspace, host, port, web root, and base path.
+- The generic Dockerfile builds the web UI in a Node 24 stage and copies only static `dist` assets into the final Python runtime image; `node_modules` is not present in the final runtime layer.
+- The web UI dependency tree is pinned by `package-lock.json`, checked by ESLint, Prettier, strict TypeScript, Vitest coverage, Playwright browser smoke tests, npm audit, and an npm license compatibility check.
+- The `Web UI` GitHub Actions workflow runs the TypeScript, unit, coverage, build, license, audit, browser smoke, and gateway-served proxy smoke checks on pull requests and `main`.
+- Documentation records local Docker serving and Jupyter proxy serving through the packaged web UI.
+
+**Completed verification**
+
+- Web UI unit tests cover event projection, run payload assembly, replay rehydration, command error rendering, WebSocket streaming, and Server-Sent Events fallback cleanup.
+- Playwright loads the built app through Vite preview and verifies that mocked gateway events render through the researcher UI.
+- Gateway tests cover REST, WebSocket, Server-Sent Events replay, and static asset serving under a proxy base path.
+- The gateway-served proxy smoke test starts `heartwood serve`, loads the built web UI under `/proxy/<port>/`, and exercises prefixed command and replay routes.
+- Static image tests verify that the Dockerfile builds and copies web assets and that the image includes the web UI launcher.
+
+### Implemented In 0J — Provider Invocation
+
+- Provider route configuration and invocation support live in `packages/adapters`, keeping provider behavior behind the model adapter boundary instead of the gateway owning provider-specific logic.
+- Provider route validation rejects inline secrets, requires absolute `secret_file` paths for secret-bearing routes, validates provider ids, auth modes, capability tiers, endpoint normalization, duplicate route ids, and default route references.
+- Provider invocation supports OpenAI-compatible chat-completions routes, including local loopback, OpenAI, Azure OpenAI, llama.cpp, and vLLM routes, using content-free synthetic messages and bounded timeouts.
+- Secret-bearing routes read runtime secret files only after policy approval and selected-route validation; secret paths and secret values are not recorded in session events, audit exports, reviewer packets, or Docker image layers.
+- Managed-identity routes are valid configuration metadata but reject invocation until a real platform adapter supplies the identity exchange.
+- `heartwood run --provider-config --provider-route --invoke-provider` invokes a selected provider route only after the model-call decision is allowed and a `model-call` approval for that decision exists.
+- Local model invocation and provider route invocation are mutually exclusive for one run command.
+- Provider route decisions record only safe route metadata, response metadata, and attestations; prompt and response content remain scrubbed from persisted artifacts.
+- The notebook API mirrors provider route selection and invocation flags through the shared session command payload.
+
+**Completed verification**
+
+- Provider route tests cover successful OpenAI-compatible invocation against a local synthetic server, secret-file authorization, managed-identity rejection, malformed routes, duplicate route ids, inline secret rejection, and adapter invocation conformance.
+- Session service tests cover approval-before-invocation, denied provider routes, missing secret files not being read on policy denial, provider response metadata, and provider/local-model mutual exclusion.
+- CLI tests cover provider route selection, `--invoke-provider` validation, and `heartwood serve`.
+
 ## Remaining Phase 0 Passes
 
 ### 0H — Static Documentation Site And Project Tracking
@@ -210,81 +248,37 @@ The repository is at **0G complete**. Passes 0A through 0G are implemented and m
 - GHCR tag cleanup has a documented policy, dry-run output, required permissions, retention window, protected tag patterns, and rollback procedure.
 - A GitHub Project exists for implementation tracking, and remaining operational backlog items have issues with phase, risk, platform, owner, status, required evidence, and dependency metadata.
 
-### 0I — Researcher Web UI And Platform Surfacing
+### 0K — Larger Local Model Evaluation And Platform Proxy Validation
 
 **Fit and sequencing**
 
-- Start this pass after 0H so the web UI is only an additional presentation adapter over a proven local-runtime, agent-server, documentation, and project-tracking baseline.
-- Do not introduce a second session contract, separate agent-server path, or browser-only policy implementation.
-- Keep this pass focused on the generic web UI, proxy surfacing, and frontend supply-chain controls; do not wire live provider invocation or larger local coding models here.
-
-**Required work**
-
-- Add `packages/webui`.
-- Build the web UI as a standalone TypeScript single-page app on `spezi-web-design-system` and `spezi-web-configurations`, using Vite and Vitest, bootstrapped from `spezi-web-template-application`.
-- Render chat, dataset cards, proposed skills, approval prompts, policy status, activity trace, count-floored export, and attestation from gateway events.
-- Use WebSocket as the primary transport.
-- Add Server-Sent Events fallback.
-- Rehydrate after reconnect by replaying the session event log.
-- Build for sub-path serving with relative asset, API, and WebSocket bases.
-- Ship self-contained assets with no external CDN.
-- Surface the generic image UI through `jupyter-server-proxy`.
-- Validate Terra and Seven Bridges proxy paths through their Jupyter/Data Studio routes.
-- Validate DNAnexus first through `jupyter-server-proxy`; keep `httpsApp` as the platform-native upgrade path.
-- Inherit identity from the platform proxy; do not add a Heartwood-owned login.
-- Keep the agent-server localhost-only behind the gateway and session key.
-- Add npm-side license compatibility checks.
-- Add a container entrypoint or documented command that starts the gateway plus web UI inside the generic image for local smoke tests.
-- Add web UI documentation to the static site, including local Docker usage, Jupyter proxy usage, current limitations, and expected approval flow.
-
-**Required tests**
-
-- ESLint, Prettier, strict `tsc`, Vitest, and coverage.
-- Web UI view-model snapshot tests generated from synthetic session events.
-- Component tests for event rendering, approval decisions, policy denial, reconnect replay, count-floor export, and attestation display.
-- Proxy smoke tests for `jupyter-server-proxy` sub-path serving.
-- Runtime asset tests proving no external CDN or public network dependency.
-- Playwright or equivalent browser smoke tests for the local synthetic workflow, reconnect replay, approval controls, and transcript/audit visibility.
-- CI verifies the web UI build artifact is packaged in the generic image without requiring runtime dependency installation.
-
-**Exit gates**
-
-- The full local-runtime synthetic workflow from 0G runs from the web UI on the generic image.
-- Web UI, notebook bridge, and CLI observe the same session event semantics.
-- Web assets require no public network access at runtime.
-- Proxy smoke tests pass.
-
-### 0J — Provider Invocation And Larger Local Model Evaluation
-
-**Fit and sequencing**
-
-- Start this pass after the generic UI surface exists, unless a platform pilot requires provider invocation earlier.
-- Keep live provider invocation, larger local models, and optional GPU acceleration out of required pull-request CI until artifact size, runtime, licensing, and runner capacity are reviewed.
+- Start this pass after the generic UI and provider invocation surfaces are merged.
+- Keep larger local models and optional GPU acceleration out of required pull-request CI until artifact size, runtime, licensing, and runner capacity are reviewed.
 - Preserve the 0G safety baseline: explicit approval before model invocation, policy-gated endpoints, loopback-only local runtime defaults, scrubbed persisted artifacts, and gateway-owned agent-server access.
 
 **Required work**
 
-- Wire production provider invocation through the gateway policy layer and provider route config, likely using a provider compatibility layer such as LiteLLM where it fits.
-- Keep provider secrets outside images, Docker build arguments, Docker environment defaults, checked-in examples, logs, session events, audit exports, reviewer packets, and docs output.
 - Route any OpenHands model access through the gateway policy layer; the agent-server must not hold a separate public model egress path.
-- Add provider invocation adapters for at least the local OpenAI-compatible endpoint and one external in-boundary provider route, with all live calls disabled in default synthetic CI.
 - Prove an autonomous OpenHands conversation turn against a larger local tutorial coding model without weakening approval, audit, scrubbed-event, or capability-tier controls.
 - Select the first optional bundled coding-model artifact, with `Qwen/Qwen2.5-Coder-1.5B-Instruct` as the current candidate, and record source revision, license posture, redistribution allowance, quantization, byte size, SHA-256, provenance, cache location, build-time versus runtime resolution, CPU/memory envelope, and architecture support before adding an image target.
 - Add the deferred `model-qwen25-coder-1_5b-q4_k_m` Bake target only after the exact artifact is selected and reviewed; keep it out of required pull-request CI if its size or runtime cost is too high.
+- Validate Terra and Seven Bridges proxy paths through their Jupyter or Data Studio routes.
+- Validate DNAnexus first through `jupyter-server-proxy`; keep `httpsApp` as the platform-native upgrade path.
+- Inherit identity from the platform proxy; do not add a Heartwood-owned login.
 - Keep optional GPU acceleration behind a separate runtime profile, Docker device configuration, and self-hosted GPU or scheduled platform checks; do not make it a requirement for the generic CPU image.
 
 **Required tests**
 
-- Provider invocation tests cover approval-before-invocation, policy denial, endpoint allowlisting, secret loading from files, managed-identity metadata, malformed provider routes, prompt/response scrubbing, and denied public egress.
 - OpenHands model-routing tests prove the agent-server cannot reach model endpoints except through the gateway policy layer.
+- Platform proxy smoke tests cover Terra, Seven Bridges, and DNAnexus route prefixes when suitable test workspaces are available.
 - Larger-model tests run as optional scheduled or release checks until runtime and cost are acceptable for pull-request CI.
 - Image tests verify optional model targets are separate from `edge`, `edge-smoke`, and `edge-providers`.
 - GPU tests run only on explicit GPU-capable runners and are not baseline merge gates.
 
 **Exit gates**
 
-- A policy-gated provider route can execute a synthetic model call without leaking secrets or prompt/response content into persisted artifacts.
 - OpenHands autonomous model access is mediated by the gateway and respects capability-tier limits.
+- The web UI is validated behind at least one real controlled-platform proxy route.
 - The optional larger coding-model target has reviewed provenance, licensing, checksums, resource envelopes, and CI scope.
 - Baseline CPU images and pull-request CI remain portable on native `linux/amd64` and `linux/arm64` runners.
 
@@ -390,15 +384,16 @@ The repository is at **0G complete**. Passes 0A through 0G are implemented and m
 3. Keep the implemented `llama-cpp-cpu` profile covered by the pinned llama.cpp server binary, model artifact provenance, hash verification, license posture, resource limits, `linux/amd64` and `linux/arm64` support, and offline load/query smoke test.
 4. Keep `edge`, `edge-smoke`, `edge-providers`, commit-SHA flavor tags, and any required temporary architecture build outputs reproducible through `docker-bake.hcl` and the native-runner publish workflow.
 5. Verify public image tags as unified multi-platform indexes, move away from permanent architecture-helper tags where feasible, and add a GHCR cleanup policy with protected tag patterns and dry-run checks.
-6. Land 0I after 0H by building the researcher web UI on the Spezi stack and packaging it into the generic image as a presentation adapter over the existing gateway.
-7. Add Server-Sent Events fallback, browser smoke tests, proxy smoke tests for `jupyter-server-proxy`, and runtime asset tests proving no external CDN or public network dependency.
-8. Land 0J by wiring live provider invocation through validated provider routes and the gateway policy layer without storing provider secrets in image layers or persisted artifacts.
+6. Keep the implemented web UI as a presentation adapter over the gateway; do not add browser-only policy or a second session contract.
+7. Keep Server-Sent Events fallback, browser smoke tests, `jupyter-server-proxy` route tests, and runtime asset tests green as the UI expands.
+8. Keep provider invocation behind validated provider routes and the gateway policy layer without storing provider secrets in image layers or persisted artifacts.
 9. Extend the OpenHands-backed path from bounded bash execution to an autonomous conversation turn with a useful local tutorial model after replay and policy checks pass.
 10. Select, pin, and review the first larger coding-model artifact before implementing the optional bundled coding-model image target.
-11. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
-12. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
-13. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry smoke image without requiring a repository checkout.
-14. Select and implement the first real platform pilot only after synthetic replay, documentation, web UI, provider policy, and reviewer-packet controls are green.
+11. Validate Terra, Seven Bridges, and DNAnexus proxy paths in real platform workspaces before claiming platform proxy support.
+12. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
+13. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
+14. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry smoke image without requiring a repository checkout.
+15. Select and implement the first real platform pilot only after synthetic replay, documentation, web UI, provider policy, and reviewer-packet controls are green.
 
 ## Repository Strategy
 

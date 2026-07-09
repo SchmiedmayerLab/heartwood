@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Generic Heartwood Image
 
-The generic image family packages the Python workspace, CLI, gateway, notebook bridge, synthetic fixtures, verified skills, Jupyter/widget runtime dependencies, the `llama-cpp-cpu` runtime profile, provider route validation, the pinned OpenHands agent-server package, and the deterministic loopback stub used for fixture checks. It is published as multi-architecture `runtime`, `smoke`, and `providers` flavors for `linux/amd64` and `linux/arm64` wherever the dependency stack supports both platforms.
+The generic image family packages the Python workspace, CLI, gateway, notebook bridge, built researcher web UI, synthetic fixtures, verified skills, Jupyter/widget runtime dependencies, the `llama-cpp-cpu` runtime profile, provider route validation and invocation support, the pinned OpenHands agent-server package, and the deterministic loopback stub used for fixture checks. It is published as multi-architecture `runtime`, `smoke`, and `providers` flavors for `linux/amd64` and `linux/arm64` wherever the dependency stack supports both platforms.
 
 The `runtime` flavor publishes as `edge` and does not bundle model weights. The `smoke` flavor publishes as `edge-smoke` and bundles only the tiny verified GGUF smoke artifact. The `providers` flavor publishes as `edge-providers` and documents file-based runtime provider secret references without baking credentials into the image.
 
@@ -23,3 +23,5 @@ CI runs `docker buildx build --check` against the Dockerfile before the Compose 
 The local-runtime manifest is checked in at `images/generic/local-runtime/profiles.toml`. The `llama-cpp-cpu` profile is implemented for the smoke path with the pinned ggml-org/llama.cpp `llama-server` CPU binary and `ggml-org/models-moved` `tinyllamas/stories260K.gguf`, pinned by SHA-256 and byte size in `images/generic/local-runtime/models/stories260k.toml`. This model is a tiny load/query artifact with no production or biomedical quality claim and is bundled only in the `smoke` flavor. The `stub-loopback` profile remains available by setting `HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback`.
 
 Docker can run GPU-accelerated workloads when the host exposes a supported GPU runtime, but the portable generic image stays CPU-first. NVIDIA acceleration is tracked as the deferred `llama-cpp-cuda` profile so GPU-specific base images, wheels, drivers, device reservations, and self-hosted runner tests do not become hidden requirements for the baseline image.
+
+`images/generic/scripts/start_web_ui.sh` starts the gateway and serves the packaged web UI from `/opt/heartwood/packages/webui/dist`. Set `HEARTWOOD_WEB_BASE_PATH=/proxy/<port>/` when serving behind `jupyter-server-proxy`; otherwise the default root path is suitable for local Docker runs with `-p 8767:8767`.

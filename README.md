@@ -19,7 +19,7 @@ SPDX-License-Identifier: MIT
 
 A Docker-packaged coding harness for sensitive biomedical research data.
 
-Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and a CLI-first workflow for reproducible analyses, built on one session command/event contract that drives current CLI and notebook surfaces and planned researcher-web-UI surfaces.
+Heartwood is designed to run inside trusted research platforms, close to controlled data. It provides platform detection, policy checks, skill packaging, audit records, and CLI, notebook, and web UI workflows for reproducible analyses, built on one session command/event contract.
 
 Participant-level data stays inside the platform boundary. Development and CI use synthetic fixtures only.
 
@@ -28,7 +28,7 @@ Participant-level data stays inside the platform boundary. Development and CI us
 
 Heartwood builds the biomedical, platform, policy, skills, and audit layer around a reusable execution core. The architecture centers on a session gateway that owns the local agent-server boundary and exposes one shared session command/event contract to shipped surfaces such as the CLI and notebook bridge, and to planned surfaces such as the researcher web UI (see [design/03-architecture.md](design/03-architecture.md)). The project uses a Python workspace, typed contracts, platform adapters, verified local skills, and deterministic offline harnesses for local development and CI.
 
-The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, the expanded `heartwood` command-line interface, a notebook bridge, synthetic evidence-bundle generation, generic image smoke-test configuration, the implemented `llama-cpp-cpu` smoke profile, provider route configuration, image flavor metadata, and pinned OpenHands agent-server packaging. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
+The current repository contains the core foundation: repository health files, CI, the `uv` workspace, deterministic platform detection, adapter protocols and generic/local adapters, versioned schemas, synthetic fixture checks, deny-by-default model policy, hash-chained audit logging, resumable session orchestration, local skill verification, a bundle catalog for packaged skills, prototype verified skills, replay fixtures, the session gateway package, the expanded `heartwood` command-line interface, a notebook bridge, a Spezi-based researcher web UI, synthetic evidence-bundle generation, generic image smoke-test configuration, the implemented `llama-cpp-cpu` smoke profile, provider route invocation, image flavor metadata, and pinned OpenHands agent-server packaging. The full implementation plan is tracked in [design/09-implementation-plan.md](design/09-implementation-plan.md).
 
 
 ## Usage
@@ -43,9 +43,10 @@ uv run heartwood chat --prompt "summarize the synthetic cohort"
 uv run heartwood run --endpoint https://model.local.invalid/v1/chat/completions
 uv run heartwood audit export
 uv run heartwood reviewer packet
+uv run heartwood serve --web-root packages/webui/dist
 ```
 
-The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. The `chat`, `run`, `replay`, `audit export`, and reviewer-packet commands use the same session command/event contract as the notebook bridge.
+The `detect` command inspects environment markers, fingerprints the local synthetic fixture by filenames and headers only, and prints a proposal. The `chat`, `run`, `replay`, `audit export`, reviewer-packet, notebook, and web UI paths use the same session command/event contract.
 
 Run the generic offline stack from Docker only after the main-branch smoke image is published. The image family is published for `linux/amd64` and `linux/arm64` where the dependency stack supports both platforms:
 
@@ -54,12 +55,18 @@ docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
 docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
-The `edge` runtime image carries the CLI, gateway, notebook bridge, local inference runtime dependencies, provider route validation, pinned OpenHands agent-server package, and policy/audit stack without bundled model weights. The `edge-smoke` image adds the tiny verified GGUF artifact for offline smoke tests. The default Docker smoke path runs the local model endpoint at `127.0.0.1`, starts the OpenHands agent-server as a gateway-owned localhost child during the agentic run, calls authenticated OpenHands `/api` routes through the gateway backend, exports a scrubbed audit log, and generates the synthetic reviewer packet while runtime network access is disabled. The `edge-providers` image carries provider route configuration support with file-based runtime secret references and no provider secrets. See [Container Images](docs/container-images.md) for the tag scheme and flavor policy.
+The `edge` runtime image carries the CLI, gateway, notebook bridge, built researcher web UI, local inference runtime dependencies, provider route validation/invocation support, pinned OpenHands agent-server package, and policy/audit stack without bundled model weights. The `edge-smoke` image adds the tiny verified GGUF artifact for offline smoke tests. The default Docker smoke path runs the local model endpoint at `127.0.0.1`, starts the OpenHands agent-server as a gateway-owned localhost child during the agentic run, calls authenticated OpenHands `/api` routes through the gateway backend, exports a scrubbed audit log, and generates the synthetic reviewer packet while runtime network access is disabled. The `edge-providers` image carries provider route configuration support with file-based runtime secret references and no provider secrets. See [Container Images](docs/container-images.md) for the tag scheme and flavor policy.
 
 From a checkout, run the same CI smoke path with Compose:
 
 ```bash
 docker compose -f images/generic/compose.yaml run --rm heartwood
+```
+
+To serve the packaged web UI from the image, publish the gateway port and start the launcher:
+
+```bash
+docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
 ```
 
 See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
@@ -81,6 +88,7 @@ See [Getting Started With The Offline Stack](docs/getting-started-offline.md) fo
 - [`packages/gateway`](packages/gateway) contains ASGI HTTP command handling, replayable WebSocket event streams, managed local agent-server binding, and model egress gating.
 - [`packages/model-policy`](packages/model-policy) contains deny-by-default model-call policy evaluation and attestation records.
 - [`packages/notebook`](packages/notebook) contains the notebook Python API and optional widget bridge.
+- [`packages/webui`](packages/webui) contains the Spezi-based researcher web UI.
 - [`packages/schemas`](packages/schemas) contains versioned policy, audit, detection, skill, and approval schemas.
 - [`packages/session`](packages/session) contains the shared session command/event contract.
 - [`packages/skills`](packages/skills) contains local `SKILL.md` verification, the package-time skill bundle catalog loader, and deterministic skill test helpers.
@@ -99,6 +107,19 @@ uv run mypy packages
 uv run pytest
 uvx reuse lint
 uv run heartwood-fixtures fixtures skills evals
+```
+
+The web UI checks run from `packages/webui`:
+
+```bash
+npm ci
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+npm run license:check
+npm run test:e2e
 ```
 
 Do not add PHI, credentials, live-platform identifiers, or non-synthetic records to tests, fixtures, examples, issues, or pull requests.

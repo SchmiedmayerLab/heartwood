@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import sys
 import tomllib
@@ -22,6 +23,9 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     )
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
+    assert "FROM node:24-trixie-slim AS webui-build" in dockerfile
+    assert "npm ci --no-audit --fund=false" in dockerfile
+    assert "npm run build" in dockerfile
     assert "org.opencontainers.image.source" in dockerfile
     assert 'org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}"' in dockerfile
     assert "uv sync --locked --no-dev --all-extras" in dockerfile
@@ -54,6 +58,11 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
         "HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml"
         in dockerfile
     )
+    assert "HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist" in dockerfile
+    assert (
+        "COPY --from=webui-build --chown=heartwood:heartwood "
+        "/src/packages/webui/dist ./packages/webui/dist" in dockerfile
+    )
     assert "HEARTWOOD_AGENT_SERVER_API_KEY" not in dockerfile
     assert "ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0" in dockerfile
     assert "ARG HEARTWOOD_IMAGE_FLAVOR=runtime" in dockerfile
@@ -70,6 +79,34 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     assert "USER heartwood" in dockerfile
     assert 'PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"' in dockerfile
     assert 'CMD ["heartwood", "--help"]' in dockerfile
+
+
+def test_web_ui_package_has_ci_and_container_launcher() -> None:
+    package = json.loads(
+        (_repo_root() / "packages" / "webui" / "package.json").read_text(encoding="utf-8")
+    )
+    workflow = (_repo_root() / ".github" / "workflows" / "web-ui.yml").read_text(encoding="utf-8")
+    launcher = (_repo_root() / "images" / "generic" / "scripts" / "start_web_ui.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert package["name"] == "@heartwood/webui"
+    assert package["scripts"]["build"] == "tsc --noEmit && vite build"
+    assert package["scripts"]["test:e2e"] == "playwright test"
+    assert package["scripts"]["test:gateway"] == "node scripts/smoke-gateway.cjs"
+    assert "@stanfordspezi/spezi-web-design-system" in package["dependencies"]
+    assert "@stanfordspezi/spezi-web-configurations" in package["devDependencies"]
+    assert "name: Web UI" in workflow
+    assert "actions/setup-node@v6" in workflow
+    assert 'node-version: "24"' in workflow
+    assert "npm run license:check" in workflow
+    assert "npm audit --audit-level=moderate" in workflow
+    assert "npx playwright install --with-deps chromium" in workflow
+    assert "npm run test:e2e" in workflow
+    assert "npm run test:gateway --prefix packages/webui" in workflow
+    assert "heartwood \\" in launcher
+    assert '--web-root "${web_root}"' in launcher
+    assert '--base-path "${base_path}"' in launcher
 
 
 def test_compose_smoke_runtime_disables_network() -> None:
