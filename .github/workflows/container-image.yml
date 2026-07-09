@@ -108,9 +108,22 @@ jobs:
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
         run: |
+          public_manifest_raw() {
+            local image_ref="${IMAGE_NAME}:$1"
+            local docker_config
+            local raw
+            docker_config="$(mktemp -d)"
+            echo "Verifying public GHCR access for ${image_ref}" >&2
+            if ! raw="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw "${image_ref}")"; then
+              rm -rf "${docker_config}"
+              return 1
+            fi
+            rm -rf "${docker_config}"
+            printf '%s\n' "${raw}"
+          }
           verify_single_platform_tag() {
             image_ref="${IMAGE_NAME}:$1"
-            raw="$(docker buildx imagetools inspect --raw "${image_ref}")"
+            raw="$(public_manifest_raw "$1")"
             printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"amd64"'
             if printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"arm64"'; then
               echo "${image_ref} unexpectedly includes linux/arm64" >&2
@@ -165,9 +178,22 @@ jobs:
           IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
         run: |
+          public_manifest_raw() {
+            local image_ref="${IMAGE_NAME}:$1"
+            local docker_config
+            local raw
+            docker_config="$(mktemp -d)"
+            echo "Verifying public GHCR access for ${image_ref}" >&2
+            if ! raw="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw "${image_ref}")"; then
+              rm -rf "${docker_config}"
+              return 1
+            fi
+            rm -rf "${docker_config}"
+            printf '%s\n' "${raw}"
+          }
           verify_multi_platform_tag() {
             image_ref="${IMAGE_NAME}:$1"
-            raw="$(docker buildx imagetools inspect --raw "${image_ref}")"
+            raw="$(public_manifest_raw "$1")"
             printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"amd64"'
             printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"arm64"'
           }

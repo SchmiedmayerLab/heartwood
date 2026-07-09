@@ -15,6 +15,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
 
 def test_generic_image_contains_runtime_surface_packages() -> None:
     dockerfile = (_repo_root() / "images" / "generic" / "Dockerfile").read_text(encoding="utf-8")
@@ -35,7 +37,8 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     ) in dockerfile
     assert "llama-cpp-python" not in gateway_pyproject
     assert "libtmux==0.61.0" in gateway_pyproject
-    assert "openhands-tools==1.33.0" in gateway_pyproject
+    assert "openhands-agent-server==1.34.0" in gateway_pyproject
+    assert "openhands-tools==1.34.0" in gateway_pyproject
     assert "ARG LLAMA_CPP_VERSION=b9937" in dockerfile
     assert (
         "LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3"
@@ -92,6 +95,36 @@ def test_generic_image_contains_runtime_surface_packages() -> None:
     assert "USER heartwood" in dockerfile
     assert 'PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"' in dockerfile
     assert 'CMD ["heartwood", "--help"]' in dockerfile
+
+
+def test_openhands_runtime_pins_stay_consistent_across_assets() -> None:
+    gateway_manifest = tomllib.loads(
+        (_repo_root() / "packages" / "gateway" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    runtime_manifest = tomllib.loads(
+        (_repo_root() / "images" / "generic" / "local-runtime" / "profiles.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    getting_started = (_repo_root() / "docs" / "getting-started-offline.md").read_text(
+        encoding="utf-8"
+    )
+    implementation_plan = (_repo_root() / "design" / "09-implementation-plan.md").read_text(
+        encoding="utf-8"
+    )
+
+    agent_extra = gateway_manifest["project"]["optional-dependencies"]["agent-server"]
+    pins = dict(_exact_package_pin(requirement) for requirement in agent_extra)
+    expected_packages = ("openhands-agent-server", "openhands-tools", "libtmux")
+    profile_dependency = runtime_manifest["agent_server"]["openhands"]["runtime_dependency"]
+
+    for package_name in expected_packages:
+        pinned_dependency = f"{package_name}=={pins[package_name]}"
+        assert pinned_dependency in profile_dependency
+        assert pinned_dependency in getting_started
+
+    assert f"openhands-agent-server=={pins['openhands-agent-server']}" in implementation_plan
+    assert f"openhands-tools=={pins['openhands-tools']}" in implementation_plan
 
 
 def test_platform_image_defines_terra_runtime_contract() -> None:
@@ -419,8 +452,8 @@ def test_local_runtime_profiles_distinguish_stub_from_real_runtime() -> None:
     assert real["artifact_bundled_in_flavors"] == ["smoke"]
     assert real["artifact_not_bundled_in_flavors"] == ["runtime", "providers"]
     assert agent_server["status"] == "implemented"
-    assert "openhands-agent-server==1.33.0" in agent_server["runtime_dependency"]
-    assert "openhands-tools==1.33.0" in agent_server["runtime_dependency"]
+    assert "openhands-agent-server==1.34.0" in agent_server["runtime_dependency"]
+    assert "openhands-tools==1.34.0" in agent_server["runtime_dependency"]
     assert agent_server["gateway_owned"] is True
     assert agent_server["direct_client_endpoint"] is False
     assert agent_server["tool_execution_backend"].startswith(
@@ -573,6 +606,9 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert '--set terra-smoke.platform="linux/amd64"' in workflow
     assert "terra-runtime terra-smoke" in workflow
     assert "docker buildx imagetools inspect" in workflow
+    assert "public_manifest_raw" in workflow
+    assert 'DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw' in workflow
+    assert "Verifying public GHCR access" in workflow
     assert "verify_single_platform_tag" in workflow
     assert 'verify_single_platform_tag "${IMAGE_CHANNEL}-terra"' in workflow
     assert 'verify_single_platform_tag "sha-${GIT_SHA}-terra"' in workflow
@@ -636,3 +672,12 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _exact_package_pin(requirement: str) -> tuple[str, str]:
+    parsed = Requirement(requirement)
+    specifiers = list(parsed.specifier)
+    assert len(specifiers) == 1
+    specifier = specifiers[0]
+    assert specifier.operator == "=="
+    return parsed.name, specifier.version
