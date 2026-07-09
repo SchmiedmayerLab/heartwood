@@ -89,16 +89,17 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - The `runtime` image flavor is the default platform-ready image, publishes as `edge`, and does not bundle model weights.
 - The `smoke` image flavor publishes as `edge-smoke`, bundles the tiny verified GGUF model artifact, and proves offline local inference load/query behavior through the pinned llama.cpp `llama-server` binary without making a model-quality or biomedical capability claim.
 - The `providers` image flavor publishes as `edge-providers`, carries provider route configuration support with file-based runtime secret references, and does not bake provider secrets or model weights.
+- The Terra-derived notebook image flavors publish as `edge-terra` and `edge-terra-smoke`, derive from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, install a managed Python 3.12 Heartwood runtime under `/opt/heartwood`, register a Heartwood Jupyter kernel under `/opt/conda`, and preserve the Terra base image entrypoint.
 - The generic image pins the production OpenHands agent-server package, OpenHands tools package, and required tmux dependency, then starts the server as a gateway-owned localhost child during the offline stack run.
 - The CLI supports an explicit `run --local-model` mode that invokes only allowlisted HTTP loopback endpoints, records safe response metadata, and keeps prompt/response content out of persisted session events and audit exports.
 - The CLI can select a provider route from a validated provider configuration without reading provider secrets or invoking live provider APIs in synthetic tests.
 - Docker Compose disables runtime network access for the smoke service and runs the offline stack script end to end.
 - The offline stack smoke script starts the default `llama-cpp-cpu` runtime, runs detection, approves the synthetic model call, runs the agentic CLI through the local model endpoint, starts the gateway-managed OpenHands process during the agentic turn, writes a bounded synthetic workspace artifact through authenticated OpenHands bash execution, exports the scrubbed audit log, and generates the reviewer packet.
-- The container image publish workflow builds `docker-bake.hcl` targets on native `linux/amd64` and `linux/arm64` runners on `main`, merges the architecture outputs into multi-architecture manifests, and publishes `edge`, `edge-smoke`, `edge-providers`, and commit-SHA flavor tags to GitHub Container Registry.
+- The container image publish workflow builds `docker-bake.hcl` targets on native `linux/amd64` and `linux/arm64` runners on `main`, merges the generic architecture outputs into multi-architecture manifests, frees runner disk before the real Terra build, publishes `edge`, `edge-smoke`, `edge-providers`, `edge-terra`, `edge-terra-smoke`, and commit-SHA flavor tags to GitHub Container Registry, verifies generic public tags resolve to both baseline Linux architectures, and verifies Terra public tags remain `linux/amd64` until the selected Terra base supports ARM.
 - `docs/getting-started-offline.md` documents pull-and-run usage from the published smoke image and the local Compose workflow.
 - `docs/container-images.md` records the image naming scheme, flavor policy, provider secret posture, local model strategy, and future GitHub Issues/Projects migration.
-- The container smoke workflow runs the offline stack smoke on native GitHub-hosted `linux/amd64` and `linux/arm64` runners for pull requests, pushes to `main`, and manual dispatch.
-- Static image tests verify the generic image family includes the expected runtime surfaces, declares the local-runtime profiles, separates CPU and GPU runtime profiles, records the verified GGUF artifact, includes the OpenHands launcher, disables runtime network access through Compose, uses the smoke flavor for bundled model CI, publishes the expected image tags, validates provider route examples, and covers both baseline Linux architectures.
+- The container smoke workflow runs the offline stack smoke on native GitHub-hosted `linux/amd64` and `linux/arm64` runners for pull requests, pushes to `main`, and manual dispatch. It also builds a lightweight Terra-compatible CI base, builds `edge-terra-smoke-ci` through the same platform Dockerfile on `linux/amd64`, runs the Terra platform image smoke, and runs the full offline stack smoke with runtime network disabled inside that CI image.
+- Static image tests verify the generic image family includes the expected runtime surfaces, declares the local-runtime profiles, separates CPU and GPU runtime profiles, records the verified GGUF artifact, includes the OpenHands launcher, disables runtime network access through Compose, uses the smoke flavor for bundled model CI, publishes the expected image tags, validates provider route examples, covers both baseline Linux architectures, and records the Terra-derived image contract.
 
 ### Current Exclusions
 
@@ -109,7 +110,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - The bundled local model exists only in the smoke flavor, is a tiny smoke-test artifact, and is not a production coding or biomedical model.
 - No optional larger bundled coding-model image target exists yet because no larger GGUF artifact has completed provenance, license, checksum, redistribution, and resource-envelope review.
 - No GPU runtime profile is implemented yet; CUDA support is documented as deferred.
-- No automated post-publish registry manifest verification or GHCR tag cleanup exists yet; public image tags are created as multi-architecture manifests, but the registry state and stale helper tags are not independently checked after publication.
+- No automated GHCR tag cleanup exists yet; stale helper tags and unreferenced package versions require a documented dry-run cleanup policy before deletion.
 
 ## Phase 0 Requirements
 
@@ -173,6 +174,10 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - The CLI exposes `heartwood serve` to run the gateway and packaged web UI from one command.
 - `images/generic/scripts/start_web_ui.sh` starts the gateway and web UI inside the generic image with runtime-configurable workspace, host, port, web root, and base path.
 - The generic Dockerfile builds the web UI in a Node 24 stage and copies only static `dist` assets into the final Python runtime image; `node_modules` is not present in the final runtime layer.
+- The generic Dockerfile copies `README.md`, `ACRONYMS.md`, `docs/`, and `design/` into `/opt/heartwood` so the packaged runtime includes the tutorial notebook and design record without requiring a repository checkout.
+- `images/platform/Dockerfile`, `images/platforms.toml`, and `docker-bake.hcl` define an extensible platform-derived image layer. The implemented Terra targets use the Terra Jupyter Python base, install the Heartwood runtime under `/opt/heartwood`, register the `heartwood` Jupyter kernel, keep the Terra base entrypoint, and publish `edge-terra` and `edge-terra-smoke` on `linux/amd64`.
+- `images/platform/terra-ci-base.Dockerfile` defines a lightweight Terra-compatible notebook base for pull-request smoke tests; it is not a user-facing Terra image and exists to test the platform Dockerfile, Jupyter home/prefix assumptions, kernel registration, packaged UI, and offline stack without pulling the real Terra base on every pull request.
+- `images/platform/scripts/terra_image_smoke.sh` verifies that the Terra image contains the Heartwood CLI, notebook bridge, tutorial docs, web UI assets, Jupyter kernel registration, and platform home assumptions before the full offline stack smoke runs.
 - The web UI dependency tree is pinned by `package-lock.json`, checked by ESLint, Prettier, strict TypeScript, Vitest coverage, Playwright browser smoke tests, npm audit, and an npm license compatibility check.
 - The `Web UI` GitHub Actions workflow runs the TypeScript, unit, coverage, build, license, audit, browser smoke, and gateway-served proxy smoke checks on pull requests and `main`.
 - Documentation records local Docker serving and Jupyter proxy serving through the packaged web UI.
@@ -184,8 +189,9 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Playwright loads the built app through Vite preview and verifies that mocked gateway events render through the researcher UI.
 - Gateway tests cover REST, WebSocket, Server-Sent Events replay, and static asset serving under a proxy base path.
 - The gateway-served proxy smoke test starts `heartwood serve`, loads the built web UI under `/proxy/<port>/`, and exercises prefixed command and replay routes.
-- Static image tests verify that the Dockerfile builds and copies web assets and that the image includes the web UI launcher.
-- Static documentation asset tests verify that the Terra Jupyter notebook remains synthetic-only, has no saved outputs, and covers the CLI, notebook API, audit export, widget projection, offline stack smoke, and packaged web UI launcher paths.
+- Static image tests verify that the Dockerfile builds and copies web assets, tutorial docs, and design docs, and that the image includes the web UI launcher.
+- Static image tests verify the platform image manifest, Terra base image, Terra tags, Jupyter kernel registration, no baked secrets, and `linux/amd64`-only Terra publication contract.
+- Static documentation asset tests verify that the Terra Jupyter notebook remains synthetic-only, has no saved outputs, covers the CLI, notebook API, audit export, widget projection, offline stack smoke, and packaged web UI launcher paths, and clearly states that live Terra workspace validation remains required.
 
 ### Implemented In 0J — Provider Invocation
 
@@ -224,7 +230,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Make the site build reproducible locally from the repository without requiring published images, cloud credentials, or network access after dependencies are installed.
 - Update reviewer-packet limitations so they describe the static site as the current documentation pass, not as a missing 0G exit gate.
 - Formalize the container tag lifecycle in documentation and CI: public `edge`, `edge-smoke`, `edge-providers`, commit-SHA, and future semver tags are unified multi-platform image indexes; architecture-specific tags are internal assembly details, not user-facing install targets.
-- Add post-publish manifest verification for every public image tag using registry inspection, proving that each unified tag resolves to `linux/amd64` and `linux/arm64` before it is documented as usable.
+- Keep post-publish registry verification for every public image tag: generic unified tags must resolve to `linux/amd64` and `linux/arm64`, while platform-derived tags must match the platform manifest's supported architecture set.
 - Replace architecture-helper tags with digest-based manifest assembly where feasible; otherwise keep helper tags explicitly internal and define a retention policy that preserves manifests referenced by public indexes.
 - Define a GHCR cleanup policy that keeps current moving tags, semver release tags, a bounded history of commit-SHA tags, SBOM/provenance artifacts, and any digest referenced by public multi-platform indexes, while cleaning stale helper tags and unreferenced package versions only after a dry-run report.
 - Move operational implementation items from long Markdown backlog lists into GitHub Issues and a GitHub Project after the site structure is stable; use fields for phase, risk, platform, owner, status, required evidence, and dependency.
@@ -237,7 +243,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Static asset checks prove no external CDN or public network dependency is required at runtime.
 - GitHub Pages publish workflow runs only from `main` and uses read-only contents permissions plus the minimum Pages deployment permissions.
 - Reviewer-packet tests assert that current limitations no longer name 0G as blocked by the documentation site.
-- Image publication checks inspect public unified tags after manifest creation and fail if any required platform is missing.
+- Image publication checks inspect public unified tags after manifest creation and fail if any required platform is missing or any platform-specific tag publishes an unsupported architecture.
 - Registry cleanup tests run in dry-run mode and assert that current moving tags, semver tags, retained commit-SHA tags, and manifests referenced by public indexes are never selected for deletion.
 
 **Exit gates**
@@ -264,6 +270,8 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Prove an autonomous OpenHands conversation turn against a larger local tutorial coding model without weakening approval, audit, scrubbed-event, or capability-tier controls.
 - Select the first optional bundled coding-model artifact, with `Qwen/Qwen2.5-Coder-1.5B-Instruct` as the current candidate, and record source revision, license posture, redistribution allowance, quantization, byte size, SHA-256, provenance, cache location, build-time versus runtime resolution, CPU/memory envelope, and architecture support before adding an image target.
 - Add the deferred `model-qwen25-coder-1_5b-q4_k_m` Bake target only after the exact artifact is selected and reviewed; keep it out of required pull-request CI if its size or runtime cost is too high.
+- Validate Terra image launch, notebook startup, `/home/jupyter` workspace behavior, GitHub Container Registry or Google Artifact Registry image access, image size/startup timing, `jupyter-server-proxy` path behavior, and web UI chat interaction in a synthetic Terra workspace before documenting Terra as supported in live Terra.
+- Reuse the `images/platform/Dockerfile` and `images/platforms.toml` pattern for Seven Bridges and DNAnexus only after their base image, home directory, proxy path, registry access, and identity headers are validated.
 - Validate Terra and Seven Bridges proxy paths through their Jupyter or Data Studio routes.
 - Validate DNAnexus first through `jupyter-server-proxy`; keep `httpsApp` as the platform-native upgrade path.
 - Inherit identity from the platform proxy; do not add a Heartwood-owned login.
@@ -272,7 +280,9 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 **Required tests**
 
 - OpenHands model-routing tests prove the agent-server cannot reach model endpoints except through the gateway policy layer.
+- Terra image tests statically verify the selected Terra base image, `/home/jupyter` assumptions, packaged Heartwood docs/notebook, loopback web UI port, Jupyter service path, Jupyter kernel registration, publication tags, and absence of baked provider secrets.
 - Platform proxy smoke tests cover Terra, Seven Bridges, and DNAnexus route prefixes when suitable test workspaces are available.
+- A live Terra workspace smoke records the custom image digest, Terra base image digest, VM shape, notebook startup result, web UI proxy URL shape, one synthetic chat-like web UI command, CLI replay count, audit export path, reviewer packet path, and any identity/proxy headers exposed to Heartwood.
 - Larger-model tests run as optional scheduled or release checks until runtime and cost are acceptable for pull-request CI.
 - Image tests verify optional model targets are separate from `edge`, `edge-smoke`, and `edge-providers`.
 - GPU tests run only on explicit GPU-capable runners and are not baseline merge gates.
@@ -281,6 +291,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 
 - OpenHands autonomous model access is mediated by the gateway and respects capability-tier limits.
 - The web UI is validated behind at least one real controlled-platform proxy route.
+- A Terra-derived Heartwood notebook image launches in Terra from a documented registry reference and completes the synthetic local-model, OpenHands, CLI, notebook, web UI, audit, and reviewer-packet demo path.
 - The optional larger coding-model target has reviewed provenance, licensing, checksums, resource envelopes, and CI scope.
 - Baseline CPU images and pull-request CI remain portable on native `linux/amd64` and `linux/arm64` runners.
 
@@ -391,11 +402,12 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 8. Keep provider invocation behind validated provider routes and the gateway policy layer without storing provider secrets in image layers or persisted artifacts.
 9. Extend the OpenHands-backed path from bounded bash execution to an autonomous conversation turn with a useful local tutorial model after replay and policy checks pass.
 10. Select, pin, and review the first larger coding-model artifact before implementing the optional bundled coding-model image target.
-11. Validate Terra, Seven Bridges, and DNAnexus proxy paths in real platform workspaces before claiming platform proxy support.
-12. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
-13. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
-14. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry smoke image without requiring a repository checkout.
-15. Select and implement the first real platform pilot only after synthetic replay, documentation, web UI, provider policy, and reviewer-packet controls are green.
+11. Keep the implemented Terra-derived notebook image publish and CI smoke path green, and validate it in a live Terra workspace before claiming Terra custom-environment support; the generic image remains the portable runtime baseline.
+12. Validate Terra, Seven Bridges, and DNAnexus proxy paths in real platform workspaces before claiming platform proxy support.
+13. Require explicit approval before every model invocation path and keep model prompt/response content out of persisted artifacts.
+14. Keep optional GPU acceleration as a separate explicit runtime profile with Docker device configuration and GPU-capable CI rather than a baseline generic-image requirement.
+15. Keep the 0G Docker-only path reproducible from the published GitHub Container Registry smoke image without requiring a repository checkout.
+16. Select and implement the first real platform pilot only after synthetic replay, documentation, web UI, provider policy, and reviewer-packet controls are green.
 
 ## Repository Strategy
 
@@ -424,5 +436,6 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Dataset fingerprinting can mis-detect unusual schemas; propose-not-commit detection and human confirmation remain required.
 - The current local-model path uses a tiny `llama-cpp-cpu` smoke artifact that proves local load/query behavior but does not provide production coding-agent or biomedical reasoning quality.
 - The OpenHands agent-server package, gateway-owned process boundary, and bounded bash execution path are implemented, but autonomous coding quality with a larger local tutorial model still needs validation.
+- Terra custom-environment support is not complete until a Terra-base-derived Heartwood notebook image launches in Terra and completes the synthetic local-model, web UI, CLI, notebook, audit, and reviewer-packet smoke in a live Terra workspace.
 - WebSocket reliability varies across platform proxies; Server-Sent Events fallback is required.
 - The web UI adds a TypeScript supply-chain surface; pinned dependencies, Spezi shared configs, npm license gates, and CI checks are required.

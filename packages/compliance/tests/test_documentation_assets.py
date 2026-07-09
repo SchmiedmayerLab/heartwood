@@ -39,5 +39,26 @@ def test_terra_jupyter_demo_notebook_covers_runtime_surfaces() -> None:
             assert cell["outputs"] == []
 
 
+def test_terra_runbook_tracks_platform_image_contract() -> None:
+    runbook = (_repo_root() / "docs" / "terra-jupyter-demo.md").read_text(encoding="utf-8")
+
+    assert "Terra Jupyter Notebook base image" in runbook
+    assert "DataBiosphere/terra-docker" in runbook
+    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke" in runbook
+    assert "edge-terra" in runbook
+    assert "edge-terra-smoke-ci" in runbook
+    assert "Terra-compatible notebook base" in runbook
+    assert "publish automatically from `main`" in runbook
+    assert "cd /opt/heartwood && bash images/generic/scripts/offline_stack_smoke.sh" in runbook
+    assert "run.approval_controls" in runbook
+    assert "approval.decision" in runbook
+    assert "run.approvals" not in runbook
+    assert "approval.status" not in runbook
+    assert "web UI chat interaction" in runbook
+    assert "custom image digest" in runbook
+    assert "real Terra workspace is still required" in runbook
+    assert "configure the Cloud Environment to use the selected image directly" not in runbook
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]

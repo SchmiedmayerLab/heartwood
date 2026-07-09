@@ -25,6 +25,10 @@ The smoke test proves offline load, query, policy gating, event flow, tool execu
 | Runtime | `edge` | Default platform-ready image with no bundled model weights. |
 | Smoke | `edge-smoke` | Offline stack CI and tutorial image with the tiny verified GGUF artifact. |
 | Providers | `edge-providers` | Provider-route image with file-based secret references and no provider secrets. |
+| Terra Runtime | `edge-terra` | Terra-derived notebook image with no bundled model weights. |
+| Terra Smoke | `edge-terra-smoke` | Terra-derived notebook image with the tiny verified GGUF artifact for synthetic Terra demos and CI smoke. |
+
+The `edge-terra-smoke-ci` tag is a local CI tag only. It is built from a lightweight Terra-compatible base to test the platform Dockerfile, notebook assumptions, packaged web UI, local model path, and offline stack without pulling the real Terra base in every pull request.
 
 Commit-pinned tags use `sha-<git-sha>`, `sha-<git-sha>-smoke`, and `sha-<git-sha>-providers`. Stable release tags will use `v<semver>` after the first release; `latest` is intentionally not used before then.
 
@@ -56,6 +60,8 @@ docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash
 ```
 
 The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves the synthetic model call, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`, then runs the Python-only Terra-style Jupyter demo smoke against the packaged web UI and notebook API.
+
+The packaged image includes the project README, acronym glossary, `docs/`, and `design/` under `/opt/heartwood`, including `/opt/heartwood/docs/terra-jupyter-demo.ipynb`. This lets a runtime image carry the tutorial material needed for a local or platform notebook demonstration without a repository checkout.
 
 To open the packaged researcher UI from the runtime image, publish the gateway port and start the web launcher:
 
@@ -93,5 +99,5 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - It does not validate controlled data.
 - It does not yet validate optional GPU acceleration; that belongs to a separate CUDA profile and a GPU-capable runner.
 - It does not yet prove autonomous coding quality from a larger local tutorial model; the bundled tiny model is only a load/query artifact, while the tool-execution smoke is intentionally bounded and deterministic after approval.
-- It does not validate Terra, Seven Bridges, or DNAnexus controlled-platform identity binding; local and Jupyter proxy routes are synthetic smoke paths.
+- It does not validate Terra, Seven Bridges, or DNAnexus controlled-platform identity binding; Terra platform-image CI is local and synthetic until a real Terra workspace smoke records platform launch, proxy behavior, and identity evidence.
 - It does not publish the static documentation site; that belongs with the next documentation-site pass.

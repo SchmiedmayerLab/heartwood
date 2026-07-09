@@ -19,17 +19,21 @@ Heartwood publishes one image family from one Dockerfile and one Buildx Bake fil
 | `edge` | Moving main-branch runtime image. Not a stable release. |
 | `edge-smoke` | Moving main-branch smoke image with the tiny verified GGUF artifact for offline CI and tutorials. |
 | `edge-providers` | Moving main-branch provider-route image with file-based provider secret configuration support and no bundled model weights. |
+| `edge-terra` | Moving main-branch Terra-derived notebook image built from the selected Terra Jupyter Python base, without bundled model weights. |
+| `edge-terra-smoke` | Moving main-branch Terra-derived notebook image with the tiny verified GGUF artifact for Terra demos and CI smoke. |
 | `sha-<git-sha>` | Exact runtime image for one commit. |
 | `sha-<git-sha>-smoke` | Exact smoke image for one commit. |
 | `sha-<git-sha>-providers` | Exact provider-route image for one commit. |
+| `sha-<git-sha>-terra` | Exact Terra-derived runtime image for one commit. |
+| `sha-<git-sha>-terra-smoke` | Exact Terra-derived smoke image for one commit. |
 | `v<semver>` | Future stable runtime release. |
 | `v<semver>-<flavor>` | Future stable release for a non-default flavor. |
 
 Do not use `latest` until the first stable release exists. Do not use branch names such as `main` or informal tags such as `dev-main` for user-facing image references.
 
-The publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64` and `edge-arm64`, then creates the public multi-architecture tags listed above with `docker buildx imagetools create`. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references.
+The generic publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64` and `edge-arm64`, creates the public multi-architecture generic tags with `docker buildx imagetools create`, and verifies those public tags with registry inspection before the workflow succeeds. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references. Terra-derived images publish as `linux/amd64` tags because the selected Terra notebook base is amd64, and the workflow verifies that those tags do not accidentally advertise unsupported ARM images. Pull-request CI uses `edge-terra-smoke-ci` only as a local test tag built from a lightweight Terra-compatible base; it is not published as a user-facing platform image.
 
-Registry maintenance must protect public moving tags, commit-SHA tags retained by policy, future semver tags, SBOM/provenance artifacts, and any manifest referenced by a public multi-architecture index. Cleanup automation should begin with dry-run reports, delete only stale helper tags or unreferenced versions outside the retention window, and record the GHCR permissions required to perform deletions. The next documentation and governance pass must add post-publish registry inspection that proves each public tag resolves to both `linux/amd64` and `linux/arm64`.
+Registry maintenance must protect public moving tags, commit-SHA tags retained by policy, future semver tags, SBOM/provenance artifacts, and any manifest referenced by a public multi-architecture index. Cleanup automation should begin with dry-run reports, delete only stale helper tags or unreferenced versions outside the retention window, and record the GHCR permissions required to perform deletions. The next documentation and governance pass must keep post-publish registry verification aligned with this tag policy and add the dry-run cleanup policy.
 
 ## Current Flavors
 
@@ -38,8 +42,20 @@ Registry maintenance must protect public moving tags, commit-SHA tags retained b
 | Runtime | `runtime` | `edge` | No | Default platform-ready image for CLI, gateway, notebook bridge, built researcher web UI, OpenHands launcher, local inference runtime dependencies, provider route config/invocation support, and externally mounted model artifacts. |
 | Smoke | `smoke` | `edge-smoke` | Yes, tiny checked GGUF | Pull-request CI, main-branch CI, and Docker-only tutorials proving offline load/query, gateway policy, OpenHands bash execution, audit export, and reviewer packet generation. |
 | Providers | `providers` | `edge-providers` | No | Platform embedding where model access is supplied by in-boundary provider endpoints and credentials are mounted at runtime. |
+| Terra Runtime | `terra-runtime` | `edge-terra` | No | Terra-derived Jupyter notebook image built from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, with Heartwood installed under `/opt/heartwood` and a registered Heartwood kernel. |
+| Terra Smoke | `terra-smoke` | `edge-terra-smoke` | Yes, tiny checked GGUF | Terra-derived Jupyter notebook image for synthetic Terra demos and CI, proving local inference, gateway policy, OpenHands bash execution, notebook API, web UI, audit export, and reviewer packet generation. |
 
 The smoke flavor is intentionally not the default image because the default image should stay platform-ready and should not imply that bundled weights are required. The smoke model exists to prove the stack runs air-gapped; it is not a coding-quality, biomedical, or production model.
+
+## Platform Notebook Images
+
+The generic image family is the portable Heartwood runtime baseline. It is suitable for local Docker, Docker Compose, CI, and as the source runtime for platform-specific images, but it is not the Terra custom notebook image users should select in Terra.
+
+Terra's current Jupyter custom-environment documentation directs custom notebook images to extend a Terra Jupyter base image or a project-specific image accepted by Terra's notebook service. The implemented Terra target derives from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, installs Heartwood under `/opt/heartwood`, preserves `/opt/heartwood/docs/terra-jupyter-demo.ipynb`, registers a `heartwood` Jupyter kernel under `/opt/conda`, keeps Jupyter on the Terra base image's expected notebook service path, and exposes the Heartwood gateway on loopback for notebook-proxy access.
+
+Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` for the first synthetic Terra demo after the main-branch publish workflow completes. Do not document `edge`, `edge-smoke`, or `edge-providers` as supported Terra custom environment images. CI proves the platform Dockerfile and offline smoke path through the Terra-compatible CI base, while the main-branch publish workflow builds the real Terra-derived image; live Terra workspace validation must still record the Terra base image digest, Heartwood image digest, VM shape, startup behavior, proxy path behavior, one synthetic web UI chat command, CLI/notebook replay evidence, audit export path, reviewer packet path, and any identity headers available to the gateway.
+
+The pull-request Terra smoke job builds `images/platform/terra-ci-base.Dockerfile` and then builds `terra-smoke-ci` through the same `images/platform/Dockerfile`. That job validates Heartwood packaging, the Jupyter home/prefix assumptions, kernel registration, the platform smoke script, and the offline stack with runtime network disabled without pulling the multi-gigabyte Terra base on every pull request. The main-branch publish job builds `terra-runtime` and `terra-smoke` from the real Terra base after freeing runner disk space, then verifies the published Terra tags.
 
 ## Provider Secrets
 
@@ -71,6 +87,8 @@ bash images/generic/scripts/start_web_ui.sh
 ```
 
 The launcher reads `HEARTWOOD_WORKSPACE`, `HEARTWOOD_WEB_HOST`, `HEARTWOOD_WEB_PORT`, `HEARTWOOD_WEB_ROOT`, and `HEARTWOOD_WEB_BASE_PATH`. Use `HEARTWOOD_WEB_BASE_PATH=/proxy/<port>/` when the upstream proxy preserves the prefix before forwarding. For `jupyter-server-proxy` routes that expose `/user/<name>/proxy/<port>/` in the browser and strip that prefix before the request reaches Heartwood, keep the launcher base path at `/`; the web UI infers the browser proxy base for gateway calls, while the gateway serves root-relative static and session routes internally. CI covers both proxy shapes, including a stripped Jupyter-style route that verifies static assets, command submission, replay, and Server-Sent Events through the external notebook URL. The generic image also carries `images/generic/scripts/terra_jupyter_demo_smoke.py`, a Python-only runtime smoke that verifies the packaged static assets and notebook API without Node.js or a repository checkout. The web UI is a presentation adapter over the same session command/event contract as the CLI and notebook bridge, uses WebSocket as the primary stream, falls back to Server-Sent Events, and replays persisted events after reconnect.
+
+The image also carries `README.md`, `ACRONYMS.md`, `docs/`, and `design/` under `/opt/heartwood` so a packaged runtime contains the tutorial notebook and design record needed for an offline demonstration.
 
 ## Local Model Strategy
 

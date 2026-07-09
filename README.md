@@ -71,6 +71,8 @@ docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/
 
 See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
 
+For Terra-like notebook demonstrations, see [Terra-Style Jupyter Demo](docs/terra-jupyter-demo.md). The main-branch image workflow publishes Terra-derived `edge-terra` and `edge-terra-smoke` notebook images, and CI validates the same platform Dockerfile through a lightweight Terra-compatible base plus local Terra-style proxy mechanics; a live Terra workspace smoke is still required before claiming supported Terra launch behavior with platform identity binding.
+
 
 ## Repository Structure
 
