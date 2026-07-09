@@ -16,7 +16,7 @@ import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from packaging.requirements import Requirement
 
@@ -264,8 +264,6 @@ commit_smoke_tag = "sha-<git-sha>-terra-smoke"
                 "terra",
                 "--image-name",
                 image_name,
-                "--image-channel",
-                "edge",
                 "--git-sha",
                 "abc123",
                 "--registry-scheme",
@@ -818,11 +816,12 @@ class _RegistryHandler(BaseHTTPRequestHandler):
             self._write_json(200, "application/json", {"token": self.token})
             return
         if self.headers.get("Authorization") != f"Bearer {self.token}":
+            server = cast(ThreadingHTTPServer, self.server)
             self.send_response(401)
             self.send_header(
                 "WWW-Authenticate",
                 (
-                    f'Bearer realm="http://{self.headers["Host"]}/token",'
+                    f'Bearer realm="http://127.0.0.1:{server.server_port}/token",'
                     'service="registry.test",scope="repository:test/heartwood:pull"'
                 ),
             )

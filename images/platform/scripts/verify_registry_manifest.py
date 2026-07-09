@@ -301,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, default=Path("images/platforms.toml"))
     parser.add_argument("--platform", required=True)
     parser.add_argument("--image-name")
-    parser.add_argument("--image-channel", default="edge")
+    parser.add_argument("--image-channel")
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--registry-scheme", choices=["https", "http"], default="https")
     return parser
@@ -313,6 +313,9 @@ def main(argv: list[str] | None = None) -> int:
     image_name = args.image_name or manifest.get("image_name")
     if not isinstance(image_name, str):
         raise SystemExit("image name must be supplied by --image-name or the platform manifest")
+    image_channel = args.image_channel or manifest.get("moving_channel", "edge")
+    if not isinstance(image_channel, str):
+        raise SystemExit("image channel must be supplied by --image-channel or moving_channel")
     expected_media_type = platform.get("manifest_media_type")
     if not isinstance(expected_media_type, str):
         raise SystemExit("platform manifest must define manifest_media_type")
@@ -323,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("platform manifest config_media_type must be a string")
 
     supported_platforms = parse_platforms(platform)
-    tags = expected_tags(platform, image_channel=args.image_channel, git_sha=args.git_sha)
+    tags = expected_tags(platform, image_channel=image_channel, git_sha=args.git_sha)
     allow_non_platform_manifests = bool(platform.get("allow_non_platform_manifests", False))
     client = RegistryClient(image_name=image_name, scheme=args.registry_scheme)
     for tag in tags:
