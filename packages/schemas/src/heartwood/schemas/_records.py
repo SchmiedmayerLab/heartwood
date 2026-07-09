@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 __all__ = [
     "ApprovalRecord",
     "AuditEvent",
+    "ConfirmationRequest",
     "DetectorEvidence",
     "EgressAttestationRecord",
     "JsonValue",
@@ -152,13 +153,27 @@ class SkillMetadata(_HeartwoodRecord):
         return self
 
 
+class ConfirmationRequest(_HeartwoodRecord):
+    """Human-in-the-loop confirmation request for a proposed tool call."""
+
+    schema_version: Literal["heartwood.confirmation-request.v1"] = (
+        "heartwood.confirmation-request.v1"
+    )
+    request_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    tool_call_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    risk: Literal["low", "medium", "high", "unknown"]
+    summary: str = Field(min_length=1)
+
+
 class ApprovalRecord(_HeartwoodRecord):
     """Human approval or denial record for a proposed action."""
 
     schema_version: Literal["heartwood.approval-record.v1"] = "heartwood.approval-record.v1"
     approval_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
-    target_type: Literal["skill", "egress", "model-call"]
+    target_type: Literal["skill", "egress", "model-call", "tool-call"]
     target_id: str = Field(min_length=1)
     decision: Literal["approved", "denied"]
     actor_id: str = Field(min_length=1)
@@ -169,6 +184,7 @@ class ApprovalRecord(_HeartwoodRecord):
 _SCHEMA_MODELS: Mapping[str, type[_HeartwoodRecord]] = {
     "approval-record.v1": ApprovalRecord,
     "audit-event.v1": AuditEvent,
+    "confirmation-request.v1": ConfirmationRequest,
     "detector-evidence.v1": DetectorEvidence,
     "egress-attestation-record.v1": EgressAttestationRecord,
     "model-call-decision.v1": ModelCallDecision,

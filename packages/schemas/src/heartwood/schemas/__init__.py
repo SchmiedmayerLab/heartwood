@@ -11,6 +11,7 @@ from __future__ import annotations
 from heartwood.schemas._records import (
     ApprovalRecord,
     AuditEvent,
+    ConfirmationRequest,
     DetectorEvidence,
     EgressAttestationRecord,
     JsonValue,
@@ -24,6 +25,7 @@ from heartwood.schemas._records import (
 __all__ = [
     "ApprovalRecord",
     "AuditEvent",
+    "ConfirmationRequest",
     "DetectorEvidence",
     "EgressAttestationRecord",
     "JsonValue",

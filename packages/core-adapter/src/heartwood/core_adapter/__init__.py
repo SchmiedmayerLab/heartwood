@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from heartwood.core_adapter._facade import (
     AgentBackend,
-    AgentTurn,
+    BackendEvent,
+    BackendEventKind,
     DeterministicAgentBackend,
+    ProposedToolCall,
     ToolExecution,
 )
 from heartwood.core_adapter._service import SessionResult, SessionService
@@ -19,9 +21,11 @@ from heartwood.core_adapter._state import FileSessionStore, SessionStoreBoundary
 
 __all__ = [
     "AgentBackend",
-    "AgentTurn",
+    "BackendEvent",
+    "BackendEventKind",
     "DeterministicAgentBackend",
     "FileSessionStore",
+    "ProposedToolCall",
     "SessionResult",
     "SessionService",
     "SessionStoreBoundaryError",

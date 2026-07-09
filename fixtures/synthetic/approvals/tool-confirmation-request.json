@@ -1,0 +1,9 @@
+{
+  "schema_version": "heartwood.confirmation-request.v1",
+  "request_id": "session-synthetic-001-toolcall-0-confirm",
+  "session_id": "session-synthetic-001",
+  "tool_call_id": "session-synthetic-001-toolcall-0",
+  "tool_name": "heartwood.synthetic.noop",
+  "risk": "low",
+  "summary": "run the synthetic aggregate no-op"
+}

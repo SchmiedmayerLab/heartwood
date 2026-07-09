@@ -24,19 +24,33 @@ class CommandKind(StrEnum):
     DENY = "deny"
     CHAT = "chat"
     RUN = "run"
+    PAUSE = "pause"
+    RESUME = "resume"
     REPLAY = "replay"
     AUDIT_EXPORT = "audit.export"
 
 
 class EventKind(StrEnum):
-    """Events emitted by a Heartwood session."""
+    """Events emitted by a Heartwood session.
+
+    The stream mirrors the agent-server event model so every surface renders the
+    same turns. ``MODEL_CALL_DECISION_RECORDED`` is the egress decision for one
+    model call; ``POLICY_DECISION_RECORDED`` is reserved for non-egress policy
+    decisions.
+    """
 
     COMMAND_RECEIVED = "command.received"
     DETECTION_PROPOSED = "detection.proposed"
     APPROVAL_RECORDED = "approval.recorded"
     POLICY_DECISION_RECORDED = "policy.decision.recorded"
     MODEL_CALL_DECISION_RECORDED = "model_call.decision.recorded"
+    AGENT_MESSAGE_EMITTED = "agent_message.emitted"
+    TOOL_CALL_PROPOSED = "tool_call.proposed"
+    CONFIRMATION_REQUESTED = "confirmation.requested"
+    CONFIRMATION_RESOLVED = "confirmation.resolved"
     TOOL_EXECUTION_RECORDED = "tool.execution.recorded"
+    SESSION_PAUSED = "session.paused"
+    SESSION_RESUMED = "session.resumed"
     AUDIT_EXPORT_RECORDED = "audit.export.recorded"
     ERROR_RECORDED = "error.recorded"
 

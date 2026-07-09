@@ -25,15 +25,22 @@ from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
 from heartwood.adapters.model import FakeLocalModelProviderAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.audit import AuditLog
-from heartwood.core_adapter._facade import AgentBackend, DeterministicAgentBackend
+from heartwood.core_adapter._facade import (
+    AgentBackend,
+    BackendEvent,
+    BackendEventKind,
+    DeterministicAgentBackend,
+    ProposedToolCall,
+    ToolExecution,
+)
 from heartwood.core_adapter._state import FileSessionStore
-from heartwood.schemas import ApprovalRecord, JsonValue
+from heartwood.schemas import ApprovalRecord, ConfirmationRequest, JsonValue
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
 ApprovalDecision: TypeAlias = Literal["approved", "denied"]
-ApprovalTargetType: TypeAlias = Literal["skill", "egress", "model-call"]
+ApprovalTargetType: TypeAlias = Literal["skill", "egress", "model-call", "tool-call"]
 
-_APPROVAL_TARGET_TYPES = {"skill", "egress", "model-call"}
+_APPROVAL_TARGET_TYPES = {"skill", "egress", "model-call", "tool-call"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,8 +134,18 @@ class SessionService:
             events.append(self._handle_detect())
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
             events.append(self._handle_approval(command))
+        elif command_kind == CommandKind.CHAT.value:
+            events.extend(self._handle_chat(command))
         elif command_kind == CommandKind.RUN.value:
             events.extend(self._handle_run(command))
+        elif command_kind == CommandKind.PAUSE.value:
+            events.append(
+                self._record_event(EventKind.SESSION_PAUSED, {"command_id": command.command_id})
+            )
+        elif command_kind == CommandKind.RESUME.value:
+            events.append(
+                self._record_event(EventKind.SESSION_RESUMED, {"command_id": command.command_id})
+            )
         elif command_kind == CommandKind.AUDIT_EXPORT.value:
             events.append(self._handle_audit_export())
         else:
@@ -187,6 +204,11 @@ class SessionService:
             {"approval": approval.model_dump(mode="json", by_alias=True)},
         )
 
+    def _handle_chat(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
+        prompt = str(command.payload.get("prompt", ""))
+        stream = self.backend.chat_turn(session_id=command.session_id, prompt_length=len(prompt))
+        return tuple(self._translate_backend_events(command.session_id, stream))
+
     def _handle_run(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
         prompt = str(command.payload.get("prompt", ""))
         endpoint = str(command.payload.get("endpoint", "https://model.local.invalid/v1/chat"))
@@ -200,23 +222,74 @@ class SessionService:
             EventKind.MODEL_CALL_DECISION_RECORDED,
             {"decision": decision.model_dump(mode="json")},
         )
-        turn = self.backend.run(
+        approved = (
+            self._has_model_call_approval(decision.decision_id) and decision.decision == "allow"
+        )
+        stream = self.backend.run_turn(
             session_id=command.session_id,
             prompt_length=len(prompt),
-            approved=self._has_model_call_approval(decision.decision_id)
-            and decision.decision == "allow",
+            approved=approved,
         )
-        execution = turn.tool_execution
-        tool_event = self._record_event(
-            EventKind.TOOL_EXECUTION_RECORDED,
-            {
-                "backend_id": turn.backend_id,
-                "tool_name": execution.tool_name if execution else "none",
-                "exit_code": execution.exit_code if execution else 1,
-                "summary": execution.summary if execution else "no tool execution",
-            },
+        return (policy_event, *self._translate_backend_events(command.session_id, stream))
+
+    def _translate_backend_events(
+        self, session_id: str, stream: tuple[BackendEvent, ...]
+    ) -> list[SessionEvent]:
+        translated: list[SessionEvent] = []
+        for event in stream:
+            if event.kind == BackendEventKind.AGENT_MESSAGE:
+                translated.append(
+                    self._record_event(EventKind.AGENT_MESSAGE_EMITTED, {"content": event.message})
+                )
+            elif event.kind == BackendEventKind.TOOL_CALL_PROPOSED:
+                tool_call = _require_tool_call(event)
+                translated.append(
+                    self._record_event(
+                        EventKind.TOOL_CALL_PROPOSED,
+                        {
+                            "tool_call_id": tool_call.tool_call_id,
+                            "tool_name": tool_call.tool_name,
+                            "risk": tool_call.risk,
+                            "summary": tool_call.summary,
+                        },
+                    )
+                )
+            elif event.kind == BackendEventKind.CONFIRMATION:
+                translated.append(self._record_confirmation(session_id, event))
+            elif event.kind == BackendEventKind.TOOL_EXECUTION:
+                execution = _require_tool_execution(event)
+                translated.append(
+                    self._record_event(
+                        EventKind.TOOL_EXECUTION_RECORDED,
+                        {
+                            "backend_id": self.backend.backend_id,
+                            "tool_name": execution.tool_name,
+                            "exit_code": execution.exit_code,
+                            "summary": execution.summary,
+                        },
+                    )
+                )
+        return translated
+
+    def _record_confirmation(self, session_id: str, event: BackendEvent) -> SessionEvent:
+        tool_call = _require_tool_call(event)
+        if event.approved:
+            return self._record_event(
+                EventKind.CONFIRMATION_RESOLVED,
+                {"tool_call_id": tool_call.tool_call_id, "decision": "approved"},
+            )
+        request = ConfirmationRequest(
+            request_id=f"{tool_call.tool_call_id}-confirm",
+            session_id=session_id,
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_call.tool_name,
+            risk=tool_call.risk,
+            summary=tool_call.summary,
         )
-        return (policy_event, tool_event)
+        return self._record_event(
+            EventKind.CONFIRMATION_REQUESTED,
+            {"request": request.model_dump(mode="json")},
+        )
 
     def _handle_audit_export(self) -> SessionEvent:
         event = self._record_event(
@@ -263,6 +336,20 @@ class SessionService:
         )
         self.store.append_event(event)
         return event
+
+
+def _require_tool_call(event: BackendEvent) -> ProposedToolCall:
+    if event.tool_call is None:  # pragma: no cover - backend contract guarantees presence
+        msg = f"{event.kind} event is missing a tool call"
+        raise TypeError(msg)
+    return event.tool_call
+
+
+def _require_tool_execution(event: BackendEvent) -> ToolExecution:
+    if event.tool_execution is None:  # pragma: no cover - backend contract guarantees presence
+        msg = f"{event.kind} event is missing a tool execution"
+        raise TypeError(msg)
+    return event.tool_execution
 
 
 def _optional_string(value: JsonValue | None) -> str | None:
