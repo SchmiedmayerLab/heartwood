@@ -187,6 +187,7 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert "ENTRYPOINT" in ci_base
     assert "WWW-Authenticate" in verifier
     assert "parse_bearer_challenge" in verifier
+    assert 'registry != "localhost"' in verifier
     assert "IMAGE_MANIFEST_MEDIA_TYPES" in verifier
     assert "INDEX_MEDIA_TYPES" in verifier
     assert "allow_non_platform_manifests" in verifier

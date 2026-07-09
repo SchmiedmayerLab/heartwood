@@ -125,9 +125,10 @@ def parse_image_name(image_name: str) -> RegistryReference:
     if "://" in image_name:
         raise SystemExit("image name must not include a URL scheme")
     parts = image_name.split("/", 1)
-    if len(parts) != 2 or "." not in parts[0]:
+    registry = parts[0]
+    if len(parts) != 2 or ("." not in registry and ":" not in registry and registry != "localhost"):
         raise SystemExit(f"image name must include an explicit registry host: {image_name}")
-    return RegistryReference(registry=parts[0], repository=parts[1])
+    return RegistryReference(registry=registry, repository=parts[1])
 
 
 def parse_bearer_challenge(challenge: str) -> dict[str, str]:
