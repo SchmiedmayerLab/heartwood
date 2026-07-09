@@ -145,8 +145,9 @@ class ReviewerPacketGenerator:
                     "checked-in Markdown remains the current source of truth."
                 ),
                 (
-                    "- The web UI, Server-Sent Events fallback, and platform proxy smoke tests "
-                    "are planned after the documentation-site pass."
+                    "- The web UI, Server-Sent Events fallback, Jupyter-style proxy smoke, "
+                    "and Terra-style packaged demo smoke are implemented synthetic paths; "
+                    "live controlled-platform validation remains future work."
                 ),
                 (
                     "- Platform-specific policy review starts after the generic reviewer packet "
