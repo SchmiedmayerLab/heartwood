@@ -14,7 +14,7 @@ This runbook demonstrates the current Heartwood stack from a Terra-derived Jupyt
 
 ## Current Status
 
-Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` when the Terra demo must include the tiny bundled model artifact and the full offline smoke path. Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` when demonstrating the UI, CLI, notebook API, provider route configuration, and gateway behavior without bundled model weights. These tags publish automatically from `main`.
+Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` when the Terra demo must include the tiny bundled model artifact and the full offline smoke path. Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` when demonstrating the UI, CLI, notebook API, provider route configuration, and gateway behavior without bundled model weights. These tags publish automatically from `main`, and the image workflow verifies the public GHCR pull path through unauthenticated registry inspection before it succeeds.
 
 Terra's current custom-environment guidance says custom Jupyter images should be based on a Terra Jupyter Notebook base image or a project-specific image, and the `DataBiosphere/terra-docker` repository states that notebook custom images need to use a Terra base image to work with Terra's notebook service. The Heartwood Terra image derives from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, installs Heartwood under `/opt/heartwood`, registers a `heartwood` Jupyter kernel, and keeps the generic `edge`, `edge-smoke`, and `edge-providers` tags out of the Terra custom-environment path.
 
@@ -93,7 +93,7 @@ for approval in run.approval_controls:
 
 ## Live Terra End-To-End Trial
 
-Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. If the GitHub Container Registry package is private, publish the same image to Google Artifact Registry or make the GHCR package accessible to Terra before creating the Cloud Environment.
+Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created; verify that an unauthenticated Docker client can inspect the tag from outside the workflow login with `DOCKER_CONFIG="$(mktemp -d)" docker manifest inspect ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke`.
 
 1. Create or select a synthetic-only Terra workspace; do not use controlled data for this validation.
 2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, and enough disk for the image plus `/home/jupyter/heartwood-workspace`.

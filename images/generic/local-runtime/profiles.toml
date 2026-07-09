@@ -76,7 +76,7 @@ artifact_not_bundled_in_flavors = ["runtime", "providers"]
 
 [agent_server.openhands]
 status = "implemented"
-runtime_dependency = "openhands-agent-server==1.33.0, openhands-tools==1.33.0, libtmux==0.61.0"
+runtime_dependency = "openhands-agent-server==1.34.0, openhands-tools==1.34.0, libtmux==0.61.0"
 command = "agent-server --host 127.0.0.1 --port 8766"
 launcher = "images/generic/scripts/start_agent_server.sh"
 host = "127.0.0.1"

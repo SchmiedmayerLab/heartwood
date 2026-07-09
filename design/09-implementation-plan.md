@@ -14,7 +14,7 @@ This document is the implementation checklist. It records the current repository
 
 ## Current Baseline
 
-The repository is at **0G complete with the web UI and provider-invocation passes implemented**. Passes 0A through 0G are implemented and must stay green while the documentation-site, project-tracking, platform-proxy, larger-model, and controlled-platform work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners. The web UI and provider-invocation slices add the Spezi-based researcher interface, Server-Sent Events fallback, static asset serving, Jupyter proxy helpers, generic image web packaging, and policy-gated OpenAI-compatible provider invocation without changing the shared session command/event contract.
+The repository is at **0G, 0I, and 0J complete; 0H remains the next implementation pass**. Passes 0A through 0G, 0I, and 0J are implemented and must stay green while the documentation-site, project-tracking, registry-governance, platform-proxy, larger-model, and controlled-platform work lands. The completed 0G slice proves the portable CPU local-runtime smoke path, keeps the deterministic stub as an explicit fixture profile, packages the pinned OpenHands agent-server command and tool stack, adds authenticated OpenHands-backed bash execution for the Docker-only offline stack, and publishes the multi-architecture image family from native architecture runners. The completed web UI and provider-invocation slices add the Spezi-based researcher interface, Server-Sent Events fallback, static asset serving, Jupyter proxy helpers, generic image web packaging, Terra-derived notebook image packaging, and policy-gated OpenAI-compatible provider invocation without changing the shared session command/event contract.
 
 ### Implemented In 0A — Repository Bootstrap And CI Baseline
 
@@ -95,7 +95,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - The CLI can select a provider route from a validated provider configuration without reading provider secrets or invoking live provider APIs in synthetic tests.
 - Docker Compose disables runtime network access for the smoke service and runs the offline stack script end to end.
 - The offline stack smoke script starts the default `llama-cpp-cpu` runtime, runs detection, approves the synthetic model call, runs the agentic CLI through the local model endpoint, starts the gateway-managed OpenHands process during the agentic turn, writes a bounded synthetic workspace artifact through authenticated OpenHands bash execution, exports the scrubbed audit log, and generates the reviewer packet.
-- The container image publish workflow builds `docker-bake.hcl` targets on native `linux/amd64` and `linux/arm64` runners on `main`, merges the generic architecture outputs into multi-architecture manifests, frees runner disk before the real Terra build, publishes `edge`, `edge-smoke`, `edge-providers`, `edge-terra`, `edge-terra-smoke`, and commit-SHA flavor tags to GitHub Container Registry, verifies generic public tags resolve to both baseline Linux architectures, and verifies Terra public tags remain `linux/amd64` until the selected Terra base supports ARM.
+- The container image publish workflow builds `docker-bake.hcl` targets on native `linux/amd64` and `linux/arm64` runners on `main`, merges the generic architecture outputs into multi-architecture manifests, frees runner disk before the real Terra build, publishes `edge`, `edge-smoke`, `edge-providers`, `edge-terra`, `edge-terra-smoke`, and commit-SHA flavor tags to GitHub Container Registry, verifies every user-facing public tag through unauthenticated registry inspection, verifies generic tags resolve to both baseline Linux architectures, and verifies Terra tags remain `linux/amd64` until the selected Terra base supports ARM.
 - `docs/getting-started-offline.md` documents pull-and-run usage from the published smoke image and the local Compose workflow.
 - `docs/container-images.md` records the image naming scheme, flavor policy, provider secret posture, local model strategy, and future GitHub Issues/Projects migration.
 - The container smoke workflow runs the offline stack smoke on native GitHub-hosted `linux/amd64` and `linux/arm64` runners for pull requests, pushes to `main`, and manual dispatch. It also builds a lightweight Terra-compatible CI base, builds `edge-terra-smoke-ci` through the same platform Dockerfile on `linux/amd64`, runs the Terra platform image smoke, and runs the full offline stack smoke with runtime network disabled inside that CI image.
@@ -124,7 +124,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Export only scrubbed JSONL audit artifacts and attestations.
 - Run repository validation, Python quality checks, type checks, unit tests, replay tests, fixture-lint checks, coverage gates, and REUSE checks before merge.
 
-## Completed Phase 0 Integration Pass
+## Completed Phase 0 Implementation Passes
 
 ### Implemented In 0G — End-to-End Local Runtime And Image Publication
 
@@ -134,7 +134,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - The `llama-cpp-cpu` profile defines `linux/amd64` and `linux/arm64` support, CPU/GPU expectations, memory floor, localhost serving API, startup and shutdown behavior, failure modes, GGUF artifact policy, checksum policy, license posture, cache location, build-time resolution, runtime resolution, and CI expectations.
 - `ggml-org/llama.cpp` release `b9937` is pinned as the CPU runtime dependency through architecture-specific Ubuntu binary archives for `linux/amd64` and `linux/arm64`, each verified by SHA-256 during the Docker build.
 - The smoke image downloads `ggml-org/models-moved` `tinyllamas/stories260K.gguf` during image build, verifies byte size and SHA-256, and loads it at runtime without public network access.
-- `openhands-agent-server==1.33.0` is pinned for the Python 3.12 image path, and `images/generic/scripts/start_agent_server.sh` starts it only on loopback with temporary workspace paths.
+- `openhands-agent-server==1.34.0` and `openhands-tools==1.34.0` are pinned for the Python 3.12 image path, and `images/generic/scripts/start_agent_server.sh` starts them only on loopback with temporary workspace paths.
 - The session gateway can start a gateway-owned OpenHands agent-server child from environment configuration and blocks direct client endpoint exposure.
 - `HEARTWOOD_AGENT_BACKEND=openhands-bash` selects an OpenHands-backed backend that lists registered OpenHands tools and writes a synthetic artifact through authenticated `/api/bash/execute_bash_command` after confirmation instead of the deterministic no-op.
 - `HEARTWOOD_AGENT_BACKEND=local-workspace` remains available as a lightweight fallback backend for bounded local artifact writes without the OpenHands process.
@@ -217,18 +217,19 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 
 **Fit and sequencing**
 
-- Land this pass immediately after 0G so the public-facing documentation and project tracking reflect the implemented Docker, local-runtime, OpenHands, provider-route, and CI behavior before frontend work expands the surface area.
-- Keep this pass documentation- and governance-focused; do not add the researcher dashboard, platform adapters, live provider invocation, or larger model image targets here.
+- Land this pass next. It was intentionally deferred while the web UI, provider invocation, Terra-derived platform image, and published-image manifest work reached an end-to-end shape.
+- Keep this pass documentation- and governance-focused; do not add new runtime surfaces, new platform adapters, live controlled-platform validation, autonomous larger-model execution, or larger model image targets here.
 - Use only checked-in project material as site source content, and keep the generated site free of external runtime dependencies.
+- Preserve the completed CLI, notebook, web UI, provider-route, generic image, Terra image, offline smoke, and reviewer-packet behavior as the evidence base for the published documentation.
 
 **Required work**
 
 - Add a static documentation site build that renders the README, getting-started guide, container image guide, design documents, acronym glossary, project goals, current limitations, security posture, and contribution routing from checked-in Markdown.
 - Configure GitHub Pages publication from `main` only, using least-privilege workflow permissions and no repository secrets.
 - Add a pull-request documentation build job that fails on broken internal links, broken checked-in asset references, malformed Markdown where the selected tool can detect it, missing SPDX headers in new source files, and external CDN dependencies.
-- Add site navigation that exposes the offline Docker tutorial, image flavor policy, provider secret policy, local model strategy, architecture, security/compliance model, audit/reviewer-packet flow, testing/evaluation plan, development workflow, and implementation plan.
+- Add site navigation that exposes the offline Docker tutorial, Terra-style Jupyter demo, platform image extension mechanism, image flavor policy, provider secret policy, local model strategy, architecture, security/compliance model, audit/reviewer-packet flow, testing/evaluation plan, development workflow, and implementation plan.
 - Make the site build reproducible locally from the repository without requiring published images, cloud credentials, or network access after dependencies are installed.
-- Update reviewer-packet limitations so they describe the static site as the current documentation pass, not as a missing 0G exit gate.
+- Update reviewer-packet limitations so they describe the static site as the current documentation pass and acknowledge that the web UI, Server-Sent Events fallback, Jupyter-style proxy smoke, and Terra-style packaged demo smoke are already implemented synthetic paths.
 - Formalize the container tag lifecycle in documentation and CI: public `edge`, `edge-smoke`, `edge-providers`, commit-SHA, and future semver tags are unified multi-platform image indexes; architecture-specific tags are internal assembly details, not user-facing install targets.
 - Keep post-publish registry verification for every public image tag: generic unified tags must resolve to `linux/amd64` and `linux/arm64`, while platform-derived tags must match the platform manifest's supported architecture set.
 - Replace architecture-helper tags with digest-based manifest assembly where feasible; otherwise keep helper tags explicitly internal and define a retention policy that preserves manifests referenced by public indexes.
@@ -243,7 +244,7 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 - Static asset checks prove no external CDN or public network dependency is required at runtime.
 - GitHub Pages publish workflow runs only from `main` and uses read-only contents permissions plus the minimum Pages deployment permissions.
 - Reviewer-packet tests assert that current limitations no longer name 0G as blocked by the documentation site.
-- Image publication checks inspect public unified tags after manifest creation and fail if any required platform is missing or any platform-specific tag publishes an unsupported architecture.
+- Image publication checks inspect public unified tags with an unauthenticated Docker config after manifest creation and fail if a tag is private, any required platform is missing, or any platform-specific tag publishes an unsupported architecture.
 - Registry cleanup tests run in dry-run mode and assert that current moving tags, semver tags, retained commit-SHA tags, and manifests referenced by public indexes are never selected for deletion.
 
 **Exit gates**
@@ -392,8 +393,8 @@ The repository is at **0G complete with the web UI and provider-invocation passe
 
 ## Implementation Backlog
 
-1. Keep the implemented 0A through 0G baseline green while adding documentation, larger-model, and platform work.
-2. Land 0H next by publishing the static documentation site, adding documentation CI, updating reviewer-packet limitations, and moving operational tracking into GitHub Issues and a GitHub Project.
+1. Keep the implemented 0A through 0G, 0I, and 0J baseline green while adding documentation, larger-model, and platform work.
+2. Land 0H next by publishing the static documentation site, adding documentation CI, updating reviewer-packet limitations, formalizing GHCR tag cleanup, and moving operational tracking into GitHub Issues and a GitHub Project.
 3. Keep the implemented `llama-cpp-cpu` profile covered by the pinned llama.cpp server binary, model artifact provenance, hash verification, license posture, resource limits, `linux/amd64` and `linux/arm64` support, and offline load/query smoke test.
 4. Keep `edge`, `edge-smoke`, `edge-providers`, commit-SHA flavor tags, and any required temporary architecture build outputs reproducible through `docker-bake.hcl` and the native-runner publish workflow.
 5. Verify public image tags as unified multi-platform indexes, move away from permanent architecture-helper tags where feasible, and add a GHCR cleanup policy with protected tag patterns and dry-run checks.
