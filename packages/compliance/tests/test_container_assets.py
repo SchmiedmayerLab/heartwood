@@ -283,13 +283,14 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
         in bake
     )
     assert (
-        'target "terra-runtime" {\n  inherits = ["_terra_common"]\n  attest = '
-        '["type=sbom", "type=provenance,mode=max"]' in bake
+        'target "_platform_common" {\n  context = "."\n  dockerfile = "images/platform/Dockerfile"'
+        "\n  pull = true\n}" in bake
     )
-    assert (
-        'target "terra-smoke" {\n  inherits = ["_terra_common"]\n  attest = '
-        '["type=sbom", "type=provenance,mode=max"]' in bake
-    )
+    assert 'cache-from = ["type=gha"]' in bake
+    assert 'cache-to = ["type=gha,mode=min"]' in bake
+    assert 'attest = ["type=sbom", "type=provenance,mode=max"]' in bake
+    assert 'target "terra-runtime" {\n  inherits = ["_terra_common"]' in bake
+    assert 'target "terra-smoke" {\n  inherits = ["_terra_common"]' in bake
     assert 'target "terra-smoke-ci" {\n  inherits = ["_terra_common"]\n  pull = false' in bake
     assert 'variable "TERRA_BASE_IMAGE"' in bake
     assert 'variable "TERRA_BASE_PLATFORM"' in bake
@@ -612,6 +613,7 @@ def test_container_smoke_workflow_runs_baseline_platform_matrix() -> None:
     assert "DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}" in workflow
     assert "docker compose -f images/generic/compose.yaml run --rm --build heartwood" in workflow
     assert "Terra image smoke test (linux/amd64)" in workflow
+    assert "driver: docker" in workflow
     assert (
         "docker buildx build --check --platform linux/amd64 --file images/platform/Dockerfile ."
         in workflow

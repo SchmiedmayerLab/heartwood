@@ -86,8 +86,6 @@ target "_platform_common" {
   context = "."
   dockerfile = "images/platform/Dockerfile"
   pull = true
-  cache-from = ["type=gha"]
-  cache-to = ["type=gha,mode=min"]
 }
 
 target "_terra_common" {
@@ -106,6 +104,8 @@ target "_terra_common" {
 
 target "terra-runtime" {
   inherits = ["_terra_common"]
+  cache-from = ["type=gha"]
+  cache-to = ["type=gha,mode=min"]
   attest = ["type=sbom", "type=provenance,mode=max"]
   args = {
     HEARTWOOD_BUNDLE_LOCAL_MODEL = "0"
@@ -119,6 +119,8 @@ target "terra-runtime" {
 
 target "terra-smoke" {
   inherits = ["_terra_common"]
+  cache-from = ["type=gha"]
+  cache-to = ["type=gha,mode=min"]
   attest = ["type=sbom", "type=provenance,mode=max"]
   args = {
     HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
