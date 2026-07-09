@@ -9,5 +9,25 @@
 from __future__ import annotations
 
 from heartwood.adapters.model.fake_local import FakeLocalModelProviderAdapter
+from heartwood.adapters.model.provider_routes import (
+    ProviderConfig,
+    ProviderConfigError,
+    ProviderInvocationError,
+    ProviderRoute,
+    ProviderRouteModelProviderAdapter,
+    invoke_provider_route,
+    load_provider_config,
+    provider_config_from_mapping,
+)
 
-__all__ = ["FakeLocalModelProviderAdapter"]
+__all__ = [
+    "FakeLocalModelProviderAdapter",
+    "ProviderConfig",
+    "ProviderConfigError",
+    "ProviderInvocationError",
+    "ProviderRoute",
+    "ProviderRouteModelProviderAdapter",
+    "invoke_provider_route",
+    "load_provider_config",
+    "provider_config_from_mapping",
+]

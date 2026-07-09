@@ -1,0 +1,56 @@
+{
+  "name": "@heartwood/webui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Researcher web UI for Heartwood sessions.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "format:check": "prettier --check .",
+    "license:check": "node scripts/check-licenses.mjs",
+    "lint": "eslint .",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:gateway": "node scripts/smoke-gateway.cjs",
+    "test:jupyter-proxy": "node scripts/smoke-jupyter-proxy.cjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stanfordspezi/spezi-web-design-system": "0.20.0",
+    "@tanstack/react-query": "5.101.2",
+    "lucide-react": "1.23.0",
+    "next-intl": "4.13.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "postcss": "8.5.10"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@stanfordspezi/spezi-web-configurations": "0.7.0",
+    "@tailwindcss/postcss": "4.1.13",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@types/node": "24.0.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.4",
+    "@vitest/coverage-v8": "3.2.6",
+    "eslint": "9.39.4",
+    "eslint-import-resolver-typescript": "4.4.5",
+    "jsdom": "29.1.1",
+    "prettier": "3.9.4",
+    "tailwindcss": "4.1.13",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "3.2.6"
+  }
+}

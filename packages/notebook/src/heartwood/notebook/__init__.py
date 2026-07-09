@@ -19,6 +19,7 @@ from heartwood.notebook._view_model import (
     PolicyStatus,
     SkillProposal,
     build_view_model,
+    jupyter_proxy_url,
 )
 from heartwood.notebook._widgets import WidgetSpec, build_widget_spec, render_widgets
 
@@ -36,6 +37,7 @@ __all__ = [
     "__version__",
     "build_view_model",
     "build_widget_spec",
+    "jupyter_proxy_url",
     "render_widgets",
 ]
 

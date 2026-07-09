@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 ## Format: `SKILL.md`
 
-Skills use the open **`SKILL.md`** standard (a directory with a `SKILL.md` file plus optional `scripts/`, `references/`, `assets/`), loaded natively by the agent core with progressive disclosure: only ~100 tokens of name+description per skill load at startup; the body loads on activation; resources load on reference. The standard is portable across agents (Claude Code, Codex, Gemini CLI, Cursor), so a skill authored for heartwood remains valid elsewhere, which preserves author reach.
+Skills use the open **`SKILL.md`** standard (a directory with a `SKILL.md` file plus optional `scripts/`, `references/`, `assets/`), loaded natively by the agent core with progressive disclosure: only ~100 tokens of name+description per skill load at startup; the body loads on activation; resources load on reference. The standard is portable across common agent and editor hosts, so a skill authored for heartwood remains valid elsewhere, which preserves author reach.
 
 ## heartwood metadata
 

@@ -17,8 +17,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+import uvicorn
+
 from heartwood.compliance import ReviewerPacketGenerator
-from heartwood.gateway import ProviderConfigError, SessionGateway, load_provider_config
+from heartwood.gateway import (
+    GatewayAsgiApp,
+    ProviderConfigError,
+    SessionGateway,
+    load_provider_config,
+)
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 __all__ = ["__version__", "main"]
@@ -30,6 +37,7 @@ _DEFAULT_WORKSPACE = Path(".heartwood") / "sessions"
 _DEFAULT_MODEL_ENDPOINT = "https://model.local.invalid/v1/chat/completions"
 _DEFAULT_LOOPBACK_MODEL_ENDPOINT = "http://127.0.0.1:8765/v1/chat/completions"
 _DEFAULT_FIXTURE_ROOT = Path("fixtures") / "synthetic"
+_DEFAULT_WEB_ROOT = Path("packages") / "webui" / "dist"
 
 
 def _format_detection(event: SessionEvent, *, workspace: Path) -> str:
@@ -215,6 +223,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--provider-route",
         help="Provider route id to select from --provider-config.",
     )
+    run.add_argument(
+        "--invoke-provider",
+        action="store_true",
+        help="Invoke the selected provider route after policy approval.",
+    )
     for name, help_text in (
         ("approve", "Approve a skill, egress decision, model call, or tool call."),
         ("deny", "Deny a skill, egress decision, model call, or tool call."),
@@ -245,6 +258,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     packet.add_argument("--output", type=Path, default=Path("compliance") / "reviewer-packet")
     packet.add_argument("--fixture-root", type=Path, default=_DEFAULT_FIXTURE_ROOT)
+    serve = subparsers.add_parser(
+        "serve",
+        help="Serve the gateway API and packaged researcher web UI.",
+    )
+    serve.add_argument("--host", default="127.0.0.1", help="Gateway bind host.")
+    serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
+    serve.add_argument(
+        "--web-root",
+        type=Path,
+        default=_DEFAULT_WEB_ROOT,
+        help="Directory containing the built web UI assets.",
+    )
+    serve.add_argument(
+        "--base-path",
+        default="/",
+        help="Static asset base path when served behind a notebook proxy.",
+    )
     return parser
 
 
@@ -252,6 +282,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``heartwood`` command and return a process exit code."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "serve":
+        return _handle_serve(
+            workspace=args.workspace,
+            host=args.host,
+            port=args.port,
+            web_root=args.web_root,
+            base_path=args.base_path,
+        )
     gateway = SessionGateway(workspace=args.workspace)
     gateway.start()
     try:
@@ -271,6 +309,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run":
             if args.local_model and args.provider_route:
                 parser.error("--provider-route cannot be combined with --local-model")
+            if args.invoke_provider and not args.provider_route:
+                parser.error("--invoke-provider requires --provider-route")
             endpoint = (
                 _DEFAULT_LOOPBACK_MODEL_ENDPOINT
                 if args.local_model and args.endpoint == _DEFAULT_MODEL_ENDPOINT
@@ -290,9 +330,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "prompt": args.prompt,
                 "endpoint": endpoint,
                 "invoke_model": args.local_model,
+                "invoke_provider": args.invoke_provider,
             }
             if provider_route is not None:
                 run_payload["provider_route"] = provider_route
+                run_payload["provider_route_id"] = args.provider_route
+                run_payload["provider_config_path"] = str(args.provider_config)
             command = _command(
                 gateway,
                 session_id=args.session_id,
@@ -407,6 +450,27 @@ def _handle_reviewer_packet(
     print(f"Reviewer packet: {packet.index_path}")
     for path in packet.files:
         print(f"  - {path}")
+    return 0
+
+
+def _handle_serve(
+    *,
+    workspace: Path,
+    host: str,
+    port: int,
+    web_root: Path,
+    base_path: str,
+) -> int:
+    if not web_root.exists():
+        msg = f"web UI assets not found: {web_root}"
+        raise SystemExit(msg)
+
+    app = GatewayAsgiApp(
+        SessionGateway(workspace=workspace),
+        static_dir=web_root,
+        static_base_path=base_path,
+    )
+    uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
 
 

@@ -1,0 +1,71 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "heartwood.platform-images.v1"
+image_name = "ghcr.io/schmiedmayerlab/heartwood"
+moving_channel = "edge"
+default_platform = "terra"
+
+[defaults]
+dockerfile = "images/platform/Dockerfile"
+runtime_home = "/opt/heartwood"
+web_port = 8767
+web_host = "127.0.0.1"
+entrypoint_policy = "Preserve the platform base image entrypoint; CI smoke tests override entrypoint when running Heartwood scripts directly."
+secret_policy = "Provider secrets are runtime files or managed identity only; platform images must not bake secrets in ARG, ENV, labels, scripts, or config examples."
+
+[platforms.terra]
+status = "implemented"
+base_image = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+base_image_source = "https://github.com/DataBiosphere/terra-docker/blob/master/config/conf.json"
+base_image_family = "terra-jupyter-python"
+base_image_version = "1.1.6"
+base_image_parent = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-base:1.1.4"
+base_platform = "linux/amd64"
+platform_home = "/home/jupyter"
+platform_user = "jupyter"
+jupyter_prefix = "/opt/conda"
+notebook_kernel = "heartwood"
+proxy = "jupyter-server-proxy under the Terra Leonardo proxy"
+registry_policy = "Publish public GHCR tags for demos; use GAR or another Terra-accessible private registry for private controlled-platform deployments."
+supported_platforms = ["linux/amd64"]
+unsupported_platforms = ["linux/arm64"]
+unsupported_reason = "The selected Terra Jupyter base image is documented and validated as an amd64 notebook base; do not publish ARM tags until the base image supports ARM."
+runtime_target = "terra-runtime"
+smoke_target = "terra-smoke"
+ci_smoke_target = "terra-smoke-ci"
+runtime_tag = "edge-terra"
+smoke_tag = "edge-terra-smoke"
+ci_smoke_tag = "edge-terra-smoke-ci"
+commit_runtime_tag = "sha-<git-sha>-terra"
+commit_smoke_tag = "sha-<git-sha>-terra-smoke"
+bundles_model_artifact_in_smoke = true
+ci_required = true
+live_workspace_validation_required = true
+
+[[platforms.terra.required_evidence]]
+name = "local-ci-smoke"
+description = "Build the Terra-compatible CI base, build the Terra smoke image through the same platform Dockerfile, run the Heartwood platform image smoke, and run the offline stack smoke with runtime network disabled."
+
+[[platforms.terra.required_evidence]]
+name = "main-publish-real-terra"
+description = "Build and publish the Terra runtime and smoke images from the real Terra base on main after freeing runner disk, then verify the published GHCR tags."
+
+[[platforms.terra.required_evidence]]
+name = "live-terra-smoke"
+description = "Launch the published Terra smoke image in a synthetic Terra workspace, open the proxied web UI, submit one synthetic chat command, replay the same session through CLI/notebook APIs, and record image/base digests plus proxy behavior."
+
+[future_platforms.seven_bridges]
+base_image = "to-be-selected"
+platform_home = "to-be-validated"
+proxy = "jupyter-server-proxy under Data Studio"
+required_before_implementation = ["base image selection", "registry access policy", "workspace smoke path", "identity/proxy header validation"]
+
+[future_platforms.dnanexus]
+base_image = "to-be-selected"
+platform_home = "to-be-validated"
+proxy = "jupyter-server-proxy first; httpsApp as platform-native upgrade"
+required_before_implementation = ["base image selection", "docker asset/load path", "workspace smoke path", "identity/proxy header validation"]

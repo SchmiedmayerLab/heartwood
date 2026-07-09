@@ -16,6 +16,7 @@ dependencies = [
     "heartwood-compliance",
     "heartwood-gateway",
     "heartwood-session",
+    "uvicorn==0.51.0",
 ]
 
 [project.scripts]

@@ -22,6 +22,10 @@ path = [
     "fixtures/**/*.jsonl",
     "skills/**/*.json",
     "evals/**/*.json",
+    "docs/**/*.ipynb",
+    "packages/webui/package.json",
+    "packages/webui/package-lock.json",
+    "packages/webui/tsconfig.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"

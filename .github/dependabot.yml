@@ -22,3 +22,10 @@ updates:
     groups:
       python:
         patterns: ["*"]
+  - package-ecosystem: "npm"
+    directory: "/packages/webui"
+    schedule:
+      interval: "weekly"
+    groups:
+      web-ui:
+        patterns: ["*"]

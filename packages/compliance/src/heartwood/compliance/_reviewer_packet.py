@@ -140,10 +140,13 @@ class ReviewerPacketGenerator:
                     "gateway-managed, and used for bounded bash execution; autonomous "
                     "coding quality with a larger local model remains future validation work."
                 ),
-                ("- The static documentation site remains required for the 0G exit gate."),
+                (
+                    "- The static documentation site is the next documentation pass; "
+                    "checked-in Markdown remains the current source of truth."
+                ),
                 (
                     "- The web UI, Server-Sent Events fallback, and platform proxy smoke tests "
-                    "are planned for 0H."
+                    "are planned after the documentation-site pass."
                 ),
                 (
                     "- Platform-specific policy review starts after the generic reviewer packet "

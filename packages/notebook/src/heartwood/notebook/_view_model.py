@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,6 +72,8 @@ class PolicyStatus:
     decision: str
     endpoint: str
     reason: str
+    route_id: str | None = None
+    provider: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,16 +129,26 @@ class NotebookSession:
         *,
         endpoint: str = "https://model.local.invalid/v1/chat/completions",
         invoke_model: bool = False,
+        provider_config_path: Path | None = None,
+        provider_route_id: str | None = None,
+        invoke_provider: bool = False,
     ) -> NotebookViewModel:
         """Run the synthetic workflow through the policy-gated session path."""
-        return self._handle(
-            CommandKind.RUN,
-            {
-                "prompt": prompt,
-                "endpoint": endpoint,
-                "invoke_model": invoke_model,
-            },
-        )
+        payload: dict[str, JsonValue] = {
+            "prompt": prompt,
+            "endpoint": endpoint,
+            "invoke_model": invoke_model,
+            "invoke_provider": invoke_provider,
+        }
+        if provider_config_path is not None:
+            payload["provider_config_path"] = str(provider_config_path)
+        if provider_route_id is not None:
+            payload["provider_route_id"] = provider_route_id
+        return self._handle(CommandKind.RUN, payload)
+
+    def web_proxy_url(self, *, port: int = 8767) -> str:
+        """Return the proxied web UI URL for Jupyter-style environments."""
+        return jupyter_proxy_url(port=port)
 
     def approve(
         self,
@@ -244,21 +257,23 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
                     detail=str(event.payload.get("summary", "")),
                 )
             )
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type="tool-call",
                     target_id=target_id,
                     label=f"Approve {event.payload.get('tool_name', 'tool call')}",
-                )
+                ),
             )
         elif kind == EventKind.CONFIRMATION_REQUESTED.value:
             request = _mapping_payload(event.payload["request"], "request")
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type="tool-call",
                     target_id=str(request["tool_call_id"]),
                     label=f"Review {request['tool_name']}",
-                )
+                ),
             )
         elif kind == EventKind.APPROVAL_RECORDED.value:
             approval = _mapping_payload(event.payload["approval"], "approval")
@@ -270,29 +285,34 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
                         detail=str(approval.get("reason", "")),
                     )
                 )
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type=str(approval["target_type"]),
                     target_id=str(approval["target_id"]),
                     label=f"{approval['decision']} {approval['target_type']}",
                     decision=str(approval["decision"]),
-                )
+                ),
             )
         elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
             decision = _mapping_payload(event.payload["decision"], "decision")
+            route = _optional_mapping_payload(event.payload.get("provider_route"))
             policies.append(
                 PolicyStatus(
                     decision=str(decision["decision"]),
                     endpoint=str(decision["endpoint"]),
                     reason=str(decision["reason"]),
+                    route_id=None if route is None else str(route["route_id"]),
+                    provider=None if route is None else str(route["provider"]),
                 )
             )
-            approvals.append(
+            _upsert_approval(
+                approvals,
                 ApprovalControl(
                     target_type="model-call",
                     target_id=str(decision["decision_id"]),
                     label=f"Review model call to {decision['endpoint']}",
-                )
+                ),
             )
         elif kind == EventKind.AUDIT_EXPORT_RECORDED.value:
             exports.append(
@@ -317,6 +337,22 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
         export_actions=tuple(exports),
         paused=paused,
     )
+
+
+def _upsert_approval(approvals: list[ApprovalControl], control: ApprovalControl) -> None:
+    for index, existing in enumerate(approvals):
+        if existing.target_type == control.target_type and existing.target_id == control.target_id:
+            approvals[index] = control
+            return
+    approvals.append(control)
+
+
+def jupyter_proxy_url(*, port: int, env: dict[str, str] | None = None) -> str:
+    """Build a `jupyter-server-proxy` URL for the current notebook server."""
+    active_env = os.environ if env is None else env
+    prefix = active_env.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+    normalized = prefix if prefix.startswith("/") else f"/{prefix}"
+    return f"{normalized.rstrip('/')}/proxy/{port}/"
 
 
 def _activity_item(event: SessionEvent) -> ActivityItem:
@@ -366,6 +402,12 @@ def _mapping_payload(value: JsonValue, name: str) -> dict[str, JsonValue]:
         msg = f"expected {name} payload to be an object"
         raise TypeError(msg)
     return value
+
+
+def _optional_mapping_payload(value: JsonValue | None) -> dict[str, JsonValue] | None:
+    if value is None:
+        return None
+    return _mapping_payload(value, "optional mapping")
 
 
 def _float_payload(value: JsonValue, name: str) -> float:

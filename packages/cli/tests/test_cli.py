@@ -242,6 +242,17 @@ def test_run_requires_provider_config_for_provider_route(
     assert exit_info.value.code == 2
 
 
+def test_run_requires_provider_route_for_provider_invocation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "sessions"
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--workspace", str(workspace), "run", "--invoke-provider"])
+
+    assert exit_info.value.code == 2
+
+
 def test_run_reports_missing_provider_config_as_cli_error(
     tmp_path: Path,
 ) -> None:
@@ -259,6 +270,43 @@ def test_run_reports_missing_provider_config_as_cli_error(
         )
 
     assert exit_info.value.code == 2
+
+
+def test_serve_constructs_gateway_with_packaged_web_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    (web_root / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def run(app: object, *, host: str, port: int, log_level: str) -> None:
+        calls.append({"app": app, "host": host, "port": port, "log_level": log_level})
+
+    monkeypatch.setattr("uvicorn.run", run)
+
+    code = main(
+        [
+            "--workspace",
+            str(tmp_path / "sessions"),
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8767",
+            "--web-root",
+            str(web_root),
+            "--base-path",
+            "/proxy/8767",
+        ]
+    )
+
+    assert code == 0
+    assert len(calls) == 1
+    assert calls[0]["host"] == "127.0.0.1"
+    assert calls[0]["port"] == 8767
+    assert calls[0]["log_level"] == "info"
 
 
 def test_deny_pause_resume_and_empty_replay_are_rendered(

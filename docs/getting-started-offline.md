@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Getting Started With The Offline Stack
 
-This guide runs the Phase 0 generic Heartwood smoke stack without public runtime network access. It demonstrates the intended shipping shape: one multi-architecture image family with a default runtime image, a smoke image with a tiny verified model artifact, a provider-route image for platform embedding, the CLI, gateway-backed session flow, notebook package, synthetic fixtures, verified skills, policy-gated local model path, a pinned OpenHands agent-server package, audit export, and a synthetic evidence bundle.
+This guide runs the Phase 0 generic Heartwood smoke stack without public runtime network access. It demonstrates the intended shipping shape: one multi-architecture image family with a default runtime image, a smoke image with a tiny verified model artifact, a provider-route image for platform embedding, the CLI, gateway-backed session flow, notebook package, researcher web UI, synthetic fixtures, verified skills, policy-gated local model path, a pinned OpenHands agent-server package, audit export, and a synthetic evidence bundle.
 
 The default local-runtime profile in this guide is `llama-cpp-cpu`. The smoke image starts the pinned llama.cpp `llama-server` binary on `127.0.0.1`, loads a tiny verified GGUF artifact bundled into that smoke flavor, runs one approved local model call through the gateway policy path, starts the gateway-managed OpenHands agent-server, and writes a bounded synthetic workspace artifact through authenticated OpenHands `/api/bash/execute_bash_command` execution. The model artifact exists to prove offline load/query behavior and has no production or biomedical quality claim. The deterministic `stub-loopback` profile remains available for fixture checks by setting `HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback`.
 
@@ -25,6 +25,10 @@ The smoke test proves offline load, query, policy gating, event flow, tool execu
 | Runtime | `edge` | Default platform-ready image with no bundled model weights. |
 | Smoke | `edge-smoke` | Offline stack CI and tutorial image with the tiny verified GGUF artifact. |
 | Providers | `edge-providers` | Provider-route image with file-based secret references and no provider secrets. |
+| Terra Runtime | `edge-terra` | Terra-derived notebook image with no bundled model weights. |
+| Terra Smoke | `edge-terra-smoke` | Terra-derived notebook image with the tiny verified GGUF artifact for synthetic Terra demos and CI smoke. |
+
+The `edge-terra-smoke-ci` tag is a local CI tag only. It is built from a lightweight Terra-compatible base to test the platform Dockerfile, notebook assumptions, packaged web UI, local model path, and offline stack without pulling the real Terra base in every pull request.
 
 Commit-pinned tags use `sha-<git-sha>`, `sha-<git-sha>-smoke`, and `sha-<git-sha>-providers`. Stable release tags will use `v<semver>` after the first release; `latest` is intentionally not used before then.
 
@@ -32,7 +36,7 @@ The bundled artifact is intentionally tiny so pull-request CI can exercise the s
 
 ## Architecture And Acceleration Scope
 
-The image family is expected to publish and smoke-test `linux/amd64` and `linux/arm64` variants. The current technology stack is Python-first and uses portable container tooling, so both architectures are reasonable baseline targets. GitHub-hosted CI uses standard `ubuntu-latest` runners with QEMU for the `linux/arm64` smoke path until native hosted `arm64` runners are stable enough for this repository's required checks.
+The image family is expected to publish and smoke-test `linux/amd64` and `linux/arm64` variants. The current technology stack is Python-first with a built static web UI and portable container tooling, so both architectures are reasonable baseline targets. GitHub-hosted CI uses native `ubuntu-24.04` and `ubuntu-24.04-arm` runners for the smoke path so the ARM image is not validated through QEMU runtime emulation.
 
 Docker can expose GPUs to containers, but GPU support is a host capability, not something a portable CPU image can guarantee. The baseline real runtime therefore remains `llama-cpp-cpu`; NVIDIA acceleration is tracked separately as `llama-cpp-cuda`, requiring an explicit CUDA-enabled runtime, Docker GPU device exposure, and self-hosted GPU CI or scheduled platform checks. The CPU profile must keep working without a GPU.
 
@@ -55,7 +59,18 @@ docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
 docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
 ```
 
-The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves the synthetic model call, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, and writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`.
+The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves the synthetic model call, invokes `heartwood run --local-model`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`, then runs the Python-only Terra-style Jupyter demo smoke against the packaged web UI and notebook API.
+
+The packaged image includes the project README, acronym glossary, `docs/`, and `design/` under `/opt/heartwood`, including `/opt/heartwood/docs/terra-jupyter-demo.ipynb`. This lets a runtime image carry the tutorial material needed for a local or platform notebook demonstration without a repository checkout.
+
+To open the packaged researcher UI from the runtime image, publish the gateway port and start the web launcher:
+
+```bash
+docker pull ghcr.io/schmiedmayerlab/heartwood:edge
+docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
+```
+
+Open `http://127.0.0.1:8767/`. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects. Heartwood supports both common notebook proxy shapes: preserved-prefix routes such as `/proxy/8767/`, where `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` is passed to the launcher, and stripped `jupyter-server-proxy` routes such as `/user/<name>/proxy/8767/`, where the gateway serves `/` and the proxy strips the browser prefix before forwarding. CI smoke tests both the preserved-prefix gateway route and the stripped Jupyter-style route used by Terra-like notebook environments. See [Terra-Style Jupyter Demo](terra-jupyter-demo.md) for the synthetic workspace walkthrough.
 
 ## Run From A Checkout
 
@@ -75,11 +90,14 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - The model response content is not persisted into session events or audit exports; only response metadata is recorded.
 - The OpenHands-backed backend emits tool proposal, confirmation, and execution events after the model call, calls authenticated OpenHands `/api` routes, and writes a bounded synthetic artifact through the agent-server bash service.
 - The audit export and reviewer packet can be produced from the same offline session.
+- The packaged web UI can be served by the gateway from self-contained assets without a CDN, and the same session event stream can be surfaced through WebSocket or Server-Sent Events under local or Jupyter-style proxy routes.
+- The Jupyter-style smoke path serves the UI through an external `/user/synthetic/proxy/<port>/` route, strips that prefix before forwarding to the gateway, and verifies static assets, command submission, event replay, and Server-Sent Events through the external notebook URL shape.
+- The packaged runtime image can execute the same Jupyter-style smoke without Node.js or a repository checkout; the smoke uses only Python, the installed `heartwood` executable, packaged static assets, and the notebook bridge.
 
 ## What It Does Not Prove Yet
 
 - It does not validate controlled data.
 - It does not yet validate optional GPU acceleration; that belongs to a separate CUDA profile and a GPU-capable runner.
 - It does not yet prove autonomous coding quality from a larger local tutorial model; the bundled tiny model is only a load/query artifact, while the tool-execution smoke is intentionally bounded and deterministic after approval.
-- It does not run the researcher web UI or platform proxy routes.
-- It does not publish the static documentation site; that belongs with the web/documentation pass.
+- It does not validate Terra, Seven Bridges, or DNAnexus controlled-platform identity binding; Terra platform-image CI is local and synthetic until a real Terra workspace smoke records platform launch, proxy behavior, and identity evidence.
+- It does not publish the static documentation site; that belongs with the next documentation-site pass.
