@@ -71,6 +71,7 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "Platform Image Extension Guide" in guide
     assert "images/platforms.toml" in guide
     assert "images/platform/Dockerfile" in guide
+    assert "images/platform/scripts/verify_registry_manifest.py" in guide
     assert "docker-bake.hcl" in guide
     assert ".github/workflows/container-smoke.yml" in guide
     assert ".github/workflows/container-image.yml" in guide
@@ -80,6 +81,8 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "empty Docker config" in guide
     assert "anonymous registry access" in guide
     assert "manifest media type" in guide
+    assert "config media type" in guide
+    assert "non-platform manifest policy" in guide
     assert "Terra tags must return `application/vnd.docker.distribution.manifest.v2+json`" in guide
     assert "local-only CI load targets without attestations" in guide
     assert (
@@ -91,6 +94,7 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "Synthetic data only" in guide
     assert "Platform Image Extension Guide](docs/platform-images.md)" in readme
     assert "Platform Image Extension Guide](platform-images.md)" in container_docs
+    assert "images/platform/scripts/verify_registry_manifest.py" in container_docs
     assert (
         "Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests"
         in container_docs

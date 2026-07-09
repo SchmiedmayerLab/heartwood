@@ -31,30 +31,12 @@ Heartwood publishes one image family from one Dockerfile and one Buildx Bake fil
 
 Do not use `latest` until the first stable release exists. Do not use branch names such as `main` or informal tags such as `dev-main` for user-facing image references.
 
-The generic publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64` and `edge-arm64`, creates the public multi-architecture generic tags with `docker buildx imagetools create`, keeps Buildx SBOM/provenance attestations on those generic image artifacts, and verifies the public tags through an unauthenticated registry inspection before the workflow succeeds. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references. Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests with media type `application/vnd.docker.distribution.manifest.v2+json` because the selected Terra notebook base is amd64 and Terra Leonardo image auto-detection accepts Docker manifest v2 media types but not OCI indexes. The Terra publish path disables Buildx default attestations for `edge-terra`, `edge-terra-smoke`, and commit-SHA Terra tags because attached attestations would force an OCI image index that Leonardo rejects. Pull-request CI uses `edge-terra-smoke-ci` only as a local test tag built from a lightweight Terra-compatible base; it is not published as a user-facing platform image.
+The generic publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64` and `edge-arm64`, creates the public multi-architecture generic tags with `docker buildx imagetools create`, keeps Buildx SBOM/provenance attestations on those generic image artifacts, and verifies the public tags through an unauthenticated registry inspection before the workflow succeeds. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references. Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests with media type `application/vnd.docker.distribution.manifest.v2+json` because the selected Terra notebook base is amd64 and Terra Leonardo image auto-detection accepts Docker manifest v2 media types but not OCI indexes. The Terra publish path disables Buildx default attestations for `edge-terra`, `edge-terra-smoke`, and commit-SHA Terra tags because attached attestations would force an OCI image index that Leonardo rejects. Platform-derived tag checks are driven by `images/platform/scripts/verify_registry_manifest.py` and the `images/platforms.toml` manifest so future platforms can declare their own manifest media type, config media type, supported architecture set, and non-platform manifest policy. Pull-request CI uses `edge-terra-smoke-ci` only as a local test tag built from a lightweight Terra-compatible base; it is not published as a user-facing platform image.
 
 The `SchmiedmayerLab/heartwood` GHCR package must stay public because Terra cannot use the main demo tags without anonymous pull access. If GitHub reports the package as private, change the package visibility from the GitHub package settings page before relying on the image in Terra. The workflow verifies Terra tags with the same unauthenticated Docker schema-2 manifest request shape that Leonardo uses; this manual check is stricter than `docker manifest inspect`, which can succeed on OCI indexes that Leonardo rejects:
 
 ```bash
-python3 - <<'PY'
-import json
-import urllib.parse
-import urllib.request
-
-repo = "schmiedmayerlab/heartwood"
-tag = "edge-terra-smoke"
-media_type = "application/vnd.docker.distribution.manifest.v2+json"
-token_url = "https://ghcr.io/token?" + urllib.parse.urlencode({"service": "ghcr.io", "scope": f"repository:{repo}:pull"})
-with urllib.request.urlopen(token_url, timeout=30) as response:
-    token = json.load(response)["token"]
-request = urllib.request.Request(f"https://ghcr.io/v2/{repo}/manifests/{tag}", headers={"Accept": media_type, "Authorization": f"Bearer {token}"})
-with urllib.request.urlopen(request, timeout=30) as response:
-    assert response.headers.get_content_type() == media_type
-    manifest = json.load(response)
-assert manifest["mediaType"] == media_type
-assert "manifests" not in manifest
-print(f"{repo}:{tag} is a Docker schema-2 image manifest")
-PY
+python3 images/platform/scripts/verify_registry_manifest.py --manifest images/platforms.toml --platform terra --image-name ghcr.io/schmiedmayerlab/heartwood --git-sha <published-git-sha>
 ```
 
 Registry maintenance must protect public moving tags, commit-SHA tags retained by policy, future semver tags, generic SBOM/provenance artifacts, and any manifest referenced by a public multi-architecture index. Terra user-facing tags intentionally lack Buildx attestations until Leonardo accepts OCI indexes or OCI image manifests. Cleanup automation should begin with dry-run reports, delete only stale helper tags or unreferenced versions outside the retention window, and record the GHCR permissions required to perform deletions. The next documentation and governance pass must keep post-publish registry verification aligned with this tag policy and add the dry-run cleanup policy.

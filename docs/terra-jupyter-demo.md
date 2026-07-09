@@ -93,7 +93,7 @@ for approval in run.approval_controls:
 
 ## Live Terra End-To-End Trial
 
-Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created, and the tag must pass the Leonardo-compatible Docker schema-2 manifest check in [Container Images](container-images.md); `docker manifest inspect` alone is insufficient because it can read OCI indexes that Leonardo rejects.
+Use this checklist after `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke` has been published by the main-branch image workflow. The GHCR package must be public before the Terra Cloud Environment is created, and the tag must pass the Leonardo-compatible Docker schema-2 manifest check in [Container Images](container-images.md) through `images/platform/scripts/verify_registry_manifest.py`; `docker manifest inspect` alone is insufficient because it can read OCI indexes that Leonardo rejects.
 
 1. Create or select a synthetic-only Terra workspace; do not use controlled data for this validation.
 2. Create a Jupyter Cloud Environment with `ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke`, a Standard VM, no GPU for the current `llama-cpp-cpu` profile, and enough disk for the image plus `/home/jupyter/heartwood-workspace`.

@@ -14,22 +14,23 @@ Heartwood platform images are derived notebook images for controlled research en
 
 ## Extension Contract
 
-Every platform image is defined by five repository surfaces:
+Every platform image is defined by six repository surfaces:
 
 | Surface | Purpose |
 |---|---|
 | `images/platforms.toml` | Source of truth for platform name, base image, platform architecture, home directory, user, Jupyter prefix, proxy behavior, tag names, registry policy, and required evidence. |
 | `images/platform/Dockerfile` | Shared platform-image Dockerfile that keeps the platform base as the final stage, installs Heartwood under `/opt/heartwood`, registers the optional Jupyter kernel, copies packaged docs and web UI assets, and preserves the platform entrypoint. |
 | `docker-bake.hcl` | Build graph for runtime, smoke, CI-smoke, tags, build arguments, supported platforms, manifest media type, attestation policy, and cache behavior. |
+| `images/platform/scripts/verify_registry_manifest.py` | Registry verification tool that reads `images/platforms.toml`, requests the expected manifest media type, follows registry Bearer challenges, verifies expected tags, and checks the platform architecture set. |
 | `.github/workflows/container-smoke.yml` and `.github/workflows/container-image.yml` | Pull-request smoke checks and main-branch publication checks for the platform image targets. |
 | `packages/compliance/tests/test_container_assets.py` and `packages/compliance/tests/test_documentation_assets.py` | Static guardrails that keep image, workflow, documentation, tag, secret, and live-validation requirements synchronized. |
 
 ## Add Or Adapt A Platform Image
 
-1. Add a platform entry to `images/platforms.toml`. Record the exact base image, source repository or vendor page, parent image if known, supported architectures, unsupported architectures, home directory, runtime user, Jupyter prefix, proxy mechanism, registry policy, tags, CI requirement, and live workspace evidence requirement.
+1. Add a platform entry to `images/platforms.toml`. Record the exact base image, source repository or vendor page, parent image if known, supported architectures, unsupported architectures, home directory, runtime user, Jupyter prefix, proxy mechanism, registry policy, manifest media type, config media type for single-image manifests, non-platform manifest policy for indexes, tags, CI requirement, and live workspace evidence requirement.
 2. Add or extend Bake targets in `docker-bake.hcl`. Use `_platform_common` for shared behavior and a platform-specific common target for base image, base platform, runtime architecture, platform home, user, and Jupyter prefix. Keep runtime images without bundled model artifacts and smoke images with only the tiny verified smoke artifact unless a larger model artifact has completed provenance and license review.
 3. Add CI coverage in `.github/workflows/container-smoke.yml`. Pull-request CI should build a lightweight platform-compatible CI base when the real base is too large or slow for every pull request, then build the smoke target through the shared platform Dockerfile, run `images/platform/scripts/terra_image_smoke.sh` or the platform-specific equivalent, and run `images/generic/scripts/offline_stack_smoke.sh` with runtime network disabled. Local `--load` smoke targets that use a locally tagged base image must use the Docker Buildx `docker` driver so the builder can resolve that base image from the host Docker daemon. Local `--load` smoke targets must also disable attestations because Docker's local exporter cannot load SBOM/provenance image indexes; generic main-branch published targets should keep SBOM and provenance attestations. Platform published targets may declare a platform-specific manifest media type and attestation exception when the platform image detector cannot read OCI indexes.
-4. Add main-branch publication in `.github/workflows/container-image.yml`. Publish only architectures supported by the selected platform base. Verify generic public tags after publication with `docker buildx imagetools inspect` under an empty Docker config so the check proves anonymous registry access; generic public tags must expose both `linux/amd64` and `linux/arm64`. Verify platform tags with the registry request shape that the target platform uses, including the expected manifest media type and architecture set recorded in `images/platforms.toml`; Terra tags must return `application/vnd.docker.distribution.manifest.v2+json` for `linux/amd64` because Leonardo rejects OCI indexes during image auto-detection.
+4. Add main-branch publication in `.github/workflows/container-image.yml`. Publish only architectures supported by the selected platform base. Verify generic public tags after publication with `docker buildx imagetools inspect` under an empty Docker config so the check proves anonymous registry access; generic public tags must expose both `linux/amd64` and `linux/arm64`. Verify platform tags with `images/platform/scripts/verify_registry_manifest.py` so CI uses the registry request shape, expected manifest media type, config media type, non-platform entry policy, tag set, and architecture set recorded in `images/platforms.toml`; Terra tags must return `application/vnd.docker.distribution.manifest.v2+json` for `linux/amd64` because Leonardo rejects OCI indexes during image auto-detection.
 5. Update documentation. Link the platform from `docs/container-images.md`, add or update the platform runbook, and keep `design/09-implementation-plan.md` current with implemented requirements, exclusions, live-validation evidence, and future work.
 6. Add static tests. Tests must assert the base image, supported architecture set, tag names, no baked secrets, Jupyter kernel registration, packaged docs, packaged web UI, CI smoke commands, main-branch publish commands, and live workspace evidence requirements.
 7. Run local verification before opening or updating a pull request:
@@ -37,6 +38,7 @@ Every platform image is defined by five repository surfaces:
 ```bash
 docker buildx build --check --platform linux/amd64 --file images/platform/Dockerfile .
 docker buildx bake --file docker-bake.hcl --print terra-runtime terra-smoke terra-smoke-ci
+python3 images/platform/scripts/verify_registry_manifest.py --manifest images/platforms.toml --platform terra --image-name ghcr.io/schmiedmayerlab/heartwood --git-sha <published-git-sha>
 docker buildx bake --file docker-bake.hcl --load --set terra-smoke-ci.platform=linux/amd64 terra-smoke-ci
 docker run --rm --platform linux/amd64 --network none --entrypoint bash ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci images/platform/scripts/terra_image_smoke.sh
 docker run --rm --platform linux/amd64 --network none --entrypoint bash ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci images/generic/scripts/offline_stack_smoke.sh

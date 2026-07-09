@@ -13,7 +13,10 @@ import json
 import subprocess
 import sys
 import tomllib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from typing import ClassVar
 
 from packaging.requirements import Requirement
 
@@ -132,6 +135,9 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     ci_base = (_repo_root() / "images" / "platform" / "terra-ci-base.Dockerfile").read_text(
         encoding="utf-8"
     )
+    verifier = (
+        _repo_root() / "images" / "platform" / "scripts" / "verify_registry_manifest.py"
+    ).read_text(encoding="utf-8")
     manifest = tomllib.loads((_repo_root() / "images" / "platforms.toml").read_text("utf-8"))
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
@@ -179,6 +185,13 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert "HOME=/home/jupyter" in ci_base
     assert "/opt/conda/bin/jupyter" in ci_base
     assert "ENTRYPOINT" in ci_base
+    assert "WWW-Authenticate" in verifier
+    assert "parse_bearer_challenge" in verifier
+    assert "IMAGE_MANIFEST_MEDIA_TYPES" in verifier
+    assert "INDEX_MEDIA_TYPES" in verifier
+    assert "allow_non_platform_manifests" in verifier
+    assert "manifest_media_type" in verifier
+    assert "supported_platforms" in verifier
 
     terra = manifest["platforms"]["terra"]
     assert terra["status"] == "implemented"
@@ -195,12 +208,86 @@ def test_platform_image_defines_terra_runtime_contract() -> None:
     assert terra["smoke_tag"] == "edge-terra-smoke"
     assert terra["ci_smoke_tag"] == "edge-terra-smoke-ci"
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
+    assert terra["config_media_type"] == "application/vnd.docker.container.image.v1+json"
     assert terra["publish_attestations"] is False
+    assert terra["allow_non_platform_manifests"] is False
     assert "Terra Leonardo image auto-detection" in terra["registry_policy"]
     assert terra["supported_platforms"] == ["linux/amd64"]
     assert terra["unsupported_platforms"] == ["linux/arm64"]
     assert terra["ci_required"] is True
     assert terra["live_workspace_validation_required"] is True
+
+
+def test_platform_registry_manifest_verifier_uses_platform_contract(tmp_path: Path) -> None:
+    _RegistryHandler.accepted_tags = {
+        "edge-terra",
+        "edge-terra-smoke",
+        "sha-abc123-terra",
+        "sha-abc123-terra-smoke",
+    }
+    _RegistryHandler.requested_accept_headers = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RegistryHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        image_name = f"127.0.0.1:{server.server_port}/test/heartwood"
+        manifest = tmp_path / "platforms.toml"
+        manifest.write_text(
+            f"""
+schema_version = "heartwood.platform-images.v1"
+image_name = "{image_name}"
+moving_channel = "edge"
+
+[platforms.terra]
+manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
+config_media_type = "application/vnd.docker.container.image.v1+json"
+publish_attestations = false
+allow_non_platform_manifests = false
+supported_platforms = ["linux/amd64"]
+runtime_tag = "edge-terra"
+smoke_tag = "edge-terra-smoke"
+commit_runtime_tag = "sha-<git-sha>-terra"
+commit_smoke_tag = "sha-<git-sha>-terra-smoke"
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(
+                    _repo_root() / "images" / "platform" / "scripts" / "verify_registry_manifest.py"
+                ),
+                "--manifest",
+                str(manifest),
+                "--platform",
+                "terra",
+                "--image-name",
+                image_name,
+                "--image-channel",
+                "edge",
+                "--git-sha",
+                "abc123",
+                "--registry-scheme",
+                "http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "runtime moving tag" in result.stdout
+    assert "smoke commit tag" in result.stdout
+    assert _RegistryHandler.requested_accept_headers == [
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ]
 
 
 def test_web_ui_package_has_ci_and_container_launcher() -> None:
@@ -300,7 +387,12 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
         flavors["platform_flavors"]["terra_runtime"]["manifest_media_type"]
         == "application/vnd.docker.distribution.manifest.v2+json"
     )
+    assert (
+        flavors["platform_flavors"]["terra_runtime"]["config_media_type"]
+        == "application/vnd.docker.container.image.v1+json"
+    )
     assert flavors["platform_flavors"]["terra_runtime"]["publish_attestations"] is False
+    assert flavors["platform_flavors"]["terra_runtime"]["allow_non_platform_manifests"] is False
     assert flavors["platform_flavors"]["terra_smoke"]["target"] == "terra-smoke"
     assert flavors["platform_flavors"]["terra_smoke"]["moving_tag"] == "edge-terra-smoke"
     assert flavors["platform_flavors"]["terra_smoke"]["bundles_model_artifact"] is True
@@ -309,7 +401,12 @@ def test_image_flavors_define_channel_tags_and_weight_policy() -> None:
         flavors["platform_flavors"]["terra_smoke"]["manifest_media_type"]
         == "application/vnd.docker.distribution.manifest.v2+json"
     )
+    assert (
+        flavors["platform_flavors"]["terra_smoke"]["config_media_type"]
+        == "application/vnd.docker.container.image.v1+json"
+    )
     assert flavors["platform_flavors"]["terra_smoke"]["publish_attestations"] is False
+    assert flavors["platform_flavors"]["terra_smoke"]["allow_non_platform_manifests"] is False
     assert flavors["platform_flavors"]["terra_smoke_ci"]["target"] == "terra-smoke-ci"
     assert flavors["platform_flavors"]["terra_smoke_ci"]["moving_tag"] == "edge-terra-smoke-ci"
     assert flavors["platform_flavors"]["terra_smoke_ci"]["base_image"] == (
@@ -633,16 +730,12 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert '--set terra-smoke.platform="linux/amd64"' in workflow
     assert "terra-runtime terra-smoke" in workflow
     assert "docker buildx imagetools inspect" in workflow
-    assert "expected_manifest_media_type" in workflow
-    assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
-    assert "application/vnd.docker.container.image.v1+json" in workflow
-    assert "Verifying Leonardo-compatible Docker manifest" in workflow
-    assert "returned an image index instead of one image manifest" in workflow
-    assert 'f"{image_channel}-terra"' in workflow
-    assert 'f"sha-{git_sha}-terra"' in workflow
-    assert 'f"{image_channel}-terra-smoke"' in workflow
-    assert 'f"sha-{git_sha}-terra-smoke"' in workflow
-    assert "expected linux/amd64" in workflow
+    assert "python3 images/platform/scripts/verify_registry_manifest.py" in workflow
+    assert "--manifest images/platforms.toml" in workflow
+    assert "--platform terra" in workflow
+    assert '--image-name "${IMAGE_NAME}"' in workflow
+    assert '--image-channel "${IMAGE_CHANNEL}"' in workflow
+    assert '--git-sha "${GIT_SHA}"' in workflow
     assert "docker buildx imagetools create \\" in workflow
     assert "Verify image manifests" in workflow
     assert "verify_multi_platform_tag" in workflow
@@ -709,6 +802,70 @@ def _bake_target_block(bake: str, target: str) -> str:
     if next_target == -1:
         return bake[start:]
     return bake[start:next_target]
+
+
+class _RegistryHandler(BaseHTTPRequestHandler):
+    manifest_media_type: ClassVar[str] = "application/vnd.docker.distribution.manifest.v2+json"
+    config_media_type: ClassVar[str] = "application/vnd.docker.container.image.v1+json"
+    token: ClassVar[str] = "registry-token"
+    accepted_tags: ClassVar[set[str]] = set()
+    requested_accept_headers: ClassVar[list[str]] = []
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/token":
+            self._write_json(200, "application/json", {"token": self.token})
+            return
+        if self.headers.get("Authorization") != f"Bearer {self.token}":
+            self.send_response(401)
+            self.send_header(
+                "WWW-Authenticate",
+                (
+                    f'Bearer realm="http://{self.headers["Host"]}/token",'
+                    'service="registry.test",scope="repository:test/heartwood:pull"'
+                ),
+            )
+            self.end_headers()
+            return
+        if path.startswith("/v2/test/heartwood/manifests/"):
+            tag = path.rsplit("/", 1)[1]
+            if tag not in self.accepted_tags:
+                self._write_json(404, "application/json", {"error": "unknown tag"})
+                return
+            self.requested_accept_headers.append(self.headers.get("Accept", ""))
+            if self.headers.get("Accept") != self.manifest_media_type:
+                self._write_json(406, "application/json", {"error": "unexpected accept"})
+                return
+            self._write_json(
+                200,
+                self.manifest_media_type,
+                {
+                    "schemaVersion": 2,
+                    "mediaType": self.manifest_media_type,
+                    "config": {
+                        "mediaType": self.config_media_type,
+                        "size": 54,
+                        "digest": "sha256:config",
+                    },
+                    "layers": [],
+                },
+            )
+            return
+        if path == "/v2/test/heartwood/blobs/sha256:config":
+            self._write_json(200, "application/json", {"os": "linux", "architecture": "amd64"})
+            return
+        self._write_json(404, "application/json", {"error": "unknown path"})
+
+    def log_message(self, _message_format: str, *_args: object) -> None:
+        return
+
+    def _write_json(self, status: int, content_type: str, payload: dict[str, object]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def _exact_package_pin(requirement: str) -> tuple[str, str]:

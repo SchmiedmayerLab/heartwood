@@ -57,7 +57,9 @@ ci_required = true
 public_default = false
 supported_platforms = ["linux/amd64"]
 manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
+config_media_type = "application/vnd.docker.container.image.v1+json"
 publish_attestations = false
+allow_non_platform_manifests = false
 
 [platform_flavors.terra_smoke]
 target = "terra-smoke"
@@ -73,7 +75,9 @@ ci_required = true
 public_default = false
 supported_platforms = ["linux/amd64"]
 manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
+config_media_type = "application/vnd.docker.container.image.v1+json"
 publish_attestations = false
+allow_non_platform_manifests = false
 
 [platform_flavors.terra_smoke_ci]
 target = "terra-smoke-ci"
