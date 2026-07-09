@@ -91,7 +91,7 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 - The `providers` image flavor publishes as `edge-providers`, carries provider route configuration support with file-based runtime secret references, and does not bake provider secrets or model weights.
 - The Terra-derived notebook image flavors publish as `edge-terra` and `edge-terra-smoke`, derive from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, install a managed Python 3.12 Heartwood runtime under `/opt/heartwood`, register a Heartwood Jupyter kernel under `/opt/conda`, and preserve the Terra base image entrypoint.
 - The generic image pins the production OpenHands agent-server package, OpenHands tools package, and required tmux dependency, then starts the server as a gateway-owned localhost child during the offline stack run.
-- The CLI supports an explicit `run --local-model` mode that invokes only allowlisted HTTP loopback endpoints, records safe response metadata, and keeps prompt/response content out of persisted session events and audit exports.
+- The CLI supports an explicit `run --local-model` mode that invokes only allowlisted HTTP loopback endpoints, records safe response metadata, and keeps prompt/response content out of persisted session events and audit exports by default; the local interactive demo can opt into a bounded synthetic response preview through `HEARTWOOD_DEMO_RESPONSE_PREVIEW=1`.
 - The CLI can select a provider route from a validated provider configuration without reading provider secrets or invoking live provider APIs in synthetic tests.
 - Docker Compose disables runtime network access for the smoke service and runs the offline stack script end to end.
 - The offline stack smoke script starts the default `llama-cpp-cpu` runtime, runs detection, approves the synthetic model call, runs the agentic CLI through the local model endpoint, starts the gateway-managed OpenHands process during the agentic turn, writes a bounded synthetic workspace artifact through authenticated OpenHands bash execution, exports the scrubbed audit log, and generates the reviewer packet.
@@ -159,20 +159,20 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 - The smoke test starts a real local inference runtime, runs a model call after explicit approval, starts the managed OpenHands agent-server behind the gateway, completes one synthetic agentic CLI turn with authenticated OpenHands bash execution, exports a scrubbed audit log, and generates the synthetic evidence bundle.
 - The same session command/event contract drives the CLI, notebook bridge, gateway, and OpenHands backend path.
 - The default `edge` runtime image does not bundle model weights; the `edge-smoke` image bundles only the tiny verified smoke artifact; provider secrets are runtime file or identity inputs only.
-- Prompt and response content are not persisted in commands, session events, audit exports, reviewer packets, or CI logs.
+- Prompt and response content are not persisted in commands, audit exports, reviewer packets, or CI logs; session events store response content only when the local synthetic demo explicitly enables the bounded response preview.
 - GitHub Actions covers the image smoke, local inference runtime profile, OpenHands behind-gateway path, and GHCR publishing path.
 - The generic image family publishes multi-architecture manifests for `edge`, `edge-smoke`, and `edge-providers` on `linux/amd64` and `linux/arm64`; any architecture excluded from a runtime profile is explicitly documented in the profile.
 
 ### Implemented In 0I — Researcher Web UI And Platform Surfacing
 
 - `packages/webui` contains a standalone TypeScript single-page app built on `@stanfordspezi/spezi-web-design-system`, `@stanfordspezi/spezi-web-configurations`, React, Vite, Vitest, and Playwright.
-- The web UI renders gateway events as chat messages, dataset proposals, approval controls, policy status, provider route metadata, activity trace, and scrubbed audit export links.
+- The web UI renders gateway events as chat messages, dataset proposals, approval controls with approve/deny actions, policy status, provider route metadata, local model invocation status, bounded synthetic response previews when enabled, activity trace, and scrubbed audit export links.
 - The web UI uses WebSocket streaming as the primary transport, falls back to Server-Sent Events, and rehydrates by replaying persisted session events after reconnect.
 - The web client uses relative assets, infers `jupyter-server-proxy` API bases such as `/proxy/8767/`, and also supports an explicit gateway base through build-time configuration.
 - `packages/gateway` serves self-contained static web assets, accepts gateway REST/WebSocket/Server-Sent Events routes under the configured proxy base path, rejects `/sessions/*` static fallbacks, and exposes `GET /sessions/{session}/events/stream` as the Server-Sent Events fallback.
 - The notebook bridge exposes `web_proxy_url()` and `jupyter_proxy_url()` helpers for Jupyter-style proxy routes and projects provider route metadata into notebook policy status.
 - The CLI exposes `heartwood serve` to run the gateway and packaged web UI from one command.
-- `images/generic/scripts/start_web_ui.sh` starts the gateway and web UI inside the generic image with runtime-configurable workspace, host, port, web root, and base path.
+- `images/generic/scripts/start_demo_stack.sh` starts the self-contained local Docker demo path from the smoke image with the bundled local model, seeded synthetic model-call approval, gateway-managed OpenHands child server, bounded response preview, and packaged web UI. `images/generic/scripts/start_web_ui.sh` remains the lower-level gateway/web UI launcher with runtime-configurable workspace, host, port, web root, and base path.
 - The generic Dockerfile builds the web UI in a Node 24 stage and copies only static `dist` assets into the final Python runtime image; `node_modules` is not present in the final runtime layer.
 - The generic Dockerfile copies `README.md`, `ACRONYMS.md`, `docs/`, and `design/` into `/opt/heartwood` so the packaged runtime includes the tutorial notebook and design record without requiring a repository checkout.
 - `images/platform/Dockerfile`, `images/platforms.toml`, and `docker-bake.hcl` define an extensible platform-derived image layer. The implemented Terra targets use the Terra Jupyter Python base, install the Heartwood runtime under `/opt/heartwood`, register the `heartwood` Jupyter kernel, keep the Terra base entrypoint, and publish `edge-terra` and `edge-terra-smoke` on `linux/amd64`.
@@ -202,7 +202,7 @@ The repository is at **0G, 0I, and 0J complete; 0H remains the next implementati
 - Managed-identity routes are valid configuration metadata but reject invocation until a real platform adapter supplies the identity exchange.
 - `heartwood run --provider-config --provider-route --invoke-provider` invokes a selected provider route only after the model-call decision is allowed and a `model-call` approval for that decision exists.
 - Local model invocation and provider route invocation are mutually exclusive for one run command.
-- Provider route decisions record only safe route metadata, response metadata, and attestations; prompt and response content remain scrubbed from persisted artifacts.
+- Provider route decisions record only safe route metadata, response metadata, and attestations by default; prompt and response content remain scrubbed from exported artifacts, while the synthetic local demo can opt into a bounded response preview for UI demonstration.
 - The notebook API mirrors provider route selection and invocation flags through the shared session command payload.
 
 **Completed verification**

@@ -179,6 +179,42 @@ textarea {
   grid-template-columns: 1fr;
 }
 
+.approval-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.approval-row > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.approval-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approval-actions button {
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.empty-state {
+  color: #5d6f65;
+  font-size: 0.86rem;
+}
+
+.model-preview {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #d9e2dc;
+  background: #f7faf8;
+  color: #17211b;
+  overflow-wrap: anywhere;
+}
+
 .activity-row {
   grid-template-columns: 42px minmax(110px, 0.42fr) minmax(0, 1fr);
   align-items: baseline;

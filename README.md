@@ -63,11 +63,13 @@ From a checkout, run the same CI smoke path with Compose:
 docker compose -f images/generic/compose.yaml run --rm heartwood
 ```
 
-To serve the packaged web UI from the image, publish the gateway port and start the launcher:
+To run the interactive local-model demo, publish the gateway port and start the full demo stack:
 
 ```bash
-docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
+docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/start_demo_stack.sh
 ```
+
+Open `http://127.0.0.1:8767/`, click **Run Local Model**, then inspect the Local Model, Policy, Approvals, Activity, and Exports panels. The demo stack starts the bundled llama.cpp smoke model, starts the gateway-managed OpenHands child server, pre-approves the synthetic model-call decision for the default local session, and enables a bounded synthetic response preview for the UI.
 
 See [Getting Started With The Offline Stack](docs/getting-started-offline.md) for the full walkthrough and current limitations.
 

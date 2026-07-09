@@ -55,6 +55,15 @@ export const syntheticEvents = (): SessionEvent[] => [
       provider: "openai-compatible",
       route_id: "local-loopback",
     },
+    response_metadata: {
+      choices_count: 1,
+      model: "heartwood-local-runtime",
+      response_preview: "Synthetic local model response.",
+      status: "ok",
+      usage: {
+        total_tokens: 2,
+      },
+    },
   }),
   event(3, "agent_message.emitted", {
     content:

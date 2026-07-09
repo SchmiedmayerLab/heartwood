@@ -333,7 +333,10 @@ class SessionService:
                         endpoint=endpoint,
                         prompt_length=len(prompt),
                     )
-                    policy_payload["response_metadata"] = _model_response_metadata(response)
+                    policy_payload["response_metadata"] = _model_response_metadata(
+                        response,
+                        include_preview=_truthy(self.env.get("HEARTWOOD_DEMO_RESPONSE_PREVIEW")),
+                    )
             except LocalModelInvocationError as error:
                 error_event = self._record_event(
                     EventKind.ERROR_RECORDED,
@@ -373,7 +376,10 @@ class SessionService:
                         provider_route,
                         prompt_length=len(prompt),
                     )
-                    policy_payload["response_metadata"] = _model_response_metadata(response)
+                    policy_payload["response_metadata"] = _model_response_metadata(
+                        response,
+                        include_preview=_truthy(self.env.get("HEARTWOOD_DEMO_RESPONSE_PREVIEW")),
+                    )
             except ProviderInvocationError as error:
                 error_event = self._record_event(
                     EventKind.ERROR_RECORDED,
@@ -619,7 +625,11 @@ def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> Age
     raise ValueError(msg)
 
 
-def _model_response_metadata(response: JsonValue) -> dict[str, JsonValue]:
+def _model_response_metadata(
+    response: JsonValue,
+    *,
+    include_preview: bool = False,
+) -> dict[str, JsonValue]:
     if not isinstance(response, dict):
         return {"status": "ok", "response_type": type(response).__name__}
     metadata: dict[str, JsonValue] = {"status": "ok"}
@@ -637,4 +647,29 @@ def _model_response_metadata(response: JsonValue) -> dict[str, JsonValue]:
             if isinstance(value, int | float) and not isinstance(value, bool):
                 safe_usage[key] = value
         metadata["usage"] = safe_usage
+    if include_preview:
+        preview = _model_response_preview(response)
+        if preview is not None:
+            metadata["response_preview"] = preview[:500]
+            metadata["response_preview_truncated"] = len(preview) > 500
     return metadata
+
+
+def _model_response_preview(response: dict[str, JsonValue]) -> str | None:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    message = first.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+    text = first.get("text")
+    return text if isinstance(text, str) else None
+
+
+def _truthy(value: str | None) -> bool:
+    return value is not None and value.lower() in {"1", "true", "yes", "on"}

@@ -76,25 +76,27 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
 
     await waitFor(() => expect(client.replayCalls).toBe(1));
-    fireEvent.change(screen.getByLabelText("Provider Config"), {
-      target: { value: "/workspace/provider-routes.toml" },
-    });
-    fireEvent.change(screen.getByLabelText("Route"), {
-      target: { value: "local-loopback" },
-    });
-    fireEvent.click(screen.getByLabelText("Invoke Provider"));
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(screen.getByLabelText("Provider Config")).toHaveValue(
+      "/opt/heartwood/images/generic/providers/provider-routes.example.toml",
+    );
+    expect(screen.getByLabelText("Route")).toHaveValue("local-loopback");
+    expect(screen.getByLabelText("Invoke Provider")).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Run Local Model" }));
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("run"));
     expect(client.commands.at(-1)?.payload).toMatchObject({
       invoke_provider: true,
-      provider_config_path: "/workspace/provider-routes.toml",
+      provider_config_path:
+        "/opt/heartwood/images/generic/providers/provider-routes.example.toml",
       provider_route_id: "local-loopback",
     });
 
     fireEvent.click(screen.getByLabelText("Replay"));
 
-    expect(await screen.findByText(/local-loopback/u)).toBeInTheDocument();
+    expect(await screen.findAllByText(/local-loopback/u)).toHaveLength(2);
+    expect(
+      await screen.findByText("Synthetic local model response."),
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(
         screen.getAllByText("/workspace/.heartwood/audit/export.jsonl"),
@@ -102,7 +104,34 @@ describe("App", () => {
     );
     expect(client.replayCalls).toBe(2);
   });
+
+  it("sends approval decisions from rendered controls", async () => {
+    const client = new PendingApprovalClient();
+    render(<App client={client} initialSessionId="session-test" />);
+
+    await waitFor(() => expect(client.replayCalls).toBe(1));
+    fireEvent.click(screen.getByLabelText("Replay"));
+    fireEvent.click(
+      await screen.findByLabelText("Approve session-test-toolcall-0"),
+    );
+
+    await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));
+    expect(client.commands.at(-1)?.payload).toMatchObject({
+      reason: "web UI demo decision",
+      target_id: "session-test-toolcall-0",
+      target_type: "tool-call",
+    });
+  });
 });
+
+class PendingApprovalClient extends FakeClient {
+  override replayEvents(): Promise<SessionEventResponse> {
+    this.replayCalls += 1;
+    return Promise.resolve({
+      events: this.replayCalls === 1 ? [] : syntheticEvents(),
+    });
+  }
+}
 
 class RejectingClient extends FakeClient {
   override postCommand(): Promise<SessionEventResponse> {

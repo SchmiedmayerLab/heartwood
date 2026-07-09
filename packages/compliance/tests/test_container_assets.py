@@ -208,6 +208,9 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     launcher = (_repo_root() / "images" / "generic" / "scripts" / "start_web_ui.sh").read_text(
         encoding="utf-8"
     )
+    demo_launcher = (
+        _repo_root() / "images" / "generic" / "scripts" / "start_demo_stack.sh"
+    ).read_text(encoding="utf-8")
     terra_smoke = (
         _repo_root() / "images" / "generic" / "scripts" / "terra_jupyter_demo_smoke.py"
     ).read_text(encoding="utf-8")
@@ -231,8 +234,18 @@ def test_web_ui_package_has_ci_and_container_launcher() -> None:
     assert "npm run test:gateway --prefix packages/webui" in workflow
     assert "npm run test:jupyter-proxy --prefix packages/webui" in workflow
     assert "heartwood \\" in launcher
+    assert "HEARTWOOD_AGENT_BACKEND:-deterministic-local" in launcher
+    assert 'HEARTWOOD_AGENT_SERVER_ENABLED="${HEARTWOOD_AGENT_SERVER_ENABLED:-1}"' in launcher
+    assert "bash images/generic/scripts/start_agent_server.sh" in launcher
+    assert "HEARTWOOD_AGENT_SERVER_WORKSPACE" in launcher
     assert '--web-root "${web_root}"' in launcher
     assert '--base-path "${base_path}"' in launcher
+    assert "HEARTWOOD_DEMO_RESPONSE_PREVIEW" in demo_launcher
+    assert "HEARTWOOD_DEMO_SEED_APPROVALS" in demo_launcher
+    assert "HEARTWOOD_DEMO_WEB_HOST:-0.0.0.0" in demo_launcher
+    assert "start_local_runtime.sh" in demo_launcher
+    assert "start_web_ui.sh" in demo_launcher
+    assert "--target-type model-call" in demo_launcher
     assert "ThreadingHTTPServer" in terra_smoke
     assert "NotebookSession" in terra_smoke
     assert "Terra-style Jupyter demo smoke: ok" in terra_smoke

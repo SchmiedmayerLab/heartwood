@@ -18,6 +18,7 @@ import { Textarea } from "@stanfordspezi/spezi-web-design-system/components/Text
 import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
 import {
   Activity,
+  BrainCircuit,
   Check,
   Database,
   Download,
@@ -32,7 +33,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
-import type { JsonValue, SessionEvent } from "./types";
+import type { ApprovalControl, JsonValue, SessionEvent } from "./types";
 import { buildViewModel, emptyViewModel } from "./viewModel";
 
 interface AppProps {
@@ -46,13 +47,17 @@ export const App = ({
 }: AppProps) => {
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [events, setEvents] = useState<SessionEvent[]>([]);
-  const [prompt, setPrompt] = useState("run the synthetic workflow");
-  const [endpoint, setEndpoint] = useState(
-    "https://model.local.invalid/v1/chat/completions",
+  const [prompt, setPrompt] = useState(
+    "Summarize the synthetic cohort quality check in one sentence.",
   );
-  const [providerConfigPath, setProviderConfigPath] = useState("");
-  const [providerRouteId, setProviderRouteId] = useState("");
-  const [invokeProvider, setInvokeProvider] = useState(false);
+  const [endpoint, setEndpoint] = useState(
+    "http://127.0.0.1:8765/v1/chat/completions",
+  );
+  const [providerConfigPath, setProviderConfigPath] = useState(
+    "/opt/heartwood/images/generic/providers/provider-routes.example.toml",
+  );
+  const [providerRouteId, setProviderRouteId] = useState("local-loopback");
+  const [invokeProvider, setInvokeProvider] = useState(true);
   const [status, setStatus] = useState<"idle" | "busy" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
@@ -104,6 +109,13 @@ export const App = ({
       setStatus("error");
     }
   };
+
+  const decideApproval = (kind: "approve" | "deny", control: ApprovalControl) =>
+    send(kind, {
+      reason: "web UI demo decision",
+      target_id: control.targetId,
+      target_type: control.targetType,
+    });
 
   const runPayload = (): Record<string, JsonValue> => {
     const payload: Record<string, JsonValue> = {
@@ -241,7 +253,7 @@ export const App = ({
                   onClick={() => void send("run", runPayload())}
                 >
                   <Play size={16} />
-                  Run
+                  {invokeProvider ? "Run Local Model" : "Run"}
                 </Button>
                 <Button variant="outline" onClick={() => void send("pause")}>
                   <Pause size={16} />
@@ -276,14 +288,29 @@ export const App = ({
             </div>
           </Card>
 
-          <StatusPanels events={events} />
+          <StatusPanels
+            events={events}
+            isBusy={status === "busy"}
+            onApprovalDecision={decideApproval}
+          />
         </section>
       </main>
     </SpeziProvider>
   );
 };
 
-const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
+const StatusPanels = ({
+  events,
+  isBusy,
+  onApprovalDecision,
+}: {
+  events: SessionEvent[];
+  isBusy: boolean;
+  onApprovalDecision: (
+    kind: "approve" | "deny",
+    control: ApprovalControl,
+  ) => Promise<void>;
+}) => {
   const viewModel = buildViewModel(events);
   return (
     <>
@@ -303,6 +330,50 @@ const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
               <Badge variant="outline">{proposal.confidence.toFixed(2)}</Badge>
             </div>
           ))}
+        </div>
+      </Card>
+
+      <Card className="panel model-panel">
+        <CardHeader>
+          <CardTitle asChild>
+            <h2>
+              <BrainCircuit size={18} />
+              Local Model
+            </h2>
+          </CardTitle>
+        </CardHeader>
+        <div className="panel-body list">
+          {viewModel.modelInvocations.length === 0 ?
+            <div className="empty-state">pending</div>
+          : viewModel.modelInvocations.map((invocation, index) => (
+              <div
+                className="list-row stacked"
+                key={`${invocation.routeId ?? invocation.model ?? "model"}-${index}`}
+              >
+                <span>
+                  {invocation.status}
+                  {invocation.routeId ? ` via ${invocation.routeId}` : ""}
+                </span>
+                {invocation.responsePreview ?
+                  <p className="model-preview">{invocation.responsePreview}</p>
+                : null}
+                <small>
+                  {[
+                    invocation.provider,
+                    invocation.model,
+                    invocation.choicesCount === null ?
+                      null
+                    : `${invocation.choicesCount} choices`,
+                    invocation.totalTokens === null ?
+                      null
+                    : `${invocation.totalTokens} tokens`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </small>
+              </div>
+            ))
+          }
         </div>
       </Card>
 
@@ -343,10 +414,13 @@ const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
         <div className="panel-body list">
           {viewModel.approvalControls.map((control) => (
             <div
-              className="list-row"
+              className="list-row approval-row"
               key={`${control.targetType}-${control.targetId}-${control.decision}`}
             >
-              <span>{control.targetId}</span>
+              <span>
+                {control.label}
+                <small>{control.targetId}</small>
+              </span>
               <Badge
                 variant={
                   control.decision === "denied" ?
@@ -356,6 +430,30 @@ const StatusPanels = ({ events }: { events: SessionEvent[] }) => {
               >
                 {control.decision ?? control.targetType}
               </Badge>
+              {control.decision === null ?
+                <div className="approval-actions">
+                  <Button
+                    aria-label={`Approve ${control.targetId}`}
+                    disabled={isBusy}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onApprovalDecision("approve", control)}
+                  >
+                    <Check size={14} />
+                    Approve
+                  </Button>
+                  <Button
+                    aria-label={`Deny ${control.targetId}`}
+                    disabled={isBusy}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void onApprovalDecision("deny", control)}
+                  >
+                    <X size={14} />
+                    Deny
+                  </Button>
+                </div>
+              : null}
             </div>
           ))}
         </div>

@@ -98,6 +98,16 @@ export interface PolicyStatus {
   provider: string | null;
 }
 
+export interface ModelInvocation {
+  status: string;
+  model: string | null;
+  routeId: string | null;
+  provider: string | null;
+  responsePreview: string | null;
+  choicesCount: number | null;
+  totalTokens: number | null;
+}
+
 export interface ExportAction {
   label: string;
   path: string;
@@ -112,6 +122,7 @@ export interface SessionViewModel {
   skillProposals: SkillProposal[];
   approvalControls: ApprovalControl[];
   policyStatus: PolicyStatus[];
+  modelInvocations: ModelInvocation[];
   exportActions: ExportAction[];
   paused: boolean;
 }

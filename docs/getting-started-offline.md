@@ -63,14 +63,14 @@ The command starts the `llama-cpp-cpu` runtime profile, runs detection, approves
 
 The packaged image includes the project README, acronym glossary, `docs/`, and `design/` under `/opt/heartwood`, including `/opt/heartwood/docs/terra-jupyter-demo.ipynb`. This lets a runtime image carry the tutorial material needed for a local or platform notebook demonstration without a repository checkout.
 
-To open the packaged researcher UI from the runtime image, publish the gateway port and start the web launcher:
+To open the packaged researcher UI with the local model, OpenHands backend, seeded synthetic approval, and bounded demo response preview, publish the gateway port and start the full demo launcher:
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:edge
-docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_web_ui.sh
+docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
+docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/start_demo_stack.sh
 ```
 
-Open `http://127.0.0.1:8767/`. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects. Heartwood supports both common notebook proxy shapes: preserved-prefix routes such as `/proxy/8767/`, where `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` is passed to the launcher, and stripped `jupyter-server-proxy` routes such as `/user/<name>/proxy/8767/`, where the gateway serves `/` and the proxy strips the browser prefix before forwarding. CI smoke tests both the preserved-prefix gateway route and the stripped Jupyter-style route used by Terra-like notebook environments. See [Terra-Style Jupyter Demo](terra-jupyter-demo.md) for the synthetic workspace walkthrough.
+Open `http://127.0.0.1:8767/`, click **Run Local Model**, then inspect the Local Model, Policy, Approvals, Activity, and Exports panels. The demo stack starts the bundled llama.cpp smoke model on `127.0.0.1:8765`, starts the gateway-managed OpenHands child server, pre-approves the synthetic model-call decision for `session-local`, and enables `HEARTWOOD_DEMO_RESPONSE_PREVIEW=1` so the UI can show a bounded synthetic response preview. Set `HEARTWOOD_DEMO_SEED_APPROVALS=0` to exercise the approval gate manually: the first run records the model-call decision, the Approvals panel exposes the approval action, and the second run invokes the local model after approval. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects. Heartwood supports both common notebook proxy shapes: preserved-prefix routes such as `/proxy/8767/`, where `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` is passed to the launcher, and stripped `jupyter-server-proxy` routes such as `/user/<name>/proxy/8767/`, where the gateway serves `/` and the proxy strips the browser prefix before forwarding. CI smoke tests both the preserved-prefix gateway route and the stripped Jupyter-style route used by Terra-like notebook environments. See [Terra-Style Jupyter Demo](terra-jupyter-demo.md) for the synthetic workspace walkthrough.
 
 ## Run From A Checkout
 
@@ -87,7 +87,7 @@ Compose builds the local image, pulls the current base image tag, disables runti
 - The CLI can drive the gateway-backed session contract inside the image.
 - The generic policy allows only configured model endpoints and includes the loopback chat-completions endpoint.
 - The llama-cpp model call happens over `127.0.0.1` while external network is disabled.
-- The model response content is not persisted into session events or audit exports; only response metadata is recorded.
+- Model response content is not persisted by default. The interactive Docker demo enables a bounded synthetic response preview with `HEARTWOOD_DEMO_RESPONSE_PREVIEW=1`; audit exports remain scrubbed.
 - The OpenHands-backed backend emits tool proposal, confirmation, and execution events after the model call, calls authenticated OpenHands `/api` routes, and writes a bounded synthetic artifact through the agent-server bash service.
 - The audit export and reviewer packet can be produced from the same offline session.
 - The packaged web UI can be served by the gateway from self-contained assets without a CDN, and the same session event stream can be surfaced through WebSocket or Server-Sent Events under local or Jupyter-style proxy routes.

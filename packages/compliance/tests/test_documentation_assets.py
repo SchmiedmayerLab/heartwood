@@ -87,6 +87,10 @@ def test_platform_image_extension_guide_defines_mechanism() -> None:
     assert "Synthetic data only" in guide
     assert "Platform Image Extension Guide](docs/platform-images.md)" in readme
     assert "Platform Image Extension Guide](platform-images.md)" in container_docs
+    assert "start_demo_stack.sh" in readme
+    assert "Run Local Model" in readme
+    assert "bounded synthetic response preview" in container_docs
+    assert "gateway-managed localhost OpenHands child server" in container_docs
 
 
 def _repo_root() -> Path:

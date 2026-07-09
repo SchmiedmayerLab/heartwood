@@ -21,5 +21,7 @@ test("loads the web UI and renders mocked gateway events", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Heartwood" })).toBeVisible();
   await expect(page.getByText("omop-cdm")).toBeVisible();
-  await expect(page.getByText("local-loopback")).toBeVisible();
+  await expect(page.getByText("ok via local-loopback")).toBeVisible();
+  await expect(page.getByText("allow via local-loopback")).toBeVisible();
+  await expect(page.getByText("Synthetic local model response.")).toBeVisible();
 });

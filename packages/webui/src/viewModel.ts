@@ -27,6 +27,7 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
   skillProposals: [],
   approvalControls: [],
   policyStatus: [],
+  modelInvocations: [],
   exportActions: [],
   paused: false,
 });
@@ -51,7 +52,7 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
           status: "proposed",
           detail: stringValue(event.payload.summary),
         });
-        viewModel.approvalControls.push({
+        addApprovalControl(viewModel.approvalControls, {
           targetType: "tool-call",
           targetId: stringValue(event.payload.tool_call_id),
           label: `Approve ${stringValue(event.payload.tool_name)}`,
@@ -59,9 +60,13 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
         });
         break;
       case "confirmation.requested":
-        viewModel.approvalControls.push(
+        addApprovalControl(
+          viewModel.approvalControls,
           confirmationApproval(event.payload.request),
         );
+        break;
+      case "confirmation.resolved":
+        recordConfirmation(viewModel.approvalControls, event.payload);
         break;
       case "approval.recorded":
         recordApproval(
@@ -72,7 +77,9 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
         break;
       case "model_call.decision.recorded":
         viewModel.policyStatus.push(policyStatus(event.payload));
-        viewModel.approvalControls.push(
+        viewModel.modelInvocations.push(modelInvocation(event.payload));
+        addApprovalControl(
+          viewModel.approvalControls,
           modelCallApproval(event.payload.decision),
         );
         break;
@@ -151,6 +158,32 @@ const recordApproval = (
   }
 };
 
+const recordConfirmation = (
+  approvals: ApprovalControl[],
+  payload: Record<string, JsonValue>,
+): void => {
+  const targetId = stringValue(payload.tool_call_id);
+  if (!targetId) {
+    return;
+  }
+  const decision = stringValue(payload.decision) || "approved";
+  const existing = approvals.find(
+    (control) =>
+      control.targetType === "tool-call" && control.targetId === targetId,
+  );
+  if (existing) {
+    existing.decision = decision;
+    existing.label = `${decision} tool-call`;
+  } else {
+    approvals.push({
+      targetType: "tool-call",
+      targetId,
+      label: `${decision} tool-call`,
+      decision,
+    });
+  }
+};
+
 const policyStatus = (payload: Record<string, JsonValue>): PolicyStatus => {
   const decision = recordValue(payload.decision);
   const route = optionalRecordValue(payload.provider_route);
@@ -163,6 +196,25 @@ const policyStatus = (payload: Record<string, JsonValue>): PolicyStatus => {
   };
 };
 
+const modelInvocation = (
+  payload: Record<string, JsonValue>,
+): SessionViewModel["modelInvocations"][number] => {
+  const metadata = optionalRecordValue(payload.response_metadata);
+  const route = optionalRecordValue(payload.provider_route);
+  const usage = optionalRecordValue(metadata?.usage);
+  return {
+    status: metadata === null ? "pending" : stringValue(metadata.status),
+    model: metadata === null ? null : stringValue(metadata.model) || null,
+    routeId: route === null ? null : stringValue(route.route_id),
+    provider: route === null ? null : stringValue(route.provider),
+    responsePreview:
+      metadata === null ? null : stringValue(metadata.response_preview) || null,
+    choicesCount:
+      metadata === null ? null : numberOrNull(metadata.choices_count),
+    totalTokens: usage === null ? null : numberOrNull(usage.total_tokens),
+  };
+};
+
 const modelCallApproval = (value: JsonValue | undefined): ApprovalControl => {
   const decision = recordValue(value);
   return {
@@ -171,6 +223,20 @@ const modelCallApproval = (value: JsonValue | undefined): ApprovalControl => {
     label: `Review model call to ${stringValue(decision.endpoint)}`,
     decision: null,
   };
+};
+
+const addApprovalControl = (
+  approvals: ApprovalControl[],
+  next: ApprovalControl,
+): void => {
+  const existing = approvals.find(
+    (control) =>
+      control.targetType === next.targetType &&
+      control.targetId === next.targetId,
+  );
+  if (existing === undefined) {
+    approvals.push(next);
+  }
 };
 
 const activityItem = (event: SessionEvent): ActivityItem => ({
@@ -251,6 +317,13 @@ export const numberValue = (value: JsonValue | undefined): number => {
     return value;
   }
   return 0;
+};
+
+export const numberOrNull = (value: JsonValue | undefined): number | null => {
+  if (typeof value === "number") {
+    return value;
+  }
+  return null;
 };
 
 export const stringArrayValue = (value: JsonValue | undefined): string[] => {
