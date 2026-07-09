@@ -154,6 +154,7 @@ def _read_json_response(request: urllib.request.Request) -> RegistryResponse:
 def verify_tag(
     client: RegistryClient,
     tag: ExpectedTag,
+    platform: dict[str, Any],
     expected_media_type: str,
     expected_platforms: set[str],
     expected_config_media_type: str | None,
@@ -173,7 +174,12 @@ def verify_tag(
 
     if expected_media_type in IMAGE_MANIFEST_MEDIA_TYPES:
         verify_image_manifest(
-            client, image_ref, manifest, expected_platforms, expected_config_media_type
+            client,
+            image_ref,
+            manifest,
+            platform,
+            expected_platforms,
+            expected_config_media_type,
         )
         return
     if expected_media_type in INDEX_MEDIA_TYPES:
@@ -186,6 +192,7 @@ def verify_image_manifest(
     client: RegistryClient,
     image_ref: str,
     manifest: dict[str, Any],
+    platform_contract: dict[str, Any],
     expected_platforms: set[str],
     expected_config_media_type: str | None,
 ) -> None:
@@ -215,6 +222,94 @@ def verify_image_manifest(
     platform = f"{image_config.get('os')}/{image_config.get('architecture')}"
     if platform not in expected_platforms:
         raise SystemExit(f"{image_ref} is {platform}, expected {sorted(expected_platforms)}")
+    verify_image_config_contract(image_ref, image_config, platform_contract)
+
+
+def verify_image_config_contract(
+    image_ref: str, image_config: dict[str, Any], platform_contract: dict[str, Any]
+) -> None:
+    config = image_config.get("config")
+    if not isinstance(config, dict):
+        raise SystemExit(f"{image_ref} has no image runtime config")
+
+    expected_user = platform_contract.get("image_user")
+    if isinstance(expected_user, str) and config.get("User") != expected_user:
+        raise SystemExit(f"{image_ref} user is {config.get('User')}, expected {expected_user}")
+
+    expected_workdir = platform_contract.get("working_dir")
+    if isinstance(expected_workdir, str) and config.get("WorkingDir") != expected_workdir:
+        raise SystemExit(
+            f"{image_ref} working directory is {config.get('WorkingDir')}, "
+            f"expected {expected_workdir}"
+        )
+
+    expected_entrypoint = _optional_string_list(platform_contract, "entrypoint")
+    if expected_entrypoint is not None and config.get("Entrypoint") != expected_entrypoint:
+        raise SystemExit(
+            f"{image_ref} entrypoint is {config.get('Entrypoint')}, expected {expected_entrypoint}"
+        )
+
+    expected_ports = _optional_string_list(platform_contract, "exposed_ports") or []
+    exposed_ports = config.get("ExposedPorts")
+    if expected_ports and not isinstance(exposed_ports, dict):
+        raise SystemExit(f"{image_ref} has no exposed ports")
+    for port in expected_ports:
+        if port not in exposed_ports:
+            raise SystemExit(f"{image_ref} does not expose required port {port}")
+
+    env = _env_map(config.get("Env"), image_ref)
+    required_env = _optional_string_list(platform_contract, "required_env") or []
+    for expected in required_env:
+        key, separator, value = expected.partition("=")
+        if separator != "=":
+            raise SystemExit(f"required_env entry must use KEY=VALUE format: {expected}")
+        if env.get(key) != value:
+            raise SystemExit(f"{image_ref} env {key} is {env.get(key)}, expected {value}")
+
+    required_env_contains = platform_contract.get("required_env_contains")
+    if required_env_contains is not None:
+        if not isinstance(required_env_contains, dict):
+            raise SystemExit("required_env_contains must be a table")
+        for key, expected_values in required_env_contains.items():
+            if not isinstance(key, str):
+                raise SystemExit("required_env_contains keys must be strings")
+            if not isinstance(expected_values, list) or not all(
+                isinstance(item, str) for item in expected_values
+            ):
+                raise SystemExit(f"required_env_contains.{key} must be a string list")
+            actual = env.get(key, "")
+            for expected in expected_values:
+                if expected not in actual:
+                    raise SystemExit(f"{image_ref} env {key} does not contain {expected}")
+
+    forbidden_path_entries = (
+        _optional_string_list(platform_contract, "forbidden_path_entries") or []
+    )
+    if forbidden_path_entries:
+        path_entries = env.get("PATH", "").split(":")
+        for entry in forbidden_path_entries:
+            if entry in path_entries:
+                raise SystemExit(f"{image_ref} PATH must not contain {entry}")
+
+
+def _env_map(env: object, image_ref: str) -> dict[str, str]:
+    if not isinstance(env, list) or not all(isinstance(item, str) for item in env):
+        raise SystemExit(f"{image_ref} has no environment list")
+    values: dict[str, str] = {}
+    for item in env:
+        key, separator, value = item.partition("=")
+        if separator == "=":
+            values[key] = value
+    return values
+
+
+def _optional_string_list(values: dict[str, Any], key: str) -> list[str] | None:
+    raw = values.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise SystemExit(f"platform manifest {key} must be a string list")
+    return raw
 
 
 def verify_image_index(
@@ -335,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         verify_tag(
             client=client,
             tag=tag,
+            platform=platform,
             expected_media_type=expected_media_type,
             expected_platforms=supported_platforms,
             expected_config_media_type=expected_config_media_type,

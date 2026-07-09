@@ -80,13 +80,32 @@ jobs:
           docker buildx bake --file docker-bake.hcl --load
           --set terra-smoke-ci.platform=linux/amd64
           terra-smoke-ci
+      - name: Run Terra Jupyter contract smoke
+        run: >-
+          docker run --rm --platform linux/amd64 --network none
+          --entrypoint bash
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+          /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
       - name: Run Terra platform image smoke
         run: >-
-          docker run --rm --platform linux/amd64 --network none --entrypoint bash
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /opt/heartwood --entrypoint bash
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
           images/platform/scripts/terra_image_smoke.sh
       - name: Run Terra offline stack smoke
         run: >-
-          docker run --rm --platform linux/amd64 --network none --entrypoint bash
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /opt/heartwood --entrypoint bash
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
           images/generic/scripts/offline_stack_smoke.sh
+      - name: Run Terra Jupyter launch smoke
+        run: >-
+          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+      - name: Run Terra Leonardo Jupyter launch smoke
+        env:
+          HEARTWOOD_TERRA_HOST_PORT: "8001"
+          HEARTWOOD_TERRA_JUPYTER_MODE: leonardo
+        run: >-
+          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
