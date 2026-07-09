@@ -34,6 +34,7 @@ from heartwood.core_adapter._facade import (
     BackendEvent,
     BackendEventKind,
     DeterministicAgentBackend,
+    LocalWorkspaceAgentBackend,
     ProposedToolCall,
     ToolExecution,
 )
@@ -127,19 +128,22 @@ class SessionService:
         workspace: Path,
         *,
         session_id: str = "session-local",
+        backend: AgentBackend | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
     ) -> SessionService:
         """Build the default local session service using the caller environment."""
         platform = GenericPlatformAdapter()
         policy = platform.default_policy_profile()
+        active_env = os.environ if env is None else env
+        store = FileSessionStore(workspace, session_id)
         return cls(
-            store=FileSessionStore(workspace, session_id),
+            store=store,
             platform_adapter=platform,
             data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
             model_provider_adapter=FakeLocalModelProviderAdapter(policy),
-            backend=DeterministicAgentBackend(),
-            env=os.environ if env is None else env,
+            backend=_backend_from_env(store=store, env=active_env) if backend is None else backend,
+            env=active_env,
             clock=clock,
         )
 
@@ -237,7 +241,9 @@ class SessionService:
 
     def _handle_run(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
         prompt = str(command.payload.get("prompt", ""))
-        endpoint = str(command.payload.get("endpoint", "https://model.local.invalid/v1/chat"))
+        endpoint = str(
+            command.payload.get("endpoint", "https://model.local.invalid/v1/chat/completions")
+        )
         request = ModelCallRequest(
             endpoint=endpoint,
             capability_tier=self.model_provider_adapter.capability_tier,
@@ -273,7 +279,6 @@ class SessionService:
                 elif model_call_approved:
                     response = _invoke_loopback_model(
                         endpoint=endpoint,
-                        session_id=command.session_id,
                         prompt_length=len(prompt),
                     )
                     policy_payload["response_metadata"] = _model_response_metadata(response)
@@ -463,7 +468,6 @@ def _dict_payload(value: JsonValue | None, name: str) -> dict[str, JsonValue]:
 def _invoke_loopback_model(
     *,
     endpoint: str,
-    session_id: str,
     prompt_length: int,
 ) -> JsonValue:
     parsed = urlsplit(endpoint)
@@ -472,12 +476,22 @@ def _invoke_loopback_model(
         msg = "local model demo can invoke only http loopback endpoints"
         raise LocalModelInvocationError(msg)
     request_payload = {
-        "model": "heartwood-local-demo",
-        "messages": [{"role": "user", "content": "[scrubbed]"}],
-        "metadata": {
-            "session_id": session_id,
-            "prompt_length": prompt_length,
-        },
+        "model": "heartwood-local-runtime",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Heartwood offline smoke test. Do not use patient data.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Confirm that the local runtime is reachable for a synthetic smoke test. "
+                    f"Synthetic prompt length: {prompt_length}."
+                ),
+            },
+        ],
+        "max_tokens": 16,
+        "temperature": 0,
     }
     request = urllib.request.Request(
         endpoint,
@@ -501,6 +515,16 @@ def _invoke_loopback_model(
         msg = "local model returned a non-JSON response"
         raise LocalModelInvocationError(msg)
     return cast(JsonValue, decoded)
+
+
+def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> AgentBackend:
+    backend_id = env.get("HEARTWOOD_AGENT_BACKEND", "deterministic-local")
+    if backend_id in {"deterministic-local", "deterministic"}:
+        return DeterministicAgentBackend()
+    if backend_id in {"local-workspace", "workspace"}:
+        return LocalWorkspaceAgentBackend(store.session_dir / "agent-artifacts")
+    msg = f"unsupported HEARTWOOD_AGENT_BACKEND: {backend_id}"
+    raise ValueError(msg)
 
 
 def _model_response_metadata(response: JsonValue) -> dict[str, JsonValue]:

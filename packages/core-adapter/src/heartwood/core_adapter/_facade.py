@@ -8,16 +8,16 @@
 
 The facade mirrors the OpenHands agent-server model: a turn produces a stream of
 typed events (assistant message, proposed tool call, confirmation gate, tool
-execution) rather than a single result. The first backend is deterministic and
-offline; the real ``openhands-agent-server`` binding implements the same
-protocol behind this facade once dependencies, policy gates, and replay behavior
-are pinned.
+execution) rather than a single result. Deterministic replay remains available
+for tests, while local runtime profiles can select a workspace-backed tool
+executor that performs a real bounded filesystem action.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal, Protocol
 
 
@@ -134,3 +134,96 @@ class DeterministicAgentBackend:
                 ),
             ),
         )
+
+
+class LocalWorkspaceAgentBackend:
+    """Local backend that executes a bounded workspace-writing tool.
+
+    The backend writes only synthetic, content-free metadata derived from the
+    session envelope. It gives the offline image a real tool-execution path
+    without introducing participant data, prompt text, shell access, or public
+    network behavior into the first local-runtime smoke test.
+    """
+
+    def __init__(self, artifact_dir: Path) -> None:
+        """Initialize the backend with a root-confined artifact directory."""
+        self.artifact_dir = artifact_dir.resolve()
+
+    @property
+    def backend_id(self) -> str:
+        """Return the backend id."""
+        return "local-workspace"
+
+    def _tool_call(self, session_id: str) -> ProposedToolCall:
+        return ProposedToolCall(
+            tool_call_id=f"{session_id}-toolcall-0",
+            tool_name="heartwood.local.write_summary",
+            risk="low",
+            summary="write a synthetic workspace summary artifact",
+        )
+
+    def _agent_message(self, session_id: str, prompt_length: int) -> BackendEvent:
+        return BackendEvent(
+            kind=BackendEventKind.AGENT_MESSAGE,
+            message=(
+                "Prepared a local workspace action over the detected synthetic dataset "
+                f"(session_id={session_id}, prompt_length={prompt_length})."
+            ),
+        )
+
+    def chat_turn(self, *, session_id: str, prompt_length: int) -> tuple[BackendEvent, ...]:
+        """Emit a content-free assistant message for a chat turn."""
+        return (self._agent_message(session_id, prompt_length),)
+
+    def run_turn(
+        self, *, session_id: str, prompt_length: int, approved: bool
+    ) -> tuple[BackendEvent, ...]:
+        """Write the local artifact only after the confirmation gate resolves."""
+        tool_call = self._tool_call(session_id)
+        if approved:
+            artifact_path = self._write_summary(session_id=session_id, prompt_length=prompt_length)
+            execution = ToolExecution(
+                tool_name=tool_call.tool_name,
+                exit_code=0,
+                summary=(
+                    "wrote synthetic workspace artifact: "
+                    f"{artifact_path.parent.name}/{artifact_path.name}"
+                ),
+            )
+        else:
+            execution = ToolExecution(
+                tool_name=tool_call.tool_name,
+                exit_code=1,
+                summary="approval required before writing workspace artifact",
+            )
+        return (
+            self._agent_message(session_id, prompt_length),
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
+            BackendEvent(
+                kind=BackendEventKind.CONFIRMATION, tool_call=tool_call, approved=approved
+            ),
+            BackendEvent(kind=BackendEventKind.TOOL_EXECUTION, tool_execution=execution),
+        )
+
+    def _write_summary(self, *, session_id: str, prompt_length: int) -> Path:
+        path = (self.artifact_dir / "synthetic-workspace-summary.md").resolve()
+        if path.parent != self.artifact_dir:
+            msg = f"artifact path escapes backend directory: {path}"
+            raise ValueError(msg)
+        self.artifact_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "\n".join(
+                (
+                    "# Synthetic Workspace Summary",
+                    "",
+                    f"- Session: `{session_id}`",
+                    f"- Prompt length: `{prompt_length}`",
+                    "- Dataset: synthetic OMOP fixture",
+                    "- Tool action: local workspace artifact write",
+                    "- Persisted prompt content: none",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        return path

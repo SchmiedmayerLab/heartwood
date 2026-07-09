@@ -48,7 +48,7 @@ def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
         target_type="model-call",
         target_id="decision-synthetic-model-call",
     )
-    run = session.run(endpoint="https://model.local.invalid/v1/chat")
+    run = session.run(endpoint="https://model.local.invalid/v1/chat/completions")
     exported = session.audit_export()
 
     assert detected.dataset_proposals[0].dataset_type == "omop-cdm"
@@ -94,7 +94,7 @@ def test_notebook_pause_resume_updates_view_state(tmp_path: Path) -> None:
 def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
     session = NotebookSession(workspace=tmp_path, session_id="notebook-widgets")
     session.detect()
-    session.run(endpoint="https://public.example.invalid/v1/chat")
+    session.run(endpoint="https://public.example.invalid/v1/chat/completions")
     view_model = session.audit_export()
 
     sections = build_widget_spec(view_model)

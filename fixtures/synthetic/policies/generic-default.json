@@ -4,8 +4,8 @@
   "platform_id": "generic",
   "deny_egress_by_default": true,
   "allowed_model_endpoints": [
-    "https://model.local.invalid/v1/chat",
-    "http://127.0.0.1:8765/v1/chat"
+    "https://model.local.invalid/v1/chat/completions",
+    "http://127.0.0.1:8765/v1/chat/completions"
   ],
   "credential_allowlist": [],
   "aggregate_count_floor": 20,

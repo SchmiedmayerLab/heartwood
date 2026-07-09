@@ -16,7 +16,7 @@ def _policy() -> PolicyProfile:
     return PolicyProfile(
         policy_id="generic-default",
         platform_id="generic",
-        allowed_model_endpoints=("https://model.local.invalid/v1/chat",),
+        allowed_model_endpoints=("https://model.local.invalid/v1/chat/completions",),
     )
 
 
@@ -30,7 +30,7 @@ def test_egress_proxy_blocks_denied_call_before_invocation() -> None:
         return "should not run"
 
     result = proxy.call(
-        endpoint="https://public.example.invalid/v1/chat",
+        endpoint="https://public.example.invalid/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",
@@ -56,7 +56,7 @@ def test_egress_proxy_invokes_allowed_call_and_records_attestation() -> None:
         return {"status": "ok"}
 
     result = proxy.call(
-        endpoint="https://model.local.invalid/v1/chat",
+        endpoint="https://model.local.invalid/v1/chat/completions",
         capability_tier="supervised",
         decision_id="decision-1",
         purpose="synthetic model call",

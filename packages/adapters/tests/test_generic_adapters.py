@@ -80,7 +80,7 @@ def test_fake_local_model_provider_allows_only_policy_endpoint() -> None:
     provider = FakeLocalModelProviderAdapter(policy)
     decision = provider.evaluate_model_call(
         ModelCallRequest(
-            endpoint="https://model.local.invalid/v1/chat",
+            endpoint="https://model.local.invalid/v1/chat/completions",
             capability_tier="supervised",
             purpose="synthetic model call",
         )
@@ -88,7 +88,7 @@ def test_fake_local_model_provider_allows_only_policy_endpoint() -> None:
     assert decision.decision == "allow"
     loopback_decision = provider.evaluate_model_call(
         ModelCallRequest(
-            endpoint="http://127.0.0.1:8765/v1/chat",
+            endpoint="http://127.0.0.1:8765/v1/chat/completions",
             capability_tier="supervised",
             purpose="synthetic loopback model call",
         )

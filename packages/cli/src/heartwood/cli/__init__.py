@@ -9,14 +9,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import shutil
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from heartwood.compliance import ReviewerPacketGenerator
-from heartwood.gateway import SessionGateway
+from heartwood.gateway import ProviderConfigError, SessionGateway, load_provider_config
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 __all__ = ["__version__", "main"]
@@ -25,8 +27,8 @@ __version__ = "0.0.0"
 
 _PROG = "heartwood"
 _DEFAULT_WORKSPACE = Path(".heartwood") / "sessions"
-_DEFAULT_MODEL_ENDPOINT = "https://model.local.invalid/v1/chat"
-_DEFAULT_LOOPBACK_MODEL_ENDPOINT = "http://127.0.0.1:8765/v1/chat"
+_DEFAULT_MODEL_ENDPOINT = "https://model.local.invalid/v1/chat/completions"
+_DEFAULT_LOOPBACK_MODEL_ENDPOINT = "http://127.0.0.1:8765/v1/chat/completions"
 _DEFAULT_FIXTURE_ROOT = Path("fixtures") / "synthetic"
 
 
@@ -57,6 +59,11 @@ def _format_detection(event: SessionEvent, *, workspace: Path) -> str:
         f"  - {item}" for item in _string_list_payload(dataset["evidence"], "dataset.evidence")
     ]
     return "\n".join(lines)
+
+
+def _provider_config_default() -> Path | None:
+    value = os.environ.get("HEARTWOOD_PROVIDER_CONFIG")
+    return Path(value) if value else None
 
 
 def _format_transcript(events: Sequence[SessionEvent]) -> str:
@@ -198,6 +205,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Invoke the allowlisted loopback model endpoint before the agent turn.",
     )
+    run.add_argument(
+        "--provider-config",
+        type=Path,
+        default=_provider_config_default(),
+        help="Provider route configuration with file-based secret references.",
+    )
+    run.add_argument(
+        "--provider-route",
+        help="Provider route id to select from --provider-config.",
+    )
     for name, help_text in (
         ("approve", "Approve a skill, egress decision, model call, or tool call."),
         ("deny", "Deny a skill, egress decision, model call, or tool call."),
@@ -236,73 +253,97 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     gateway = SessionGateway(workspace=args.workspace)
-    if args.command == "detect":
-        return _handle_detect(gateway, workspace=args.workspace, session_id=args.session_id)
-    if args.command == "chat":
-        if args.prompt is not None:
-            command = _command(
-                gateway,
-                session_id=args.session_id,
-                kind=CommandKind.CHAT,
-                payload={"prompt": args.prompt},
+    gateway.start()
+    try:
+        if args.command == "detect":
+            return _handle_detect(gateway, workspace=args.workspace, session_id=args.session_id)
+        if args.command == "chat":
+            if args.prompt is not None:
+                command = _command(
+                    gateway,
+                    session_id=args.session_id,
+                    kind=CommandKind.CHAT,
+                    payload={"prompt": args.prompt},
+                )
+                print(_format_transcript(gateway.handle(command).events))
+                return 0
+            return _interactive_chat(gateway, session_id=args.session_id)
+        if args.command == "run":
+            if args.local_model and args.provider_route:
+                parser.error("--provider-route cannot be combined with --local-model")
+            endpoint = (
+                _DEFAULT_LOOPBACK_MODEL_ENDPOINT
+                if args.local_model and args.endpoint == _DEFAULT_MODEL_ENDPOINT
+                else args.endpoint
             )
-            print(_format_transcript(gateway.handle(command).events))
-            return 0
-        return _interactive_chat(gateway, session_id=args.session_id)
-    if args.command == "run":
-        endpoint = (
-            _DEFAULT_LOOPBACK_MODEL_ENDPOINT
-            if args.local_model and args.endpoint == _DEFAULT_MODEL_ENDPOINT
-            else args.endpoint
-        )
-        command = _command(
-            gateway,
-            session_id=args.session_id,
-            kind=CommandKind.RUN,
-            payload={
+            provider_route: dict[str, JsonValue] | None = None
+            if args.provider_route:
+                if args.provider_config is None:
+                    parser.error("--provider-config is required when --provider-route is specified")
+                try:
+                    route = load_provider_config(args.provider_config).route(args.provider_route)
+                except ProviderConfigError as error:
+                    parser.error(str(error))
+                endpoint = route.endpoint
+                provider_route = cast(dict[str, JsonValue], route.safe_metadata())
+            run_payload: dict[str, JsonValue] = {
                 "prompt": args.prompt,
                 "endpoint": endpoint,
                 "invoke_model": args.local_model,
-            },
-        )
-        print(_format_transcript(gateway.handle(command).events))
+            }
+            if provider_route is not None:
+                run_payload["provider_route"] = provider_route
+            command = _command(
+                gateway,
+                session_id=args.session_id,
+                kind=CommandKind.RUN,
+                payload=run_payload,
+            )
+            print(_format_transcript(gateway.handle(command).events))
+            return 0
+        if args.command in {"approve", "deny"}:
+            kind = CommandKind.APPROVE if args.command == "approve" else CommandKind.DENY
+            approval_payload: dict[str, JsonValue] = {
+                "target_type": args.target_type,
+                "target_id": args.target_id,
+            }
+            if args.reason:
+                approval_payload["reason"] = args.reason
+            command = _command(
+                gateway,
+                session_id=args.session_id,
+                kind=kind,
+                payload=approval_payload,
+            )
+            print(_format_transcript(gateway.handle(command).events))
+            return 0
+        if args.command == "pause":
+            command = _command(gateway, session_id=args.session_id, kind=CommandKind.PAUSE)
+            print(_format_transcript(gateway.handle(command).events))
+            return 0
+        if args.command == "resume":
+            command = _command(gateway, session_id=args.session_id, kind=CommandKind.RESUME)
+            print(_format_transcript(gateway.handle(command).events))
+            return 0
+        if args.command == "replay":
+            return _handle_replay(gateway, session_id=args.session_id)
+        if args.command == "audit" and args.audit_command == "export":
+            return _handle_audit_export(
+                gateway,
+                session_id=args.session_id,
+                output=args.output,
+            )
+        if args.command == "reviewer" and args.reviewer_command == "packet":
+            return _handle_reviewer_packet(
+                workspace=args.workspace,
+                session_id=args.session_id,
+                fixture_root=args.fixture_root,
+                output=args.output,
+            )
+        parser.print_help()
         return 0
-    if args.command in {"approve", "deny"}:
-        kind = CommandKind.APPROVE if args.command == "approve" else CommandKind.DENY
-        payload: dict[str, JsonValue] = {
-            "target_type": args.target_type,
-            "target_id": args.target_id,
-        }
-        if args.reason:
-            payload["reason"] = args.reason
-        command = _command(gateway, session_id=args.session_id, kind=kind, payload=payload)
-        print(_format_transcript(gateway.handle(command).events))
-        return 0
-    if args.command == "pause":
-        command = _command(gateway, session_id=args.session_id, kind=CommandKind.PAUSE)
-        print(_format_transcript(gateway.handle(command).events))
-        return 0
-    if args.command == "resume":
-        command = _command(gateway, session_id=args.session_id, kind=CommandKind.RESUME)
-        print(_format_transcript(gateway.handle(command).events))
-        return 0
-    if args.command == "replay":
-        return _handle_replay(gateway, session_id=args.session_id)
-    if args.command == "audit" and args.audit_command == "export":
-        return _handle_audit_export(
-            gateway,
-            session_id=args.session_id,
-            output=args.output,
-        )
-    if args.command == "reviewer" and args.reviewer_command == "packet":
-        return _handle_reviewer_packet(
-            workspace=args.workspace,
-            session_id=args.session_id,
-            fixture_root=args.fixture_root,
-            output=args.output,
-        )
-    parser.print_help()
-    return 0
+    finally:
+        gateway.stop()
 
 
 def _handle_detect(gateway: SessionGateway, *, workspace: Path, session_id: str) -> int:
