@@ -965,6 +965,12 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert '--image-name "${IMAGE_NAME}"' in workflow
     assert '--image-channel "${IMAGE_CHANNEL}"' in workflow
     assert '--git-sha "${GIT_SHA}"' in workflow
+    assert "Free runner disk before Terra publish smoke" in workflow
+    assert "docker buildx prune --all --force" in workflow
+    assert "docker system prune --all --force --volumes" in workflow
+    assert "Pull published Terra smoke image" in workflow
+    assert "Pull published Terra runtime image" not in workflow
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke"' in workflow
     assert "docker buildx imagetools create \\" in workflow
     assert "Verify image manifests" in workflow
     assert "verify_multi_platform_tag" in workflow
