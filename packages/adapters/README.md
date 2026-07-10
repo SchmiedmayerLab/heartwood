@@ -10,6 +10,6 @@ SPDX-License-Identifier: MIT
 
 # Heartwood Adapters
 
-Service provider interfaces for platform, model-provider, data-source, and registry adapters.
+Service provider interfaces for platform, data-source, and Skill-registry boundaries.
 
-The package includes the shared adapter protocols, reusable conformance checks, and deterministic generic/local implementations used by the core harness tests.
+The package includes shared adapter protocols, reusable conformance checks, and deterministic generic and local implementations. Runtime model-provider compatibility belongs to OpenHands and LiteLLM and is intentionally not represented as a Heartwood provider-adapter layer.

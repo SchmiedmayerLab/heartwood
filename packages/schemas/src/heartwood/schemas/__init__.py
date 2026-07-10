@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from heartwood.schemas._records import (
+    ActionConfirmationMode,
     ApprovalRecord,
     AuditEvent,
     ConfirmationRequest,
@@ -23,6 +24,7 @@ from heartwood.schemas._records import (
 )
 
 __all__ = [
+    "ActionConfirmationMode",
     "ApprovalRecord",
     "AuditEvent",
     "ConfirmationRequest",

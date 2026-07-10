@@ -51,30 +51,96 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Free runner disk for generic image
+      - name: Build and push image by digest
+        env:
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          docker system prune --all --force
-          df -h
-      - name: Build and push architecture image flavors
+          docker buildx bake --file docker-bake.hcl \
+            --set runtime.platform="${DOCKER_PLATFORM}" \
+            --set runtime.tags="${IMAGE_NAME}" \
+            --set "runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file /tmp/metadata.json \
+            runtime
+          digest="$(jq -r '.runtime["containerimage.digest"]' /tmp/metadata.json)"
+          test "${digest}" != "null"
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload image digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: generic-digest-${{ matrix.suffix }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-platform generic image
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+      - name: Download image digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: generic-digest-*
+          path: /tmp/digests
+          merge-multiple: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish generic image tags
+        env:
+          GIT_SHA: ${{ github.sha }}
+          IMAGE_CHANNEL: edge
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          sources=()
+          for digest in /tmp/digests/*; do
+            sources+=("${IMAGE_NAME}@sha256:$(basename "${digest}")")
+          done
+          test "${#sources[@]}" -eq 2
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
+            --tag "${IMAGE_NAME}:sha-${GIT_SHA}" \
+            "${sources[@]}"
+      - name: Verify generic image tags
+        env:
+          GIT_SHA: ${{ github.sha }}
+          IMAGE_CHANNEL: edge
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          for tag in "${IMAGE_CHANNEL}" "sha-${GIT_SHA}"; do
+            raw="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}:${tag}")"
+            grep -Eq '"architecture"[[:space:]]*:[[:space:]]*"amd64"' <<<"${raw}"
+            grep -Eq '"architecture"[[:space:]]*:[[:space:]]*"arm64"' <<<"${raw}"
+          done
+      - name: Pull published generic image
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-          GIT_SHA: ${{ github.sha }}
-          IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}
-          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: docker pull "${IMAGE_NAME}:edge"
+      - name: Run published generic OpenHands smoke
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: >-
-          docker buildx bake --file docker-bake.hcl --push
-          --set runtime.platform="${DOCKER_PLATFORM}"
-          --set smoke.platform="${DOCKER_PLATFORM}"
-          --set providers.platform="${DOCKER_PLATFORM}"
-          runtime smoke providers
+          docker run --rm --init --network none --read-only
+          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256
+          --tmpfs /tmp:rw,nosuid,nodev,size=1g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m
+          --env HEARTWOOD_AGENT_BACKEND=openhands-sdk
+          "${IMAGE_NAME}:edge"
+          bash images/generic/scripts/offline_stack_smoke.sh
 
   build-terra:
-    name: Build Terra image (linux/amd64)
+    name: Build and verify Terra image (linux/amd64)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -92,30 +158,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Free runner disk for Terra image
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          docker system prune --all --force
-          df -h
-      - name: Build and push Terra image flavors
+      - name: Build and push Terra image
         env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-          GIT_SHA: ${{ github.sha }}
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
-        run: >-
-          docker buildx bake --file docker-bake.hcl
-          --set terra-runtime.platform="linux/amd64"
-          --set terra-smoke.platform="linux/amd64"
-          terra-runtime terra-smoke
+          GIT_SHA: ${{ github.sha }}
+          IMAGE_CHANNEL: edge
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: docker buildx bake --file docker-bake.hcl terra-runtime
       - name: Verify Terra image tags
         env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
           GIT_SHA: ${{ github.sha }}
+          IMAGE_CHANNEL: edge
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: >-
           python3 images/platform/scripts/verify_registry_manifest.py
           --manifest images/platforms.toml
@@ -123,114 +177,33 @@ jobs:
           --image-name "${IMAGE_NAME}"
           --image-channel "${IMAGE_CHANNEL}"
           --git-sha "${GIT_SHA}"
-      - name: Free runner disk before Terra publish smoke
-        run: |
-          docker buildx prune --all --force
-          docker system prune --all --force --volumes
-          df -h
-      - name: Pull published Terra smoke image
+      - name: Pull published Terra image
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-        run: docker pull "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke"
+        run: docker pull "${IMAGE_NAME}:edge-terra"
       - name: Run published Terra Jupyter contract smoke
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --entrypoint bash
-          "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke"
+          "${IMAGE_NAME}:edge-terra"
           /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
+      - name: Run published Terra OpenHands smoke
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: >-
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /opt/heartwood --entrypoint bash
+          "${IMAGE_NAME}:edge-terra"
+          images/generic/scripts/offline_stack_smoke.sh
       - name: Run published Terra Jupyter launch smoke
         env:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-        run: >-
-          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
-          "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke"
+        run: bash images/platform/scripts/terra_jupyter_launch_smoke.sh "${IMAGE_NAME}:edge-terra"
       - name: Run published Terra Leonardo Jupyter launch smoke
         env:
           HEARTWOOD_TERRA_HOST_PORT: "8001"
           HEARTWOOD_TERRA_JUPYTER_MODE: leonardo
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-        run: >-
-          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
-          "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke"
-
-  publish:
-    name: Publish multi-architecture image manifests
-    runs-on: ubuntu-24.04
-    needs: build
-    steps:
-      - name: Set image name
-        id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish image manifests
-        env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-          GIT_SHA: ${{ github.sha }}
-        run: |
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
-            --tag "${IMAGE_NAME}:sha-${GIT_SHA}" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-amd64" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-arm64"
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b" \
-            --tag "${IMAGE_NAME}:sha-${GIT_SHA}-coder-7b" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b-amd64" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b-arm64"
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke" \
-            --tag "${IMAGE_NAME}:sha-${GIT_SHA}-smoke" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-amd64" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke-arm64"
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers" \
-            --tag "${IMAGE_NAME}:sha-${GIT_SHA}-providers" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-amd64" \
-            "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers-arm64"
-      - name: Verify image manifests
-        env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-          IMAGE_CHANNEL: edge
-          GIT_SHA: ${{ github.sha }}
-        run: |
-          public_manifest_raw() {
-            local image_ref="${IMAGE_NAME}:$1"
-            local docker_config
-            local raw
-            docker_config="$(mktemp -d)"
-            echo "Verifying public GHCR access for ${image_ref}" >&2
-            if ! raw="$(DOCKER_CONFIG="${docker_config}" docker buildx imagetools inspect --raw "${image_ref}")"; then
-              rm -rf "${docker_config}"
-              return 1
-            fi
-            rm -rf "${docker_config}"
-            printf '%s\n' "${raw}"
-          }
-          verify_multi_platform_tag() {
-            image_ref="${IMAGE_NAME}:$1"
-            raw="$(public_manifest_raw "$1")"
-            printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"amd64"'
-            printf '%s\n' "${raw}" | grep -E '"architecture"[[:space:]]*:[[:space:]]*"arm64"'
-          }
-          verify_multi_platform_tag "${IMAGE_CHANNEL}"
-          verify_multi_platform_tag "sha-${GIT_SHA}"
-          verify_multi_platform_tag "${IMAGE_CHANNEL}-coder-7b"
-          verify_multi_platform_tag "sha-${GIT_SHA}-coder-7b"
-          verify_multi_platform_tag "${IMAGE_CHANNEL}-smoke"
-          verify_multi_platform_tag "sha-${GIT_SHA}-smoke"
-          verify_multi_platform_tag "${IMAGE_CHANNEL}-providers"
-          verify_multi_platform_tag "sha-${GIT_SHA}-providers"
+        run: bash images/platform/scripts/terra_jupyter_launch_smoke.sh "${IMAGE_NAME}:edge-terra"

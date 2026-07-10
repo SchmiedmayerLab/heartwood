@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-gateway
+# Heartwood Gateway
 
 Session gateway for Heartwood command and event streams.
 
-The package owns ASGI HTTP command handling, replayable ASGI WebSocket event streaming, the managed local agent-server boundary, and the policy-gated model-call path. The default path is deterministic and offline for tests and synthetic replay, and the generic image can enable a gateway-owned localhost OpenHands agent-server child through environment configuration. The `openhands-bash` backend calls authenticated OpenHands `/api` routes to execute the bounded offline smoke tool path behind the same session contract.
+The package owns ASGI command handling, replayable WebSocket and Server-Sent Events streams, non-secret model and action settings, reviewed local-artifact downloads, and the OpenHands SDK backend adapter. It authorizes the selected endpoint, capability tier, credential reference, and action-confirmation mode before lazily creating an OpenHands conversation; configures the upstream OpenHands analyzer ensemble and confirmation policy; loads repository-verified Skills through OpenHands; and translates messages, actions, confirmations, and observations into the shared Heartwood event contract. Provider credentials are resolved only after policy allows the reference and are never written to settings or audit records.

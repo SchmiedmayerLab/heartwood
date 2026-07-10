@@ -11,8 +11,8 @@ surfaces — drives the same session by issuing commands and consuming a single
 structured event stream. This package will hold that contract so no interface
 owns separate execution semantics.
 
-See ``design/03-architecture.md`` (interaction model) and
-``design/09-implementation-plan.md`` (phase 0B) for the contract's role.
+See ``design/03-architecture.md`` and ``design/09-implementation-plan.md`` for
+the contract's role.
 """
 
 from __future__ import annotations

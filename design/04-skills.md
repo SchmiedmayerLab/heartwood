@@ -8,15 +8,15 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 04 — Skills and auto-detection
+# 04 — Skills And Auto-Detection
 
 ## Format: `SKILL.md`
 
-Skills use the open **`SKILL.md`** standard (a directory with a `SKILL.md` file plus optional `scripts/`, `references/`, `assets/`), loaded natively by the agent core with progressive disclosure: only ~100 tokens of name+description per skill load at startup; the body loads on activation; resources load on reference. The standard is portable across common agent and editor hosts, so a skill authored for heartwood remains valid elsewhere, which preserves author reach.
+Skills use the open **`SKILL.md`** standard (a directory with a `SKILL.md` file plus optional `scripts/`, `references/`, `assets/`), loaded natively by the agent core with progressive disclosure: name and description load at startup, the body loads on activation, and resources load on reference. The standard is portable across common agent and editor hosts, so a Skill authored for Heartwood remains valid elsewhere.
 
-## heartwood metadata
+## Heartwood Metadata
 
-Skills carry a namespaced `heartwood.*` block in the `metadata` field, so they stay valid in any `SKILL.md` host while heartwood enforces the load-bearing fields in code (never via model self-report):
+Skills carry a namespaced `heartwood.*` block in the `metadata` field, so they stay valid in any `SKILL.md` host while Heartwood enforces the load-bearing fields in code rather than through model self-report:
 
 ```yaml
 metadata:
@@ -29,24 +29,28 @@ metadata:
   heartwood.sig: "sigstore:<bundle-ref>"
 ```
 
-## Auto-detection (deterministic, propose-not-commit)
+## Auto-Detection
 
-Detection is a fast, auditable, offline-testable pipeline that **proposes** — it never silently loads a skill or runs code. The danger it guards against is guessing wrong *authoritatively* for a non-technical user.
+Detection is a fast, auditable, offline-testable pipeline that reports evidence and confidence without executing code, changing installed Skills, or asserting an unsupported dataset identity. Repository-verified bundled Skills remain available to OpenHands; detection will eventually narrow and rank that bundle for the active platform and dataset.
 
 1. **Platform** — env-var / file probes (`WORKSPACE_*`/`GOOGLE_PROJECT` → Terra; `DX_*` → DNAnexus; SB config → Seven Bridges; else generic). Pure code, no tokens.
-2. **Dataset** — schema/format fingerprints (OMOP table-name set in `INFORMATION_SCHEMA`; VCF/BAM/DICOM magic bytes; FHIR NDJSON), each with a confidence.
-3. **Selection** — a manifest maps `(platform, dataset) → skills` from the metadata above; a dispatcher emits a visible, logged proposal with evidence and confidence ("Detected DNAnexus + VCF (0.95) → propose `genomics-qc`, `vcf-cohort-filter` [confirm] [pick] [why]"). Low confidence requires confirmation; "detection is wrong / let me pick" is a one-click primary path. Embedding retrieval is used only for the long tail (undeclared or ambiguous cases), always followed by confirmation.
+2. **Dataset** — the current integration fixture produces a deterministic synthetic OMOP fingerprint. A normal unconfigured runtime must report no detected dataset until a real data-source adapter supplies schema or format evidence such as OMOP table-name sets in `INFORMATION_SCHEMA`, VCF/BAM/DICOM magic bytes, or FHIR NDJSON structure.
+3. **Selection target** — the dispatcher maps `(platform, dataset) → Skills` and emits a visible, logged proposal with a researcher correction path. This dispatcher is not implemented; the runtime currently makes the small checked-in bundle available to OpenHands without dataset filtering. Community or experimental Skills require installation-time approval before they can enter the runtime Skill directory.
 
-The common path uses no model call and is unit-tested against synthetic fixtures of each platform + dataset. Only matched skills' metadata enters context at start; full bodies load on activation, keeping skill overhead small.
+Detection uses no model call. OpenHands receives repository-verified Skill metadata at startup and loads full bodies on activation through native progressive disclosure. Dataset-aware narrowing remains future work and must not bypass the extension trust gate.
 
-## Sub-agents
+## Current Packaging And Trust
 
-Sub-agents are specialized skill+tool bundles (e.g. `genomics-qc`, `omop-phenotyping`) with scoped context, packaged the same way and delegated to via the SDK. The detector may propose one for a detected dataset.
+- **Current bundle.** `skills/bundle.toml` selects checked-in `SKILL.md` directories. The repository gate validates metadata consistency, declared tools, network posture, entrypoint confinement, deterministic tests, and provenance-field shape before the image includes them. OpenHands loads the resulting read-only bundle without runtime network access.
+- **Current trust meaning.** `verified` means repository-verified: the Skill is checked in, selected by the bundle, and accepted by local validation and tests. Existing `heartwood.sig` values are provenance placeholders; the repository does not perform cryptographic Sigstore verification. Repository verification is not clinical, statistical, security, or institutional approval.
+- **Extensions.** `community` and `experimental` Skills can be installed only from a mounted local directory after explicit review. Heartwood does not fetch external Skills or maintain a parallel registry at runtime.
 
-## Sharing and distribution
+## Runtime Extension Installation
 
-- **Standard format, heartwood verification gate.** heartwood does not run a competing general registry. It **curates and signs** a secure-platform skill collection, **aggregates** existing registries (e.g. BioContextAI), and cross-publishes generic skills upstream so authors reach the larger audience.
-- **Bundle catalog.** Phase 0 tracks supported packaged skills in `skills/bundle.toml`. Local entries point at checked-in `SKILL.md` directories and resolve through the local verification gate. External git entries are import specifications: semver tag, resolved commit, content SHA-256, repository-relative path, `heartwood.*` metadata, and Sigstore provenance. The build-time importer vendors external entries into the same local skill directory shape before runtime.
-- **Offline-first.** At build time (outside the perimeter), the image build clones skills at a pinned semver tag, verifies signatures, and vendors them into a read-only directory the agent core loads from. The heartwood verification gate is what writes into that directory, at a pinned OpenHands SDK version whose skill-loading format is validated in CI. No runtime network is required or allowed. Large binary assets ship as OCI/ORAS artifacts resolved at build.
-- **Versioning.** Semver is mandatory (never commit-SHA-as-version) so builds pin reproducibly and reviewers can validate a specific version. Release channels (`stable` = verified; `latest` = community) are separate refs.
-- **Trust tiers.** `verified` (reviewed + signed, pre-seeded), `community` (installable, badged), `experimental` (opt-in only). Enforcement — signing, sandboxing, scanning, approval UX — is in [05](05-security-compliance.md).
+`heartwood skills inspect <mounted-directory>` verifies and displays one extension before installation. `heartwood skills install <mounted-directory> --approve` records the installation-time decision, rejects unsupported tools, required network access, malformed metadata, path escapes, symbolic links, and bundled-name replacement, and atomically copies the source into deployment-persistent Skill storage. `heartwood skills remove <name>` removes only installed extensions. The web Skills panel exposes the same inspect, approve, install, list, and remove operations through the gateway.
+
+The gateway gives OpenHands both the read-only bundled directory and the persistent installed directory. OpenHands performs native progressive disclosure across both. Automatic user, public-marketplace, and project-workspace Skill loading is disabled so a workspace cannot bypass installation review or override a repository-verified Skill. Installed Skills do not create a second activation protocol and do not trigger repeated conversational approval.
+
+## Future Distribution
+
+External imports require a build-time workflow that resolves an immutable source, verifies content digests and real signatures, records review provenance, vendors the result, and tests the final image. Release channels, cross-publication, dataset-aware selection, and sub-agent bundles remain future work until those controls exist.

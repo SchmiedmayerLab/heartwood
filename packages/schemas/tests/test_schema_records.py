@@ -70,6 +70,21 @@ def test_policy_profile_enforces_aggregate_count_floor() -> None:
         )
 
 
+def test_policy_profile_defaults_to_confirmation_for_every_action() -> None:
+    policy = PolicyProfile(policy_id="generic-default", platform_id="generic")
+
+    assert policy.allowed_action_confirmation_modes == ("always-confirm",)
+
+    with pytest.raises(ValidationError):
+        PolicyProfile.model_validate(
+            {
+                "policy_id": "generic-default",
+                "platform_id": "generic",
+                "allowed_action_confirmation_modes": ["never-confirm"],
+            }
+        )
+
+
 def test_model_call_decision_requires_reason() -> None:
     decision = ModelCallDecision(
         decision_id="decision-1",

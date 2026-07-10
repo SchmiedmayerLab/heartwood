@@ -11,41 +11,19 @@ import { event, syntheticEvents } from "./test/fixtures";
 import { buildViewModel } from "./viewModel";
 
 describe("buildViewModel", () => {
-  it("projects gateway events into the researcher UI state", () => {
+  it("projects the conversation and actual pending action", () => {
     const viewModel = buildViewModel(syntheticEvents());
 
     expect(viewModel.sessionId).toBe("session-test");
-    expect(viewModel.datasetProposals).toEqual([
-      {
-        confidence: 0.95,
-        datasetType: "omop-cdm",
-        evidence: ["found synthetic person table"],
-        sourceId: "synthetic-omop",
-      },
-    ]);
-    expect(viewModel.policyStatus[0]).toMatchObject({
-      decision: "allow",
-      provider: "openai-compatible",
-      routeId: "local-loopback",
-    });
-    expect(viewModel.modelInvocations[0]).toMatchObject({
-      choicesCount: 1,
-      model: "heartwood-local-runtime",
-      responsePreview: "Synthetic local model response.",
-      routeId: "local-loopback",
-      status: "ok",
-      totalTokens: 2,
-    });
     expect(viewModel.conversation).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          content: "Synthetic local model response.",
-          label: "Model",
-          role: "model",
+          content: "Inspect the synthetic workspace",
+          label: "You",
+          role: "user",
         }),
         expect.objectContaining({
-          content:
-            "Prepared a local workspace action over the detected synthetic dataset.",
+          content: "I will inspect the synthetic workspace.",
           label: "Agent",
           role: "agent",
         }),
@@ -54,159 +32,86 @@ describe("buildViewModel", () => {
           label: "Trace",
           role: "trace",
         }),
+        expect.objectContaining({ content: "allow model route" }),
       ]),
     );
-    expect(
-      viewModel.approvalControls.some(
-        (control) => control.targetType === "tool-call",
-      ),
-    ).toBe(true);
+    expect(viewModel.approvalControls).toEqual([
+      expect.objectContaining({
+        decision: null,
+        targetId: "session-test-toolcall-0",
+        targetType: "tool-call",
+      }),
+    ]);
   });
 
-  it("projects approvals, lifecycle, exports, and errors", () => {
+  it("projects lifecycle, exports, errors, and confirmation results", () => {
     const viewModel = buildViewModel([
-      ...syntheticEvents(),
-      event(5, "approval.recorded", {
-        approval: {
-          decision: "approved",
-          reason: "synthetic approval",
-          target_id: "heartwood.aggregate-export",
-          target_type: "skill",
-        },
-      }),
-      event(6, "confirmation.requested", {
-        request: {
-          tool_call_id: "session-test-toolcall-1",
-          tool_name: "heartwood.local.write_summary",
-        },
-      }),
-      event(7, "confirmation.resolved", {
-        command_id: "session-test-approve-000007",
+      event(0, "confirmation.resolved", {
         decision: "approved",
-        tool_call_id: "session-test-toolcall-1",
+        tool_call_id: "toolcall-1",
       }),
-      event(8, "tool.execution.recorded", { exit_code: 0 }),
-      event(9, "audit.export.recorded", {
-        path: "/workspace/.heartwood/audit/export.jsonl",
-      }),
-      event(10, "session.paused", { command_id: "session-test-pause-000010" }),
-      event(11, "session.resumed", {
-        command_id: "session-test-resume-000011",
-      }),
-      event(12, "error.recorded", { reason: "synthetic error" }),
+      event(1, "tool.execution.recorded", { exit_code: 0 }),
+      event(2, "audit.export.recorded", { path: "/audit.jsonl" }),
+      event(3, "session.paused", {}),
+      event(4, "session.resumed", {}),
+      event(5, "error.recorded", { reason: "synthetic error" }),
     ]);
 
-    expect(viewModel.skillProposals).toContainEqual({
-      detail: "synthetic approval",
-      status: "approved",
-      targetId: "heartwood.aggregate-export",
-    });
-    expect(viewModel.approvalControls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          decision: "approved",
-          targetId: "session-test-toolcall-1",
-        }),
-        expect.objectContaining({ targetType: "skill" }),
-      ]),
-    );
-    expect(viewModel.exportActions).toEqual([
-      {
-        label: "Scrubbed audit JSONL",
-        path: "/workspace/.heartwood/audit/export.jsonl",
-      },
+    expect(viewModel.approvalControls).toEqual([
+      expect.objectContaining({ decision: "approved", targetId: "toolcall-1" }),
     ]);
     expect(viewModel.paused).toBe(false);
+    expect(viewModel.activity[1]?.detail).toBe("exit=0");
+    expect(viewModel.activity[2]?.detail).toBe("/audit.jsonl");
     expect(viewModel.activity.at(-1)?.detail).toBe("synthetic error");
   });
 
-  it("uses empty defaults for partial payloads", () => {
+  it("does not invent an approval before OpenHands requests confirmation", () => {
     const viewModel = buildViewModel([
-      event(0, "detection.proposed", {
-        dataset: {
-          confidence: "unknown",
-          dataset_type: 12,
-          evidence: "none",
-          source_id: null,
-        },
-      }),
-      event(1, "model_call.decision.recorded", {
-        decision: {
-          decision: true,
-        },
+      event(0, "tool_call.proposed", {
+        summary: "inspect",
+        tool_call_id: "toolcall-1",
+        tool_name: "terminal",
       }),
     ]);
 
-    expect(viewModel.datasetProposals[0]).toEqual({
-      confidence: 0,
-      datasetType: "12",
-      evidence: [],
-      sourceId: "",
-    });
-    expect(viewModel.policyStatus[0]).toMatchObject({
-      decision: "true",
-      provider: null,
-      routeId: null,
-    });
-    expect(viewModel.modelInvocations[0]).toMatchObject({
-      responsePreview: null,
-      status: "pending",
-    });
+    expect(viewModel.approvalControls).toEqual([]);
   });
 
-  it("updates existing approval controls for recorded decisions", () => {
+  it("coalesces repeated confirmation state", () => {
     const viewModel = buildViewModel([
-      event(0, "tool_call.proposed", {
-        summary: "write synthetic output",
-        tool_call_id: "toolcall-1",
-        tool_name: "heartwood.local.write_summary",
-      }),
-      event(1, "approval.recorded", {
-        approval: {
-          decision: "approved",
-          reason: "synthetic approval",
-          target_id: "toolcall-1",
-          target_type: "tool-call",
-        },
-      }),
-    ]);
-
-    const controls = viewModel.approvalControls.filter(
-      (control) => control.targetId === "toolcall-1",
-    );
-    expect(controls).toHaveLength(1);
-    expect(controls[0]).toMatchObject({
-      decision: "approved",
-      label: "approved tool-call",
-    });
-  });
-
-  it("resolves tool-call controls from confirmation events without duplicates", () => {
-    const viewModel = buildViewModel([
-      event(0, "tool_call.proposed", {
-        summary: "write synthetic output",
-        tool_call_id: "toolcall-1",
-        tool_name: "heartwood.local.write_summary",
+      event(0, "confirmation.requested", {
+        request: { tool_call_id: "toolcall-1", tool_name: "terminal" },
       }),
       event(1, "confirmation.requested", {
-        request: {
-          tool_call_id: "toolcall-1",
-          tool_name: "heartwood.local.write_summary",
-        },
+        request: { tool_call_id: "toolcall-1", tool_name: "terminal" },
       }),
       event(2, "confirmation.resolved", {
-        decision: "approved",
+        decision: "denied",
         tool_call_id: "toolcall-1",
       }),
     ]);
 
-    const controls = viewModel.approvalControls.filter(
-      (control) => control.targetId === "toolcall-1",
-    );
-    expect(controls).toHaveLength(1);
-    expect(controls[0]).toMatchObject({
-      decision: "approved",
-      label: "approved tool-call",
+    expect(viewModel.approvalControls).toEqual([
+      expect.objectContaining({ decision: "denied", targetId: "toolcall-1" }),
+    ]);
+  });
+
+  it("uses safe defaults for malformed optional values", () => {
+    const viewModel = buildViewModel([
+      event(0, "model_call.decision.recorded", {
+        decision: { decision: true, reason: [] },
+      }),
+      event(1, "agent_message.emitted", { content: null }),
+      event(2, "confirmation.resolved", {}),
+      event(3, "command.received", { command_id: 7 }),
+    ]);
+
+    expect(viewModel.conversation[0]).toMatchObject({
+      content: "true model route",
+      detail: null,
     });
+    expect(viewModel.approvalControls).toEqual([]);
+    expect(viewModel.activity.at(-1)?.detail).toBe("7");
   });
 });

@@ -7,6 +7,13 @@
     "https://model.local.invalid/v1/chat/completions",
     "http://127.0.0.1:8765/v1/chat/completions"
   ],
+  "allowed_capability_tiers": [
+    "supervised"
+  ],
+  "allowed_action_confirmation_modes": [
+    "always-confirm",
+    "confirm-risky"
+  ],
   "credential_allowlist": [],
   "aggregate_count_floor": 20,
   "notes": "Synthetic default policy for schema validation and the offline loopback model demo."

@@ -4,633 +4,109 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for the core session service."""
-
 from __future__ import annotations
 
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import stat
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 
-from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
-from heartwood.adapters.model import FakeLocalModelProviderAdapter
-from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.core_adapter import (
+    BackendEvent,
+    BackendEventKind,
     DeterministicAgentBackend,
-    FileSessionStore,
+    ProposedToolCall,
     SessionService,
-    SessionStoreBoundaryError,
 )
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
-def _command(kind: CommandKind, **payload: JsonValue) -> SessionCommand:
-    return SessionCommand(
-        command_id=f"command-{kind.value}",
-        session_id="session-synthetic-001",
-        kind=kind,
-        actor_id="synthetic-user",
-        created_at="2026-01-01T00:00:00Z",
-        payload=payload,
-    )
-
-
-def test_session_detect_emits_platform_and_dataset_proposals(tmp_path: Path) -> None:
+def test_detection_persists_replayable_events(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
+
     result = service.handle(_command(CommandKind.DETECT))
 
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
         EventKind.DETECTION_PROPOSED.value,
     ]
-    detection = result.events[1].payload
-    platform = detection["platform"]
-    dataset = detection["dataset"]
-    assert isinstance(platform, dict)
-    assert isinstance(dataset, dict)
-    assert platform["adapter_id"] == "generic"
-    assert dataset["dataset_type"] == "omop-cdm"
-    assert "rows" not in json.dumps(detection)
+    assert service.replay_events() == result.events
 
 
-def test_session_records_approval_and_resume_events(tmp_path: Path) -> None:
+def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
-    service.handle(_command(CommandKind.DETECT))
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            approval_id="approval-1",
-            target_type="skill",
-            target_id="heartwood.synthetic.omop-summary",
-        )
-    )
 
-    resumed = SessionService.synthetic_default(tmp_path)
-    events = resumed.replay_events()
-    assert [event.sequence for event in events] == [0, 1, 2, 3]
-    assert events[-1].kind == EventKind.APPROVAL_RECORDED.value
-
-
-def test_session_store_next_sequence_is_cached_after_resume(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    service.handle(_command(CommandKind.DETECT))
-
-    store = FileSessionStore(tmp_path, "session-synthetic-001")
-    assert store.next_sequence() == 2
-    assert store.next_sequence() == 3
-
-
-def test_session_run_records_policy_decision_without_prompt_content(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            prompt="show me the first records",
-            endpoint="https://model.local.invalid/v1/chat/completions",
-        )
-    )
+    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
 
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
+        EventKind.USER_MESSAGE_RECORDED.value,
         EventKind.MODEL_CALL_DECISION_RECORDED.value,
         EventKind.AGENT_MESSAGE_EMITTED.value,
         EventKind.TOOL_CALL_PROPOSED.value,
-        EventKind.CONFIRMATION_RESOLVED.value,
-        EventKind.TOOL_EXECUTION_RECORDED.value,
+        EventKind.CONFIRMATION_REQUESTED.value,
     ]
-    decision = result.events[1].payload["decision"]
+    assert result.events[1].payload == {
+        "actor_id": "human",
+        "command_id": "command-chat",
+        "content": "summarize the cohort",
+    }
+    decision = result.events[2].payload["decision"]
     assert isinstance(decision, dict)
     assert decision["decision"] == "allow"
-    assert result.events[-1].payload["exit_code"] == 0
-    assert "show me" not in json.dumps([event.model_dump(mode="json") for event in result.events])
-    commands = (tmp_path / "session-synthetic-001" / "commands.jsonl").read_text(encoding="utf-8")
-    assert "show me" not in commands
-
-
-def test_session_run_can_invoke_allowlisted_loopback_model(tmp_path: Path) -> None:
-    server = _LocalModelServer()
-    service = _loopback_service(tmp_path, server.endpoint)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
+    profile = result.events[2].payload["model_profile"]
+    assert isinstance(profile, dict)
+    assert profile["profile_id"] == "deterministic-local"
+    assert "summarize the cohort" in json.dumps(
+        [event.model_dump(mode="json") for event in service.replay_events()]
     )
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                prompt="invoke local model",
-                endpoint=server.endpoint,
-                invoke_model=True,
-            )
-        )
-    finally:
-        server.close()
-
-    decision = result.events[1].payload["decision"]
-    metadata = result.events[1].payload["response_metadata"]
-    assert isinstance(decision, dict)
-    assert isinstance(metadata, dict)
-    assert decision["decision"] == "allow"
-    assert metadata["model"] == "heartwood-local-runtime"
-    assert metadata["status"] == "ok"
-    assert server.requests == [
-        {
-            "max_tokens": 768,
-            "messages_count": 2,
-            "model": "heartwood-local-runtime",
-            "user_prompt": "invoke local model",
-        }
-    ]
-    assert "Synthetic local model response" not in json.dumps(
-        [event.model_dump(mode="json") for event in result.events]
-    )
+    audit_text = service.store.audit_path.read_text(encoding="utf-8")
+    assert "summarize the cohort" not in audit_text
+    assert '"content":"[scrubbed]"' in audit_text
+    assert stat.S_IMODE(service.store.session_dir.stat().st_mode) == 0o700
+    for path in (
+        service.store.commands_path,
+        service.store.events_path,
+        service.store.audit_path,
+    ):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
-def test_session_run_can_include_demo_response_preview_when_enabled(tmp_path: Path) -> None:
-    server = _LocalModelServer()
-    service = _loopback_service(
+def test_run_is_a_compatibility_alias_for_task_submission(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+
+    result = service.handle(_command(CommandKind.RUN, prompt="run the workflow"))
+
+    assert any(event.kind == EventKind.CONFIRMATION_REQUESTED.value for event in result.events)
+
+
+def test_risk_based_mode_auto_executes_low_risk_action_and_records_mode(
+    tmp_path: Path,
+) -> None:
+    service = SessionService.local_default(
         tmp_path,
-        server.endpoint,
-        env={"HEARTWOOD_DEMO_RESPONSE_PREVIEW": "1"},
+        session_id="session-synthetic-001",
+        backend=DeterministicAgentBackend(action_confirmation_mode="confirm-risky"),
+        env={},
     )
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                prompt="invoke local model",
-                endpoint=server.endpoint,
-                invoke_model=True,
-            )
-        )
-    finally:
-        server.close()
 
-    metadata = result.events[1].payload["response_metadata"]
-    assert isinstance(metadata, dict)
-    assert metadata["response_preview"] == "Synthetic local model response"
-    assert metadata["response_preview_truncated"] is False
+    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
+
+    kinds = [event.kind for event in result.events]
+    assert EventKind.TOOL_CALL_PROPOSED.value in kinds
+    assert EventKind.TOOL_EXECUTION_RECORDED.value in kinds
+    assert EventKind.CONFIRMATION_REQUESTED.value not in kinds
+    profile = result.events[2].payload["model_profile"]
+    assert isinstance(profile, dict)
+    assert profile["action_confirmation_mode"] == "confirm-risky"
 
 
-def test_session_run_can_override_local_model_response_budget(tmp_path: Path) -> None:
-    server = _LocalModelServer()
-    service = _loopback_service(
-        tmp_path,
-        server.endpoint,
-        env={"HEARTWOOD_LOCAL_MODEL_MAX_TOKENS": "32"},
-    )
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    try:
-        service.handle(
-            _command(
-                CommandKind.RUN,
-                prompt="short smoke call",
-                endpoint=server.endpoint,
-                invoke_model=True,
-            )
-        )
-    finally:
-        server.close()
-
-    assert server.requests == [
-        {
-            "max_tokens": 32,
-            "messages_count": 2,
-            "model": "heartwood-local-runtime",
-            "user_prompt": "short smoke call",
-        }
-    ]
-
-
-def test_session_run_requires_approval_before_local_model_invocation(tmp_path: Path) -> None:
-    server = _LocalModelServer()
-    service = _loopback_service(tmp_path, server.endpoint)
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                prompt="invoke local model",
-                endpoint=server.endpoint,
-                invoke_model=True,
-            )
-        )
-    finally:
-        server.close()
-
-    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
-    decision_event = next(
-        event
-        for event in result.events
-        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-    )
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert server.requests == []
-    assert error.payload["reason"] == "local model invocation requires approved model-call decision"
-    assert "response_metadata" not in decision_event.payload
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_run_can_invoke_selected_provider_route_after_approval(tmp_path: Path) -> None:
-    server = _LocalModelServer()
-    secret = tmp_path / "provider.key"
-    secret.write_text("synthetic-provider-secret\n", encoding="utf-8")
-    provider_config = tmp_path / "provider-routes.toml"
-    provider_config.write_text(
-        "\n".join(
-            (
-                'schema_version = "heartwood.provider-config.v1"',
-                "",
-                "[[routes]]",
-                'route_id = "in-boundary-openai"',
-                'provider = "openai"',
-                f'endpoint = "{server.endpoint}"',
-                'model = "synthetic-provider-model"',
-                'capability_tier = "supervised"',
-                'auth = "secret-file"',
-                f'secret_file = "{secret}"',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    service = _loopback_service(tmp_path, server.endpoint)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                prompt="invoke provider",
-                provider_config_path=str(provider_config),
-                provider_route_id="in-boundary-openai",
-                invoke_provider=True,
-            )
-        )
-    finally:
-        server.close()
-
-    decision_event = next(
-        event
-        for event in result.events
-        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-    )
-    route = decision_event.payload["provider_route"]
-    metadata = decision_event.payload["response_metadata"]
-    assert isinstance(route, dict)
-    assert isinstance(metadata, dict)
-    assert route["route_id"] == "in-boundary-openai"
-    assert route["auth"] == "secret-file"
-    assert "secret_file" not in route
-    assert metadata["status"] == "ok"
-    assert server.requests == [
-        {
-            "authorization": "Bearer synthetic-provider-secret",
-            "max_tokens": 16,
-            "messages_count": 2,
-            "model": "synthetic-provider-model",
-            "user_prompt": (
-                "Confirm that the configured provider route is reachable for a synthetic "
-                "policy-gated call. Synthetic prompt length: 15."
-            ),
-        }
-    ]
-    persisted = (tmp_path / "session-synthetic-001" / "commands.jsonl").read_text(encoding="utf-8")
-    event_json = json.dumps([event.model_dump(mode="json") for event in result.events])
-    assert "synthetic-provider-secret" not in persisted
-    assert "synthetic-provider-secret" not in event_json
-    assert "invoke provider" not in persisted
-
-
-def test_session_run_requires_approval_before_provider_invocation(tmp_path: Path) -> None:
-    server = _LocalModelServer()
-    provider_config = tmp_path / "provider-routes.toml"
-    provider_config.write_text(
-        "\n".join(
-            (
-                'schema_version = "heartwood.provider-config.v1"',
-                "",
-                "[[routes]]",
-                'route_id = "local-openai-compatible"',
-                'provider = "openai-compatible"',
-                f'endpoint = "{server.endpoint}"',
-                'model = "synthetic-provider-model"',
-                'capability_tier = "supervised"',
-                'auth = "none"',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    service = _loopback_service(tmp_path, server.endpoint)
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                provider_config_path=str(provider_config),
-                provider_route_id="local-openai-compatible",
-                invoke_provider=True,
-            )
-        )
-    finally:
-        server.close()
-
-    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
-    decision_event = next(
-        event
-        for event in result.events
-        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-    )
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert server.requests == []
-    assert error.payload["reason"] == "provider invocation requires approved model-call decision"
-    assert "response_metadata" not in decision_event.payload
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_run_blocks_tool_execution_when_provider_route_is_invalid(
-    tmp_path: Path,
-) -> None:
-    provider_config = tmp_path / "provider-routes.toml"
-    provider_config.write_text(
-        "\n".join(
-            (
-                'schema_version = "heartwood.provider-config.v1"',
-                "",
-                "[[routes]]",
-                'route_id = "local-openai-compatible"',
-                'provider = "openai-compatible"',
-                'endpoint = "http://127.0.0.1:8765/v1/chat/completions"',
-                'model = "synthetic-provider-model"',
-                'capability_tier = "supervised"',
-                'auth = "none"',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
+def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
+    service.handle(_command(CommandKind.CHAT, prompt="run the workflow"))
 
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            provider_config_path=str(provider_config),
-            provider_route_id="missing-route",
-        )
-    )
-
-    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert error.payload["reason"] == "unknown provider route: missing-route"
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_run_rejects_conflicting_model_invocation_flags_without_calling_model(
-    tmp_path: Path,
-) -> None:
-    server = _LocalModelServer()
-    service = _loopback_service(tmp_path, server.endpoint)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                endpoint=server.endpoint,
-                invoke_model=True,
-                invoke_provider=True,
-            )
-        )
-    finally:
-        server.close()
-
-    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
-    decision_event = next(
-        event
-        for event in result.events
-        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-    )
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert error.payload["reason"] == (
-        "local-model and provider-route invocation are mutually exclusive"
-    )
-    assert server.requests == []
-    assert "response_metadata" not in decision_event.payload
-    assert execution.payload["exit_code"] == 1
-
-
-def test_denied_provider_route_does_not_read_missing_secret(tmp_path: Path) -> None:
-    provider_config = tmp_path / "provider-routes.toml"
-    provider_config.write_text(
-        "\n".join(
-            (
-                'schema_version = "heartwood.provider-config.v1"',
-                "",
-                "[[routes]]",
-                'route_id = "external-openai"',
-                'provider = "openai"',
-                'endpoint = "https://public.example.invalid/v1/chat/completions"',
-                'model = "configured-by-platform"',
-                'capability_tier = "supervised"',
-                'auth = "secret-file"',
-                f'secret_file = "{tmp_path / "missing.key"}"',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    service = _loopback_service(tmp_path, "http://127.0.0.1:8765/v1/chat/completions")
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            provider_config_path=str(provider_config),
-            provider_route_id="external-openai",
-            invoke_provider=True,
-        )
-    )
-
-    decision_event = next(
-        event
-        for event in result.events
-        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-    )
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    event_json = json.dumps([event.model_dump(mode="json") for event in result.events])
-    decision = decision_event.payload["decision"]
-    assert isinstance(decision, dict)
-    assert decision["decision"] == "deny"
-    assert "provider secret file is unavailable" not in event_json
-    assert "response_metadata" not in decision_event.payload
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_run_rejects_local_model_redirects(tmp_path: Path) -> None:
-    server = _RedirectModelServer()
-    service = _loopback_service(tmp_path, server.endpoint)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    try:
-        result = service.handle(
-            _command(
-                CommandKind.RUN,
-                prompt="invoke redirecting local model",
-                endpoint=server.endpoint,
-                invoke_model=True,
-            )
-        )
-    finally:
-        server.close()
-
-    error = next(event for event in result.events if event.kind == EventKind.ERROR_RECORDED.value)
-    decision_event = next(
-        event
-        for event in result.events
-        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-    )
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert error.payload["reason"] == "local model invocation rejected redirect"
-    assert "response_metadata" not in decision_event.payload
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_run_blocks_tool_execution_when_local_model_invocation_fails(
-    tmp_path: Path,
-) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    service.handle(
-        _command(
-            CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        )
-    )
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            prompt="invoke missing local model",
-            endpoint="https://model.local.invalid/v1/chat/completions",
-            invoke_model=True,
-        )
-    )
-
-    assert any(event.kind == EventKind.ERROR_RECORDED.value for event in result.events)
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_denied_model_endpoint_still_records_noop_tool_failure(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            prompt="run",
-            endpoint="https://public.example.invalid/v1/chat/completions",
-        )
-    )
-
-    decision = result.events[1].payload["decision"]
-    assert isinstance(decision, dict)
-    assert decision["decision"] == "deny"
-    confirmation = next(
-        event for event in result.events if event.kind == EventKind.CONFIRMATION_REQUESTED.value
-    )
-    assert isinstance(confirmation.payload["request"], dict)
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_run_requires_prior_model_call_approval(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            prompt="run",
-            endpoint="https://model.local.invalid/v1/chat/completions",
-        )
-    )
-
-    decision = result.events[1].payload["decision"]
-    assert isinstance(decision, dict)
-    assert decision["decision"] == "allow"
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    assert execution.payload["exit_code"] == 1
-
-
-def test_session_records_tool_call_approval(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
     result = service.handle(
         _command(
             CommandKind.APPROVE,
@@ -639,242 +115,387 @@ def test_session_records_tool_call_approval(tmp_path: Path) -> None:
         )
     )
 
-    approval = result.events[-1].payload["approval"]
-    assert isinstance(approval, dict)
-    assert approval["target_type"] == "tool-call"
-
-
-def test_session_audit_export_writes_scrubbed_jsonl(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    service.handle(_command(CommandKind.RUN, prompt="sensitive prompt", approved=True))
-    result = service.handle(_command(CommandKind.AUDIT_EXPORT))
-
-    path = Path(str(result.events[-1].payload["path"]))
-    exported = path.read_text(encoding="utf-8")
-    assert "sensitive prompt" not in exported
-    assert "audit.export.recorded" in exported
-
-
-def test_session_chat_emits_agent_message(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.AGENT_MESSAGE_EMITTED.value,
+        EventKind.CONFIRMATION_RESOLVED.value,
+        EventKind.TOOL_EXECUTION_RECORDED.value,
     ]
+    assert result.events[1].payload["decision"] == "approved"
+    assert result.events[2].payload["exit_code"] == 0
 
 
-def test_session_pause_and_resume_emit_lifecycle_events(tmp_path: Path) -> None:
+def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
-    paused = service.handle(_command(CommandKind.PAUSE))
-    resumed = service.handle(_command(CommandKind.RESUME))
-    assert paused.events[-1].kind == EventKind.SESSION_PAUSED.value
-    assert resumed.events[-1].kind == EventKind.SESSION_RESUMED.value
+    service.handle(_command(CommandKind.CHAT, prompt="run the workflow"))
+
+    result = service.handle(
+        _command(
+            CommandKind.DENY,
+            target_type="tool-call",
+            target_id="session-synthetic-001-toolcall-0",
+        )
+    )
+
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.CONFIRMATION_RESOLVED.value,
+    ]
+    assert result.events[1].payload["decision"] == "denied"
 
 
-def test_agent_message_content_is_scrubbed_from_audit_export(tmp_path: Path) -> None:
+def test_interactive_approval_rejects_non_action_targets(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
-    service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
-    result = service.handle(_command(CommandKind.AUDIT_EXPORT))
 
-    export_path = Path(str(result.events[-1].payload["path"]))
-    exported = export_path.read_text(encoding="utf-8")
-    events_text = (tmp_path / "session-synthetic-001" / "events.jsonl").read_text(encoding="utf-8")
+    result = service.handle(
+        _command(CommandKind.APPROVE, target_type="model-call", target_id="route")
+    )
 
-    assert "Planned a synthetic aggregate analysis" in events_text
-    assert "Planned a synthetic aggregate analysis" not in exported
-    assert "[scrubbed]" in exported
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert "only for pending tool actions" in str(result.events[-1].payload["reason"])
 
 
-def test_unimplemented_commands_emit_structured_error(tmp_path: Path) -> None:
+def test_action_decision_requires_matching_pending_action(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
-    result = service.handle(_command(CommandKind.REPLAY))
+
+    result = service.handle(
+        _command(CommandKind.APPROVE, target_type="tool-call", target_id="missing")
+    )
+
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert "no matching pending action" in str(result.events[-1].payload["reason"])
+
+
+def test_second_task_requires_pending_action_resolution(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.CHAT, prompt="first task"))
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="second task"))
+
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.USER_MESSAGE_RECORDED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert "resolve the pending action" in str(result.events[-1].payload["reason"])
+
+
+def test_resume_requires_pending_action_resolution(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.CHAT, prompt="propose an action"))
+
+    result = service.handle(_command(CommandKind.RESUME))
+
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+    assert result.events[-1].payload["reason"] == "resolve the pending action before resuming"
+
+
+def test_denied_route_never_calls_backend(tmp_path: Path) -> None:
+    backend = _RecordingBackend(endpoint="https://public.example.invalid/v1/chat/completions")
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        policy_profile=PolicyProfile(
+            policy_id="local-only",
+            platform_id="generic",
+            deny_egress_by_default=True,
+            allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
+            credential_allowlist=(),
+        ),
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(CommandKind.CHAT, prompt="do not send").model_copy(
+            update={"session_id": "session-local"}
+        )
+    )
+
+    assert backend.prompts == []
+    decision = result.events[2].payload["decision"]
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "deny"
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
 
 
-def test_session_store_rejects_session_path_escape(tmp_path: Path) -> None:
-    with pytest.raises(SessionStoreBoundaryError):
-        FileSessionStore(tmp_path, "../outside")
+def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:
+    pending = ProposedToolCall(
+        tool_call_id="session-local-action",
+        tool_name="terminal",
+        risk="low",
+        summary="run a bounded command",
+    )
+    backend = _RecordingBackend(
+        endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        response=(
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=pending),
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=pending),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        policy_profile=PolicyProfile(
+            policy_id="local-only",
+            platform_id="generic",
+            deny_egress_by_default=True,
+            allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
+            credential_allowlist=(),
+        ),
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    command = _command(CommandKind.CHAT, prompt="propose action").model_copy(
+        update={"session_id": "session-local"}
+    )
+    service.handle(command)
+    backend.endpoint = "https://public.example.invalid/v1/chat/completions"
+
+    result = service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="tool-call",
+            target_id=pending.tool_call_id,
+        ).model_copy(update={"session_id": "session-local"})
+    )
+
+    assert backend.resolutions == []
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.MODEL_CALL_DECISION_RECORDED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+    decision = result.events[1].payload["decision"]
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "deny"
 
 
-def test_session_rejects_mismatched_command_session(tmp_path: Path) -> None:
+def test_resume_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:
+    backend = _RecordingBackend(endpoint="https://public.example.invalid/v1/chat/completions")
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        policy_profile=PolicyProfile(
+            policy_id="local-only",
+            platform_id="generic",
+            deny_egress_by_default=True,
+            allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
+            credential_allowlist=(),
+        ),
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(CommandKind.RESUME).model_copy(update={"session_id": "session-local"})
+    )
+
+    assert backend.resume_calls == 0
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.MODEL_CALL_DECISION_RECORDED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+
+
+def test_backend_configuration_fails_before_route_decision(tmp_path: Path) -> None:
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        configuration_error="model profile is not ready",
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(CommandKind.CHAT, prompt="do not send").model_copy(
+            update={"session_id": "session-local"}
+        )
+    )
+
+    assert backend.prompts == []
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.USER_MESSAGE_RECORDED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+    assert result.events[-1].payload["reason"] == "model profile is not ready"
+
+
+def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(BackendEvent(kind=BackendEventKind.ERROR, message="backend unavailable"),),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(CommandKind.CHAT, prompt="run").model_copy(update={"session_id": "session-local"})
+    )
+
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert result.events[-1].payload["reason"] == "backend unavailable"
+
+
+def test_empty_prompt_is_rejected_before_backend(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
-    command = _command(CommandKind.DETECT).model_copy(update={"session_id": "other-session"})
 
-    with pytest.raises(ValueError, match="does not match store session"):
-        service.handle(command)
+    result = service.handle(_command(CommandKind.CHAT, prompt="  "))
 
-
-def test_local_default_uses_non_synthetic_clock(tmp_path: Path) -> None:
-    command = _command(CommandKind.DETECT).model_copy(update={"session_id": "session-local"})
-    result = SessionService.local_default(tmp_path, env={}).handle(command)
-
-    assert result.events[0].occurred_at != "2026-01-01T00:00:00Z"
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert result.events[-1].payload["reason"] == "prompt is required"
 
 
-def test_local_default_can_use_workspace_backend(tmp_path: Path) -> None:
+def test_pause_resume_and_export_are_persisted(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+
+    paused = service.handle(_command(CommandKind.PAUSE))
+    resumed = service.handle(_command(CommandKind.RESUME))
+    exported = service.handle(_command(CommandKind.AUDIT_EXPORT))
+
+    assert paused.events[-1].kind == EventKind.SESSION_PAUSED.value
+    assert resumed.events[-1].kind == EventKind.SESSION_RESUMED.value
+    assert exported.events[-1].kind == EventKind.AUDIT_EXPORT_RECORDED.value
+    path = Path(str(exported.events[-1].payload["path"]))
+    assert path.is_file()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert "audit.export.recorded" in path.read_text(encoding="utf-8")
+
+
+def test_service_rejects_command_for_another_session(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+
+    with pytest.raises(ValueError, match="does not match"):
+        service.handle(_command(CommandKind.DETECT).model_copy(update={"session_id": "other"}))
+
+
+def test_local_workspace_backend_writes_only_after_allow_once(tmp_path: Path) -> None:
     service = SessionService.local_default(
         tmp_path,
         session_id="session-local",
         env={"HEARTWOOD_AGENT_BACKEND": "local-workspace"},
         clock=lambda: "2026-01-01T00:00:00Z",
     )
+    command = _command(CommandKind.CHAT, prompt="write summary").model_copy(
+        update={"session_id": "session-local"}
+    )
+    service.handle(command)
+    artifact = tmp_path / "session-local" / "agent-artifacts" / "synthetic-workspace-summary.md"
+    assert not artifact.exists()
+
     service.handle(
         _command(
             CommandKind.APPROVE,
-            target_type="model-call",
-            target_id="decision-synthetic-model-call",
-        ).model_copy(update={"session_id": "session-local"})
-    )
-    result = service.handle(
-        _command(
-            CommandKind.RUN,
-            prompt="write a bounded summary",
-            endpoint="https://model.local.invalid/v1/chat/completions",
+            target_type="tool-call",
+            target_id="session-local-toolcall-0",
         ).model_copy(update={"session_id": "session-local"})
     )
 
-    execution = next(
-        event for event in result.events if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
-    )
-    artifact = tmp_path / "session-local" / "agent-artifacts" / "synthetic-workspace-summary.md"
-    assert service.backend.backend_id == "local-workspace"
-    assert execution.payload["backend_id"] == "local-workspace"
-    assert execution.payload["tool_name"] == "heartwood.local.write_summary"
-    assert execution.payload["exit_code"] == 0
     assert artifact.is_file()
-    assert "write a bounded summary" not in artifact.read_text(encoding="utf-8")
+    assert "Persisted prompt content: none" in artifact.read_text(encoding="utf-8")
 
 
-class _LoopbackPlatform(GenericPlatformAdapter):
-    def __init__(self, endpoint: str) -> None:
+def test_local_default_rejects_unknown_backend(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsupported HEARTWOOD_AGENT_BACKEND"):
+        SessionService.local_default(
+            tmp_path,
+            env={"HEARTWOOD_AGENT_BACKEND": "missing"},
+        )
+
+
+class _RecordingBackend:
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        response: tuple[BackendEvent, ...] = (),
+        configuration_error: str | None = None,
+    ) -> None:
         self.endpoint = endpoint
+        self.response = response
+        self._configuration_error = configuration_error
+        self.prompts: list[str] = []
+        self.resolutions: list[tuple[str, bool]] = []
+        self.resume_calls = 0
 
-    def default_policy_profile(self) -> PolicyProfile:
-        return PolicyProfile(
-            policy_id="generic-default",
-            platform_id=self.adapter_id,
-            allowed_model_endpoints=(self.endpoint,),
-        )
+    @property
+    def backend_id(self) -> str:
+        return "recording"
 
+    @property
+    def configuration_error(self) -> str | None:
+        return self._configuration_error
 
-class _LocalModelHandler(BaseHTTPRequestHandler):
-    requests: ClassVar[list[dict[str, JsonValue]]] = []
+    @property
+    def model_endpoint(self) -> str:
+        return self.endpoint
 
-    def do_POST(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
-        payload = json.loads(body.decode("utf-8"))
-        assert isinstance(payload, dict)
-        messages = payload["messages"]
-        assert isinstance(messages, list)
-        self.requests.append(
-            request_record := {
-                "max_tokens": payload["max_tokens"],
-                "messages_count": len(messages),
-                "model": payload["model"],
-                "user_prompt": messages[-1]["content"],
-            }
-        )
-        authorization = self.headers.get("Authorization")
-        if authorization is not None:
-            request_record["authorization"] = authorization
-        response = {
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "model": "heartwood-local-runtime",
-            "choices": [
-                {
-                    "index": 0,
-                    "finish_reason": "stop",
-                    "message": {
-                        "role": "assistant",
-                        "content": "Synthetic local model response",
-                    },
-                }
-            ],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        encoded = json.dumps(response).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+    @property
+    def model_profile_id(self) -> str:
+        return "recording"
 
-    def log_message(self, _fmt: str, *_args: object) -> None:
+    @property
+    def capability_tier(self) -> str:
+        return "supervised"
+
+    @property
+    def credential_reference(self) -> str | None:
+        return None
+
+    @property
+    def action_confirmation_mode(self) -> str:
+        return "always-confirm"
+
+    @property
+    def continuation_requires_model_authorization(self) -> bool:
+        return True
+
+    def submit_turn(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+        prompt: str,
+    ) -> tuple[BackendEvent, ...]:
+        self.prompts.append(prompt)
+        return self.response
+
+    def restore_pending(self, tool_call: object | None) -> None:  # noqa: ARG002
+        return None
+
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+        tool_call_id: str,
+        approved: bool,
+    ) -> tuple[BackendEvent, ...]:
+        self.resolutions.append((tool_call_id, approved))
+        return ()
+
+    def pause(self) -> None:
+        return None
+
+    def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
+        self.resume_calls += 1
+        return ()
+
+    def close(self) -> None:
         return None
 
 
-class _RedirectModelHandler(BaseHTTPRequestHandler):
-    def do_POST(self) -> None:
-        self.send_response(302)
-        self.send_header("Location", "https://public.example.invalid/v1/chat/completions")
-        self.end_headers()
-
-    def log_message(self, _fmt: str, *_args: object) -> None:
-        return None
-
-
-class _LocalModelServer:
-    def __init__(self) -> None:
-        _LocalModelHandler.requests = []
-        self.server = HTTPServer(("127.0.0.1", 0), _LocalModelHandler)
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.start()
-
-    @property
-    def endpoint(self) -> str:
-        host = self.server.server_address[0]
-        port = self.server.server_address[1]
-        if isinstance(host, bytes):
-            host = host.decode("utf-8")
-        return f"http://{host}:{port}/v1/chat/completions"
-
-    @property
-    def requests(self) -> list[dict[str, JsonValue]]:
-        return _LocalModelHandler.requests
-
-    def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
-
-
-class _RedirectModelServer:
-    def __init__(self) -> None:
-        self.server = HTTPServer(("127.0.0.1", 0), _RedirectModelHandler)
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.start()
-
-    @property
-    def endpoint(self) -> str:
-        host = self.server.server_address[0]
-        port = self.server.server_address[1]
-        if isinstance(host, bytes):
-            host = host.decode("utf-8")
-        return f"http://{host}:{port}/v1/chat/completions"
-
-    def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
-
-
-def _loopback_service(
-    tmp_path: Path,
-    endpoint: str,
-    *,
-    env: dict[str, str] | None = None,
-) -> SessionService:
-    platform = _LoopbackPlatform(endpoint)
-    policy = platform.default_policy_profile()
-    return SessionService(
-        store=FileSessionStore(tmp_path, "session-synthetic-001"),
-        platform_adapter=platform,
-        data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
-        model_provider_adapter=FakeLocalModelProviderAdapter(policy),
-        backend=DeterministicAgentBackend(),
-        env={} if env is None else env,
-        clock=lambda: "2026-01-01T00:00:00Z",
+def _command(kind: CommandKind, **payload: JsonValue) -> SessionCommand:
+    return SessionCommand(
+        command_id=f"command-{kind.value.replace('.', '-')}",
+        session_id="session-synthetic-001",
+        kind=kind,
+        actor_id="human",
+        created_at="2026-01-01T00:00:00Z",
+        payload=payload,
     )

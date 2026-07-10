@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from heartwood.model_policy import ModelPolicyEngine, PolicyInputError, filter_credentials
+from heartwood.model_policy import (
+    ModelPolicyEngine,
+    PolicyInputError,
+    filter_credentials,
+    normalize_endpoint,
+)
 from heartwood.schemas import PolicyProfile
 
 
@@ -42,6 +47,13 @@ def test_policy_allows_exact_normalized_endpoint() -> None:
     )
     assert decision.decision == "allow"
     assert decision.endpoint == "https://model.local.invalid/v1/chat/completions"
+
+
+def test_endpoint_normalization_preserves_bracketed_ipv6_hosts() -> None:
+    assert (
+        normalize_endpoint("HTTP://[::1]:8765/v1/chat/completions")
+        == "http://[::1]:8765/v1/chat/completions"
+    )
 
 
 def test_policy_allows_unlisted_endpoint_when_default_deny_disabled() -> None:
@@ -133,11 +145,86 @@ def test_policy_denies_experimental_autonomy() -> None:
     assert "capability tier experimental" in decision.reason
 
 
+def test_policy_allows_only_capability_tiers_selected_by_deployment() -> None:
+    profile = PolicyProfile(
+        policy_id="experimental",
+        platform_id="generic",
+        allowed_model_endpoints=("https://model.local.invalid/v1/chat/completions",),
+        allowed_capability_tiers=("experimental",),
+    )
+
+    decision = ModelPolicyEngine(profile).evaluate(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        capability_tier="experimental",
+        decision_id="decision-1",
+        purpose="synthetic model call",
+    )
+
+    assert decision.decision == "allow"
+
+
+def test_policy_requires_explicit_risk_based_confirmation_authorization() -> None:
+    denied = ModelPolicyEngine(_policy()).evaluate(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        capability_tier="supervised",
+        action_confirmation_mode="confirm-risky",
+        decision_id="decision-1",
+        purpose="synthetic model call",
+    )
+    allowed_profile = _policy().model_copy(
+        update={"allowed_action_confirmation_modes": ("always-confirm", "confirm-risky")}
+    )
+    allowed = ModelPolicyEngine(allowed_profile).evaluate(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        capability_tier="supervised",
+        action_confirmation_mode="confirm-risky",
+        decision_id="decision-2",
+        purpose="synthetic model call",
+    )
+
+    assert denied.decision == "deny"
+    assert "confirm-risky" in denied.reason
+    assert allowed.decision == "allow"
+
+
+def test_policy_requires_explicit_non_secret_credential_reference() -> None:
+    denied = ModelPolicyEngine(_policy()).evaluate(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        capability_tier="supervised",
+        credential_reference="OPENAI_API_KEY",
+        decision_id="decision-1",
+        purpose="synthetic model call",
+    )
+    allowed_profile = _policy().model_copy(update={"credential_allowlist": ("OPENAI_API_KEY",)})
+    allowed = ModelPolicyEngine(allowed_profile).evaluate(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        capability_tier="supervised",
+        credential_reference="OPENAI_API_KEY",
+        decision_id="decision-2",
+        purpose="synthetic model call",
+    )
+
+    assert denied.decision == "deny"
+    assert "OPENAI_API_KEY" not in denied.reason
+    assert allowed.decision == "allow"
+
+
 def test_policy_rejects_unknown_capability_tier() -> None:
     with pytest.raises(PolicyInputError):
         ModelPolicyEngine(_policy()).evaluate(
             endpoint="https://model.local.invalid/v1/chat/completions",
             capability_tier="unknown",
+            decision_id="decision-1",
+            purpose="synthetic model call",
+        )
+
+
+def test_policy_rejects_unknown_action_confirmation_mode() -> None:
+    with pytest.raises(PolicyInputError, match="action confirmation mode"):
+        ModelPolicyEngine(_policy()).evaluate(
+            endpoint="https://model.local.invalid/v1/chat/completions",
+            capability_tier="supervised",
+            action_confirmation_mode="never-confirm",
             decision_id="decision-1",
             purpose="synthetic model call",
         )

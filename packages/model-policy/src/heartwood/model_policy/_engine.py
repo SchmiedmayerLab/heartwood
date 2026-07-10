@@ -15,8 +15,10 @@ from urllib.parse import urlsplit
 from heartwood.schemas import EgressAttestationRecord, ModelCallDecision, PolicyProfile
 
 CapabilityTier: TypeAlias = Literal["autonomous", "supervised", "experimental"]
+ActionConfirmationMode: TypeAlias = Literal["always-confirm", "confirm-risky"]
 
 _VALID_CAPABILITY_TIERS = {"autonomous", "supervised", "experimental"}
+_VALID_ACTION_CONFIRMATION_MODES = {"always-confirm", "confirm-risky"}
 
 
 class PolicyInputError(ValueError):
@@ -50,7 +52,8 @@ def normalize_endpoint(endpoint: str) -> str:
             raise PolicyInputError(str(error)) from error
         port = f":{parsed_port}" if parsed_port is not None else ""
         path = parsed.path or "/"
-        return f"{scheme}://{host}{port}{path}"
+        rendered_host = f"[{host}]" if ":" in host else host
+        return f"{scheme}://{rendered_host}{port}{path}"
     if scheme == "local":
         if not parsed.netloc:
             msg = "local endpoints must include an authority"
@@ -73,14 +76,8 @@ def filter_credentials(
 class ModelPolicyEngine:
     """Evaluate proposed model calls under a policy profile."""
 
-    def __init__(
-        self,
-        profile: PolicyProfile,
-        *,
-        allowed_capability_tiers: tuple[str, ...] = ("autonomous", "supervised"),
-    ) -> None:
+    def __init__(self, profile: PolicyProfile) -> None:
         self.profile = profile
-        self.allowed_capability_tiers = allowed_capability_tiers
         self._normalized_allowed_endpoints = tuple(
             normalize_endpoint(allowed) for allowed in self.profile.allowed_model_endpoints
         )
@@ -90,12 +87,17 @@ class ModelPolicyEngine:
         *,
         endpoint: str,
         capability_tier: str,
+        action_confirmation_mode: str = "always-confirm",
+        credential_reference: str | None = None,
         decision_id: str,
         purpose: str,
     ) -> ModelCallDecision:
         """Evaluate a proposed model call and return an auditable decision."""
         if capability_tier not in _VALID_CAPABILITY_TIERS:
             msg = f"unsupported capability tier: {capability_tier}"
+            raise PolicyInputError(msg)
+        if action_confirmation_mode not in _VALID_ACTION_CONFIRMATION_MODES:
+            msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
             raise PolicyInputError(msg)
         checked_capability_tier = cast(CapabilityTier, capability_tier)
         try:
@@ -110,7 +112,7 @@ class ModelPolicyEngine:
                 reason=str(error),
             )
 
-        if capability_tier not in self.allowed_capability_tiers:
+        if capability_tier not in self.profile.allowed_capability_tiers:
             return ModelCallDecision(
                 decision_id=decision_id,
                 policy_profile_id=self.profile.policy_id,
@@ -118,6 +120,32 @@ class ModelPolicyEngine:
                 capability_tier=checked_capability_tier,
                 decision="deny",
                 reason=f"capability tier {capability_tier} is not allowed for {purpose}",
+            )
+
+        if action_confirmation_mode not in self.profile.allowed_action_confirmation_modes:
+            return ModelCallDecision(
+                decision_id=decision_id,
+                policy_profile_id=self.profile.policy_id,
+                endpoint=normalized_endpoint,
+                capability_tier=checked_capability_tier,
+                decision="deny",
+                reason=(
+                    f"action confirmation mode {action_confirmation_mode} "
+                    f"is not allowed for {purpose}"
+                ),
+            )
+
+        if (
+            credential_reference is not None
+            and credential_reference not in self.profile.credential_allowlist
+        ):
+            return ModelCallDecision(
+                decision_id=decision_id,
+                policy_profile_id=self.profile.policy_id,
+                endpoint=normalized_endpoint,
+                capability_tier=checked_capability_tier,
+                decision="deny",
+                reason=f"credential reference is not allowed for {purpose}",
             )
 
         if (
@@ -139,7 +167,7 @@ class ModelPolicyEngine:
             endpoint=normalized_endpoint,
             capability_tier=checked_capability_tier,
             decision="allow",
-            reason=f"endpoint and capability tier are allowed for {purpose}",
+            reason=f"model route policy allows the configured profile for {purpose}",
         )
 
     def attestation(

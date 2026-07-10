@@ -33,9 +33,12 @@ GATEWAY_PORT = int(os.environ.get("HEARTWOOD_TERRA_DEMO_GATEWAY_PORT", "8767"))
 PROXY_PORT = int(os.environ.get("HEARTWOOD_TERRA_DEMO_PROXY_PORT", "8768"))
 SERVICE_PREFIX = os.environ.get("HEARTWOOD_TERRA_DEMO_SERVICE_PREFIX", "/user/synthetic/")
 SESSION_ID = os.environ.get("HEARTWOOD_TERRA_DEMO_SESSION_ID", "terra-demo-smoke")
-WORKSPACE = Path(os.environ.get("HEARTWOOD_TERRA_DEMO_WORKSPACE", "/tmp/heartwood-terra-demo"))
+STATE_ROOT = Path(os.environ.get("HEARTWOOD_TERRA_DEMO_STATE_ROOT", "/tmp/heartwood-terra-demo"))
+WORKSPACE = STATE_ROOT / "sessions"
 WEB_ROOT = Path(os.environ.get("HEARTWOOD_WEB_ROOT", "/opt/heartwood/packages/webui/dist"))
 VERBOSE = os.environ.get("HEARTWOOD_TERRA_DEMO_VERBOSE") == "1"
+REQUEST_TIMEOUT = float(os.environ.get("HEARTWOOD_TERRA_DEMO_REQUEST_TIMEOUT", "30"))
+STARTUP_TIMEOUT = float(os.environ.get("HEARTWOOD_TERRA_DEMO_STARTUP_TIMEOUT", "60"))
 
 
 def main() -> int:
@@ -43,7 +46,7 @@ def main() -> int:
     if not (WEB_ROOT / "index.html").exists():
         raise SystemExit(f"web UI assets not found: {WEB_ROOT}")
 
-    shutil.rmtree(WORKSPACE, ignore_errors=True)
+    shutil.rmtree(STATE_ROOT, ignore_errors=True)
     WORKSPACE.mkdir(parents=True, exist_ok=True)
 
     gateway = _start_gateway()
@@ -127,6 +130,9 @@ def _start_proxy() -> ThreadingHTTPServer:
         def do_POST(self) -> None:
             self._proxy()
 
+        def do_PUT(self) -> None:
+            self._proxy()
+
         def _proxy(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
             if not parsed.path.startswith(external_base_path):
@@ -142,7 +148,7 @@ def _start_proxy() -> ThreadingHTTPServer:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length)
 
-            connection = HTTPConnection(GATEWAY_HOST, GATEWAY_PORT, timeout=10)
+            connection = HTTPConnection(GATEWAY_HOST, GATEWAY_PORT, timeout=REQUEST_TIMEOUT)
             try:
                 headers = {
                     key: value
@@ -194,34 +200,72 @@ def _verify_web_ui(external_base: str) -> None:
 
 
 def _verify_gateway_session(external_base: str) -> None:
-    command = {
-        "actor_id": "synthetic-user",
-        "command_id": "terra-demo-smoke-detect",
-        "created_at": "2026-01-01T00:00:00Z",
-        "kind": "detect",
-        "payload": {},
-        "schema_version": "heartwood.session-command.v1",
-        "session_id": SESSION_ID,
-    }
+    _trace("reading action settings")
+    actions = _request_json(urllib.parse.urljoin(external_base, "settings/actions"))
+    if actions.get("confirmation_mode") != "always-confirm":
+        raise AssertionError("gateway did not expose the default action confirmation mode")
+    _trace("persisting action settings")
+    selected_actions = _request_json(
+        urllib.parse.urljoin(external_base, "settings/actions/confirmation"),
+        data={"mode": "always-confirm"},
+        method="PUT",
+    )
+    if selected_actions.get("confirmation_mode") != "always-confirm":
+        raise AssertionError("gateway did not persist action confirmation through the proxy")
+
+    _trace("submitting detection command")
     response = _request_json(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
-        data=command,
+        data=_gateway_command("detect", "terra-demo-smoke-detect"),
     )
     event_kinds = {event["kind"] for event in response["events"]}
     if "detection.proposed" not in event_kinds:
         raise AssertionError("gateway command route did not return detection events")
 
+    _trace("replaying session events")
     replay = _request_json(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/events?after=0")
     )
     if not any(event["sequence"] == 1 for event in replay["events"]):
         raise AssertionError("gateway replay route did not return persisted events")
 
+    _trace("streaming session events")
     stream = _request_sse(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/events/stream?after=0")
     )
     if "event: heartwood-session-events" not in stream or "detection.proposed" not in stream:
         raise AssertionError("gateway SSE route did not stream persisted events")
+
+    _trace("submitting OpenHands chat command")
+    task = _request_json(
+        urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
+        data=_gateway_command(
+            "chat",
+            "terra-demo-smoke-chat",
+            {"prompt": "Propose the bounded synthetic gateway action."},
+        ),
+    )
+    task_kinds = {event["kind"] for event in task["events"]}
+    if "confirmation.requested" not in task_kinds:
+        raise AssertionError("gateway chat did not return an OpenHands confirmation")
+
+    _trace("approving OpenHands tool call")
+    allowed = _request_json(
+        urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
+        data=_gateway_command(
+            "approve",
+            "terra-demo-smoke-allow",
+            {
+                "target_id": "call-heartwood-offline-smoke",
+                "target_type": "tool-call",
+            },
+        ),
+    )
+    allowed_kinds = {event["kind"] for event in allowed["events"]}
+    if not {"confirmation.resolved", "tool.execution.recorded"}.issubset(allowed_kinds):
+        raise AssertionError(
+            f"gateway allow did not execute the pending OpenHands action: {sorted(allowed_kinds)}"
+        )
 
 
 def _verify_notebook_api() -> None:
@@ -237,7 +281,7 @@ def _verify_notebook_api() -> None:
 
 
 def _wait_for_url(url: str) -> None:
-    deadline = time.time() + 20
+    deadline = time.time() + STARTUP_TIMEOUT
     last_error: BaseException | None = None
     while time.time() < deadline:
         try:
@@ -249,27 +293,32 @@ def _wait_for_url(url: str) -> None:
     raise RuntimeError(f"server did not become ready: {last_error}")
 
 
-def _request_text(url: str, *, timeout: float = 5) -> str:
+def _request_text(url: str, *, timeout: float = REQUEST_TIMEOUT) -> str:
     request = urllib.request.Request(url, headers={"Connection": "close"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8")
 
 
-def _request_json(url: str, *, data: dict[str, object] | None = None) -> dict[str, object]:
+def _request_json(
+    url: str,
+    *,
+    data: dict[str, object] | None = None,
+    method: str | None = None,
+) -> dict[str, object]:
     encoded = None if data is None else json.dumps(data).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=encoded,
         headers={"Connection": "close", "Content-Type": "application/json"},
-        method="POST" if encoded is not None else "GET",
+        method=method or ("POST" if encoded is not None else "GET"),
     )
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
 def _request_sse(url: str) -> str:
     request = urllib.request.Request(url, headers={"Connection": "close"})
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
         buffer = ""
         while "\n\n" not in buffer and "\r\n\r\n" not in buffer:
             chunk = response.read(1)
@@ -277,6 +326,22 @@ def _request_sse(url: str) -> str:
                 break
             buffer += chunk.decode("utf-8")
         return buffer
+
+
+def _gateway_command(
+    kind: str,
+    command_id: str,
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "actor_id": "synthetic-user",
+        "command_id": command_id,
+        "created_at": "2026-01-01T00:00:00Z",
+        "kind": kind,
+        "payload": {} if payload is None else payload,
+        "schema_version": "heartwood.session-command.v1",
+        "session_id": SESSION_ID,
+    }
 
 
 def _first_asset_path(html: str) -> str:

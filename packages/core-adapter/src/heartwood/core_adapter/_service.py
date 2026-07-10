@@ -4,36 +4,19 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Session service that accepts commands and emits structured events."""
+"""Session orchestration over policy, an agent backend, state, and audit."""
 
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
-from urllib.parse import urlsplit
+from typing import Literal, cast
 
-from heartwood.adapters import (
-    DataSourceAdapter,
-    ModelCallRequest,
-    ModelProviderAdapter,
-    PlatformAdapter,
-)
+from heartwood.adapters import DataSourceAdapter, PlatformAdapter
 from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
-from heartwood.adapters.model import (
-    FakeLocalModelProviderAdapter,
-    ProviderConfigError,
-    ProviderInvocationError,
-    ProviderRoute,
-    invoke_provider_route,
-    load_provider_config,
-)
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.audit import AuditLog
 from heartwood.core_adapter._facade import (
@@ -47,34 +30,8 @@ from heartwood.core_adapter._facade import (
 )
 from heartwood.core_adapter._state import FileSessionStore
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import ApprovalRecord, ConfirmationRequest, JsonValue
+from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
-
-ApprovalDecision: TypeAlias = Literal["approved", "denied"]
-ApprovalTargetType: TypeAlias = Literal["skill", "egress", "model-call", "tool-call"]
-
-_APPROVAL_TARGET_TYPES = {"skill", "egress", "model-call", "tool-call"}
-_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self,
-        _req: urllib.request.Request,
-        _fp: object,
-        _code: int,
-        _msg: str,
-        _headers: object,
-        _newurl: str,
-    ) -> None:
-        return None
-
-
-class LocalModelInvocationError(RuntimeError):
-    """Raised when the local model demo endpoint cannot be invoked safely."""
-
-
-_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler())
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +42,7 @@ class SessionResult:
 
 
 class SessionService:
-    """Core session orchestration over adapters, policy, state, and audit logging."""
+    """Core session service shared by every interaction surface."""
 
     def __init__(
         self,
@@ -93,8 +50,8 @@ class SessionService:
         store: FileSessionStore,
         platform_adapter: PlatformAdapter,
         data_source_adapter: DataSourceAdapter,
-        model_provider_adapter: ModelProviderAdapter,
         backend: AgentBackend,
+        policy_profile: PolicyProfile | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
     ) -> None:
@@ -102,10 +59,12 @@ class SessionService:
         self.audit_log = AuditLog(store.audit_path)
         self.platform_adapter = platform_adapter
         self.data_source_adapter = data_source_adapter
-        self.model_provider_adapter = model_provider_adapter
         self.backend = backend
+        self.policy_profile = policy_profile or platform_adapter.default_policy_profile()
+        self.policy = ModelPolicyEngine(self.policy_profile)
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
+        self.backend.restore_pending(_pending_tool_call(self.store.read_events()))
 
     @classmethod
     def synthetic_default(
@@ -116,14 +75,12 @@ class SessionService:
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
     ) -> SessionService:
-        """Build the default synthetic local session service."""
+        """Build the deterministic synthetic service used in tests and replay."""
         platform = GenericPlatformAdapter()
-        policy = platform.default_policy_profile()
         return cls(
             store=FileSessionStore(workspace, session_id),
             platform_adapter=platform,
             data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
-            model_provider_adapter=FakeLocalModelProviderAdapter(policy),
             backend=DeterministicAgentBackend(),
             env={} if env is None else env,
             clock=(lambda: "2026-01-01T00:00:00Z") if clock is None else clock,
@@ -136,26 +93,26 @@ class SessionService:
         *,
         session_id: str = "session-local",
         backend: AgentBackend | None = None,
+        policy_profile: PolicyProfile | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
     ) -> SessionService:
-        """Build the default local session service using the caller environment."""
+        """Build a local service using the caller environment."""
         platform = GenericPlatformAdapter()
-        policy = platform.default_policy_profile()
         active_env = os.environ if env is None else env
         store = FileSessionStore(workspace, session_id)
         return cls(
             store=store,
             platform_adapter=platform,
             data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
-            model_provider_adapter=FakeLocalModelProviderAdapter(policy),
             backend=_backend_from_env(store=store, env=active_env) if backend is None else backend,
+            policy_profile=policy_profile,
             env=active_env,
             clock=clock,
         )
 
     def handle(self, command: SessionCommand) -> SessionResult:
-        """Handle one command, persist emitted events, and append audit records."""
+        """Handle one command, persist events, and append audit records."""
         if command.session_id != self.store.session_id:
             msg = (
                 f"command session {command.session_id} does not match "
@@ -163,44 +120,80 @@ class SessionService:
             )
             raise ValueError(msg)
         self.store.append_command(command)
-        events = [
-            self._record_event(EventKind.COMMAND_RECEIVED, {"command_id": command.command_id})
-        ]
         command_kind = _kind_value(command.kind)
+        events = [
+            self._record_event(
+                EventKind.COMMAND_RECEIVED,
+                {
+                    "actor_id": command.actor_id,
+                    "command_id": command.command_id,
+                    "command_kind": command_kind,
+                },
+            )
+        ]
         if command_kind == CommandKind.DETECT.value:
             events.append(self._handle_detect())
+        elif command_kind in {CommandKind.CHAT.value, CommandKind.RUN.value}:
+            events.extend(self._handle_task(command))
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
-            events.append(self._handle_approval(command))
-        elif command_kind == CommandKind.CHAT.value:
-            events.extend(self._handle_chat(command))
-        elif command_kind == CommandKind.RUN.value:
-            events.extend(self._handle_run(command))
+            events.extend(self._handle_action_decision(command))
         elif command_kind == CommandKind.PAUSE.value:
+            self.backend.pause()
             events.append(
                 self._record_event(EventKind.SESSION_PAUSED, {"command_id": command.command_id})
             )
         elif command_kind == CommandKind.RESUME.value:
-            events.append(
-                self._record_event(EventKind.SESSION_RESUMED, {"command_id": command.command_id})
-            )
+            pending = _pending_tool_call(self.store.read_events())
+            if pending is not None:
+                events.append(
+                    self._record_event(
+                        EventKind.ERROR_RECORDED,
+                        {
+                            "command": command_kind,
+                            "reason": "resolve the pending action before resuming",
+                        },
+                    )
+                )
+            else:
+                authorized = True
+                authorization_events: list[SessionEvent] = []
+                if self.backend.continuation_requires_model_authorization:
+                    authorized, authorization_events = self._authorize_backend(
+                        command,
+                        purpose=f"resumed agent turn through {self.backend.backend_id}",
+                    )
+                events.extend(authorization_events)
+                if authorized:
+                    events.append(
+                        self._record_event(
+                            EventKind.SESSION_RESUMED,
+                            {"command_id": command.command_id},
+                        )
+                    )
+                    events.extend(
+                        self._translate_backend_events(
+                            self.backend.resume(session_id=command.session_id)
+                        )
+                    )
         elif command_kind == CommandKind.AUDIT_EXPORT.value:
             events.append(self._handle_audit_export())
         else:
             events.append(
                 self._record_event(
                     EventKind.ERROR_RECORDED,
-                    {
-                        "command": command_kind,
-                        "reason": "command is not implemented in the core harness yet",
-                    },
+                    {"command": command_kind, "reason": "command is not implemented"},
                 )
             )
         return SessionResult(events=tuple(events))
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
-        """Return persisted session events for deterministic replay tests."""
+        """Return persisted session events after verifying the audit chain."""
         self.audit_log.verify()
         return self.store.read_events()
+
+    def close(self) -> None:
+        """Release backend resources."""
+        self.backend.close()
 
     def _handle_detect(self) -> SessionEvent:
         platform = self.platform_adapter.detect(self.env)
@@ -222,207 +215,154 @@ class SessionService:
             },
         )
 
-    def _handle_approval(self, command: SessionCommand) -> SessionEvent:
-        decision: ApprovalDecision = (
-            "approved" if _kind_value(command.kind) == CommandKind.APPROVE.value else "denied"
-        )
-        approval = ApprovalRecord(
-            approval_id=str(command.payload.get("approval_id", f"{command.command_id}-approval")),
-            session_id=command.session_id,
-            target_type=_approval_target_type(command.payload.get("target_type", "skill")),
-            target_id=str(command.payload.get("target_id", "heartwood.synthetic.omop-summary")),
-            decision=decision,
-            actor_id=command.actor_id,
-            occurred_at=self.clock(),
-            reason=_optional_string(command.payload.get("reason")),
-        )
-        return self._record_event(
-            EventKind.APPROVAL_RECORDED,
-            {"approval": approval.model_dump(mode="json", by_alias=True)},
-        )
-
-    def _handle_chat(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
-        prompt = str(command.payload.get("prompt", ""))
-        stream = self.backend.chat_turn(session_id=command.session_id, prompt_length=len(prompt))
-        return tuple(self._translate_backend_events(command.session_id, stream))
-
-    def _handle_run(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
-        prompt = str(command.payload.get("prompt", ""))
-        endpoint = str(
-            command.payload.get("endpoint", "https://model.local.invalid/v1/chat/completions")
-        )
-        provider_route: ProviderRoute | None = None
-        provider_route_id = _optional_string(command.payload.get("provider_route_id"))
-        provider_config_path = _optional_string(command.payload.get("provider_config_path"))
-        error_event: SessionEvent | None = None
-        if provider_route_id is not None:
-            if provider_config_path is None:
-                error_event = self._record_event(
+    def _handle_task(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
+        prompt_value = command.payload.get("prompt")
+        if not isinstance(prompt_value, str) or not (prompt := prompt_value.strip()):
+            return (
+                self._record_event(
                     EventKind.ERROR_RECORDED,
-                    {
-                        "command": _kind_value(command.kind),
-                        "reason": "provider route requires a provider config path",
-                    },
-                )
-            else:
-                try:
-                    provider_route = load_provider_config(Path(provider_config_path)).route(
-                        provider_route_id
-                    )
-                    endpoint = provider_route.endpoint
-                except ProviderConfigError as error:
-                    error_event = self._record_event(
-                        EventKind.ERROR_RECORDED,
-                        {
-                            "command": _kind_value(command.kind),
-                            "reason": str(error),
-                        },
-                    )
-        request = ModelCallRequest(
-            endpoint=endpoint,
-            capability_tier=(
-                provider_route.capability_tier
-                if provider_route is not None
-                else self.model_provider_adapter.capability_tier
-            ),
-            purpose=(
-                f"provider route {provider_route.route_id}"
-                if provider_route is not None
-                else "synthetic core harness run"
-            ),
-        )
-        invoke_model = bool(command.payload.get("invoke_model", False))
-        invoke_provider = bool(command.payload.get("invoke_provider", False))
-        if invoke_model and invoke_provider:
-            error_event = self._record_event(
-                EventKind.ERROR_RECORDED,
-                {
-                    "command": _kind_value(command.kind),
-                    "reason": "local-model and provider-route invocation are mutually exclusive",
-                },
+                    {"command": _kind_value(command.kind), "reason": "prompt is required"},
+                ),
             )
-        decision = self.model_provider_adapter.evaluate_model_call(request)
-        policy_payload: dict[str, JsonValue] = {"decision": decision.model_dump(mode="json")}
-        if provider_route is not None:
-            policy_payload["provider_route"] = cast(JsonValue, provider_route.safe_metadata())
-        model_call_approved = (
-            self._has_model_call_approval(decision.decision_id) and decision.decision == "allow"
+        user_event = self._record_event(
+            EventKind.USER_MESSAGE_RECORDED,
+            {
+                "actor_id": command.actor_id,
+                "command_id": command.command_id,
+                "content": prompt,
+            },
         )
-        if invoke_model and error_event is None:
-            try:
-                engine = ModelPolicyEngine(self.platform_adapter.default_policy_profile())
-                attestation = engine.attestation(
-                    decision=decision,
-                    record_id=f"{command.command_id}-attestation",
-                    session_id=command.session_id,
-                    occurred_at=self.clock(),
-                )
-                policy_payload["attestation"] = attestation.model_dump(mode="json")
-                if decision.decision == "allow" and not model_call_approved:
-                    error_event = self._record_event(
-                        EventKind.ERROR_RECORDED,
-                        {
-                            "command": _kind_value(command.kind),
-                            "reason": (
-                                "local model invocation requires approved model-call decision"
-                            ),
-                        },
-                    )
-                elif model_call_approved:
-                    response = _invoke_loopback_model(
-                        endpoint=endpoint,
-                        prompt=prompt,
-                        max_tokens=_env_int(
-                            self.env,
-                            "HEARTWOOD_LOCAL_MODEL_MAX_TOKENS",
-                            default=768,
-                            minimum=1,
-                            maximum=4096,
-                        ),
-                        timeout_seconds=_env_int(
-                            self.env,
-                            "HEARTWOOD_LOCAL_MODEL_TIMEOUT_SECONDS",
-                            default=180,
-                            minimum=1,
-                            maximum=900,
-                        ),
-                    )
-                    policy_payload["response_metadata"] = _model_response_metadata(
-                        response,
-                        include_preview=_truthy(self.env.get("HEARTWOOD_DEMO_RESPONSE_PREVIEW")),
-                    )
-            except LocalModelInvocationError as error:
-                error_event = self._record_event(
+        if _pending_tool_call(self.store.read_events()) is not None:
+            return (
+                user_event,
+                self._record_event(
                     EventKind.ERROR_RECORDED,
                     {
                         "command": _kind_value(command.kind),
-                        "reason": str(error),
+                        "reason": "resolve the pending action before submitting another task",
                     },
-                )
-        if invoke_provider and error_event is None:
-            try:
-                engine = ModelPolicyEngine(self.platform_adapter.default_policy_profile())
-                attestation = engine.attestation(
-                    decision=decision,
-                    record_id=f"{command.command_id}-attestation",
-                    session_id=command.session_id,
-                    occurred_at=self.clock(),
-                )
-                policy_payload["attestation"] = attestation.model_dump(mode="json")
-                if provider_route is None:
-                    error_event = self._record_event(
-                        EventKind.ERROR_RECORDED,
-                        {
-                            "command": _kind_value(command.kind),
-                            "reason": "provider invocation requires a selected provider route",
-                        },
-                    )
-                elif decision.decision == "allow" and not model_call_approved:
-                    error_event = self._record_event(
-                        EventKind.ERROR_RECORDED,
-                        {
-                            "command": _kind_value(command.kind),
-                            "reason": "provider invocation requires approved model-call decision",
-                        },
-                    )
-                elif model_call_approved:
-                    response = invoke_provider_route(
-                        provider_route,
-                        prompt_length=len(prompt),
-                    )
-                    policy_payload["response_metadata"] = _model_response_metadata(
-                        response,
-                        include_preview=_truthy(self.env.get("HEARTWOOD_DEMO_RESPONSE_PREVIEW")),
-                    )
-            except ProviderInvocationError as error:
-                error_event = self._record_event(
+                ),
+            )
+        authorized, authorization_events = self._authorize_backend(
+            command,
+            purpose=f"agent turn through {self.backend.backend_id}",
+        )
+        if not authorized:
+            return (user_event, *authorization_events)
+        stream = self.backend.submit_turn(session_id=command.session_id, prompt=prompt)
+        return (user_event, *authorization_events, *self._translate_backend_events(stream))
+
+    def _authorize_backend(
+        self,
+        command: SessionCommand,
+        *,
+        purpose: str,
+    ) -> tuple[bool, list[SessionEvent]]:
+        """Authorize one backend operation that may continue model execution."""
+        configuration_error = self.backend.configuration_error
+        if configuration_error is not None:
+            return False, [
+                self._record_event(
                     EventKind.ERROR_RECORDED,
                     {
-                        "command": _kind_value(command.kind),
-                        "reason": str(error),
+                        "backend_id": self.backend.backend_id,
+                        "reason": configuration_error,
                     },
                 )
-        policy_event = self._record_event(EventKind.MODEL_CALL_DECISION_RECORDED, policy_payload)
-        model_invocation_required = (invoke_model or invoke_provider) and model_call_approved
-        model_invocation_succeeded = (
-            not model_invocation_required or "response_metadata" in policy_payload
+            ]
+        decision = self.policy.evaluate(
+            endpoint=self.backend.model_endpoint,
+            capability_tier=self.backend.capability_tier,
+            action_confirmation_mode=self.backend.action_confirmation_mode,
+            credential_reference=self.backend.credential_reference,
+            decision_id=f"{command.command_id}-model-route",
+            purpose=purpose,
         )
-        approved = error_event is None and model_call_approved and model_invocation_succeeded
-        stream = self.backend.run_turn(
+        attestation = self.policy.attestation(
+            decision=decision,
+            record_id=f"{command.command_id}-attestation",
             session_id=command.session_id,
-            prompt_length=len(prompt),
-            approved=approved,
+            occurred_at=self.clock(),
         )
+        policy_event = self._record_event(
+            EventKind.MODEL_CALL_DECISION_RECORDED,
+            {
+                "decision": decision.model_dump(mode="json"),
+                "attestation": attestation.model_dump(mode="json"),
+                "model_profile": {
+                    "backend_id": self.backend.backend_id,
+                    "profile_id": self.backend.model_profile_id,
+                    "capability_tier": self.backend.capability_tier,
+                    "action_confirmation_mode": self.backend.action_confirmation_mode,
+                },
+            },
+        )
+        if decision.decision != "allow":
+            return False, [
+                policy_event,
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": "active model profile is denied by platform policy",
+                    },
+                ),
+            ]
+        return True, [policy_event]
+
+    def _handle_action_decision(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
+        target_type = str(command.payload.get("target_type", "tool-call"))
+        if target_type != "tool-call":
+            return (
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": "interactive approval is supported only for pending tool actions",
+                    },
+                ),
+            )
+        tool_call_id = str(command.payload.get("target_id", ""))
+        if not tool_call_id:
+            return (
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {"command": _kind_value(command.kind), "reason": "target_id is required"},
+                ),
+            )
+        approved = _kind_value(command.kind) == CommandKind.APPROVE.value
+        pending = _pending_tool_call(self.store.read_events())
+        if pending is None or pending.tool_call_id != tool_call_id:
+            return (
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": f"no matching pending action: {tool_call_id}",
+                    },
+                ),
+            )
         events: list[SessionEvent] = []
-        if error_event is not None:
-            events.append(error_event)
-        events.append(policy_event)
-        events.extend(self._translate_backend_events(command.session_id, stream))
+        if approved and self.backend.continuation_requires_model_authorization:
+            authorized, authorization_events = self._authorize_backend(
+                command,
+                purpose=f"approved action continuation through {self.backend.backend_id}",
+            )
+            events.extend(authorization_events)
+            if not authorized:
+                return tuple(events)
+        events.extend(
+            self._translate_backend_events(
+                self.backend.resolve_confirmation(
+                    session_id=command.session_id,
+                    tool_call_id=tool_call_id,
+                    approved=approved,
+                )
+            )
+        )
         return tuple(events)
 
-    def _translate_backend_events(
-        self, session_id: str, stream: tuple[BackendEvent, ...]
-    ) -> list[SessionEvent]:
+    def _translate_backend_events(self, stream: tuple[BackendEvent, ...]) -> list[SessionEvent]:
         translated: list[SessionEvent] = []
         for event in stream:
             if event.kind == BackendEventKind.AGENT_MESSAGE:
@@ -442,8 +382,19 @@ class SessionService:
                         },
                     )
                 )
-            elif event.kind == BackendEventKind.CONFIRMATION:
-                translated.append(self._record_confirmation(session_id, event))
+            elif event.kind == BackendEventKind.CONFIRMATION_REQUESTED:
+                translated.append(self._record_confirmation_request(event))
+            elif event.kind == BackendEventKind.CONFIRMATION_RESOLVED:
+                tool_call = _require_tool_call(event)
+                translated.append(
+                    self._record_event(
+                        EventKind.CONFIRMATION_RESOLVED,
+                        {
+                            "tool_call_id": tool_call.tool_call_id,
+                            "decision": "approved" if event.approved else "denied",
+                        },
+                    )
+                )
             elif event.kind == BackendEventKind.TOOL_EXECUTION:
                 execution = _require_tool_execution(event)
                 translated.append(
@@ -457,18 +408,20 @@ class SessionService:
                         },
                     )
                 )
+            elif event.kind == BackendEventKind.ERROR:
+                translated.append(
+                    self._record_event(
+                        EventKind.ERROR_RECORDED,
+                        {"backend_id": self.backend.backend_id, "reason": event.message or "error"},
+                    )
+                )
         return translated
 
-    def _record_confirmation(self, session_id: str, event: BackendEvent) -> SessionEvent:
+    def _record_confirmation_request(self, event: BackendEvent) -> SessionEvent:
         tool_call = _require_tool_call(event)
-        if event.approved:
-            return self._record_event(
-                EventKind.CONFIRMATION_RESOLVED,
-                {"tool_call_id": tool_call.tool_call_id, "decision": "approved"},
-            )
         request = ConfirmationRequest(
             request_id=f"{tool_call.tool_call_id}-confirm",
-            session_id=session_id,
+            session_id=self.store.session_id,
             tool_call_id=tool_call.tool_call_id,
             tool_name=tool_call.tool_name,
             risk=tool_call.risk,
@@ -488,22 +441,8 @@ class SessionService:
                 "scrubbed": True,
             },
         )
-        exported = self.audit_log.export_jsonl()
-        self.store.audit_export_path.write_text(exported, encoding="utf-8")
+        self.store.write_audit_export(self.audit_log.export_jsonl())
         return event
-
-    def _has_model_call_approval(self, decision_id: str) -> bool:
-        for event in self.store.read_events():
-            if _event_kind_value(event.kind) != EventKind.APPROVAL_RECORDED.value:
-                continue
-            approval_payload = _dict_payload(event.payload.get("approval"), "approval")
-            if (
-                approval_payload.get("target_type") == "model-call"
-                and approval_payload.get("target_id") == decision_id
-                and approval_payload.get("decision") == "approved"
-            ):
-                return True
-        return False
 
     def _record_event(self, kind: EventKind, payload: dict[str, JsonValue]) -> SessionEvent:
         sequence = self.store.next_sequence()
@@ -540,118 +479,12 @@ def _require_tool_execution(event: BackendEvent) -> ToolExecution:
     return event.tool_execution
 
 
-def _optional_string(value: JsonValue | None) -> str | None:
-    if value is None:
-        return None
-    return str(value)
-
-
 def _utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _kind_value(kind: CommandKind | str) -> str:
-    if isinstance(kind, CommandKind):
-        return kind.value
-    return kind
-
-
-def _event_kind_value(kind: EventKind | str) -> str:
-    if isinstance(kind, EventKind):
-        return kind.value
-    return kind
-
-
-def _approval_target_type(value: JsonValue | None) -> ApprovalTargetType:
-    candidate = "skill" if value is None else str(value)
-    if candidate not in _APPROVAL_TARGET_TYPES:
-        msg = f"unsupported approval target type: {candidate}"
-        raise ValueError(msg)
-    return cast(ApprovalTargetType, candidate)
-
-
-def _dict_payload(value: JsonValue | None, name: str) -> dict[str, JsonValue]:
-    if isinstance(value, dict):
-        return value
-    msg = f"expected {name} payload to be an object"
-    raise TypeError(msg)
-
-
-def _invoke_loopback_model(
-    *,
-    endpoint: str,
-    prompt: str,
-    max_tokens: int,
-    timeout_seconds: int,
-) -> JsonValue:
-    parsed = urlsplit(endpoint)
-    host = parsed.hostname or ""
-    if parsed.scheme != "http" or host not in _LOOPBACK_HOSTS:
-        msg = "local model demo can invoke only http loopback endpoints"
-        raise LocalModelInvocationError(msg)
-    user_prompt = prompt.strip() or "Confirm that the local runtime is reachable."
-    request_payload = {
-        "model": "heartwood-local-runtime",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are the local Heartwood coding model running inside an offline demo. "
-                    "Use only synthetic data and provide concise, actionable coding-agent output."
-                ),
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0,
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(request_payload, sort_keys=True).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with _NO_REDIRECT_OPENER.open(request, timeout=timeout_seconds) as response:
-            decoded = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        if 300 <= error.code < 400:
-            msg = "local model invocation rejected redirect"
-        else:
-            msg = f"local model invocation failed: {error}"
-        raise LocalModelInvocationError(msg) from error
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-        msg = f"local model invocation failed: {error}"
-        raise LocalModelInvocationError(msg) from error
-    if not isinstance(decoded, str | int | float | bool | list | dict) and decoded is not None:
-        msg = "local model returned a non-JSON response"
-        raise LocalModelInvocationError(msg)
-    return cast(JsonValue, decoded)
-
-
-def _env_int(
-    env: Mapping[str, str],
-    name: str,
-    *,
-    default: int,
-    minimum: int,
-    maximum: int,
-) -> int:
-    value = env.get(name)
-    if value is None or value == "":
-        return default
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        msg = f"{name} must be an integer"
-        raise LocalModelInvocationError(msg) from error
-    if parsed < minimum or parsed > maximum:
-        msg = f"{name} must be between {minimum} and {maximum}"
-        raise LocalModelInvocationError(msg)
-    return parsed
+    return kind.value if isinstance(kind, CommandKind) else kind
 
 
 def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> AgentBackend:
@@ -664,51 +497,23 @@ def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> Age
     raise ValueError(msg)
 
 
-def _model_response_metadata(
-    response: JsonValue,
-    *,
-    include_preview: bool = False,
-) -> dict[str, JsonValue]:
-    if not isinstance(response, dict):
-        return {"status": "ok", "response_type": type(response).__name__}
-    metadata: dict[str, JsonValue] = {"status": "ok"}
-    for key in ("id", "model", "object"):
-        value = response.get(key)
-        if isinstance(value, str):
-            metadata[key] = value
-    choices = response.get("choices")
-    if isinstance(choices, list):
-        metadata["choices_count"] = len(choices)
-    usage = response.get("usage")
-    if isinstance(usage, dict):
-        safe_usage: dict[str, JsonValue] = {}
-        for key, value in usage.items():
-            if isinstance(value, int | float) and not isinstance(value, bool):
-                safe_usage[key] = value
-        metadata["usage"] = safe_usage
-    if include_preview:
-        preview = _model_response_preview(response)
-        if preview is not None:
-            metadata["response_preview"] = preview[:500]
-            metadata["response_preview_truncated"] = len(preview) > 500
-    return metadata
-
-
-def _model_response_preview(response: dict[str, JsonValue]) -> str | None:
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    first = choices[0]
-    if not isinstance(first, dict):
-        return None
-    message = first.get("message")
-    if isinstance(message, dict):
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-    text = first.get("text")
-    return text if isinstance(text, str) else None
-
-
-def _truthy(value: str | None) -> bool:
-    return value is not None and value.lower() in {"1", "true", "yes", "on"}
+def _pending_tool_call(events: tuple[SessionEvent, ...]) -> ProposedToolCall | None:
+    pending: ProposedToolCall | None = None
+    for event in events:
+        kind = str(event.kind)
+        if kind == EventKind.CONFIRMATION_REQUESTED.value:
+            request = event.payload.get("request")
+            if isinstance(request, dict):
+                risk_value = str(request.get("risk", "unknown"))
+                risk = risk_value if risk_value in {"low", "medium", "high"} else "unknown"
+                pending = ProposedToolCall(
+                    tool_call_id=str(request.get("tool_call_id", "")),
+                    tool_name=str(request.get("tool_name", "unknown-tool")),
+                    risk=cast(Literal["low", "medium", "high", "unknown"], risk),
+                    summary=str(request.get("summary", "pending action")),
+                )
+        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
+            tool_call_id = str(event.payload.get("tool_call_id", ""))
+            if pending is not None and pending.tool_call_id == tool_call_id:
+                pending = None
+    return pending

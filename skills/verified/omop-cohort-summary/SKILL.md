@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 # SPDX-License-Identifier: MIT
 id: "heartwood.synthetic.omop-cohort-summary"
-name: "Synthetic OMOP cohort summary"
+name: "omop-cohort-summary"
 description: "Build aggregate cohort counts and quality checks from synthetic OMOP-like tables."
 tools: "read-local-csv,write-aggregate-json"
 approval-summary: "Reads synthetic OMOP-like CSV tables from the configured local data root and writes aggregate counts plus quality checks without row values."

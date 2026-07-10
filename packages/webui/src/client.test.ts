@@ -113,6 +113,160 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("manages non-secret model profiles through settings routes", async () => {
+    const settings = {
+      schema_version: "heartwood.model-settings.v1",
+      active_profile: "local",
+      profiles: [],
+      presets: [],
+    };
+    const validation = {
+      profile: {},
+      credential_status: "configured",
+      policy_decision: { decision: "allow" },
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(validation)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+    const profile = {
+      profile_id: "local",
+      model: "openai/local-model",
+      policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+      capability_tier: "supervised" as const,
+      base_url: "http://127.0.0.1:8765/v1",
+      credential_kind: "none" as const,
+      api_key_env: null,
+      api_key_file: null,
+      api_version: null,
+      aws_region_name: null,
+      aws_profile_name: null,
+      description: null,
+    };
+
+    await client.getModelSettings();
+    await client.saveModelProfile(profile);
+    await client.selectModelProfile("local");
+    await client.removeModelProfile("local");
+    await client.validateModelProfile("local profile");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/models");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/profiles",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/proxy/8767/settings/models/active",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/proxy/8767/settings/models/profiles/local",
+      { method: "DELETE" },
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      "/proxy/8767/settings/models/validation?profile_id=local%20profile",
+    );
+  });
+
+  it("selects the shared action-confirmation mode", async () => {
+    const actions = {
+      schema_version: "heartwood.action-settings.v1",
+      confirmation_mode: "always-confirm",
+      modes: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(actions)))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ ...actions, confirmation_mode: "confirm-risky" }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.getActionSettings();
+    await client.selectActionConfirmationMode("confirm-risky");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/actions");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/actions/confirmation",
+      expect.objectContaining({
+        body: JSON.stringify({ mode: "confirm-risky" }),
+        method: "PUT",
+      }),
+    );
+  });
+
+  it("reports model settings errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "invalid profile" }), {
+          status: 422,
+        }),
+      ),
+    );
+
+    await expect(new GatewayClient().getModelSettings()).rejects.toThrow(
+      "invalid profile",
+    );
+  });
+
+  it("manages Skill inspection and installation through settings routes", async () => {
+    const skill = {
+      name: "community-summary",
+      skill_id: "example.community-summary",
+      source: "candidate",
+    };
+    const settings = { skills: [{ ...skill, source: "installed" }] };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ skills: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(skill)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ skills: [] })));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.getSkillSettings();
+    await client.inspectSkill("/mnt/community-summary");
+    await client.installSkill("/mnt/community-summary");
+    await client.removeSkill("community summary");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/skills");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/skills/inspect",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/proxy/8767/settings/skills/install",
+      expect.objectContaining({
+        body: JSON.stringify({
+          approved: true,
+          source: "/mnt/community-summary",
+        }),
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/proxy/8767/settings/skills/community%20summary",
+      { method: "DELETE" },
+    );
+  });
+
   it("reports gateway errors", async () => {
     vi.stubGlobal(
       "fetch",
@@ -176,7 +330,7 @@ describe("GatewayClient", () => {
       received.push(events);
     });
     FakeWebSocket.instances[0]?.fail();
-    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(2, 3));
+    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(3, 4));
     cleanup();
 
     expect(FakeWebSocket.instances[0]?.url).toContain(
@@ -199,7 +353,7 @@ describe("GatewayClient", () => {
       received.push(events);
     });
     FakeWebSocket.instances[0]?.closeWith(1011);
-    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(2, 3));
+    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(3, 4));
     cleanup();
 
     expect(FakeEventSource.instances[0]?.url).toBe(
@@ -216,7 +370,7 @@ describe("GatewayClient", () => {
     const cleanup = client.streamEvents("session-test", undefined, (events) => {
       received.push(events);
     });
-    FakeWebSocket.instances[0]?.emit(syntheticEvents().slice(3, 4));
+    FakeWebSocket.instances[0]?.emit(syntheticEvents().slice(4, 5));
     cleanup();
 
     expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");

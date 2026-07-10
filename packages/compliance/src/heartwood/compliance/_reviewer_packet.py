@@ -27,7 +27,7 @@ class ReviewerPacket:
 
 
 class ReviewerPacketGenerator:
-    """Generate a deterministic reviewer packet from synthetic Phase 0 artifacts."""
+    """Generate a deterministic reviewer packet from synthetic repository artifacts."""
 
     def __init__(
         self,
@@ -126,23 +126,31 @@ class ReviewerPacketGenerator:
             (
                 "# Current Limitations",
                 "",
-                "- Phase 0 uses synthetic fixtures only and does not validate controlled data.",
                 (
-                    "- The generic model path uses a local synthetic smoke artifact; "
-                    "production provider wiring remains behind the gateway egress proxy."
+                    "- Public validation uses synthetic fixtures only and does not validate "
+                    "controlled data."
                 ),
                 (
-                    "- The generic image bundles a tiny llama-cpp-cpu smoke artifact; it "
-                    "does not make a production model-quality or biomedical reasoning claim."
+                    "- Model profiles and application-layer route policy are implemented, but "
+                    "each institution must validate its provider agreement, identity, and "
+                    "authoritative network controls."
                 ),
                 (
-                    "- The production OpenHands agent-server package is pinned, "
-                    "gateway-managed, and used for bounded bash execution; autonomous "
-                    "coding quality with a larger local model remains future validation work."
+                    "- Images contain no model weights. Optional reviewed downloads and the "
+                    "CI fixture make no production or biomedical-quality claim."
                 ),
                 (
-                    "- The static documentation site is the next documentation pass; "
-                    "checked-in Markdown remains the current source of truth."
+                    "- The pinned OpenHands SDK provides the conversation and coding tools; "
+                    "model capability and unattended operation remain deployment-specific gates."
+                ),
+                (
+                    "- Ask Every Time is the action-confirmation default. Auto-Approve Low Risk "
+                    "remains a deployment-policy opt-in and still confirms medium-, high-, and "
+                    "unknown-risk actions."
+                ),
+                (
+                    "- A published documentation site and stable release channel are not yet "
+                    "implemented; checked-in Markdown remains the source of truth."
                 ),
                 (
                     "- The web UI, Server-Sent Events fallback, Jupyter-style proxy smoke, "
@@ -150,8 +158,8 @@ class ReviewerPacketGenerator:
                     "live controlled-platform validation remains future work."
                 ),
                 (
-                    "- Platform-specific policy review starts after the generic reviewer packet "
-                    "and synthetic replay pass."
+                    "- Platform-specific policy, identity, network, and live-platform evidence "
+                    "are required independently of this generic synthetic packet."
                 ),
                 "",
             )
@@ -176,14 +184,26 @@ class ReviewerPacketGenerator:
                 "",
                 "## Threat Model Summary",
                 "",
-                "- Controlled data remains inside the trusted platform boundary.",
                 (
-                    "- Network egress is denied by default and model calls are evaluated before "
-                    "invocation."
+                    "- The deployment must keep controlled data inside an institution-approved "
+                    "boundary; this synthetic packet does not establish that platform control."
                 ),
                 (
-                    "- Skill activation, model calls, tool calls, and export paths require "
-                    "explicit human approval."
+                    "- Heartwood denies unallowlisted declared model routes before invocation; "
+                    "platform controls remain authoritative for network egress."
+                ),
+                (
+                    "- Deployment policy authorizes model routes; a conversational click cannot "
+                    "override it."
+                ),
+                (
+                    "- Bundled Skills load automatically; mounted extensions require "
+                    "installation review."
+                ),
+                (
+                    "- OpenHands Ask Every Time requires Allow once or Reject for tool actions. "
+                    "The optional Auto-Approve Low Risk mode still confirms medium-, high-, "
+                    "and unknown-risk actions."
                 ),
                 "- Audit exports use scrubbed JSONL records with a verified hash chain.",
                 "",
@@ -195,7 +215,7 @@ class ReviewerPacketGenerator:
                 '  Gateway --> Core["Session service"]',
                 '  Core --> Audit["Hash-chained audit log"]',
                 '  Core --> Policy["Policy engine"]',
-                '  Policy --> Model["In-boundary model endpoint"]',
+                '  Policy -. authorizes profile .-> Model["Configured model route"]',
                 '  Core --> Skills["Verified skills"]',
                 '  Core --> State["Workspace session state"]',
                 "```",
@@ -205,6 +225,10 @@ class ReviewerPacketGenerator:
                 f"- Policy: `{policy.policy_id}`",
                 f"- Platform: `{policy.platform_id}`",
                 f"- Deny egress by default: `{policy.deny_egress_by_default}`",
+                (
+                    "- Allowed action-confirmation modes: `"
+                    f"{', '.join(policy.allowed_action_confirmation_modes)}`"
+                ),
                 f"- Aggregate count floor: `{policy.aggregate_count_floor}`",
                 "",
                 "## Fixture Statement",

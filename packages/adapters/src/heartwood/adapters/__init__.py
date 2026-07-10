@@ -12,9 +12,6 @@ from heartwood.adapters._protocols import (
     AdapterDetection,
     DatasetFingerprint,
     DataSourceAdapter,
-    ModelCallRequest,
-    ModelInvocationRequest,
-    ModelProviderAdapter,
     PlatformAdapter,
     RegistryAdapter,
     RegistryVerification,
@@ -22,7 +19,6 @@ from heartwood.adapters._protocols import (
 )
 from heartwood.adapters.conformance import (
     assert_data_source_adapter_conforms,
-    assert_model_provider_adapter_conforms,
     assert_platform_adapter_conforms,
     assert_registry_adapter_conforms,
 )
@@ -31,16 +27,12 @@ __all__ = [
     "AdapterDetection",
     "DataSourceAdapter",
     "DatasetFingerprint",
-    "ModelCallRequest",
-    "ModelInvocationRequest",
-    "ModelProviderAdapter",
     "PlatformAdapter",
     "RegistryAdapter",
     "RegistryVerification",
     "SkillReference",
     "__version__",
     "assert_data_source_adapter_conforms",
-    "assert_model_provider_adapter_conforms",
     "assert_platform_adapter_conforms",
     "assert_registry_adapter_conforms",
 ]

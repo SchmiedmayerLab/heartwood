@@ -13,14 +13,11 @@ from pathlib import Path
 import pytest
 
 from heartwood.adapters import (
-    ModelCallRequest,
     assert_data_source_adapter_conforms,
-    assert_model_provider_adapter_conforms,
     assert_platform_adapter_conforms,
     assert_registry_adapter_conforms,
 )
 from heartwood.adapters.data import DataSourceBoundaryError, LocalFilesystemDataSourceAdapter
-from heartwood.adapters.model import FakeLocalModelProviderAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.adapters.registry import LocalRegistryAdapter, RegistryBoundaryError
 
@@ -68,32 +65,6 @@ def test_local_filesystem_data_adapter_blocks_symlink_escape(tmp_path: Path) -> 
     adapter = LocalFilesystemDataSourceAdapter(root)
     with pytest.raises(DataSourceBoundaryError):
         adapter.read_table("person")
-
-
-def test_fake_local_model_provider_denies_default_conformance_request() -> None:
-    policy = GenericPlatformAdapter().default_policy_profile()
-    assert_model_provider_adapter_conforms(FakeLocalModelProviderAdapter(policy))
-
-
-def test_fake_local_model_provider_allows_only_policy_endpoint() -> None:
-    policy = GenericPlatformAdapter().default_policy_profile()
-    provider = FakeLocalModelProviderAdapter(policy)
-    decision = provider.evaluate_model_call(
-        ModelCallRequest(
-            endpoint="https://model.local.invalid/v1/chat/completions",
-            capability_tier="supervised",
-            purpose="synthetic model call",
-        )
-    )
-    assert decision.decision == "allow"
-    loopback_decision = provider.evaluate_model_call(
-        ModelCallRequest(
-            endpoint="http://127.0.0.1:8765/v1/chat/completions",
-            capability_tier="supervised",
-            purpose="synthetic loopback model call",
-        )
-    )
-    assert loopback_decision.decision == "allow"
 
 
 def test_local_registry_adapter_conforms() -> None:

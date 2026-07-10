@@ -6,10 +6,6 @@
 # SPDX-License-Identifier: MIT
 #
 
-# This workflow builds the generic image and runs the offline stack smoke test
-# with runtime network disabled through Docker Compose.
-# See design/09-implementation-plan.md.
-
 name: Container Smoke Test
 
 on:
@@ -27,7 +23,7 @@ concurrency:
 
 jobs:
   smoke:
-    name: Offline stack smoke test (${{ matrix.platform }})
+    name: Generic OpenHands smoke (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -46,12 +42,28 @@ jobs:
         uses: docker/setup-buildx-action@v4
       - name: Check Dockerfile
         run: docker buildx build --check --file images/generic/Dockerfile .
-      - name: Check image flavor targets
-        run: docker buildx bake --file docker-bake.hcl --print runtime smoke providers
-      - name: Build the generic image and run the offline stack
+      - name: Check image target
+        run: docker buildx bake --file docker-bake.hcl --print runtime
+      - name: Build the no-weight image and run the isolated OpenHands stack
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: docker compose -f images/generic/compose.yaml run --rm --build heartwood
+      - name: Download and verify CI-only model fixture
+        run: |
+          mkdir -p /tmp/heartwood-model
+          curl --fail --location --show-error --retry 5 \
+            https://huggingface.co/ggml-org/models-moved/resolve/96f460f/tinyllamas/stories260K.gguf \
+            --output /tmp/heartwood-model/stories260K.gguf
+          test "$(stat --format=%s /tmp/heartwood-model/stories260K.gguf)" -eq 1185376
+          echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  /tmp/heartwood-model/stories260K.gguf" | sha256sum --check -
+      - name: Run mounted local inference without network
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          docker compose -f images/generic/compose.yaml run --rm --no-deps
+          --volume /tmp/heartwood-model:/models:ro
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
+          heartwood bash images/generic/scripts/local_inference_smoke.sh
 
   terra-smoke:
     name: Terra image smoke test (linux/amd64)
@@ -68,44 +80,44 @@ jobs:
       - name: Check platform Dockerfile
         run: docker buildx build --check --platform linux/amd64 --file images/platform/Dockerfile .
       - name: Check Terra image targets
-        run: docker buildx bake --file docker-bake.hcl --print terra-runtime terra-smoke terra-smoke-ci
+        run: docker buildx bake --file docker-bake.hcl --print terra-runtime terra-ci
       - name: Build Terra-compatible CI base
         run: >-
           docker buildx build --load --platform linux/amd64
           --tag heartwood-terra-ci-base:local
           --file images/platform/terra-ci-base.Dockerfile
           images/platform
-      - name: Build Terra smoke image with CI base
+      - name: Build no-weight Terra CI image
         run: >-
           docker buildx bake --file docker-bake.hcl --load
-          --set terra-smoke-ci.platform=linux/amd64
-          terra-smoke-ci
+          --set terra-ci.platform=linux/amd64
+          terra-ci
       - name: Run Terra Jupyter contract smoke
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --entrypoint bash
-          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
       - name: Run Terra platform image smoke
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --workdir /opt/heartwood --entrypoint bash
-          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           images/platform/scripts/terra_image_smoke.sh
-      - name: Run Terra offline stack smoke
+      - name: Run Terra OpenHands smoke
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --workdir /opt/heartwood --entrypoint bash
-          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           images/generic/scripts/offline_stack_smoke.sh
       - name: Run Terra Jupyter launch smoke
         run: >-
           bash images/platform/scripts/terra_jupyter_launch_smoke.sh
-          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
       - name: Run Terra Leonardo Jupyter launch smoke
         env:
           HEARTWOOD_TERRA_HOST_PORT: "8001"
           HEARTWOOD_TERRA_JUPYTER_MODE: leonardo
         run: >-
           bash images/platform/scripts/terra_jupyter_launch_smoke.sh
-          ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci

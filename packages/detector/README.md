@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-detector
+# Heartwood Detector
 
-Deterministic, propose-not-commit environment and dataset detection. The probes inspect environment markers and data fingerprints only — no model call, no participant-level data, no side effects — and return a *proposal* (platform, confidence, evidence) for a human to confirm.
+Deterministic, propose-not-commit platform detection. The probes inspect environment markers only — no model call, participant-level data, or side effects — and return a platform proposal with confidence and evidence.
 
-This package currently implements platform detection. Dataset fingerprinting and skill selection follow (see [`design/04-skills.md`](../../design/04-skills.md)).
+The integration fixture supplies a synthetic OMOP fingerprint through a data-source adapter. A normal runtime must report no dataset until a real adapter supplies evidence. Real platform probes and dataset-aware Skill selection are delivery requirements in [04 — Skills And Auto-Detection](../../design/04-skills.md) and the [Delivery Roadmap](../../design/09-implementation-plan.md).

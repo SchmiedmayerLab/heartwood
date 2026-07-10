@@ -12,4 +12,4 @@ SPDX-License-Identifier: MIT
 
 Synthetic fixture linting for Heartwood test data and replay artifacts.
 
-The linter is intentionally narrow in Phase 0B: it catches direct identifiers, common secret shapes, live-data markers, and non-synthetic source markers before fixtures are used by adapter conformance tests, replay tests, or audit examples.
+The linter catches direct identifiers, common secret shapes, live-data markers, and non-synthetic source markers before fixtures are used by adapter conformance tests, replay tests, or audit examples. It is a repository hygiene check, not a de-identification tool.

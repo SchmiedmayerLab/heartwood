@@ -60,6 +60,7 @@ class GenericPlatformAdapter:
                 "https://model.local.invalid/v1/chat/completions",
                 "http://127.0.0.1:8765/v1/chat/completions",
             ),
+            allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
             credential_allowlist=self.credential_allowlist(),
             notes="Generic local policy for synthetic development and replay.",
         )

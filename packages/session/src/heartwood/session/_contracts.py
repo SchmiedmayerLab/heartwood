@@ -33,10 +33,10 @@ class CommandKind(StrEnum):
 class EventKind(StrEnum):
     """Events emitted by a Heartwood session.
 
-    The stream mirrors the agent-server event model so every surface renders the
-    same turns. ``MODEL_CALL_DECISION_RECORDED`` is the egress decision for one
-    model call; ``POLICY_DECISION_RECORDED`` is reserved for non-egress policy
-    decisions.
+    The stream translates OpenHands conversation events so every surface renders
+    the same turns. ``MODEL_CALL_DECISION_RECORDED`` records route authorization
+    before task submission or a continuation that may call the model;
+    ``POLICY_DECISION_RECORDED`` is reserved for other policy decisions.
     """
 
     COMMAND_RECEIVED = "command.received"
@@ -44,6 +44,7 @@ class EventKind(StrEnum):
     APPROVAL_RECORDED = "approval.recorded"
     POLICY_DECISION_RECORDED = "policy.decision.recorded"
     MODEL_CALL_DECISION_RECORDED = "model_call.decision.recorded"
+    USER_MESSAGE_RECORDED = "user_message.recorded"
     AGENT_MESSAGE_EMITTED = "agent_message.emitted"
     TOOL_CALL_PROPOSED = "tool_call.proposed"
     CONFIRMATION_REQUESTED = "confirmation.requested"

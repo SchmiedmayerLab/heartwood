@@ -90,7 +90,7 @@ class GatewayAsgiApp:
                     body=body.decode("utf-8"),
                 )
             )
-            if response.status_code != 404 or gateway_path.startswith("/sessions/"):
+            if response.status_code != 404 or _is_gateway_api_path(gateway_path):
                 await _send_json_response(
                     send, status_code=response.status_code, body=response.body
                 )
@@ -356,6 +356,10 @@ def _gateway_path(path: str, *, static_base_path: str) -> str | None:
     if path.startswith("/sessions/"):
         return path
     return _strip_static_base(path, static_base_path=static_base_path)
+
+
+def _is_gateway_api_path(path: str) -> bool:
+    return path.startswith(("/sessions/", "/settings/")) or path == "/settings"
 
 
 def _normalize_base_path(value: str) -> str:

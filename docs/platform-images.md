@@ -10,49 +10,81 @@ SPDX-License-Identifier: MIT
 
 # Platform Image Extension Guide
 
-Heartwood platform images are derived notebook images for controlled research environments that require a platform-specific base image, home directory, Jupyter prefix, proxy route, registry policy, and launch evidence. The current implemented target is Terra; future Seven Bridges, DNAnexus, or site-specific notebook images must follow the same mechanism instead of creating a parallel Docker path.
+Platform images are thin additions to an existing research-platform base. They must preserve the platform runtime and add the same Heartwood payload, model-profile contract, repository-verified Skills, and no-weight policy as the generic image.
 
-## Extension Contract
+This guide documents the implemented shared extension mechanism. It does not make every declared or future platform a supported deployment; current status is recorded in [Platform Support](platform-support.md), and unimplemented platform work is recorded in the [Delivery Roadmap](../design/09-implementation-plan.md).
 
-Every platform image is defined by six repository surfaces:
+## Source Of Truth
 
-| Surface | Purpose |
-|---|---|
-| `images/platforms.toml` | Source of truth for platform name, base image, platform architecture, home directory, user, Jupyter prefix, proxy behavior, tag names, registry policy, and required evidence. |
-| `images/platform/Dockerfile` | Shared platform-image Dockerfile that keeps the platform base as the final stage, installs Heartwood under `/opt/heartwood`, registers the optional Jupyter kernel, copies packaged docs and web UI assets, and preserves the platform entrypoint. |
-| `docker-bake.hcl` | Build graph for runtime, smoke, CI-smoke, tags, build arguments, supported platforms, manifest media type, attestation policy, and cache behavior. |
-| `images/platform/scripts/verify_registry_manifest.py` | Registry verification tool that reads `images/platforms.toml`, requests the expected manifest media type, follows registry Bearer challenges, verifies expected tags, and checks the platform architecture set and launch-critical image config. |
-| `.github/workflows/container-smoke.yml` and `.github/workflows/container-image.yml` | Pull-request smoke checks and main-branch publication checks for the platform image targets. |
-| `packages/compliance/tests/test_container_assets.py` and `packages/compliance/tests/test_documentation_assets.py` | Static guardrails that keep image, workflow, documentation, tag, secret, and live-validation requirements synchronized. |
+- `images/platforms.toml` declares the base image, architecture, user, home, workdir, entrypoint, ports, Jupyter prefix, proxy behavior, environment contract, registry media types, public tags, model storage, and required evidence.
+- `images/platform/Dockerfile` contains the shared additive build.
+- `docker-bake.hcl` contains one public runtime target and one local CI target per implemented platform.
+- `images/platform/scripts/verify_registry_manifest.py` validates public manifest and image configuration contracts.
+- `.github/workflows/container-smoke.yml` builds the platform path and runs local contract tests.
+- `.github/workflows/container-image.yml` publishes and verifies the real platform-derived image.
 
 ## Add Or Adapt A Platform Image
 
-1. Add a platform entry to `images/platforms.toml`. Record the exact base image, source repository or vendor page, parent image if known, supported architectures, unsupported architectures, home directory, runtime user, Jupyter prefix, proxy mechanism, registry policy, manifest media type, config media type for single-image manifests, non-platform manifest policy for indexes, tags, CI requirement, and live workspace evidence requirement.
-2. Add or extend Bake targets in `docker-bake.hcl`. Use `_platform_common` for shared behavior and a platform-specific common target for base image, base platform, runtime architecture, platform home, user, and Jupyter prefix. Keep runtime images without bundled model artifacts and smoke images with only the tiny verified smoke artifact unless a larger model artifact has completed provenance and license review.
-3. Add CI coverage in `.github/workflows/container-smoke.yml`. Pull-request CI should build a lightweight platform-compatible CI base with the platform's Jupyter entrypoint, notebook config, home directory, port, and launch script shape when the real base is too large or slow for every pull request, then build the smoke target through the shared platform Dockerfile, run `images/platform/scripts/terra_jupyter_contract_smoke.sh` or the platform-specific equivalent, run `images/platform/scripts/terra_image_smoke.sh` or the platform-specific equivalent, run `images/generic/scripts/offline_stack_smoke.sh` with runtime network disabled, and launch Jupyter through both the inherited entrypoint and the platform-control-plane launch script path. Local `--load` smoke targets that use a locally tagged base image must use the Docker Buildx `docker` driver so the builder can resolve that base image from the host Docker daemon. Local `--load` smoke targets must also disable attestations because Docker's local exporter cannot load SBOM/provenance image indexes; generic main-branch published targets should keep SBOM and provenance attestations. Platform published targets may declare a platform-specific manifest media type and attestation exception when the platform image detector cannot read OCI indexes.
-4. Add main-branch publication in `.github/workflows/container-image.yml`. Publish only architectures supported by the selected platform base. Verify generic public tags after publication with `docker buildx imagetools inspect` under an empty Docker config so the check proves anonymous registry access; generic public tags must expose both `linux/amd64` and `linux/arm64`. Verify platform tags with `images/platform/scripts/verify_registry_manifest.py` so CI uses the registry request shape, expected manifest media type, config media type, non-platform entry policy, tag set, architecture set, image user, working directory, entrypoint, exposed port, required environment, and forbidden PATH entries recorded in `images/platforms.toml`; Terra tags must return `application/vnd.docker.distribution.manifest.v2+json` for `linux/amd64` because Leonardo rejects OCI indexes during image auto-detection. Pull the published platform runtime image and run the Jupyter contract and launch smokes before treating the publish job as successful.
-5. Update documentation. Link the platform from `docs/container-images.md`, add or update the platform runbook, and keep `design/09-implementation-plan.md` current with implemented requirements, exclusions, live-validation evidence, and future work.
-6. Add static tests. Tests must assert the base image, supported architecture set, tag names, no baked secrets, Jupyter kernel registration, packaged docs, packaged web UI, CI smoke commands, main-branch publish commands, and live workspace evidence requirements.
-7. Run local verification before opening or updating a pull request:
+1. Pin a platform-maintained base image and document its source, platform support, update cadence, user, home, workdir, entrypoint, service ports, Jupyter paths, and proxy routes.
+2. Add an `images/platforms.toml` entry. Do not encode platform assumptions only in a Dockerfile or workflow.
+3. Reuse `images/platform/Dockerfile` when the platform can express its differences through build arguments. Add another Dockerfile only when the base requires materially different installation mechanics.
+4. Keep the Heartwood payload list aligned with the generic image: lockfile, packages, fixtures, Skills, evaluations, image scripts, built web UI, README, documentation, and design record.
+5. Keep model weights and credentials out of every layer. Define a platform-persistent model cache and runtime credential mechanisms.
+6. Preserve the base entrypoint and service runtime. Register Heartwood as a separate kernel or tool environment instead of replacing the platform Python.
+7. Add a public Bake target and a local CI target. Keep `--set <target>.platform=<architecture>` on `--load` commands and use the Docker driver when a locally tagged CI base is required.
+8. Declare the registry manifest media type, config media type, supported platforms, and non-platform manifest policy. Do not assume every control plane accepts an Open Container Initiative index.
+9. Extend the registry verifier and tests when the new platform uses a different manifest or authentication contract.
+10. Run the required synthetic live evidence pass before calling the platform supported.
+
+## Shared Application Contract
+
+Platform images must expose:
+
+- `heartwood` and the Heartwood Python executable;
+- the packaged web UI and notebook bridge;
+- the OpenHands SDK and coding tools behind the Heartwood backend adapter;
+- the same non-secret model settings and reviewed artifact catalog;
+- verified bundled Skills loaded through the OpenHands native loader;
+- route policy, event persistence, action confirmation, replay, and scrubbed audit export;
+- an explicit persistent location for sessions, settings, OpenHands state, and optional model artifacts.
+
+Do not add a platform-specific agent loop, provider client, model settings format, web contract, or Skill loader. Platform-specific behavior belongs in base-image preservation, identity, route policy, storage, proxy, and deployment adapters.
+
+## Continuous Integration
+
+The pull-request platform target must test:
+
+- Dockerfile checks, including secret-in-argument warnings;
+- no model weight build arguments or download layers;
+- image user, workdir, entrypoint, exposed ports, and required environment;
+- platform Python and Jupyter precedence;
+- Heartwood kernel registration;
+- writable platform home and Heartwood persistent paths;
+- inherited and control-plane-specific Jupyter launch routes;
+- packaged web assets and notebook API;
+- model-profile validation and a real OpenHands conversation against the no-network loopback fixture;
+- repository-verified Skill loading and scrubbed audit export.
+
+Local-only CI load targets should not include attestations because Docker's local image exporter does not load manifest lists or attested image indexes. Public generic targets retain attestations; platform targets follow the declared control-plane compatibility contract.
+
+## Registry Verification
+
+Run:
 
 ```bash
-docker buildx build --check --platform linux/amd64 --file images/platform/Dockerfile .
-docker buildx bake --file docker-bake.hcl --print terra-runtime terra-smoke terra-smoke-ci
-python3 images/platform/scripts/verify_registry_manifest.py --manifest images/platforms.toml --platform terra --image-name ghcr.io/schmiedmayerlab/heartwood --git-sha <published-git-sha>
-docker buildx bake --file docker-bake.hcl --load --set terra-smoke-ci.platform=linux/amd64 terra-smoke-ci
-docker run --rm --platform linux/amd64 --network none --entrypoint bash ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
-docker run --rm --platform linux/amd64 --network none --workdir /opt/heartwood --entrypoint bash ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci images/platform/scripts/terra_image_smoke.sh
-docker run --rm --platform linux/amd64 --network none --workdir /opt/heartwood --entrypoint bash ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci images/generic/scripts/offline_stack_smoke.sh
-bash images/platform/scripts/terra_jupyter_launch_smoke.sh ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
-HEARTWOOD_TERRA_HOST_PORT=8001 HEARTWOOD_TERRA_JUPYTER_MODE=leonardo bash images/platform/scripts/terra_jupyter_launch_smoke.sh ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke-ci
+python3 images/platform/scripts/verify_registry_manifest.py \
+  --manifest images/platforms.toml \
+  --platform <platform-id> \
+  --image-name <registry/repository> \
+  --git-sha <published-git-sha>
 ```
 
-Replace the target and tag names when adding a new platform. Keep `--set <target>.platform=<architecture>` on any `--load` Bake command, use the Docker driver when the build depends on a locally tagged base image, and keep local-only CI load targets without attestations, because Docker's local image exporter does not load manifest lists or attested image indexes.
+The verifier uses an empty authentication state when called from publication CI, follows a Bearer challenge for anonymous registry access, sends the declared Accept header, and validates manifest media type, config media type, platform set, non-platform manifest policy, user, workdir, entrypoint, ports, and required environment.
 
-## Platform Variants
+Terra tags must return `application/vnd.docker.distribution.manifest.v2+json`. Leonardo rejects an Open Container Initiative index even when `docker manifest inspect` can read it.
 
-Use a new Bake target when the base image, bundled model policy, runtime architecture, or publication tag changes. Use a new `images/platforms.toml` platform entry when the platform home directory, notebook service path, entrypoint, exposed notebook port, control-plane launch script, proxy behavior, identity headers, registry policy, or live validation evidence changes. A site-specific Terra base can inherit the Terra platform entry only if it preserves `/home/jupyter`, `/opt/conda`, the Terra notebook entrypoint behavior, `/etc/jupyter/scripts/run-jupyter.sh`, the `/notebooks/...` service path, and the same proxy shape; otherwise add a separate platform entry and evidence checklist.
+## Platform Promotion Gate
 
-## Required Live Evidence
+Use synthetic data only. Record the image and base digests, platform shape, persistent storage, startup and resume timing, service route, proxy behavior, kernel visibility, model-profile validation, credential-reference mechanism without values, optional model digest, one coding-agent conversation and action decision, CLI and notebook replay counts, scrubbed audit export, runtime network posture, and platform identity binding.
 
-Before documenting a platform image as supported in that live platform, record the custom image digest, selected base image digest, VM shape, disk size, startup time, notebook home behavior, Jupyter kernel visibility, proxy URL shape, one synthetic researcher web UI conversation interaction showing user prompt, model preview, agent message, and trace summary, CLI replay count, notebook API replay count, audit export path, reviewer packet path, runtime network posture, and any identity or proxy headers exposed to Heartwood. Synthetic data only is allowed for this validation until the platform policy and compliance evidence explicitly permit controlled data.
+Do not promote a platform to supported based only on local CI. Platform control-plane behavior, identity injection, proxy rewriting, persistent storage, and autopause/resume require a real workspace validation.
