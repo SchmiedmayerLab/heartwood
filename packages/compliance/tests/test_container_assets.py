@@ -943,6 +943,16 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert "IMAGE_TAG_SUFFIX: -${{ matrix.suffix }}" in workflow
     assert "docker buildx bake --file docker-bake.hcl --push" in workflow
     assert "Free runner disk for generic image" in workflow
+    generic_disk_step = _workflow_step_block(
+        workflow,
+        "Free runner disk for generic image",
+        "Build and push architecture image flavors",
+    )
+    terra_disk_step = _workflow_step_block(
+        workflow,
+        "Free runner disk for Terra image",
+        "Build and push Terra image flavors",
+    )
     terra_build_step = workflow.split("- name: Build and push Terra image flavors", 1)[1].split(
         "- name: Verify Terra image tags", 1
     )[0]
@@ -952,8 +962,14 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     )
     assert "Build Terra image (linux/amd64)" in workflow
     assert "Free runner disk for Terra image" in workflow
-    assert "sudo rm -rf /usr/share/dotnet" in workflow
-    assert "docker system prune --all --force" in workflow
+    for disk_step in (generic_disk_step, terra_disk_step):
+        assert "sudo rm -rf /usr/share/dotnet" in disk_step
+        assert "sudo rm -rf /usr/local/lib/android" in disk_step
+        assert "sudo rm -rf /opt/ghc" in disk_step
+        assert "sudo rm -rf /opt/hostedtoolcache/CodeQL" in disk_step
+        assert "docker system prune --all --force\n" in disk_step
+        assert "docker system prune --all --force --volumes" not in disk_step
+        assert "df -h" in disk_step
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
     assert '--set terra-runtime.platform="linux/amd64"' in workflow
     assert '--set terra-smoke.platform="linux/amd64"' in workflow
@@ -966,8 +982,15 @@ def test_container_image_workflow_publishes_ghcr_tags() -> None:
     assert '--image-channel "${IMAGE_CHANNEL}"' in workflow
     assert '--git-sha "${GIT_SHA}"' in workflow
     assert "Free runner disk before Terra publish smoke" in workflow
-    assert "docker buildx prune --all --force" in workflow
-    assert "docker system prune --all --force --volumes" in workflow
+    terra_publish_smoke_disk_step = _workflow_step_block(
+        workflow,
+        "Free runner disk before Terra publish smoke",
+        "Pull published Terra smoke image",
+    )
+    assert "docker buildx prune --all --force" in terra_publish_smoke_disk_step
+    assert "docker system prune --all --force --volumes" in terra_publish_smoke_disk_step
+    assert "sudo rm -rf /usr/share/dotnet" not in terra_publish_smoke_disk_step
+    assert "df -h" in terra_publish_smoke_disk_step
     assert "Pull published Terra smoke image" in workflow
     assert "Pull published Terra runtime image" not in workflow
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke"' in workflow
@@ -1045,6 +1068,10 @@ def _bake_target_block(bake: str, target: str) -> str:
     if next_target == -1:
         return bake[start:]
     return bake[start:next_target]
+
+
+def _workflow_step_block(workflow: str, step_name: str, next_step_name: str) -> str:
+    return workflow.split(f"- name: {step_name}", 1)[1].split(f"- name: {next_step_name}", 1)[0]
 
 
 class _RegistryHandler(BaseHTTPRequestHandler):
