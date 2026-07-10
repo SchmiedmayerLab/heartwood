@@ -37,7 +37,7 @@ jobs:
       - name: Install the pinned Python toolchain
         run: uv python install
       - name: Install the workspace (locked)
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
       - name: Check formatting
         run: uv run ruff format --check .
       - name: Lint
