@@ -229,11 +229,49 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "actions/download-artifact@v8" in publish
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}"' in publish
     assert '"${IMAGE_NAME}:sha-${GIT_SHA}"' in publish
-    assert 'docker pull "${IMAGE_NAME}:edge"' in publish
-    assert "Run published generic OpenHands smoke" in publish
-    assert "docker run --rm --init --network none --read-only" in publish
-    assert "edge-terra" in publish
+    assert 'docker pull --platform "${DOCKER_PLATFORM}" "${CANDIDATE_REFERENCE}"' in publish
+    assert "Run staged generic OpenHands smoke" in publish
+    assert "Run staged generic local inference smoke" in publish
+    assert 'docker run --rm --init --platform "${DOCKER_PLATFORM}"' in publish
+    assert "--network none --read-only" in publish
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"' in publish
     assert "verify_registry_manifest.py" in publish
+    assert "--prefer-index=false" in publish
+    assert '--reference "${CANDIDATE_DIGEST}"' in publish
+    assert publish.count("^sha256:[0-9a-f]{64}$") == 4
+    assert publish.count("if: github.ref == 'refs/heads/main'") == 3
+    assert "immutable generic commit tag already exists with a different manifest" in publish
+    assert "newly created generic commit tag does not match validated candidate manifest" in publish
+    assert "immutable Terra commit tag already exists with a different digest" in publish
+    assert "newly created Terra commit tag does not match staged candidate digest" in publish
+    assert (
+        'if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then'
+        in publish
+    )
+    assert 'if commit_digest="$(docker buildx imagetools inspect' not in publish
+    assert "refusing to move the generic channel tag from a stale main workflow" in publish
+    assert "refusing to move the Terra channel tag from a stale main workflow" in publish
+    assert publish.index("Build and stage image by digest") < publish.index(
+        "Run staged generic OpenHands smoke"
+    )
+    assert publish.index("Run staged generic local inference smoke") < publish.index(
+        "Upload validated image digest"
+    )
+    assert publish.index("Upload validated image digest") < publish.index(
+        "Create and verify immutable generic commit tag"
+    )
+    assert publish.index("Create and verify immutable generic commit tag") < publish.index(
+        "Promote generic moving tag"
+    )
+    assert publish.index("Build and stage Terra image by digest") < publish.index(
+        "Run staged Terra OpenHands smoke"
+    )
+    assert publish.index("Run staged Terra local inference smoke") < publish.index(
+        "Create and verify immutable Terra commit tag"
+    )
+    assert publish.index("Create and verify immutable Terra commit tag") < publish.index(
+        "Promote Terra moving tag"
+    )
     for stale_tag in ("edge-smoke", "edge-providers", "coder-7b", '-amd64"', '-arm64"'):
         assert stale_tag not in publish
 
@@ -251,7 +289,12 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
 
 
 def test_platform_registry_verifier_checks_only_public_terra_tags(tmp_path: Path) -> None:
-    _RegistryHandler.accepted_tags = {"edge-terra", "sha-abc123-terra"}
+    candidate_digest = "sha256:" + ("c" * 64)
+    _RegistryHandler.accepted_tags = {
+        "edge-terra",
+        "sha-abc123-terra",
+        candidate_digest,
+    }
     _RegistryHandler.requested_accept_headers = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _RegistryHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -301,14 +344,80 @@ JUPYTER_PATH = ["/opt/conda/share/jupyter"]
             capture_output=True,
             text=True,
         )
+        candidate = subprocess.run(
+            [
+                sys.executable,
+                str(_repo_root() / "images/platform/scripts/verify_registry_manifest.py"),
+                "--manifest",
+                str(manifest),
+                "--platform",
+                "terra",
+                "--reference",
+                candidate_digest,
+                "--registry-scheme",
+                "http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        invalid = subprocess.run(
+            [
+                sys.executable,
+                str(_repo_root() / "images/platform/scripts/verify_registry_manifest.py"),
+                "--manifest",
+                str(manifest),
+                "--platform",
+                "terra",
+                "--reference",
+                "../invalid",
+                "--registry-scheme",
+                "http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        invalid_manifest = tmp_path / "invalid-platforms.toml"
+        invalid_manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                'runtime_tag = "edge-terra"',
+                'runtime_tag = "invalid:tag"',
+            ),
+            encoding="utf-8",
+        )
+        invalid_declared_tag = subprocess.run(
+            [
+                sys.executable,
+                str(_repo_root() / "images/platform/scripts/verify_registry_manifest.py"),
+                "--manifest",
+                str(invalid_manifest),
+                "--platform",
+                "terra",
+                "--git-sha",
+                "abc123",
+                "--registry-scheme",
+                "http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert candidate.returncode == 0, candidate.stdout + candidate.stderr
+    assert invalid.returncode != 0
+    assert "invalid registry tag or sha256 digest" in invalid.stderr
+    assert invalid_declared_tag.returncode != 0
+    assert "invalid registry tag or sha256 digest" in invalid_declared_tag.stderr
     assert completed.stdout.count("Verifying") == 2
+    assert f"test/heartwood@{candidate_digest}" in candidate.stdout
     assert _RegistryHandler.requested_accept_headers == [
+        _RegistryHandler.manifest_media_type,
         _RegistryHandler.manifest_media_type,
         _RegistryHandler.manifest_media_type,
     ]

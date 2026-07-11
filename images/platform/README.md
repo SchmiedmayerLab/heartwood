@@ -16,7 +16,7 @@ The platform Dockerfile adds the same Heartwood application payload as the gener
 
 The public Terra tags are `edge-terra` and `sha-<git-sha>-terra`. They contain no model weights or credentials. Optional local artifacts belong in `/home/jupyter/heartwood-workspace/models`; hosted or managed model services are configured through the same non-secret profile contract as the generic image.
 
-Terra tags are `linux/amd64` Docker schema-2 manifests because the selected Terra base is AMD64-only and Leonardo does not accept an Open Container Initiative index during image auto-detection. Main publication validates the public manifest and runtime configuration, then runs Jupyter contract, inherited entrypoint, Leonardo route, and OpenHands integration smokes.
+Terra tags are `linux/amd64` Docker schema-2 manifests because the selected Terra base is AMD64-only and Leonardo does not accept an Open Container Initiative index during image auto-detection. Main publication stages one untagged digest, validates its registry and runtime configuration, runs the Jupyter contract, inherited entrypoint, Leonardo route, OpenHands, and mounted local-inference smokes against that digest, creates and verifies the immutable commit tag, and moves `edge-terra` last.
 
 Pull requests use `images/platform/terra-ci-base.Dockerfile` only as a lightweight surrogate for the large upstream Terra base. Heartwood itself is still built through `images/platform/Dockerfile`, and the surrogate provides real Jupyter packages and Terra-style launch configuration. `images/platforms.toml` is the source of truth for platform contracts and evidence.
 

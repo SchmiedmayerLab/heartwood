@@ -81,6 +81,8 @@ python3 images/platform/scripts/verify_registry_manifest.py \
 
 The verifier uses an empty authentication state when called from publication CI, follows a Bearer challenge for anonymous registry access, sends the declared Accept header, and validates manifest media type, config media type, platform set, non-platform manifest policy, user, workdir, entrypoint, ports, and required environment.
 
+Publication CI may pass `--reference <tag-or-sha256-digest>` to validate one staged candidate or immutable tag before the moving platform tag exists. Platform workflows must run their full image and launch smoke suite against the staged digest, create and verify the immutable commit tag, and update the moving tag only as the final promotion step.
+
 Terra tags must return `application/vnd.docker.distribution.manifest.v2+json`. Leonardo rejects an Open Container Initiative index even when `docker manifest inspect` can read it.
 
 ## Platform Promotion Gate
