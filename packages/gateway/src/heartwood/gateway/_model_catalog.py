@@ -29,6 +29,8 @@ ModelAvailability: TypeAlias = Literal["available", "experimental", "unsupported
 _CONNECTION_PROTOCOLS = {"anthropic", "openai", "openai-compatible", "static"}
 _CONNECTION_SOURCES = {"built-in", "platform", "user"}
 _CREDENTIAL_KINDS = {"environment", "file", "managed-identity", "none"}
+_CATALOG_TIMEOUT_SECONDS = 30.0
+_CATALOG_MAX_RETRIES = 1
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 _CONNECTION_FIELDS = {
@@ -545,14 +547,21 @@ def _list_openai_models(
     api_key: str | None,
 ) -> Sequence[ProviderModel]:
     module = import_module("openai")
-    options: dict[str, object] = {"api_key": api_key or "not-required"}
+    options: dict[str, object] = {
+        "api_key": api_key or "not-required",
+        "max_retries": _CATALOG_MAX_RETRIES,
+        "timeout": _CATALOG_TIMEOUT_SECONDS,
+    }
     if connection.base_url is not None:
         options["base_url"] = connection.base_url
     client = module.OpenAI(**options)
-    return tuple(
-        ProviderModel(model_id=cast(str, model.id), display_name=None)
-        for model in client.models.list()
-    )
+    try:
+        return tuple(
+            ProviderModel(model_id=cast(str, model.id), display_name=None)
+            for model in client.models.list()
+        )
+    finally:
+        client.close()
 
 
 def _list_anthropic_models(
@@ -562,17 +571,24 @@ def _list_anthropic_models(
     if not api_key:
         raise ModelCatalogError("model connection credential is unavailable")
     module = import_module("anthropic")
-    options: dict[str, object] = {"api_key": api_key}
+    options: dict[str, object] = {
+        "api_key": api_key,
+        "max_retries": _CATALOG_MAX_RETRIES,
+        "timeout": _CATALOG_TIMEOUT_SECONDS,
+    }
     if connection.base_url is not None:
         options["base_url"] = connection.base_url
     client = module.Anthropic(**options)
-    return tuple(
-        ProviderModel(
-            model_id=cast(str, model.id),
-            display_name=cast(str | None, getattr(model, "display_name", None)),
+    try:
+        return tuple(
+            ProviderModel(
+                model_id=cast(str, model.id),
+                display_name=cast(str | None, getattr(model, "display_name", None)),
+            )
+            for model in client.models.list()
         )
-        for model in client.models.list()
-    )
+    finally:
+        client.close()
 
 
 def _model_compatibility(

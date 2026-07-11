@@ -120,7 +120,7 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "no model capability claim without benchmark evidence" in roadmap
     assert "Do not place compliance evidence packages" in roadmap
     assert "gateway-owned session lifecycle" in readme
-    assert "Boundary evidence and workflow progress remain planned" in readme
+    assert "Boundary and workflow labels require typed gateway evidence" in readme
 
 
 def test_project_markdown_contains_no_process_artifacts() -> None:

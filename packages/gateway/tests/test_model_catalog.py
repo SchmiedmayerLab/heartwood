@@ -216,7 +216,8 @@ def test_catalog_cache_expires_before_direct_selection(
 def test_official_sdk_listers_iterate_all_returned_pages_and_preserve_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created: dict[str, object] = {}
+    created: list[dict[str, object]] = []
+    closed: list[bool] = []
 
     class Models:
         def list(self) -> list[SimpleNamespace]:
@@ -227,8 +228,11 @@ def test_official_sdk_listers_iterate_all_returned_pages_and_preserve_names(
 
     class Client:
         def __init__(self, **options: object) -> None:
-            created.update(options)
+            created.append(options)
             self.models = Models()
+
+        def close(self) -> None:
+            closed.append(True)
 
     def fake_import(name: str) -> SimpleNamespace:
         if name == "openai":
@@ -256,7 +260,11 @@ def test_official_sdk_listers_iterate_all_returned_pages_and_preserve_names(
 
     assert [model.model_id for model in openai.models] == ["model-a", "model-b"]
     assert [model.display_name for model in anthropic.models] == ["Model A", "Model B"]
-    assert created["api_key"] == "anthropic-secret"
+    assert created == [
+        {"api_key": "openai-secret", "max_retries": 1, "timeout": 30.0},
+        {"api_key": "anthropic-secret", "max_retries": 1, "timeout": 30.0},
+    ]
+    assert closed == [True, True]
 
 
 def test_provider_failures_are_content_minimized() -> None:

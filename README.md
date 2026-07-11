@@ -32,13 +32,13 @@ Participant-level data must remain within an institution-approved deployment bou
 
 See [Architecture](design/03-architecture.md), [Security And Compliance](design/05-security-compliance.md), and the [Delivery Roadmap](design/09-implementation-plan.md) for the complete contract.
 
-## Current Status
+## Capabilities And Limitations
 
-The generic runtime, OpenHands SDK integration, two action-confirmation modes, model connections and profiles, reviewed local-artifact workflow, repository-verified Skill loading, CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, audit path, multi-platform generic image, and Terra-derived image are implemented and CI-validated with synthetic data. The project is pre-release: the Terra image has not completed its live workspace evidence pass, normal runtime construction still uses the generic platform policy and synthetic OMOP data-source fixture, concurrent independent writers to one file-backed session are not supported, and no platform path is institution-approved by the repository.
+Heartwood provides an OpenHands SDK runtime, two researcher-selectable action-confirmation modes, model connections and advanced profiles, reviewed local-artifact downloads, repository-verified Skill loading, a CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, content-minimized audit export, a multi-platform generic image, and a Terra-derived image. Public examples and automated validation use synthetic data.
 
-The web UI provides persisted session creation and selection, title editing, typed context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, Skills, audit activity, installed local models, platform-provided research services, cloud and custom API connections, advanced profiles, and byte-level local-model download progress. Boundary evidence and workflow progress remain planned until typed gateway events exist, and representative-user acceptance has not been completed.
+The default runtime uses the generic platform policy and synthetic OMOP data-source fixture. File-backed sessions support one active writer, and the repository does not confer institutional approval for any deployment. Boundary and workflow labels require typed gateway evidence; absent evidence remains unknown rather than being inferred by the web UI.
 
-See [Platform Support](docs/platform-support.md) for the current support matrix. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets until their separate adapters, images, policies, and live evidence are implemented.
+See [Platform Support](docs/platform-support.md) for platform-specific evidence and limitations. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets rather than supported platforms.
 
 ## Local Development
 
