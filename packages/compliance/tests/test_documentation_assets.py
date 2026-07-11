@@ -183,6 +183,7 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     assert "Public commit and moving tags are promotion outputs" in container
     assert "publication jobs run only for the `main` ref" in container
     assert "pull requests continue to run CI validation" in container
+    assert "checks the current `main` commit immediately before" in container
     assert "candidate-validation failure leaves the candidate untagged" in container
     assert "promotion failure may leave the validated immutable commit tag" in container
     assert "reachability graph" in container

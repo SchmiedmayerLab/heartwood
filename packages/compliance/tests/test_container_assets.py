@@ -238,10 +238,17 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "verify_registry_manifest.py" in publish
     assert "--prefer-index=false" in publish
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
-    assert publish.count("^sha256:[0-9a-f]{64}$") == 2
+    assert publish.count("^sha256:[0-9a-f]{64}$") == 4
     assert publish.count("if: github.ref == 'refs/heads/main'") == 3
     assert "immutable generic commit tag already exists with a different manifest" in publish
+    assert "newly created generic commit tag does not match validated candidate manifest" in publish
     assert "immutable Terra commit tag already exists with a different digest" in publish
+    assert "newly created Terra commit tag does not match staged candidate digest" in publish
+    assert (
+        'if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then'
+        in publish
+    )
+    assert 'if commit_digest="$(docker buildx imagetools inspect' not in publish
     assert "refusing to move the generic channel tag from a stale main workflow" in publish
     assert "refusing to move the Terra channel tag from a stale main workflow" in publish
     assert publish.index("Build and stage image by digest") < publish.index(

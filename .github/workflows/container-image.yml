@@ -186,15 +186,16 @@ jobs:
               )
             )
           ' /tmp/generic-candidate-index.json
+          proposed_manifest="$(jq -cS '.manifests |= sort_by(.digest)' /tmp/generic-candidate-index.json)"
           commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}"
           if raw="$(docker buildx imagetools inspect --raw "${commit_ref}" 2>/dev/null)"; then
-            proposed_manifest="$(jq -cS '.manifests |= sort_by(.digest)' /tmp/generic-candidate-index.json)"
             existing_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
             if [ "${existing_manifest}" != "${proposed_manifest}" ]; then
               echo "immutable generic commit tag already exists with a different manifest" >&2
               exit 1
             fi
-            commit_digest="$(docker buildx imagetools inspect "${commit_ref}" | awk '$1 == "Digest:" {print $2; exit}')"
+            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
           else
             docker buildx imagetools create \
               --tag "${commit_ref}" \
@@ -202,9 +203,16 @@ jobs:
               "${sources[@]}"
             commit_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/generic-commit-metadata.json)"
             raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
+            published_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
+            if [ "${published_manifest}" != "${proposed_manifest}" ]; then
+              echo "newly created generic commit tag does not match validated candidate manifest" >&2
+              exit 1
+            fi
           fi
-          test "${commit_digest}" != "null"
-          test -n "${commit_digest}"
+          if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "generic commit tag returned an invalid image digest: ${commit_digest}" >&2
+            exit 1
+          fi
           jq -e '
             ([
               .manifests[]
@@ -342,11 +350,10 @@ jobs:
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
           commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-terra"
-          if commit_digest="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null | awk '$1 == "Digest:" {print $2; exit}')"; then
-            if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
-              echo "immutable Terra commit tag already exists with a different digest" >&2
-              exit 1
-            fi
+          commit_tag_existed="false"
+          if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then
+            commit_tag_existed="true"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
           else
             docker buildx imagetools create --prefer-index=false \
               --tag "${commit_ref}" \
@@ -354,8 +361,18 @@ jobs:
               "${CANDIDATE_REFERENCE}"
             commit_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/terra-commit-metadata.json)"
           fi
-          test "${commit_digest}" != "null"
-          test -n "${commit_digest}"
+          if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Terra commit tag returned an invalid image digest: ${commit_digest}" >&2
+            exit 1
+          fi
+          if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
+            if [ "${commit_tag_existed}" = "true" ]; then
+              echo "immutable Terra commit tag already exists with a different digest" >&2
+            else
+              echo "newly created Terra commit tag does not match staged candidate digest" >&2
+            fi
+            exit 1
+          fi
           python3 images/platform/scripts/verify_registry_manifest.py \
             --manifest images/platforms.toml \
             --platform terra \
