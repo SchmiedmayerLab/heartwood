@@ -199,6 +199,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
 
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     scripts = (
+        "images/generic/scripts/capable_model_e2e.sh",
         "images/generic/scripts/offline_stack_smoke.sh",
         "images/generic/scripts/container_persistence_smoke.sh",
         "images/generic/scripts/local_inference_smoke.sh",
@@ -320,6 +321,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert offline_guide.count("uid=10001,gid=10001,mode=0700") == 2
     assert "len(terminal_executions) != 1" in capable_model
+    assert 'f"http://127.0.0.1:{port}/health"' in capable_model
     assert "cohort_path.is_file()" in capable_model
     assert 'summary["source_participant_count"] != 24' in capable_model
     assert 'summary["participant_count"] != 20' in capable_model

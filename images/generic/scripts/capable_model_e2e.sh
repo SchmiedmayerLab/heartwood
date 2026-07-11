@@ -17,6 +17,7 @@ transcript="${HEARTWOOD_TRANSCRIPT:-${state_root}/transcript.txt}"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${state_root}/llama-server.log}"
 command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-600}"
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-/opt/heartwood}"
+runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 cohort_path="${state_root}/workspaces/${session_id}/cohort-summary.json"
 events_path="${workspace}/${session_id}/events.jsonl"
 
@@ -30,6 +31,7 @@ export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
 export HEARTWOOD_LOCAL_MODEL_ALIAS="heartwood-local-runtime"
 export HEARTWOOD_LOCAL_MODEL_CONTEXT="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-8192}"
 export HEARTWOOD_LOCAL_MODEL_THREADS="${HEARTWOOD_LOCAL_MODEL_THREADS:-8}"
+export HEARTWOOD_LOCAL_RUNTIME_PORT="${runtime_port}"
 export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
@@ -50,17 +52,26 @@ cleanup() {
 trap cleanup EXIT
 
 python - <<'PY'
-import socket
+import os
 import time
+import urllib.error
+import urllib.request
 
+port = int(os.environ["HEARTWOOD_LOCAL_RUNTIME_PORT"])
 deadline = time.time() + 180
+last_error = None
 while time.time() < deadline:
     try:
-        with socket.create_connection(("127.0.0.1", 8765), timeout=0.5):
-            raise SystemExit(0)
-    except OSError:
-        time.sleep(0.5)
-raise SystemExit("mounted capable-model runtime did not become ready")
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=2
+        ) as response:
+            if response.status == 200:
+                break
+    except (OSError, urllib.error.URLError) as error:
+        last_error = error
+        time.sleep(0.2)
+else:
+    raise SystemExit(f"mounted capable-model runtime did not become ready: {last_error}")
 PY
 
 run_heartwood() {
