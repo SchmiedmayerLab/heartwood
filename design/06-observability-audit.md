@@ -8,40 +8,45 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 06 — Observability, audit, and feedback
+# 06 — Observability, Audit, And Feedback
 
-## The audit record
+## Two Records
 
-The agent core is event-sourced: every agent message, tool call, model call, and user input is an immutable event appended to the agent-server log persisted on the workspace disk (via the SDK `FileStore`). heartwood keeps a separate hash-chained **audit log derived from the translated session events** — execution substrate versus compliance record. This yields deterministic replay, pause/resume/fork, and export without extra machinery. Per session, heartwood records:
+OpenHands persists conversation state for execution and resume. Heartwood translates the relevant conversation events into its versioned session command/event stream and derives a separate hash-chained audit log. The OpenHands store is the execution substrate; the Heartwood log is the product and compliance record consumed by the CLI, notebook bridge, web UI, replay, and export.
 
-- **Model calls** — endpoint, token counts, policy decision, latency (content is not logged by default).
-- **Tool + code execution** — tool, command/code, exit status (data values are referenced, not copied).
-- **Skill activations** — skill/sub-agent, detection evidence and confidence, and the human approval that authorized it.
-- **Egress decisions** — every allowed and denied network attempt.
-- **Human interactions** — confirmations, rejections, manual picks.
+Per session, Heartwood records:
 
-This one record serves reproducibility, the egress attestation, and debugging.
+- commands and actor identity;
+- platform and dataset detection proposals with evidence and confidence;
+- selected model profile identifier, endpoint, capability tier, action-confirmation mode, and route decision without credentials;
+- researcher and agent message events in the in-boundary session stream;
+- proposed tool name and risk in both records, with the model-generated action summary retained only in the in-boundary session stream;
+- confirmation request and allow-once or reject result when the selected mode requires review;
+- tool completion status in both records, with detailed result presentation retained only in the in-boundary session stream;
+- Skill identity, trust, verification, and installation decision when applicable;
+- export request, policy decision, and attestation metadata, with filesystem destinations scrubbed from the exported audit record;
+- errors without prompt, response, secret, or row content.
 
-## Tamper-evidence
+The exported audit record omits message content, model-generated action summaries, filesystem paths, row values, and sensitive tool payloads. These fields remain available only where required in the in-boundary operational state.
 
-Each event carries the hash of the prior event (a chained log), so any retroactive edit breaks the chain and is detectable; the chain head is checkpointed. Exports are Sigstore-signed, and an authoritative off-VM copy makes local tampering moot. Where a researcher has root on the VM, local immutability cannot be guaranteed — hash-chaining makes tampering **detectable** and signed export provides the authoritative record; this is documented rather than overclaimed.
+## Tamper Evidence
 
-## Researcher-facing activity view
+Each Heartwood audit event includes the previous event hash. Editing, deleting, or reordering persisted records breaks chain verification. This detects local modification but does not prevent a user with filesystem control from deleting the entire record. Deployment-owned signing, checkpointing, and authoritative copies are separate controls required where institutional policy demands them.
 
-The CLI, notebook, and researcher web UI render the same plain-language trace: "detected OMOP (0.82) → loaded `omop-cohort-builder` (approved) → wrote and ran this query in the sandbox → called Claude on Vertex (in-perimeter) → returned aggregate counts." This is what makes the system inspectable for a non-technical user without reading raw logs.
+## Researcher Activity
 
-## Export and improvement loop
+The CLI, notebook, and web UI render the same plain-language sequence from the shared event stream. The conversation remains primary; route policy, selected confirmation mode, Skill identity, action risk, confirmations, tool status, and export details are available without forcing a researcher to approve deployment policy or repository-verified Skill activation repeatedly. Auto-approved low-risk actions still produce proposed-action and execution events, so reduced prompting does not remove activity or audit visibility.
 
-Field experience improves skills, prompts, and detection **without moving PHI**:
+## Replay And Resume
 
-1. **Consented, researcher-initiated export** — no silent telemetry.
-2. **PHI scrub + reduction** — the export keeps the *trajectory skeleton* (task, decision sequence, model reasoning, errors/recovery, timings, quality ratings) and strips data values; a scrubber redacts PHI-shaped content.
-3. **Human validation gate** — the researcher (and a reviewer where required) confirms the artifact is PHI-free and aggregate-only before it leaves the perimeter, mirroring normal result-export review.
-4. **Out-of-band aggregation** — validated trajectories become replay tests ([07](07-testing-eval.md)), drive skill/detector fixes, and refine prompts/policy.
-5. **Improvements ship back** as signed skills / a new image — closing the loop with no PHI ever leaving the boundary.
+Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, and pending action. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
 
-In a fully air-gapped site, export is a manual, reviewed file carried out under the platform's existing export controls; its value is that the artifact is already structured for improvement.
+## Improvement Export
 
-## Anti-goals
+Future field-feedback export must be researcher initiated and separately authorized. It may retain a reduced trajectory skeleton, decisions, timings, errors, recovery, and ratings only after deterministic scrubbing and human confirmation that the artifact contains no protected health information. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
 
-No hidden telemetry; nothing leaves the perimeter without explicit, reviewed, consented export; no raw-PHI logging by default; no network service required to produce or store the audit trail.
+Validated synthetic or scrubbed trajectories can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; cryptographically signed Skill releases can join that path only after the distribution controls in [04](04-skills.md) are implemented.
+
+## Anti-Goals
+
+Heartwood does not send silent telemetry, export raw protected data, treat local hash chaining as immutable storage, or require a network service to persist and inspect the audit trail.

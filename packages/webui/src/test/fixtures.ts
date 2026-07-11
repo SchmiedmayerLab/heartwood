@@ -38,41 +38,43 @@ export const syntheticEvents = (): SessionEvent[] => [
       evidence: ["generic fallback"],
     },
   }),
-  event(2, "model_call.decision.recorded", {
+  event(2, "user_message.recorded", {
+    actor_id: "human",
+    command_id: "session-test-chat-000002",
+    content: "Inspect the synthetic workspace",
+  }),
+  event(3, "model_call.decision.recorded", {
     decision: {
       capability_tier: "supervised",
       decision: "allow",
       decision_id: "decision-synthetic-model-call",
       endpoint: "http://127.0.0.1:8765/v1/chat/completions",
       policy_profile_id: "generic-default",
-      reason: "endpoint and capability tier are allowed",
+      reason: "model route policy allows the configured profile",
     },
-    provider_route: {
-      auth: "none",
+    model_profile: {
+      backend_id: "openhands-sdk",
+      profile_id: "local-smoke",
       capability_tier: "supervised",
-      endpoint: "http://127.0.0.1:8765/v1/chat/completions",
-      model: "heartwood-local-runtime",
-      provider: "openai-compatible",
-      route_id: "local-loopback",
-    },
-    response_metadata: {
-      choices_count: 1,
-      model: "heartwood-local-runtime",
-      response_preview: "Synthetic local model response.",
-      status: "ok",
-      usage: {
-        total_tokens: 2,
-      },
+      action_confirmation_mode: "always-confirm",
     },
   }),
-  event(3, "agent_message.emitted", {
-    content:
-      "Prepared a local workspace action over the detected synthetic dataset.",
+  event(4, "agent_message.emitted", {
+    content: "I will inspect the synthetic workspace.",
   }),
-  event(4, "tool_call.proposed", {
+  event(5, "tool_call.proposed", {
     risk: "low",
     summary: "write a synthetic workspace summary artifact",
     tool_call_id: "session-test-toolcall-0",
     tool_name: "heartwood.local.write_summary",
+  }),
+  event(6, "confirmation.requested", {
+    request: {
+      request_id: "session-test-toolcall-0-confirm",
+      risk: "low",
+      summary: "write a synthetic workspace summary artifact",
+      tool_call_id: "session-test-toolcall-0",
+      tool_name: "heartwood.local.write_summary",
+    },
   }),
 ];

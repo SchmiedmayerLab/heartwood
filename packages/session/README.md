@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-session
+# Heartwood Session
 
-The shared session command/event contract for Heartwood interfaces. The CLI, the notebook API, and future UI surfaces all drive the same session through this contract, so no interface owns separate execution semantics.
+The shared session command/event contract for Heartwood interfaces. The CLI, notebook API, web UI, scripts, and tests drive the same session through this contract, so no interface owns separate execution semantics.
 
 See [`design/03-architecture.md`](../../design/03-architecture.md) and [`design/09-implementation-plan.md`](../../design/09-implementation-plan.md).

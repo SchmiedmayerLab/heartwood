@@ -13,19 +13,20 @@ services:
       dockerfile: images/generic/Dockerfile
       pull: true
       args:
-        HEARTWOOD_BUNDLE_LOCAL_MODEL: "1"
-        HEARTWOOD_IMAGE_FLAVOR: smoke
+        HEARTWOOD_IMAGE_FLAVOR: runtime
     init: true
     user: "10001:10001"
     network_mode: none
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=1g
-      - /home/heartwood/.cache:rw,nosuid,nodev,size=256m
+      - /home/heartwood/.cache:rw,nosuid,nodev,size=512m
       - /home/heartwood/.openhands:rw,nosuid,nodev,size=64m
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
+    environment:
+      HEARTWOOD_AGENT_BACKEND: openhands-sdk
     command: bash images/generic/scripts/offline_stack_smoke.sh

@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Versioned Pydantic record schemas for Phase 0B contracts."""
+"""Versioned Pydantic record schemas for Heartwood contracts."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from typing import Any, ClassVar, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 __all__ = [
+    "ActionConfirmationMode",
     "ApprovalRecord",
     "AuditEvent",
     "ConfirmationRequest",
@@ -29,6 +30,7 @@ __all__ = [
 ]
 
 CapabilityTier: TypeAlias = Literal["autonomous", "supervised", "experimental"]
+ActionConfirmationMode: TypeAlias = Literal["always-confirm", "confirm-risky"]
 Decision: TypeAlias = Literal["allow", "deny"]
 
 
@@ -50,6 +52,14 @@ class PolicyProfile(_HeartwoodRecord):
     platform_id: str = Field(min_length=1)
     deny_egress_by_default: bool = True
     allowed_model_endpoints: tuple[str, ...] = ()
+    allowed_capability_tiers: tuple[CapabilityTier, ...] = Field(
+        default=("supervised",),
+        min_length=1,
+    )
+    allowed_action_confirmation_modes: tuple[ActionConfirmationMode, ...] = Field(
+        default=("always-confirm",),
+        min_length=1,
+    )
     credential_allowlist: tuple[str, ...] = ()
     aggregate_count_floor: int = Field(default=20, ge=20)
     notes: str | None = None
@@ -68,7 +78,7 @@ class ModelCallDecision(_HeartwoodRecord):
 
 
 class EgressAttestationRecord(_HeartwoodRecord):
-    """Record exported to attest allowed or denied egress decisions."""
+    """Record an application-layer model-route decision for evidence export."""
 
     schema_version: Literal["heartwood.egress-attestation-record.v1"] = (
         "heartwood.egress-attestation-record.v1"

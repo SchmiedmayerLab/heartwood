@@ -21,9 +21,7 @@ RUN npm run build
 FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
 
 ARG TARGETARCH
-ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0
 ARG HEARTWOOD_IMAGE_FLAVOR=runtime
-ARG HEARTWOOD_LOCAL_MODEL_MANIFEST=images/generic/local-runtime/models/stories260k.toml
 ARG LLAMA_CPP_VERSION=b9937
 ARG LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3
 ARG LLAMA_CPP_UBUNTU_ARM64_SHA256=c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4
@@ -31,19 +29,22 @@ ARG HEARTWOOD_UID=10001
 ARG HEARTWOOD_GID=10001
 
 LABEL org.opencontainers.image.title="Heartwood Generic Runtime" \
-    org.opencontainers.image.description="Offline Heartwood runtime with local inference, CLI, gateway, notebook bridge, and OpenHands smoke path." \
+    org.opencontainers.image.description="Heartwood CLI, web UI, notebook bridge, policy and audit controls, verified skills, OpenHands, and optional local inference." \
     org.opencontainers.image.source="https://github.com/SchmiedmayerLab/heartwood" \
     org.opencontainers.image.licenses="MIT" \
     org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    LITELLM_LOCAL_MODEL_COST_MAP=True \
+    OPENHANDS_SUPPRESS_BANNER=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu \
-    HEARTWOOD_LOCAL_MODEL_PATH=/opt/heartwood/local-runtime/models/model.gguf \
-    HEARTWOOD_AGENT_BACKEND=openhands-bash \
-    HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml \
+    HEARTWOOD_AGENT_BACKEND=auto \
+    HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified \
+    HEARTWOOD_MODEL_CATALOG=/opt/heartwood/images/generic/local-runtime/model-catalog.toml \
+    HEARTWOOD_MODEL_CACHE=/home/heartwood/.cache/heartwood/models \
     HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     LD_LIBRARY_PATH=/opt/llama.cpp \
     PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"
@@ -90,13 +91,6 @@ USER heartwood
 
 RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
     uv sync --locked --no-dev --all-extras
-
-RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \
-      python images/generic/scripts/download_model_artifact.py \
-        --manifest "${HEARTWOOD_LOCAL_MODEL_MANIFEST}" \
-        --output "${HEARTWOOD_LOCAL_MODEL_PATH}" \
-        --skip-existing; \
-    fi
 
 COPY --chown=heartwood:heartwood README.md ACRONYMS.md ./
 COPY --chown=heartwood:heartwood docs ./docs

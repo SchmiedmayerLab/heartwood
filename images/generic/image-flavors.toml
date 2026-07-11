@@ -9,65 +9,29 @@ image_name = "ghcr.io/schmiedmayerlab/heartwood"
 moving_channel = "edge"
 commit_tag_pattern = "sha-<git-sha>"
 release_tag_pattern = "v<semver>"
-architecture_helper_tag_pattern = "<moving-or-commit-tag>-<amd64|arm64>"
 latest_policy = "Publish latest only after the first stable release; do not use latest for unreleased main-branch builds."
+model_weight_policy = "No Heartwood image contains model weights. Download reviewed artifacts into mounted storage or connect a policy-authorized provider at runtime."
 
 [flavors.runtime]
 target = "runtime"
 moving_tag = "edge"
 commit_tag = "sha-<git-sha>"
-purpose = "Default platform-ready runtime image with CLI, gateway, notebook bridge, policy/audit stack, OpenHands launcher, local inference runtime dependencies, provider route config support, and the bundled Qwen2.5-Coder-7B-Instruct Q4_K_M local coding model."
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
-runtime_network_default = "platform policy controlled; no public egress unless the platform policy allowlists it"
+purpose = "Portable CLI, web UI, notebook bridge, OpenHands SDK, verified Skills, policy and audit controls, provider presets, and llama.cpp runtime without credentials or model weights."
+bundles_model_artifact = false
+runtime_network_default = "Controlled by the deployment; model endpoints must pass the Heartwood route policy before OpenHands starts a turn."
 ci_required = true
 public_default = true
-
-[flavors.smoke]
-target = "smoke"
-moving_tag = "edge-smoke"
-commit_tag = "sha-<git-sha>-smoke"
-purpose = "Tiny-model offline stack image for pull-request CI and Docker-only tutorials."
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/stories260k.toml"
-runtime_network_default = "disabled by Compose smoke through network_mode: none"
-ci_required = true
-public_default = false
-
-[flavors.providers]
-target = "providers"
-moving_tag = "edge-providers"
-commit_tag = "sha-<git-sha>-providers"
-purpose = "Provider-route image for platform embedding and external in-boundary model endpoints. It includes route validation and file-based secret references, but no provider secrets and no model weights."
-bundles_model_artifact = false
-provider_config = "images/generic/providers/provider-routes.example.toml"
-runtime_network_default = "platform policy controlled; provider endpoints must be allowlisted before invocation"
-ci_required = true
-public_default = false
-
-[flavors.coder_7b]
-target = "runtime"
-moving_tag = "edge-coder-7b"
-commit_tag = "sha-<git-sha>-coder-7b"
-purpose = "Model-explicit alias for the default runtime image with Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF bundled for offline local inference demonstrations."
-tag_alias_of = "runtime"
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
-runtime_network_default = "disabled by user demo policy when launched with local-only endpoints; no public runtime egress is required after the image is pulled"
-ci_required = false
-public_default = false
 supported_platforms = ["linux/amd64", "linux/arm64"]
 
 [platform_flavors.terra_runtime]
 target = "terra-runtime"
 moving_tag = "edge-terra"
 commit_tag = "sha-<git-sha>-terra"
-purpose = "Terra-derived Jupyter notebook image built from the selected Terra Python base with Heartwood CLI, notebook bridge, gateway, web UI, OpenHands launcher, local inference runtime dependencies, provider route config support, tutorial docs, and the bundled Qwen2.5-Coder-7B-Instruct Q4_K_M local coding model."
+purpose = "Terra-derived Jupyter runtime with the same Heartwood application and no credentials or model weights."
 platform = "terra"
 base_image = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
-runtime_network_default = "Terra policy controlled; no public runtime egress unless the workspace policy allows it"
+bundles_model_artifact = false
+runtime_network_default = "Controlled by Terra workspace policy; model endpoints must pass the Heartwood route policy before OpenHands starts a turn."
 ci_required = true
 public_default = false
 supported_platforms = ["linux/amd64"]
@@ -75,63 +39,3 @@ manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
 config_media_type = "application/vnd.docker.container.image.v1+json"
 publish_attestations = false
 allow_non_platform_manifests = false
-
-[platform_flavors.terra_smoke]
-target = "terra-smoke"
-moving_tag = "edge-terra-smoke"
-commit_tag = "sha-<git-sha>-terra-smoke"
-purpose = "Terra-derived Jupyter notebook image with the tiny verified GGUF smoke artifact for synthetic Terra workspace demos and local CI smoke."
-platform = "terra"
-base_image = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/stories260k.toml"
-runtime_network_default = "disabled by CI smoke through docker run --network none; Terra runtime policy controlled in live workspaces"
-ci_required = true
-public_default = false
-supported_platforms = ["linux/amd64"]
-manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
-config_media_type = "application/vnd.docker.container.image.v1+json"
-publish_attestations = false
-allow_non_platform_manifests = false
-
-[platform_flavors.terra_coder_7b]
-target = "terra-runtime"
-moving_tag = "edge-terra-coder-7b"
-commit_tag = "sha-<git-sha>-terra-coder-7b"
-purpose = "Model-explicit alias for the Terra-derived Jupyter notebook image with Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF bundled for higher-quality synthetic CLI, notebook, and web UI demos."
-tag_alias_of = "terra-runtime"
-platform = "terra"
-base_image = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
-runtime_network_default = "Terra policy controlled after image pull; the local model endpoint binds to loopback and does not require public runtime egress"
-ci_required = false
-public_default = false
-supported_platforms = ["linux/amd64"]
-manifest_media_type = "application/vnd.docker.distribution.manifest.v2+json"
-config_media_type = "application/vnd.docker.container.image.v1+json"
-publish_attestations = false
-allow_non_platform_manifests = false
-
-[platform_flavors.terra_smoke_ci]
-target = "terra-smoke-ci"
-moving_tag = "edge-terra-smoke-ci"
-purpose = "Local pull-request CI image built from a lightweight Terra-compatible base through the platform Dockerfile; not published as a user-facing image."
-platform = "terra"
-base_image = "heartwood-terra-ci-base:local"
-bundles_model_artifact = true
-model_manifest = "images/generic/local-runtime/models/stories260k.toml"
-runtime_network_default = "disabled by CI smoke through docker run --network none"
-ci_required = true
-published = false
-supported_platforms = ["linux/amd64"]
-
-[future_flavors.qwen3_coder_30b_a3b_q4_k_m]
-target = "coder-30b-a3b-gpu"
-moving_tag = "edge-coder-30b-a3b-gpu"
-commit_tag = "sha-<git-sha>-coder-30b-a3b-gpu"
-purpose = "Deferred high-memory or GPU local coding-agent image after runtime profile, CI capacity, license, checksum, and Terra resource envelope review."
-bundles_model_artifact = true
-model_candidate = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
-ci_required = false
-public_default = false

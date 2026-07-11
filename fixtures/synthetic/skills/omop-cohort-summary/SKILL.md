@@ -16,4 +16,4 @@ metadata:
 
 # Synthetic OMOP Cohort Summary
 
-This fixture skill is metadata-only. It exists to exercise the Phase 0B schema and fixture checks before the Phase 0D skill runtime is implemented.
+This metadata-only synthetic fixture exercises schema and fixture-lint checks independently from the executable repository-verified Skill bundle.

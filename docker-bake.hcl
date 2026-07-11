@@ -16,10 +16,6 @@ variable "GIT_SHA" {
   default = "local"
 }
 
-variable "IMAGE_TAG_SUFFIX" {
-  default = ""
-}
-
 variable "TERRA_BASE_IMAGE" {
   default = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
 }
@@ -36,7 +32,7 @@ group "default" {
   targets = ["runtime"]
 }
 
-target "_common" {
+target "runtime" {
   context = "."
   dockerfile = "images/generic/Dockerfile"
   platforms = ["linux/amd64", "linux/arm64"]
@@ -44,55 +40,19 @@ target "_common" {
   cache-from = ["type=gha"]
   cache-to = ["type=gha,mode=min"]
   attest = ["type=sbom", "type=provenance,mode=max"]
-}
-
-target "runtime" {
-  inherits = ["_common"]
   args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
     HEARTWOOD_IMAGE_FLAVOR = "runtime"
-    HEARTWOOD_LOCAL_MODEL_MANIFEST = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
   }
   tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-coder-7b${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-coder-7b${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}",
+    "${IMAGE_NAME}:sha-${GIT_SHA}",
   ]
-}
-
-target "smoke" {
-  inherits = ["_common"]
-  args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
-    HEARTWOOD_IMAGE_FLAVOR = "smoke"
-  }
-  tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-smoke${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-smoke${IMAGE_TAG_SUFFIX}",
-  ]
-}
-
-target "providers" {
-  inherits = ["_common"]
-  args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "0"
-    HEARTWOOD_IMAGE_FLAVOR = "providers"
-  }
-  tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-providers${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-providers${IMAGE_TAG_SUFFIX}",
-  ]
-}
-
-target "_platform_common" {
-  context = "."
-  dockerfile = "images/platform/Dockerfile"
-  pull = true
 }
 
 target "_terra_common" {
-  inherits = ["_platform_common"]
+  context = "."
+  dockerfile = "images/platform/Dockerfile"
+  pull = true
   platforms = ["linux/amd64"]
   args = {
     HEARTWOOD_PLATFORM = "terra"
@@ -111,43 +71,21 @@ target "terra-runtime" {
   cache-to = ["type=gha,mode=min"]
   output = ["type=registry,oci-mediatypes=false"]
   args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
     HEARTWOOD_IMAGE_FLAVOR = "terra-runtime"
-    HEARTWOOD_LOCAL_MODEL_MANIFEST = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
   }
   tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-terra${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-coder-7b${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-terra-coder-7b${IMAGE_TAG_SUFFIX}",
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-terra",
   ]
 }
 
-target "terra-smoke" {
-  inherits = ["_terra_common"]
-  cache-from = ["type=gha"]
-  cache-to = ["type=gha,mode=min"]
-  output = ["type=registry,oci-mediatypes=false"]
-  args = {
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
-    HEARTWOOD_IMAGE_FLAVOR = "terra-smoke"
-  }
-  tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke${IMAGE_TAG_SUFFIX}",
-    "${IMAGE_NAME}:sha-${GIT_SHA}-terra-smoke${IMAGE_TAG_SUFFIX}",
-  ]
-}
-
-target "terra-smoke-ci" {
+target "terra-ci" {
   inherits = ["_terra_common"]
   pull = false
   args = {
     HEARTWOOD_PLATFORM_BASE_IMAGE = "${TERRA_CI_BASE_IMAGE}"
     HEARTWOOD_PLATFORM_BASE_PLATFORM = "linux/amd64"
-    HEARTWOOD_BUNDLE_LOCAL_MODEL = "1"
-    HEARTWOOD_IMAGE_FLAVOR = "terra-smoke-ci"
+    HEARTWOOD_IMAGE_FLAVOR = "terra-ci"
   }
-  tags = [
-    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-smoke-ci${IMAGE_TAG_SUFFIX}",
-  ]
+  tags = ["${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-ci"]
 }

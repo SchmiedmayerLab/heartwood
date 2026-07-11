@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 
 from heartwood.core_adapter import SessionResult
-from heartwood.gateway import SessionGateway
+from heartwood.gateway import ModelProfile, SessionGateway
 from heartwood.notebook import NotebookSession, build_widget_spec, jupyter_proxy_url, render_widgets
 from heartwood.notebook._widgets import WidgetSpec
 from heartwood.session import SessionCommand, SessionEvent
@@ -41,29 +41,31 @@ class _CountingGateway:
 
 
 def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-session")
+    session = _deterministic_session(tmp_path, "notebook-session")
 
     detected = session.detect()
-    approved = session.approve(
-        target_type="model-call",
-        target_id="decision-synthetic-model-call",
-    )
-    run = session.run(endpoint="https://model.local.invalid/v1/chat/completions")
+    run = session.run("inspect the synthetic workspace")
+    pending = run.approval_controls[-1]
+    approved = session.approve(tool_call_id=pending.target_id)
     exported = session.audit_export()
 
     assert detected.dataset_proposals[0].dataset_type == "omop-cdm"
-    assert approved.approval_controls[-1].decision == "approved"
     assert run.policy_status[-1].decision == "allow"
-    assert run.skill_proposals[-1].status == "proposed"
-    assert any(control.target_type == "model-call" for control in run.approval_controls)
+    assert run.chat[0].role == "user"
+    assert run.chat[0].content == "inspect the synthetic workspace"
+    assert run.chat[1].role == "assistant"
+    assert pending.target_type == "tool-call"
+    assert pending.decision is None
+    assert approved.approval_controls[-1].decision == "approved"
+    assert not any(control.target_type == "model-call" for control in run.approval_controls)
     assert exported.export_actions[-1].path.endswith("audit-export.jsonl")
     assert exported.event_count == len(session.gateway.replay_events(session_id="notebook-session"))
 
 
 def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-approvals")
+    session = _deterministic_session(tmp_path, "notebook-approvals")
 
-    run = session.run(endpoint="https://model.local.invalid/v1/chat/completions")
+    run = session.chat("inspect the workspace")
 
     keys = [(control.target_type, control.target_id) for control in run.approval_controls]
     assert len(keys) == len(set(keys))
@@ -72,10 +74,7 @@ def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
     )
     assert tool_control.label.startswith("Review")
 
-    approved = session.approve(
-        target_type=tool_control.target_type,
-        target_id=tool_control.target_id,
-    )
+    approved = session.deny(tool_call_id=tool_control.target_id)
     matching = [
         control
         for control in approved.approval_controls
@@ -86,37 +85,31 @@ def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
     ]
 
     assert len(matching) == 1
-    assert matching[0].decision == "approved"
+    assert matching[0].decision == "denied"
 
 
-def test_notebook_session_projects_provider_route_metadata(tmp_path: Path) -> None:
-    provider_config = tmp_path / "provider-routes.toml"
-    provider_config.write_text(
-        "\n".join(
-            (
-                'schema_version = "heartwood.provider-config.v1"',
-                "",
-                "[[routes]]",
-                'route_id = "local-loopback"',
-                'provider = "openai-compatible"',
-                'endpoint = "http://127.0.0.1:8765/v1/chat/completions"',
-                'model = "heartwood-local-runtime"',
-                'capability_tier = "supervised"',
-                'auth = "none"',
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    session = NotebookSession(workspace=tmp_path / "sessions", session_id="notebook-provider")
-
-    view_model = session.run(
-        provider_config_path=provider_config,
-        provider_route_id="local-loopback",
+def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -> None:
+    session = _deterministic_session(tmp_path / "sessions", "notebook-models")
+    profile = ModelProfile(
+        profile_id="local",
+        model="openai/local-model",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
     )
 
-    assert view_model.policy_status[-1].route_id == "local-loopback"
-    assert view_model.policy_status[-1].provider == "openai-compatible"
+    session.save_model_profile(profile)
+    settings = session.select_model_profile("local")
+    validation = session.validate_model_profile()
+    artifacts = session.model_artifacts()
+    policy_decision = cast(dict[str, object], validation["policy_decision"])
+    artifact_items = cast(list[object], artifacts["artifacts"])
+
+    assert settings["active_profile"] == "local"
+    assert session.model_settings()["active_profile"] == "local"
+    assert validation["credential_status"] == "configured"
+    assert policy_decision["decision"] == "allow"
+    assert len(artifact_items) == 2
 
 
 def test_jupyter_proxy_url_uses_service_prefix() -> None:
@@ -161,9 +154,9 @@ def test_notebook_pause_resume_updates_view_state(tmp_path: Path) -> None:
 
 
 def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-widgets")
+    session = _deterministic_session(tmp_path, "notebook-widgets")
     session.detect()
-    session.run(endpoint="https://public.example.invalid/v1/chat/completions")
+    session.run()
     view_model = session.audit_export()
 
     sections = build_widget_spec(view_model)
@@ -195,3 +188,11 @@ def test_widget_rendering_falls_back_without_ipywidgets(
 
     assert isinstance(rendered, tuple)
     assert all(isinstance(item, WidgetSpec) for item in rendered)
+
+
+def _deterministic_session(workspace: Path, session_id: str) -> NotebookSession:
+    gateway = SessionGateway(
+        workspace=workspace,
+        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+    )
+    return NotebookSession(workspace=workspace, session_id=session_id, gateway=gateway)

@@ -4,29 +4,38 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""The ``heartwood`` command-line interface, the primary interaction surface."""
+"""The ``heartwood`` command-line interface."""
 
 from __future__ import annotations
 
 import argparse
-import os
 import shlex
 import shutil
+import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
 
 import uvicorn
 
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
+    ActionSettingsError,
     GatewayAsgiApp,
-    ProviderConfigError,
+    ModelArtifactError,
+    ModelProfile,
+    ModelSettingsError,
     SessionGateway,
-    load_provider_config,
+    SkillSettingsError,
 )
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    JsonValue,
+    SessionCommand,
+    SessionEvent,
+    validate_session_id,
+)
 
 __all__ = ["__version__", "main"]
 
@@ -34,254 +43,163 @@ __version__ = "0.0.0"
 
 _PROG = "heartwood"
 _DEFAULT_WORKSPACE = Path(".heartwood") / "sessions"
-_DEFAULT_MODEL_ENDPOINT = "https://model.local.invalid/v1/chat/completions"
-_DEFAULT_LOOPBACK_MODEL_ENDPOINT = "http://127.0.0.1:8765/v1/chat/completions"
 _DEFAULT_FIXTURE_ROOT = Path("fixtures") / "synthetic"
 _DEFAULT_WEB_ROOT = Path("packages") / "webui" / "dist"
-
-
-def _format_detection(event: SessionEvent, *, workspace: Path) -> str:
-    """Render a detection event as a plain-language, propose-not-commit report."""
-    platform = _mapping_payload(event.payload["platform"], "platform")
-    dataset = _mapping_payload(event.payload["dataset"], "dataset")
-    platform_confidence = _float_payload(platform["confidence"], "platform.confidence")
-    dataset_confidence = _float_payload(dataset["confidence"], "dataset.confidence")
-    lines = [
-        "Heartwood - environment detection",
-        "",
-        "This is a proposal only. Nothing loads or runs without your confirmation.",
-        "",
-        f"Session: {event.session_id}",
-        f"State: {workspace}",
-        "",
-        f"Platform: {platform['adapter_id']} (confidence {platform_confidence:.2f})",
-    ]
-    lines += [
-        f"  - {item}" for item in _string_list_payload(platform["evidence"], "platform.evidence")
-    ]
-    lines += [
-        "",
-        f"Dataset: {dataset['dataset_type']} (confidence {dataset_confidence:.2f})",
-    ]
-    lines += [
-        f"  - {item}" for item in _string_list_payload(dataset["evidence"], "dataset.evidence")
-    ]
-    return "\n".join(lines)
-
-
-def _provider_config_default() -> Path | None:
-    value = os.environ.get("HEARTWOOD_PROVIDER_CONFIG")
-    return Path(value) if value else None
-
-
-def _format_transcript(events: Sequence[SessionEvent]) -> str:
-    """Render session events as a stable terminal transcript."""
-    lines = [_format_event(event) for event in events]
-    return "\n".join(line for line in lines if line)
-
-
-def _format_event(event: SessionEvent) -> str:
-    kind = _event_kind(event)
-    if kind == EventKind.COMMAND_RECEIVED.value:
-        return f"[{event.sequence:03d}] Command received: {event.payload.get('command_id', '')}"
-    if kind == EventKind.DETECTION_PROPOSED.value:
-        dataset = _mapping_payload(event.payload["dataset"], "dataset")
-        platform = _mapping_payload(event.payload["platform"], "platform")
-        return (
-            f"[{event.sequence:03d}] Detection proposed: "
-            f"platform={platform['adapter_id']} dataset={dataset['dataset_type']}"
-        )
-    if kind == EventKind.APPROVAL_RECORDED.value:
-        approval = _mapping_payload(event.payload["approval"], "approval")
-        return (
-            f"[{event.sequence:03d}] Approval recorded: "
-            f"{approval['target_type']} {approval['target_id']} {approval['decision']}"
-        )
-    if kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
-        decision = _mapping_payload(event.payload["decision"], "decision")
-        line = (
-            f"[{event.sequence:03d}] Model call: {decision['decision']} "
-            f"endpoint={decision['endpoint']} reason={decision['reason']}"
-        )
-        response_metadata = event.payload.get("response_metadata")
-        if isinstance(response_metadata, dict):
-            model = response_metadata.get("model", "unknown")
-            status = response_metadata.get("status", "unknown")
-            line = f"{line} model={model} status={status}"
-        return line
-    if kind == EventKind.AGENT_MESSAGE_EMITTED.value:
-        return f"[{event.sequence:03d}] Agent: {event.payload.get('content', '')}"
-    if kind == EventKind.TOOL_CALL_PROPOSED.value:
-        return (
-            f"[{event.sequence:03d}] Tool proposed: {event.payload.get('tool_name', '')} "
-            f"risk={event.payload.get('risk', '')}"
-        )
-    if kind == EventKind.CONFIRMATION_REQUESTED.value:
-        request = _mapping_payload(event.payload["request"], "request")
-        return (
-            f"[{event.sequence:03d}] Confirmation requested: {request['tool_name']} "
-            f"risk={request['risk']} id={request['request_id']}"
-        )
-    if kind == EventKind.CONFIRMATION_RESOLVED.value:
-        return (
-            f"[{event.sequence:03d}] Confirmation resolved: "
-            f"{event.payload.get('tool_call_id', '')} {event.payload.get('decision', '')}"
-        )
-    if kind == EventKind.TOOL_EXECUTION_RECORDED.value:
-        return (
-            f"[{event.sequence:03d}] Tool execution: {event.payload.get('tool_name', '')} "
-            f"exit={event.payload.get('exit_code', '')}"
-        )
-    if kind == EventKind.SESSION_PAUSED.value:
-        return f"[{event.sequence:03d}] Session paused"
-    if kind == EventKind.SESSION_RESUMED.value:
-        return f"[{event.sequence:03d}] Session resumed"
-    if kind == EventKind.AUDIT_EXPORT_RECORDED.value:
-        return (
-            f"[{event.sequence:03d}] Audit export: {event.payload.get('path', '')} "
-            f"events={event.payload.get('event_count', '')}"
-        )
-    if kind == EventKind.ERROR_RECORDED.value:
-        return f"[{event.sequence:03d}] Error: {event.payload.get('reason', '')}"
-    return f"[{event.sequence:03d}] {kind}"
-
-
-def _mapping_payload(value: JsonValue, name: str) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        msg = f"expected {name} payload to be an object"
-        raise TypeError(msg)
-    return value
-
-
-def _float_payload(value: JsonValue, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        msg = f"expected {name} payload to be numeric"
-        raise TypeError(msg)
-    return float(value)
-
-
-def _string_list_payload(value: JsonValue, name: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        msg = f"expected {name} payload to be a string list"
-        raise TypeError(msg)
-    items: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            msg = f"expected {name} payload to be a string list"
-            raise TypeError(msg)
-        items.append(item)
-    return tuple(items)
+_ACTION_MODE_ARGUMENTS = {
+    "ask-every-time": "always-confirm",
+    "auto-approve-low-risk": "confirm-risky",
+}
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=_PROG,
-        description="Compliance-first coding harness for sensitive biomedical research data.",
+        description="Auditable agentic coding for sensitive biomedical research data.",
     )
     parser.add_argument("--version", action="version", version=f"{_PROG} {__version__}")
     parser.add_argument(
         "--workspace",
         type=Path,
         default=_DEFAULT_WORKSPACE,
-        help="Directory for local session state.",
+        help="Directory for local session state and model settings.",
     )
-    parser.add_argument("--session-id", default="session-local", help="Session identifier.")
+    parser.add_argument(
+        "--session-id",
+        default="session-local",
+        type=_session_id_argument,
+        help="Session identifier.",
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
-    subparsers.add_parser(
-        "detect",
-        help="Detect the platform and propose next steps.",
-        description="Inspect environment markers and propose the platform. Propose-not-commit.",
-    )
+
     chat = subparsers.add_parser(
         "chat",
-        help="Open a terminal chat turn or pass one prompt.",
-        description="Run chat turns over the shared session event stream.",
+        aliases=["agent"],
+        help="Open the coding-agent conversation or submit one task.",
     )
-    chat.add_argument("--prompt", help="Run one chat turn instead of opening the prompt loop.")
+    chat.add_argument("--prompt", "-p", help="Submit one task instead of opening the prompt loop.")
     run = subparsers.add_parser(
         "run",
-        help="Run the synthetic workflow through policy-gated model-call events.",
+        help="Compatibility alias for one coding-agent task.",
     )
-    run.add_argument("--prompt", default="run the synthetic workflow", help="Run instruction.")
-    run.add_argument(
-        "--endpoint",
-        default=_DEFAULT_MODEL_ENDPOINT,
-        help="Model endpoint to evaluate under the active policy profile.",
+    run.add_argument("prompt", nargs="?", default="run the synthetic workflow")
+    subparsers.add_parser("detect", help="Detect the platform and dataset without running code.")
+
+    allow = subparsers.add_parser(
+        "allow",
+        aliases=["approve"],
+        help="Allow the current pending action once.",
     )
-    run.add_argument(
-        "--local-model",
-        action="store_true",
-        help="Invoke the allowlisted loopback model endpoint before the agent turn.",
+    allow.add_argument("tool_call_id", help="Pending action id shown in the transcript.")
+    reject = subparsers.add_parser(
+        "reject",
+        aliases=["deny"],
+        help="Reject the current pending action.",
     )
-    run.add_argument(
-        "--provider-config",
-        type=Path,
-        default=_provider_config_default(),
-        help="Provider route configuration with file-based secret references.",
-    )
-    run.add_argument(
-        "--provider-route",
-        help="Provider route id to select from --provider-config.",
-    )
-    run.add_argument(
-        "--invoke-provider",
-        action="store_true",
-        help="Invoke the selected provider route after policy approval.",
-    )
-    for name, help_text in (
-        ("approve", "Approve a skill, egress decision, model call, or tool call."),
-        ("deny", "Deny a skill, egress decision, model call, or tool call."),
-    ):
-        command = subparsers.add_parser(name, help=help_text)
-        command.add_argument(
-            "--target-type",
-            choices=("skill", "egress", "model-call", "tool-call"),
-            required=True,
-        )
-        command.add_argument("--target-id", required=True)
-        command.add_argument("--reason")
+    reject.add_argument("tool_call_id", help="Pending action id shown in the transcript.")
     subparsers.add_parser("pause", help="Pause the current session.")
     subparsers.add_parser("resume", help="Resume the current session.")
     subparsers.add_parser("replay", help="Replay the persisted session event stream.")
+
+    actions = subparsers.add_parser("actions", help="Configure action confirmation.")
+    action_subparsers = actions.add_subparsers(dest="actions_command", metavar="<actions-command>")
+    action_set = action_subparsers.add_parser(
+        "set", help="Select an action-confirmation mode allowed by platform policy."
+    )
+    action_set.add_argument("mode", choices=tuple(_ACTION_MODE_ARGUMENTS))
+
+    models = subparsers.add_parser("models", help="Configure OpenHands model profiles.")
+    model_subparsers = models.add_subparsers(dest="models_command", metavar="<models-command>")
+    model_subparsers.add_parser("list", help="List profiles and common provider presets.")
+    model_subparsers.add_parser("artifacts", help="List reviewed local-model artifacts.")
+    add = model_subparsers.add_parser("add", help="Add or update a non-secret model profile.")
+    add.add_argument("profile_id")
+    add.add_argument(
+        "--model", required=True, help="LiteLLM model id, including its provider prefix."
+    )
+    add.add_argument(
+        "--policy-endpoint", required=True, help="Exact endpoint authorized by policy."
+    )
+    add.add_argument("--base-url", help="Custom provider or local OpenAI-compatible base URL.")
+    add.add_argument(
+        "--credential-kind",
+        choices=("environment", "file", "managed-identity", "none"),
+        default="environment",
+    )
+    add.add_argument("--api-key-env", help="Environment variable containing the API key.")
+    add.add_argument("--api-key-file", help="Absolute mounted file containing the API key.")
+    add.add_argument("--api-version")
+    add.add_argument("--aws-region-name")
+    add.add_argument("--aws-profile-name")
+    add.add_argument(
+        "--capability-tier",
+        choices=("autonomous", "supervised", "experimental"),
+        default="supervised",
+    )
+    add.add_argument("--description")
+    add.add_argument("--select", action="store_true", help="Select this profile after saving it.")
+    select = model_subparsers.add_parser("select", help="Select the active profile.")
+    select.add_argument("profile_id")
+    validate = model_subparsers.add_parser(
+        "validate", help="Check credentials and platform route authorization."
+    )
+    validate.add_argument("profile_id", nargs="?")
+    remove = model_subparsers.add_parser("remove", help="Remove a profile.")
+    remove.add_argument("profile_id")
+    download = model_subparsers.add_parser(
+        "download", help="Download and verify a reviewed Hugging Face artifact."
+    )
+    download.add_argument("artifact_id")
+    download.add_argument("--cache", type=Path, help="Mounted model cache directory.")
+
+    skills = subparsers.add_parser("skills", help="Inspect bundled Skills and extensions.")
+    skill_subparsers = skills.add_subparsers(dest="skills_command", metavar="<skills-command>")
+    skill_subparsers.add_parser("list", help="List bundled and installed Skills.")
+    inspect = skill_subparsers.add_parser(
+        "inspect", help="Verify and summarize a mounted Skill source."
+    )
+    inspect.add_argument("source", type=Path)
+    install = skill_subparsers.add_parser(
+        "install", help="Install a mounted Skill after explicit review."
+    )
+    install.add_argument("source", type=Path)
+    install.add_argument(
+        "--approve",
+        action="store_true",
+        help="Record approval of the displayed permissions and install the Skill.",
+    )
+    remove_skill = skill_subparsers.add_parser("remove", help="Remove an installed extension.")
+    remove_skill.add_argument("name")
+
     audit = subparsers.add_parser("audit", help="Audit-log operations.")
     audit_subparsers = audit.add_subparsers(dest="audit_command", metavar="<audit-command>")
-    audit_export = audit_subparsers.add_parser("export", help="Export a scrubbed audit JSONL file.")
+    audit_export = audit_subparsers.add_parser("export", help="Export scrubbed audit JSONL.")
     audit_export.add_argument("--output", type=Path, help="Optional copy destination.")
-    reviewer = subparsers.add_parser("reviewer", help="Reviewer packet operations.")
+
+    reviewer = subparsers.add_parser("reviewer", help="Reviewer artifact operations.")
     reviewer_subparsers = reviewer.add_subparsers(
-        dest="reviewer_command",
-        metavar="<reviewer-command>",
+        dest="reviewer_command", metavar="<reviewer-command>"
     )
     packet = reviewer_subparsers.add_parser(
-        "packet",
-        help="Generate a synthetic-only reviewer packet.",
+        "packet", help="Generate the synthetic reviewer artifact set."
     )
     packet.add_argument("--output", type=Path, default=Path("compliance") / "reviewer-packet")
     packet.add_argument("--fixture-root", type=Path, default=_DEFAULT_FIXTURE_ROOT)
-    serve = subparsers.add_parser(
-        "serve",
-        help="Serve the gateway API and packaged researcher web UI.",
-    )
+
+    serve = subparsers.add_parser("serve", help="Serve the gateway and packaged web UI.")
     serve.add_argument("--host", default="127.0.0.1", help="Gateway bind host.")
     serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
-    serve.add_argument(
-        "--web-root",
-        type=Path,
-        default=_DEFAULT_WEB_ROOT,
-        help="Directory containing the built web UI assets.",
-    )
-    serve.add_argument(
-        "--base-path",
-        default="/",
-        help="Static asset base path when served behind a notebook proxy.",
-    )
+    serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
+    serve.add_argument("--base-path", default="/", help="Base path behind a notebook proxy.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``heartwood`` command and return a process exit code."""
+    """Run ``heartwood`` and return a process exit code."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command is None and not sys.stdin.isatty():
+        parser.print_help()
+        return 0
     if args.command == "serve":
         return _handle_serve(
             workspace=args.workspace,
@@ -290,108 +208,391 @@ def main(argv: Sequence[str] | None = None) -> int:
             web_root=args.web_root,
             base_path=args.base_path,
         )
+    if args.command == "reviewer" and args.reviewer_command == "packet":
+        return _handle_reviewer_packet(
+            workspace=args.workspace,
+            session_id=args.session_id,
+            fixture_root=args.fixture_root,
+            output=args.output,
+        )
+
     gateway = SessionGateway(workspace=args.workspace)
     gateway.start()
     try:
+        if args.command == "models":
+            return _handle_models(parser, gateway, args)
+        if args.command == "actions":
+            return _handle_actions(parser, gateway, args)
+        if args.command == "skills":
+            return _handle_skills(parser, gateway, args)
         if args.command == "detect":
             return _handle_detect(gateway, workspace=args.workspace, session_id=args.session_id)
-        if args.command == "chat":
-            if args.prompt is not None:
-                command = _command(
-                    gateway,
-                    session_id=args.session_id,
-                    kind=CommandKind.CHAT,
-                    payload={"prompt": args.prompt},
-                )
-                print(_format_transcript(gateway.handle(command).events))
-                return 0
+        if args.command in {None, "chat", "agent"}:
+            if getattr(args, "prompt", None) is not None:
+                return _submit_task(gateway, session_id=args.session_id, prompt=args.prompt)
             return _interactive_chat(gateway, session_id=args.session_id)
         if args.command == "run":
-            if args.local_model and args.provider_route:
-                parser.error("--provider-route cannot be combined with --local-model")
-            if args.invoke_provider and not args.provider_route:
-                parser.error("--invoke-provider requires --provider-route")
-            endpoint = (
-                _DEFAULT_LOOPBACK_MODEL_ENDPOINT
-                if args.local_model and args.endpoint == _DEFAULT_MODEL_ENDPOINT
-                else args.endpoint
-            )
-            provider_route: dict[str, JsonValue] | None = None
-            if args.provider_route:
-                if args.provider_config is None:
-                    parser.error("--provider-config is required when --provider-route is specified")
-                try:
-                    route = load_provider_config(args.provider_config).route(args.provider_route)
-                except ProviderConfigError as error:
-                    parser.error(str(error))
-                endpoint = route.endpoint
-                provider_route = cast(dict[str, JsonValue], route.safe_metadata())
-            run_payload: dict[str, JsonValue] = {
-                "prompt": args.prompt,
-                "endpoint": endpoint,
-                "invoke_model": args.local_model,
-                "invoke_provider": args.invoke_provider,
-            }
-            if provider_route is not None:
-                run_payload["provider_route"] = provider_route
-                run_payload["provider_route_id"] = args.provider_route
-                run_payload["provider_config_path"] = str(args.provider_config)
-            command = _command(
+            return _submit_task(
                 gateway,
                 session_id=args.session_id,
+                prompt=args.prompt,
                 kind=CommandKind.RUN,
-                payload=run_payload,
             )
-            print(_format_transcript(gateway.handle(command).events))
-            return 0
-        if args.command in {"approve", "deny"}:
-            kind = CommandKind.APPROVE if args.command == "approve" else CommandKind.DENY
-            approval_payload: dict[str, JsonValue] = {
-                "target_type": args.target_type,
-                "target_id": args.target_id,
-            }
-            if args.reason:
-                approval_payload["reason"] = args.reason
+        if args.command in {"allow", "approve", "reject", "deny"}:
+            kind = CommandKind.APPROVE if args.command in {"allow", "approve"} else CommandKind.DENY
             command = _command(
                 gateway,
                 session_id=args.session_id,
                 kind=kind,
-                payload=approval_payload,
+                payload={"target_type": "tool-call", "target_id": args.tool_call_id},
             )
-            print(_format_transcript(gateway.handle(command).events))
-            return 0
+            events = gateway.handle(command).events
+            print(_format_transcript(events))
+            return _event_exit_code(events)
         if args.command == "pause":
-            command = _command(gateway, session_id=args.session_id, kind=CommandKind.PAUSE)
-            print(_format_transcript(gateway.handle(command).events))
-            return 0
+            return _submit_simple(gateway, session_id=args.session_id, kind=CommandKind.PAUSE)
         if args.command == "resume":
-            command = _command(gateway, session_id=args.session_id, kind=CommandKind.RESUME)
-            print(_format_transcript(gateway.handle(command).events))
-            return 0
+            return _submit_simple(gateway, session_id=args.session_id, kind=CommandKind.RESUME)
         if args.command == "replay":
             return _handle_replay(gateway, session_id=args.session_id)
         if args.command == "audit" and args.audit_command == "export":
-            return _handle_audit_export(
-                gateway,
-                session_id=args.session_id,
-                output=args.output,
-            )
-        if args.command == "reviewer" and args.reviewer_command == "packet":
-            return _handle_reviewer_packet(
-                workspace=args.workspace,
-                session_id=args.session_id,
-                fixture_root=args.fixture_root,
-                output=args.output,
-            )
+            return _handle_audit_export(gateway, session_id=args.session_id, output=args.output)
         parser.print_help()
         return 0
     finally:
         gateway.stop()
 
 
+def _handle_models(
+    parser: argparse.ArgumentParser,
+    gateway: SessionGateway,
+    args: argparse.Namespace,
+) -> int:
+    command = getattr(args, "models_command", None)
+    try:
+        if command == "list":
+            print(_format_model_settings(gateway.model_settings()))
+            return 0
+        if command == "artifacts":
+            print(_format_model_artifacts(gateway.model_artifacts()))
+            return 0
+        if command == "add":
+            profile = ModelProfile(
+                profile_id=args.profile_id,
+                model=args.model,
+                policy_endpoint=args.policy_endpoint,
+                capability_tier=args.capability_tier,
+                base_url=args.base_url,
+                credential_kind=args.credential_kind,
+                api_key_env=args.api_key_env,
+                api_key_file=args.api_key_file,
+                api_version=args.api_version,
+                aws_region_name=args.aws_region_name,
+                aws_profile_name=args.aws_profile_name,
+                description=args.description,
+            )
+            settings = gateway.save_model_profile(profile)
+            if args.select:
+                settings = gateway.select_model_profile(profile.profile_id)
+            print(_format_model_settings(settings))
+            return 0
+        if command == "select":
+            print(_format_model_settings(gateway.select_model_profile(args.profile_id)))
+            return 0
+        if command == "validate":
+            print(_format_model_validation(gateway.validate_model_profile(args.profile_id)))
+            return 0
+        if command == "remove":
+            print(_format_model_settings(gateway.remove_model_profile(args.profile_id)))
+            return 0
+        if command == "download":
+            path = gateway.download_model_artifact_now(
+                args.artifact_id,
+                cache_dir=args.cache,
+            )
+            print(f"Model artifact: {path}")
+            return 0
+    except (ModelArtifactError, ModelSettingsError) as error:
+        parser.error(str(error))
+    parser.parse_args(["models", "--help"])
+    return 0
+
+
+def _handle_actions(
+    parser: argparse.ArgumentParser,
+    gateway: SessionGateway,
+    args: argparse.Namespace,
+) -> int:
+    """Show or update the shared OpenHands action-confirmation mode."""
+    try:
+        if getattr(args, "actions_command", None) == "set":
+            settings = gateway.select_action_confirmation_mode(_ACTION_MODE_ARGUMENTS[args.mode])
+        else:
+            settings = gateway.action_settings()
+    except ActionSettingsError as error:
+        parser.error(str(error))
+    print(_format_action_settings(settings))
+    return 0
+
+
+def _format_action_settings(settings: dict[str, object]) -> str:
+    lines = ["Action confirmation", ""]
+    selected = settings.get("confirmation_mode")
+    modes = settings.get("modes", [])
+    if isinstance(modes, list):
+        for item in modes:
+            if not isinstance(item, dict):
+                continue
+            marker = "*" if item.get("mode") == selected else " "
+            availability = "" if item.get("allowed") else " (not allowed by policy)"
+            lines.append(f"{marker} {item.get('label')}{availability}")
+    return "\n".join(lines)
+
+
+def _format_model_settings(settings: dict[str, object]) -> str:
+    lines = ["Heartwood model profiles", ""]
+    active = settings.get("active_profile")
+    profiles = settings.get("profiles", [])
+    if isinstance(profiles, list) and profiles:
+        for item in profiles:
+            if not isinstance(item, dict):
+                continue
+            marker = "*" if item.get("profile_id") == active else " "
+            lines.append(
+                f"{marker} {item.get('profile_id')}  {item.get('model')}  "
+                f"credentials={item.get('credential_status', 'unknown')}"
+            )
+            lines.append(f"    policy endpoint: {item.get('policy_endpoint')}")
+    else:
+        lines.append("No model profiles configured.")
+    lines.extend(("", "Presets:"))
+    presets = settings.get("presets", [])
+    if isinstance(presets, list):
+        for item in presets:
+            if isinstance(item, dict):
+                lines.append(f"  {item.get('preset_id')}: {item.get('label')}")
+    return "\n".join(lines)
+
+
+def _format_model_validation(validation: dict[str, object]) -> str:
+    profile = validation.get("profile", {})
+    decision = validation.get("policy_decision", {})
+    if not isinstance(profile, dict) or not isinstance(decision, dict):
+        return "Model profile validation returned malformed data."
+    return "\n".join(
+        (
+            f"Profile: {profile.get('profile_id')}",
+            f"Model: {profile.get('model')}",
+            f"Credentials: {validation.get('credential_status')}",
+            f"Action confirmation: {validation.get('action_confirmation_mode')}",
+            f"Policy: {decision.get('decision')} ({decision.get('reason')})",
+        )
+    )
+
+
+def _format_model_artifacts(catalog: dict[str, object]) -> str:
+    lines = ["Heartwood local-model artifacts", ""]
+    artifacts = catalog.get("artifacts", [])
+    if isinstance(artifacts, list):
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            size = item.get("artifact_size_bytes")
+            size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
+            lines.append(f"{item.get('artifact_id')}  {size_gib:.2f} GiB")
+            lines.append(f"    {item.get('purpose')}")
+    return "\n".join(lines)
+
+
+def _handle_skills(
+    parser: argparse.ArgumentParser,
+    gateway: SessionGateway,
+    args: argparse.Namespace,
+) -> int:
+    command = getattr(args, "skills_command", None)
+    try:
+        if command == "list":
+            print(_format_skill_settings(gateway.skill_settings()))
+            return 0
+        if command == "inspect":
+            print(_format_skill_summary(gateway.inspect_skill(args.source)))
+            return 0
+        if command == "install":
+            if not args.approve:
+                summary = gateway.inspect_skill(args.source)
+                parser.error(
+                    "installation approval is required; review with `heartwood skills inspect` "
+                    f"and rerun with --approve\n{_format_skill_summary(summary)}"
+                )
+            print(_format_skill_settings(gateway.install_skill(args.source, approved=True)))
+            return 0
+        if command == "remove":
+            print(_format_skill_settings(gateway.remove_skill(args.name)))
+            return 0
+    except SkillSettingsError as error:
+        parser.error(str(error))
+    parser.parse_args(["skills", "--help"])
+    return 0
+
+
+def _format_skill_settings(settings: dict[str, object]) -> str:
+    lines = ["Heartwood Skills", ""]
+    skills = settings.get("skills", [])
+    if not isinstance(skills, list) or not skills:
+        return "\n".join((*lines, "No Skills available."))
+    for item in skills:
+        if isinstance(item, dict):
+            lines.append(
+                f"{item.get('name')}  trust={item.get('trust_tier')}  source={item.get('source')}"
+            )
+            lines.append(f"    {item.get('description')}")
+    return "\n".join(lines)
+
+
+def _format_skill_summary(summary: dict[str, object]) -> str:
+    tools = summary.get("declared_tools", [])
+    tool_text = ", ".join(str(tool) for tool in tools) if isinstance(tools, list) else ""
+    return "\n".join(
+        (
+            f"Skill: {summary.get('name')}",
+            f"Trust: {summary.get('trust_tier')}",
+            f"Tools: {tool_text}",
+            f"Network: {'required' if summary.get('requires_network') else 'disabled'}",
+            f"Permissions: {summary.get('approval_summary')}",
+        )
+    )
+
+
+def _submit_task(
+    gateway: SessionGateway,
+    *,
+    session_id: str,
+    prompt: str,
+    kind: CommandKind = CommandKind.CHAT,
+) -> int:
+    command = _command(
+        gateway,
+        session_id=session_id,
+        kind=kind,
+        payload={"prompt": prompt},
+    )
+    events = gateway.handle(command).events
+    print(_format_transcript(events))
+    return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
+
+
+def _submit_simple(gateway: SessionGateway, *, session_id: str, kind: CommandKind) -> int:
+    events = gateway.handle(_command(gateway, session_id=session_id, kind=kind)).events
+    print(_format_transcript(events))
+    return _event_exit_code(events)
+
+
+def _event_exit_code(events: Sequence[SessionEvent]) -> int:
+    return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
+
+
+def _interactive_chat(gateway: SessionGateway, *, session_id: str) -> int:
+    print(
+        "Heartwood agent. Commands: /allow <id>, /reject <id>, /pause, /resume, "
+        "/status, /replay, /audit-export, /exit."
+    )
+    while True:
+        try:
+            line = input("heartwood> ").strip()
+        except EOFError:
+            print()
+            return 0
+        if line in {"/quit", "/exit"}:
+            return 0
+        if not line:
+            continue
+        if line.startswith("/"):
+            _handle_chat_directive(gateway, session_id=session_id, line=line)
+            continue
+        _submit_task(gateway, session_id=session_id, prompt=line)
+
+
+def _handle_chat_directive(gateway: SessionGateway, *, session_id: str, line: str) -> None:
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        print("Invalid command syntax.")
+        return
+    directive = parts[0]
+    if directive in {"/allow", "/reject"} and len(parts) == 2:
+        kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
+        command = _command(
+            gateway,
+            session_id=session_id,
+            kind=kind,
+            payload={"target_type": "tool-call", "target_id": parts[1]},
+        )
+        print(_format_transcript(gateway.handle(command).events))
+    elif directive == "/pause":
+        _submit_simple(gateway, session_id=session_id, kind=CommandKind.PAUSE)
+    elif directive == "/resume":
+        _submit_simple(gateway, session_id=session_id, kind=CommandKind.RESUME)
+    elif directive == "/status":
+        try:
+            print(_format_model_validation(gateway.validate_model_profile()))
+        except ModelSettingsError as error:
+            print(str(error))
+    elif directive == "/replay":
+        _handle_replay(gateway, session_id=session_id)
+    elif directive == "/audit-export":
+        _handle_audit_export(gateway, session_id=session_id, output=None)
+    else:
+        print(f"Unknown command: {directive}")
+
+
+def _format_transcript(events: Sequence[SessionEvent]) -> str:
+    return "\n".join(line for event in events if (line := _format_event(event)))
+
+
+def _format_event(event: SessionEvent) -> str:
+    kind = _event_kind(event)
+    prefix = f"[{event.sequence:03d}]"
+    if kind == EventKind.COMMAND_RECEIVED.value:
+        return ""
+    if kind == EventKind.DETECTION_PROPOSED.value:
+        dataset = _mapping_payload(event.payload["dataset"], "dataset")
+        platform = _mapping_payload(event.payload["platform"], "platform")
+        return f"{prefix} Detected {platform['adapter_id']} / {dataset['dataset_type']}"
+    if kind == EventKind.USER_MESSAGE_RECORDED.value:
+        return f"{prefix} You: {event.payload.get('content', '')}"
+    if kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
+        decision = _mapping_payload(event.payload["decision"], "decision")
+        return f"{prefix} Model route {decision['decision']}: {decision['endpoint']}"
+    if kind == EventKind.AGENT_MESSAGE_EMITTED.value:
+        return f"{prefix} Agent: {event.payload.get('content', '')}"
+    if kind == EventKind.TOOL_CALL_PROPOSED.value:
+        return (
+            f"{prefix} Action: {event.payload.get('summary', event.payload.get('tool_name', ''))} "
+            f"(risk={event.payload.get('risk', 'unknown')})"
+        )
+    if kind == EventKind.CONFIRMATION_REQUESTED.value:
+        request = _mapping_payload(event.payload["request"], "request")
+        return f"{prefix} Allow once or reject: {request['request_id']} ({request['tool_call_id']})"
+    if kind == EventKind.CONFIRMATION_RESOLVED.value:
+        return f"{prefix} Action {event.payload.get('decision', '')}"
+    if kind == EventKind.TOOL_EXECUTION_RECORDED.value:
+        return (
+            f"{prefix} Tool {event.payload.get('tool_name', '')} "
+            f"exit={event.payload.get('exit_code', '')}"
+        )
+    if kind == EventKind.SESSION_PAUSED.value:
+        return f"{prefix} Session paused"
+    if kind == EventKind.SESSION_RESUMED.value:
+        return f"{prefix} Session resumed"
+    if kind == EventKind.AUDIT_EXPORT_RECORDED.value:
+        return f"{prefix} Audit export: {event.payload.get('path', '')}"
+    if kind == EventKind.ERROR_RECORDED.value:
+        return f"{prefix} Error: {event.payload.get('reason', '')}"
+    return ""
+
+
 def _handle_detect(gateway: SessionGateway, *, workspace: Path, session_id: str) -> int:
-    command = _command(gateway, session_id=session_id, kind=CommandKind.DETECT)
-    result = gateway.handle(command)
+    result = gateway.handle(_command(gateway, session_id=session_id, kind=CommandKind.DETECT))
     detection = next(
         (
             event
@@ -403,16 +604,19 @@ def _handle_detect(gateway: SessionGateway, *, workspace: Path, session_id: str)
     if detection is None:
         print("No detection event recorded.")
         return 1
-    print(_format_detection(detection, workspace=workspace))
+    platform = _mapping_payload(detection.payload["platform"], "platform")
+    dataset = _mapping_payload(detection.payload["dataset"], "dataset")
+    print("Heartwood environment detection")
+    print(f"Session: {session_id}")
+    print(f"State: {workspace}")
+    print(f"Platform: {platform['adapter_id']} ({_float_payload(platform['confidence']):.2f})")
+    print(f"Dataset: {dataset['dataset_type']} ({_float_payload(dataset['confidence']):.2f})")
     return 0
 
 
 def _handle_replay(gateway: SessionGateway, *, session_id: str) -> int:
     events = gateway.replay_events(session_id=session_id)
-    if not events:
-        print("No session events recorded.")
-        return 0
-    print(_format_transcript(events))
+    print(_format_transcript(events) if events else "No session events recorded.")
     return 0
 
 
@@ -422,11 +626,11 @@ def _handle_audit_export(
     session_id: str,
     output: Path | None,
 ) -> int:
-    command = _command(gateway, session_id=session_id, kind=CommandKind.AUDIT_EXPORT)
-    events = gateway.handle(command).events
+    events = gateway.handle(
+        _command(gateway, session_id=session_id, kind=CommandKind.AUDIT_EXPORT)
+    ).events
     if output is not None:
-        export_event = events[-1]
-        export_path = Path(str(export_event.payload["path"]))
+        export_path = Path(str(events[-1].payload["path"]))
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(export_path, output)
     print(_format_transcript(events))
@@ -447,7 +651,7 @@ def _handle_reviewer_packet(
         fixture_root=fixture_root,
         output_dir=output,
     ).generate()
-    print(f"Reviewer packet: {packet.index_path}")
+    print(f"Reviewer artifacts: {packet.index_path}")
     for path in packet.files:
         print(f"  - {path}")
     return 0
@@ -464,7 +668,6 @@ def _handle_serve(
     if not web_root.exists():
         msg = f"web UI assets not found: {web_root}"
         raise SystemExit(msg)
-
     app = GatewayAsgiApp(
         SessionGateway(workspace=workspace),
         static_dir=web_root,
@@ -472,58 +675,6 @@ def _handle_serve(
     )
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
-
-
-def _interactive_chat(gateway: SessionGateway, *, session_id: str) -> int:
-    print("Heartwood chat. Use /quit, /pause, /resume, /replay, /audit-export, /approve, or /deny.")
-    while True:
-        try:
-            line = input("heartwood> ").strip()
-        except EOFError:
-            print()
-            return 0
-        if line in {"", "/quit", "/exit"}:
-            return 0
-        if line.startswith("/"):
-            _handle_chat_directive(gateway, session_id=session_id, line=line)
-            continue
-        command = _command(
-            gateway,
-            session_id=session_id,
-            kind=CommandKind.CHAT,
-            payload={"prompt": line},
-        )
-        print(_format_transcript(gateway.handle(command).events))
-
-
-def _handle_chat_directive(gateway: SessionGateway, *, session_id: str, line: str) -> None:
-    try:
-        parts = shlex.split(line)
-    except ValueError:
-        print("Invalid directive syntax.")
-        return
-    directive = parts[0]
-    if directive == "/pause":
-        command = _command(gateway, session_id=session_id, kind=CommandKind.PAUSE)
-        print(_format_transcript(gateway.handle(command).events))
-    elif directive == "/resume":
-        command = _command(gateway, session_id=session_id, kind=CommandKind.RESUME)
-        print(_format_transcript(gateway.handle(command).events))
-    elif directive == "/replay":
-        _handle_replay(gateway, session_id=session_id)
-    elif directive == "/audit-export":
-        _handle_audit_export(gateway, session_id=session_id, output=None)
-    elif directive in {"/approve", "/deny"} and len(parts) >= 3:
-        kind = CommandKind.APPROVE if directive == "/approve" else CommandKind.DENY
-        command = _command(
-            gateway,
-            session_id=session_id,
-            kind=kind,
-            payload={"target_type": parts[1], "target_id": parts[2]},
-        )
-        print(_format_transcript(gateway.handle(command).events))
-    else:
-        print(f"Unknown directive: {directive}")
 
 
 def _command(
@@ -542,6 +693,27 @@ def _command(
         created_at=_utc_now(),
         payload={} if payload is None else payload,
     )
+
+
+def _mapping_payload(value: JsonValue, name: str) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        msg = f"expected {name} payload to be an object"
+        raise TypeError(msg)
+    return value
+
+
+def _session_id_argument(value: str) -> str:
+    try:
+        return validate_session_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _float_payload(value: JsonValue) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        msg = "expected a numeric payload"
+        raise TypeError(msg)
+    return float(value)
 
 
 def _event_kind(event: SessionEvent) -> str:

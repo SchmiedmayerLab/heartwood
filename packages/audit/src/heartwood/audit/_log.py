@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import cast
 
@@ -77,7 +78,10 @@ class AuditLog:
         )
         event = event.model_copy(update={"event_hash": compute_event_hash(event)})
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as file:
+        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(self.path, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as file:
             file.write(event.model_dump_json() + "\n")
         return event
 
@@ -109,12 +113,17 @@ class AuditLog:
 
 
 _SENSITIVE_KEYS = {
+    "api_key",
+    "authorization",
+    "client_secret",
     "content",
     "date_of_birth",
     "dob",
     "email",
     "mrn",
     "name",
+    "password",
+    "path",
     "patient_id",
     "person_id",
     "prompt",
@@ -126,10 +135,14 @@ _SENSITIVE_KEYS = {
     "row",
     "rows",
     "secret",
+    "summary",
     "table_rows",
     "token",
     "value",
     "values",
+}
+_SENSITIVE_NORMALIZED_KEYS = {
+    "".join(character for character in key if character.isalnum()) for key in _SENSITIVE_KEYS
 }
 
 
@@ -140,11 +153,19 @@ def scrub_json_value(value: JsonValue) -> JsonValue:
         for key, item in value.items():
             normalized_key = str(key)
             scrubbed[normalized_key] = (
-                "[scrubbed]"
-                if normalized_key.lower() in _SENSITIVE_KEYS
-                else scrub_json_value(item)
+                "[scrubbed]" if _is_sensitive_key(normalized_key) else scrub_json_value(item)
             )
         return scrubbed
     if isinstance(value, list):
         return [scrub_json_value(item) for item in value]
     return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = "".join(character for character in key.lower() if character.isalnum())
+    return (
+        normalized in _SENSITIVE_NORMALIZED_KEYS
+        or "password" in normalized
+        or "secret" in normalized
+        or normalized.endswith(("apikey", "token"))
+    )

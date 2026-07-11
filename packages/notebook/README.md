@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-notebook
+# Heartwood Notebook
 
 Notebook-facing Python API and minimal widget bridge for Heartwood sessions.
 
-The package presents the same session events consumed by the CLI as typed notebook view models. The optional widget bridge renders those models with `ipywidgets` when available and falls back to deterministic widget specifications when it is not.
+The package presents the same session events consumed by the CLI and web UI as typed notebook view models. The optional widget bridge renders those models with `ipywidgets` when available and falls back to deterministic widget specifications when it is not. Full conversation interaction is provided by the web UI through the platform's authenticated Jupyter proxy.

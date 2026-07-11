@@ -4,477 +4,433 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for the ``heartwood`` command-line entry point."""
-
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
-from typing import cast
 
 import pytest
 
-from heartwood.cli import __version__, _handle_chat_directive, _handle_detect, main
-from heartwood.core_adapter import SessionResult
-from heartwood.gateway import SessionGateway
-from heartwood.session import SessionCommand, SessionEvent
+from heartwood.cli import main
 
 
-class _EmptyDetectGateway:
-    def replay_events(
-        self,
-        *,
-        session_id: str,
-        after_sequence: int | None = None,
-    ) -> tuple[SessionEvent, ...]:
-        _ = (session_id, after_sequence)
-        return ()
-
-    def handle(self, command: SessionCommand) -> SessionResult:
-        _ = command
-        return SessionResult(events=())
-
-
-def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_command_prints_help_when_stdin_is_not_interactive(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     code = main([])
-    captured = capsys.readouterr()
+
     assert code == 0
-    assert "usage: heartwood" in captured.out
+    assert "Auditable agentic coding" in capsys.readouterr().out
 
 
-def test_version_flag_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exit_info:
+def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
         main(["--version"])
-    assert exit_info.value.code == 0
-    assert __version__ in capsys.readouterr().out
+
+    assert error.value.code == 0
+    assert "heartwood 0.0.0" in capsys.readouterr().out
 
 
-def test_detect_reports_a_proposal(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    workspace = tmp_path / "sessions"
+def test_invalid_session_id_is_reported_as_argument_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["--session-id", "../escape", "detect"])
 
-    code = main(["--workspace", str(workspace), "--session-id", "cli-test", "detect"])
-    captured = capsys.readouterr()
+    assert error.value.code == 2
+    assert "session id must start with a letter or number" in capsys.readouterr().err
 
+
+def test_detect_reports_platform_and_dataset(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--workspace", str(tmp_path / "sessions"), "--session-id", "detect", "detect"])
+
+    output = capsys.readouterr().out
     assert code == 0
-    assert "environment detection" in captured.out
-    assert "Platform:" in captured.out
-    assert "proposal only" in captured.out
-    assert "Session: cli-test" in captured.out
-    assert (workspace / "cli-test" / "events.jsonl").is_file()
+    assert "Heartwood environment detection" in output
+    assert "Platform: generic" in output
+    assert "Dataset: omop-cdm" in output
 
 
-def test_detect_handles_missing_detection_event(
+def test_chat_uses_agentic_task_and_shows_pending_action(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gateway = cast(SessionGateway, _EmptyDetectGateway())
-
-    code = _handle_detect(gateway, workspace=tmp_path, session_id="missing-detection")
-    captured = capsys.readouterr()
-
-    assert code == 1
-    assert "No detection event recorded." in captured.out
-
-
-def test_run_transcript_reports_policy_and_tool_events(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    workspace = tmp_path / "sessions"
-
-    approve = main(
-        [
-            "--workspace",
-            str(workspace),
-            "--session-id",
-            "cli-run",
-            "approve",
-            "--target-type",
-            "model-call",
-            "--target-id",
-            "decision-synthetic-model-call",
-        ]
-    )
-    run = main(
-        [
-            "--workspace",
-            str(workspace),
-            "--session-id",
-            "cli-run",
-            "run",
-            "--prompt",
-            "synthetic run",
-            "--endpoint",
-            "https://model.local.invalid/v1/chat/completions",
-        ]
-    )
-    captured = capsys.readouterr()
-
-    assert approve == 0
-    assert run == 0
-    assert "Approval recorded: model-call decision-synthetic-model-call approved" in captured.out
-    assert (
-        "Model call: allow endpoint=https://model.local.invalid/v1/chat/completions" in captured.out
-    )
-    assert "Tool proposed: heartwood.synthetic.noop" in captured.out
-    assert "Confirmation resolved:" in captured.out
-    assert "Tool execution: heartwood.synthetic.noop exit=0" in captured.out
-    assert "synthetic run" not in (workspace / "cli-run" / "commands.jsonl").read_text(
-        encoding="utf-8"
-    )
-
-
-def test_denied_run_transcript_reports_confirmation_request(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    workspace = tmp_path / "sessions"
-
+    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
     code = main(
         [
             "--workspace",
-            str(workspace),
+            str(tmp_path / "sessions"),
             "--session-id",
-            "cli-denied",
-            "run",
-            "--endpoint",
-            "https://public.example.invalid/v1/chat/completions",
+            "chat",
+            "chat",
+            "--prompt",
+            "summarize",
         ]
     )
-    captured = capsys.readouterr()
 
+    output = capsys.readouterr().out
     assert code == 0
-    assert (
-        "Model call: deny endpoint=https://public.example.invalid/v1/chat/completions"
-        in captured.out
-    )
-    assert "Confirmation requested:" in captured.out
-    assert "Tool execution: heartwood.synthetic.noop exit=1" in captured.out
+    assert "Model route allow" in output
+    assert "Agent:" in output
+    assert "Action:" in output
+    assert "Allow once or reject" in output
 
 
-def test_run_can_select_provider_route_from_config(
+def test_allow_once_resumes_pending_action_across_cli_processes(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
     workspace = tmp_path / "sessions"
-    provider_config = (
-        Path(__file__).resolve().parents[3]
-        / "images"
-        / "generic"
-        / "providers"
-        / "provider-routes.example.toml"
-    )
-
     assert (
         main(
             [
                 "--workspace",
                 str(workspace),
                 "--session-id",
-                "cli-provider",
-                "approve",
-                "--target-type",
-                "model-call",
-                "--target-id",
-                "decision-synthetic-model-call",
+                "allow",
+                "chat",
+                "-p",
+                "run",
             ]
         )
         == 0
     )
+    capsys.readouterr()
+
     code = main(
         [
             "--workspace",
             str(workspace),
             "--session-id",
-            "cli-provider",
-            "run",
-            "--provider-config",
-            str(provider_config),
-            "--provider-route",
-            "local-loopback",
+            "allow",
+            "allow",
+            "allow-toolcall-0",
         ]
     )
-    captured = capsys.readouterr()
 
+    output = capsys.readouterr().out
     assert code == 0
-    assert "Model call: allow endpoint=http://127.0.0.1:8765/v1/chat/completions" in captured.out
-    persisted = (workspace / "cli-provider" / "commands.jsonl").read_text(encoding="utf-8")
-    assert '"provider":"openai-compatible"' in persisted
-    assert "secret_file" not in persisted
+    assert "Action approved" in output
+    assert "Tool heartwood.synthetic.noop exit=0" in output
 
 
-def test_run_rejects_provider_route_with_local_model(
+def test_action_decision_returns_failure_for_unknown_pending_action(
     tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "sessions"
-
-    with pytest.raises(SystemExit) as exit_info:
-        main(
-            [
-                "--workspace",
-                str(workspace),
-                "run",
-                "--local-model",
-                "--provider-route",
-                "local-loopback",
-            ]
-        )
-
-    assert exit_info.value.code == 2
-
-
-def test_run_requires_provider_config_for_provider_route(
-    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("HEARTWOOD_PROVIDER_CONFIG", raising=False)
-
-    with pytest.raises(SystemExit) as exit_info:
-        main(
-            [
-                "--workspace",
-                str(tmp_path / "sessions"),
-                "run",
-                "--provider-route",
-                "local-loopback",
-            ]
-        )
-
-    assert exit_info.value.code == 2
-
-
-def test_run_requires_provider_route_for_provider_invocation(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "sessions"
-
-    with pytest.raises(SystemExit) as exit_info:
-        main(["--workspace", str(workspace), "run", "--invoke-provider"])
-
-    assert exit_info.value.code == 2
-
-
-def test_run_reports_missing_provider_config_as_cli_error(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        main(
-            [
-                "--workspace",
-                str(tmp_path / "sessions"),
-                "run",
-                "--provider-config",
-                str(tmp_path / "missing.toml"),
-                "--provider-route",
-                "local-loopback",
-            ]
-        )
-
-    assert exit_info.value.code == 2
-
-
-def test_serve_constructs_gateway_with_packaged_web_assets(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    web_root = tmp_path / "web"
-    web_root.mkdir()
-    (web_root / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
-    calls: list[dict[str, object]] = []
-
-    def run(app: object, *, host: str, port: int, log_level: str) -> None:
-        calls.append({"app": app, "host": host, "port": port, "log_level": log_level})
-
-    monkeypatch.setattr("uvicorn.run", run)
+    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
 
     code = main(
         [
             "--workspace",
             str(tmp_path / "sessions"),
-            "serve",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8767",
-            "--web-root",
-            str(web_root),
-            "--base-path",
-            "/proxy/8767",
+            "--session-id",
+            "missing-action",
+            "allow",
+            "missing-tool-call",
         ]
     )
 
-    assert code == 0
-    assert len(calls) == 1
-    assert calls[0]["host"] == "127.0.0.1"
-    assert calls[0]["port"] == 8767
-    assert calls[0]["log_level"] == "info"
+    assert code == 1
+    assert "no matching pending action" in capsys.readouterr().out
 
 
-def test_deny_pause_resume_and_empty_replay_are_rendered(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    workspace = tmp_path / "sessions"
-
-    assert main(["--workspace", str(workspace), "--session-id", "empty", "replay"]) == 0
-    assert (
-        main(
-            [
-                "--workspace",
-                str(workspace),
-                "--session-id",
-                "cli-lifecycle",
-                "deny",
-                "--target-type",
-                "skill",
-                "--target-id",
-                "heartwood.synthetic.omop-summary",
-                "--reason",
-                "not needed",
-            ]
-        )
-        == 0
-    )
-    assert main(["--workspace", str(workspace), "--session-id", "cli-lifecycle", "pause"]) == 0
-    assert main(["--workspace", str(workspace), "--session-id", "cli-lifecycle", "resume"]) == 0
-    captured = capsys.readouterr()
-
-    assert "No session events recorded." in captured.out
-    assert "Approval recorded: skill heartwood.synthetic.omop-summary denied" in captured.out
-    assert "Session paused" in captured.out
-    assert "Session resumed" in captured.out
-
-
-def test_interactive_chat_directives(
+def test_run_remains_a_one_shot_task_alias(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "sessions"
-    lines = iter(
-        [
-            "summarize",
-            "/pause",
-            "/resume",
-            "/approve model-call decision-synthetic-model-call",
-            "/audit-export",
-            "/replay",
-            "/unknown",
-            "/quit",
-        ]
-    )
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(lines))
+    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
 
-    code = main(["--workspace", str(workspace), "--session-id", "cli-interactive", "chat"])
-    captured = capsys.readouterr()
+    code = main(["--workspace", str(tmp_path / "sessions"), "run", "inspect workspace"])
 
     assert code == 0
-    assert "Heartwood chat." in captured.out
-    assert "Agent:" in captured.out
-    assert "Session paused" in captured.out
-    assert "Session resumed" in captured.out
-    assert "Approval recorded: model-call decision-synthetic-model-call approved" in captured.out
-    assert "Audit export:" in captured.out
-    assert "Unknown directive: /unknown" in captured.out
+    assert "Allow once or reject" in capsys.readouterr().out
 
 
-def test_interactive_chat_handles_malformed_directive(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    gateway = cast(SessionGateway, _EmptyDetectGateway())
-
-    _handle_chat_directive(gateway, session_id="cli-interactive", line="/approve 'broken")
-    captured = capsys.readouterr()
-
-    assert "Invalid directive syntax." in captured.out
-
-
-def test_replay_and_audit_export_use_persisted_session_events(
+def test_actions_selects_low_risk_auto_approval_for_the_shared_runtime(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
     workspace = tmp_path / "sessions"
-    export_copy = tmp_path / "audit-copy.jsonl"
+    base = ["--workspace", str(workspace), "actions"]
 
-    assert main(["--workspace", str(workspace), "--session-id", "cli-audit", "detect"]) == 0
-    assert main(["--workspace", str(workspace), "--session-id", "cli-audit", "replay"]) == 0
+    assert main(base) == 0
+    assert main([*base, "set", "auto-approve-low-risk"]) == 0
     assert (
         main(
             [
                 "--workspace",
                 str(workspace),
                 "--session-id",
-                "cli-audit",
-                "audit",
-                "export",
-                "--output",
-                str(export_copy),
+                "risk-based",
+                "chat",
+                "--prompt",
+                "summarize",
             ]
         )
         == 0
     )
-    captured = capsys.readouterr()
 
-    assert "Detection proposed: platform=generic dataset=omop-cdm" in captured.out
-    assert "Audit export:" in captured.out
-    assert export_copy.is_file()
-    assert "detection.proposed" in export_copy.read_text(encoding="utf-8")
+    output = capsys.readouterr().out
+    assert "Ask Every Time" in output
+    assert "* Auto-Approve Low Risk" in output
+    assert "Tool heartwood.synthetic.noop exit=0" in output
+    assert "Allow once or reject" not in output
+    assert (
+        json.loads((tmp_path / "actions.json").read_text(encoding="utf-8"))["confirmation_mode"]
+        == "confirm-risky"
+    )
 
 
-def test_reviewer_packet_command_writes_synthetic_bundle(
+def test_models_add_select_list_and_validate_local_profile(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     workspace = tmp_path / "sessions"
-    output = tmp_path / "reviewer"
+    base = ["--workspace", str(workspace), "models"]
 
-    assert main(["--workspace", str(workspace), "--session-id", "cli-review", "detect"]) == 0
+    assert (
+        main(
+            [
+                *base,
+                "add",
+                "local",
+                "--model",
+                "openai/local-model",
+                "--base-url",
+                "http://127.0.0.1:8765/v1",
+                "--policy-endpoint",
+                "http://127.0.0.1:8765/v1/chat/completions",
+                "--credential-kind",
+                "none",
+                "--select",
+            ]
+        )
+        == 0
+    )
+    assert main([*base, "list"]) == 0
+    assert main([*base, "validate"]) == 0
+
+    output = capsys.readouterr().out
+    assert "* local  openai/local-model" in output
+    assert "Credentials: configured" in output
+    assert "Action confirmation: always-confirm" in output
+    assert "Policy: allow" in output
+    settings = json.loads((tmp_path / "models.json").read_text(encoding="utf-8"))
+    assert settings["active_profile"] == "local"
+
+
+def test_external_model_profile_is_denied_until_policy_allows_it(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "runtime-only-secret")
+    workspace = tmp_path / "sessions"
+    base = ["--workspace", str(workspace), "models"]
+    assert (
+        main(
+            [
+                *base,
+                "add",
+                "external",
+                "--model",
+                "openai/configured-model",
+                "--policy-endpoint",
+                "https://api.openai.com/v1/chat/completions",
+                "--api-key-env",
+                "OPENAI_API_KEY",
+                "--select",
+            ]
+        )
+        == 0
+    )
+
+    assert main([*base, "validate"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Credentials: available" in output
+    assert "Policy: deny" in output
+    assert "runtime-only-secret" not in (tmp_path / "models.json").read_text(encoding="utf-8")
+
+
+def test_models_remove_clears_active_selection(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "sessions"
+    base = ["--workspace", str(workspace), "models"]
+    main(
+        [
+            *base,
+            "add",
+            "local",
+            "--model",
+            "openai/local-model",
+            "--base-url",
+            "http://127.0.0.1:8765/v1",
+            "--policy-endpoint",
+            "http://127.0.0.1:8765/v1/chat/completions",
+            "--credential-kind",
+            "none",
+            "--select",
+        ]
+    )
+    capsys.readouterr()
+
+    assert main([*base, "remove", "local"]) == 0
+
+    assert "No model profiles configured" in capsys.readouterr().out
+
+
+def test_skills_list_inspect_install_and_remove_extension(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "sessions"
+    source = _community_skill(tmp_path)
+    base = ["--workspace", str(workspace), "skills"]
+
+    assert main([*base, "list"]) == 0
+    assert main([*base, "inspect", str(source)]) == 0
+    with pytest.raises(SystemExit) as error:
+        main([*base, "install", str(source)])
+    assert error.value.code == 2
+    assert main([*base, "install", str(source), "--approve"]) == 0
+    assert main([*base, "remove", "community-summary"]) == 0
+
+    output = capsys.readouterr()
+    assert "aggregate-export  trust=verified  source=bundled" in output.out
+    assert "Skill: community-summary" in output.out
+    assert "installation approval is required" in output.err
+    assert not (tmp_path / "skills" / "community-summary").exists()
+
+
+def test_interactive_agent_supports_action_and_session_commands(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
+    lines = iter(
+        [
+            "summarize",
+            "/allow interactive-toolcall-0",
+            "/pause",
+            "/resume",
+            "/audit-export",
+            "/replay",
+            "/exit",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(lines))
+
+    code = main(
+        [
+            "--workspace",
+            str(tmp_path / "sessions"),
+            "--session-id",
+            "interactive",
+            "chat",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "Heartwood agent." in output
+    assert "You: summarize" in output
+    assert "Action approved" in output
+    assert "Session paused" in output
+    assert "Session resumed" in output
+    assert "Audit export:" in output
+
+
+def test_replay_and_audit_export_use_persisted_events(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "sessions"
+    output = tmp_path / "audit.jsonl"
+    assert main(["--workspace", str(workspace), "--session-id", "audit", "detect"]) == 0
+    assert main(["--workspace", str(workspace), "--session-id", "audit", "replay"]) == 0
     assert (
         main(
             [
                 "--workspace",
                 str(workspace),
                 "--session-id",
-                "cli-review",
-                "reviewer",
-                "packet",
+                "audit",
+                "audit",
+                "export",
                 "--output",
                 str(output),
             ]
         )
         == 0
     )
-    captured = capsys.readouterr()
 
-    assert "Reviewer packet:" in captured.out
-    assert (output / "reviewer-packet.md").is_file()
-    assert "Synthetic Reviewer Packet" in (output / "reviewer-packet.md").read_text(
-        encoding="utf-8"
-    )
+    captured = capsys.readouterr().out
+    assert "Detected generic / omop-cdm" in captured
+    assert output.is_file()
+    assert "audit.export.recorded" in output.read_text(encoding="utf-8")
 
 
-def test_chat_prompt_emits_agent_message(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_reviewer_artifacts_remain_available(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     workspace = tmp_path / "sessions"
+    output = tmp_path / "reviewer"
+    assert main(["--workspace", str(workspace), "--session-id", "review", "detect"]) == 0
 
     code = main(
         [
             "--workspace",
             str(workspace),
             "--session-id",
-            "cli-chat",
-            "chat",
-            "--prompt",
-            "summarize",
+            "review",
+            "reviewer",
+            "packet",
+            "--output",
+            str(output),
         ]
     )
-    captured = capsys.readouterr()
 
     assert code == 0
-    assert "Agent:" in captured.out
+    assert "Reviewer artifacts:" in capsys.readouterr().out
+    assert (output / "reviewer-packet.md").is_file()
 
 
-def test_unknown_command_is_rejected() -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        main(["nope"])
-    assert exit_info.value.code != 0
+def test_serve_requires_built_assets(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="web UI assets not found"):
+        main(["serve", "--web-root", str(tmp_path / "missing")])
+
+
+def _community_skill(tmp_path: Path) -> Path:
+    repository_root = Path(__file__).resolve().parents[3]
+    source = tmp_path / "source" / "community-summary"
+    shutil.copytree(repository_root / "skills" / "verified" / "aggregate-export", source)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8")
+        .replace("heartwood.synthetic.aggregate-export", "example.community-summary")
+        .replace('name: "aggregate-export"', 'name: "community-summary"')
+        .replace('heartwood.trust-tier: "verified"', 'heartwood.trust-tier: "community"'),
+        encoding="utf-8",
+    )
+    metadata_path = source / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["heartwood.trust-tier"] = "community"
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return source

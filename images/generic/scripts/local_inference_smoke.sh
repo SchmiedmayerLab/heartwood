@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
+port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+
+HEARTWOOD_LOCAL_MODEL_PATH="${model_path}" \
+HEARTWOOD_LOCAL_MODEL_CONTEXT=256 \
+HEARTWOOD_LOCAL_MODEL_THREADS=2 \
+HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" \
+  bash images/generic/scripts/start_local_runtime.sh >/tmp/heartwood-llama-smoke.log 2>&1 &
+runtime_pid="$!"
+
+cleanup() {
+  kill "${runtime_pid}" >/dev/null 2>&1 || true
+  wait "${runtime_pid}" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" python - <<'PY'
+import json
+import os
+import socket
+import time
+import urllib.request
+
+port = int(os.environ["HEARTWOOD_LOCAL_RUNTIME_PORT"])
+deadline = time.time() + 90
+while time.time() < deadline:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            break
+    except OSError:
+        time.sleep(0.2)
+else:
+    raise SystemExit("llama-server did not become ready")
+
+payload = json.dumps(
+    {
+        "model": "heartwood-local-runtime",
+        "messages": [{"role": "user", "content": "Once upon a time"}],
+        "max_tokens": 4,
+        "temperature": 0,
+    }
+).encode()
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/v1/chat/completions",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(request, timeout=60) as response:
+    result = json.load(response)
+choices = result.get("choices")
+if not isinstance(choices, list) or not choices:
+    raise SystemExit(f"llama-server returned no completion choices: {result}")
+print("Mounted local inference smoke: ok")
+PY
