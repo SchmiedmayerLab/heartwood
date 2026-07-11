@@ -133,8 +133,8 @@ jobs:
           docker run --rm --init --network none --read-only
           --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256
           --tmpfs /tmp:rw,nosuid,nodev,size=1g
-          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m
-          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
           --env HEARTWOOD_AGENT_BACKEND=openhands-sdk
           "${IMAGE_NAME}:edge"
           bash images/generic/scripts/offline_stack_smoke.sh

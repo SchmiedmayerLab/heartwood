@@ -85,8 +85,8 @@ Then run the complete model and agent path without network access:
 docker run --rm --network none --read-only \
   -v heartwood-models:/models:ro \
   --tmpfs /tmp:rw,nosuid,nodev,size=4g \
-  --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g \
-  --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m \
+  --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700 \
+  --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
   --cap-drop ALL \
   --security-opt no-new-privileges:true \
   --pids-limit 512 \
@@ -94,6 +94,8 @@ docker run --rm --network none --read-only \
   ghcr.io/schmiedmayerlab/heartwood:edge \
   bash images/generic/scripts/capable_model_e2e.sh
 ```
+
+The home-directory tmpfs mounts explicitly use the image's non-root UID and GID. Omitting those ownership options replaces the image-owned directories with root-owned mounts and prevents OpenHands from writing its runtime state.
 
 The reviewed 7B Q4 artifact requires at least 16 GB RAM; 32 GB is recommended. This resource-intensive acceptance run is suitable for local release validation or the opt-in `run_capable_model` workflow-dispatch job, not the default pull-request gate. Pull-request CI keeps the deterministic no-network OpenHands test and a separately mounted tiny llama.cpp inference test so it remains reproducible and does not download multi-gigabyte weights.
 

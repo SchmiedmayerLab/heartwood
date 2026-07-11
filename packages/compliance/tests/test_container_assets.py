@@ -230,6 +230,8 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
+    compose = _read("images/generic/compose.yaml")
+    offline_guide = _read("docs/getting-started-offline.md")
     capable_model = _read("images/generic/scripts/capable_model_e2e.sh")
 
     assert "packages: write" in publish
@@ -241,6 +243,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert 'docker pull "${IMAGE_NAME}:edge"' in publish
     assert "Run published generic OpenHands smoke" in publish
     assert "docker run --rm --init --network none --read-only" in publish
+    assert publish.count("uid=10001,gid=10001,mode=0700") == 2
     assert "edge-terra" in publish
     assert "verify_registry_manifest.py" in publish
     for stale_tag in ("edge-smoke", "edge-providers", "coder-7b", '-amd64"', '-arm64"'):
@@ -265,6 +268,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "qwen25-7b-instruct-q4_k_m" in smoke
     assert "capable_model_e2e.sh" in smoke
     assert "--network none --read-only" in smoke
+    assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
+    assert compose.count("uid=10001,gid=10001,mode=0700") == 2
+    assert offline_guide.count("uid=10001,gid=10001,mode=0700") == 2
     assert "len(terminal_executions) != 1" in capable_model
     assert 'read_text(encoding="utf-8") != expected_content' in capable_model
     assert 'read_text(encoding="utf-8").strip()' not in capable_model

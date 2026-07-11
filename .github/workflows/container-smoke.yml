@@ -110,8 +110,8 @@ jobs:
           docker run --rm --platform linux/amd64 --network none --read-only
           --volume /tmp/heartwood-models:/models:ro
           --tmpfs /tmp:rw,nosuid,nodev,size=4g
-          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g
-          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
           --cap-drop ALL
           --security-opt no-new-privileges:true
           --pids-limit 512
