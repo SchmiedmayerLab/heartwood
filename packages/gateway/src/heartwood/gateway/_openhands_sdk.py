@@ -73,6 +73,7 @@ _AGENT_LLM_LOCAL_NUM_RETRIES = 1
 _AGENT_LLM_RETRY_MAX_WAIT_SECONDS = 8
 _AGENT_LLM_RETRY_MIN_WAIT_SECONDS = 1
 _AGENT_LLM_RETRY_MULTIPLIER = 2.0
+_AGENT_LLM_LOCAL_TIMEOUT_SECONDS = 600
 _AGENT_LLM_TIMEOUT_SECONDS = 180
 
 
@@ -441,7 +442,9 @@ def _llm_resilience_options(profile: ModelProfile) -> dict[str, int | float]:
         "retry_max_wait": _AGENT_LLM_RETRY_MAX_WAIT_SECONDS,
         "retry_min_wait": _AGENT_LLM_RETRY_MIN_WAIT_SECONDS,
         "retry_multiplier": _AGENT_LLM_RETRY_MULTIPLIER,
-        "timeout": _AGENT_LLM_TIMEOUT_SECONDS,
+        "timeout": (
+            _AGENT_LLM_LOCAL_TIMEOUT_SECONDS if profile.is_local else _AGENT_LLM_TIMEOUT_SECONDS
+        ),
     }
 
 

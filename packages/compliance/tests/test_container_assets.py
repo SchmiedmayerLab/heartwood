@@ -320,8 +320,10 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert offline_guide.count("uid=10001,gid=10001,mode=0700") == 2
-    assert "len(terminal_executions) != 1" in capable_model
+    assert "not 1 <= len(terminal_executions) <= 2" in capable_model
+    assert "not 1 <= len(tool_executions) <= 3" in capable_model
     assert 'f"http://127.0.0.1:{port}/health"' in capable_model
+    assert "llama.cpp runtime log (last 200 lines)" in capable_model
     assert "cohort_path.is_file()" in capable_model
     assert 'summary["source_participant_count"] != 24' in capable_model
     assert 'summary["participant_count"] != 20' in capable_model

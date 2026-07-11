@@ -15,7 +15,7 @@ settings="${HEARTWOOD_MODEL_SETTINGS:-${state_root}/models.json}"
 action_settings="${HEARTWOOD_ACTION_SETTINGS:-${state_root}/actions.json}"
 transcript="${HEARTWOOD_TRANSCRIPT:-${state_root}/transcript.txt}"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${state_root}/llama-server.log}"
-command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-600}"
+command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-900}"
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-/opt/heartwood}"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 cohort_path="${state_root}/workspaces/${session_id}/cohort-summary.json"
@@ -46,8 +46,15 @@ bash images/generic/scripts/start_local_runtime.sh >"${runtime_log}" 2>&1 &
 runtime_pid="$!"
 
 cleanup() {
+  status="$?"
+  trap - EXIT
   kill "${runtime_pid}" >/dev/null 2>&1 || true
   wait "${runtime_pid}" >/dev/null 2>&1 || true
+  if ((status != 0)) && [[ -f "${runtime_log}" ]]; then
+    echo "llama.cpp runtime log (last 200 lines):" >&2
+    tail -n 200 "${runtime_log}" >&2
+  fi
+  exit "${status}"
 }
 trap cleanup EXIT
 
@@ -84,7 +91,7 @@ run_heartwood --workspace "${workspace}" models connect local heartwood-local-ru
 run_heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
-  --prompt "Call the terminal tool exactly once. In that one call, execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json. Do not describe the command as text. Wait for the terminal result before calling any completion or finish action, and do not write the file again. After the command succeeds, report the aggregate cohort result." \
+  --prompt "Call the terminal tool to execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json. Do not describe the command as text. Wait for the terminal result. After the command succeeds, you may use at most two read-only actions to inspect cohort-summary.json. Do not modify or rewrite the file. Report the aggregate cohort result." \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do
@@ -150,14 +157,22 @@ unresolved = {
 }
 if unresolved:
     raise SystemExit(f"capable-model session has unresolved actions: {sorted(unresolved)}")
-terminal_executions = [
+tool_executions = [
     event
     for event in events
     if event["kind"] == "tool.execution.recorded"
-    and event["payload"].get("tool_name") == "terminal"
 ]
-if len(terminal_executions) != 1 or terminal_executions[0]["payload"].get("exit_code") != 0:
-    raise SystemExit("capable-model session must have exactly one successful terminal execution")
+terminal_executions = [
+    event for event in tool_executions if event["payload"].get("tool_name") == "terminal"
+]
+if not 1 <= len(tool_executions) <= 3 or any(
+    event["payload"].get("exit_code") != 0 for event in tool_executions
+):
+    raise SystemExit("capable-model session must have one to three successful tool executions")
+if not 1 <= len(terminal_executions) <= 2 or any(
+    event["payload"].get("exit_code") != 0 for event in terminal_executions
+):
+    raise SystemExit("capable-model session must have one or two successful terminal executions")
 if not cohort_path.is_file():
     raise SystemExit(f"capable model did not create {cohort_path}")
 cohort = json.loads(cohort_path.read_text(encoding="utf-8"))

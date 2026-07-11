@@ -116,9 +116,15 @@ def test_openhands_bounds_interactive_model_retries() -> None:
         "retry_max_wait": 8,
         "retry_min_wait": 1,
         "retry_multiplier": 2.0,
+        "timeout": 600,
+    }
+    assert _llm_resilience_options(remote) == {
+        "num_retries": 2,
+        "retry_max_wait": 8,
+        "retry_min_wait": 1,
+        "retry_multiplier": 2.0,
         "timeout": 180,
     }
-    assert _llm_resilience_options(remote)["num_retries"] == 2
 
 
 def test_openhands_security_configuration_uses_upstream_defense_in_depth() -> None:
