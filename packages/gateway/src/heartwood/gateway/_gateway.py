@@ -406,6 +406,12 @@ class SessionGateway:
             skills_dir=self.skill_manager.bundled_dir,
             additional_skills_dirs=(self.installed_skills_dir,),
             persistence_dir=self.workspace.parent / "openhands",
+            credential_environment_names=tuple(
+                configured_profile.api_key_env
+                for configured_profile in model_settings.profiles
+                if configured_profile.credential_kind == "environment"
+                and configured_profile.api_key_env is not None
+            ),
             action_confirmation_mode=action_settings.confirmation_mode,
             env=self.env,
         )

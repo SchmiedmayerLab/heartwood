@@ -80,6 +80,7 @@ class OpenHandsSdkBackend:
         skills_dir: Path,
         persistence_dir: Path,
         additional_skills_dirs: Sequence[Path] = (),
+        credential_environment_names: Sequence[str] = (),
         action_confirmation_mode: ActionConfirmationMode = "always-confirm",
         env: Mapping[str, str] | None = None,
         conversation_factory: ConversationFactory | None = None,
@@ -94,6 +95,7 @@ class OpenHandsSdkBackend:
         self.skills_dir = skills_dir.resolve()
         self.additional_skills_dirs = tuple(path.resolve() for path in additional_skills_dirs)
         self.persistence_dir = persistence_dir.resolve()
+        self._credential_environment_names = tuple(sorted(set(credential_environment_names)))
         self.env = env
         self._captured: list[object] = []
         self._pending: dict[str, ProposedToolCall] = {}
@@ -220,7 +222,8 @@ class OpenHandsSdkBackend:
 
     def pause(self) -> None:
         """Pause the OpenHands conversation."""
-        self._get_conversation().pause()
+        if self._conversation is not None:
+            self._conversation.pause()
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:
         """Resume OpenHands until the next stop."""
@@ -283,7 +286,10 @@ class OpenHandsSdkBackend:
             tools=[
                 sdk.Tool(
                     name=tools_module.TerminalTool.name,
-                    params=_terminal_tool_params(self.profile),
+                    params=_terminal_tool_params(
+                        self.profile,
+                        self._credential_environment_names,
+                    ),
                 ),
                 sdk.Tool(name=tools_module.FileEditorTool.name),
             ],
@@ -437,11 +443,17 @@ def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
     )
 
 
-def _terminal_tool_params(profile: ModelProfile) -> dict[str, object]:
-    """Mask an environment-referenced provider key from agent subprocesses."""
-    if profile.credential_kind != "environment" or profile.api_key_env is None:
+def _terminal_tool_params(
+    profile: ModelProfile,
+    credential_environment_names: Sequence[str] = (),
+) -> dict[str, object]:
+    """Mask configured environment-referenced provider keys from agent subprocesses."""
+    names = set(credential_environment_names)
+    if profile.credential_kind == "environment" and profile.api_key_env is not None:
+        names.add(profile.api_key_env)
+    if not names:
         return {}
-    return {"env": {profile.api_key_env: ""}}
+    return {"env": dict.fromkeys(sorted(names), "")}
 
 
 def _security_configuration(

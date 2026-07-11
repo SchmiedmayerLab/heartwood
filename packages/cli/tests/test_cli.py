@@ -32,6 +32,16 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
     assert "heartwood 0.0.0" in capsys.readouterr().out
 
 
+def test_invalid_session_id_is_reported_as_argument_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["--session-id", "../escape", "detect"])
+
+    assert error.value.code == 2
+    assert "session id must start with a letter or number" in capsys.readouterr().err
+
+
 def test_detect_reports_platform_and_dataset(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

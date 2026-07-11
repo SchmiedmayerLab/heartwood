@@ -28,6 +28,7 @@ export HEARTWOOD_SESSION_ID="${session_id}"
 export HEARTWOOD_MODEL_SETTINGS="${settings}"
 export HEARTWOOD_ACTION_SETTINGS="${action_settings}"
 export HEARTWOOD_MODEL_REQUEST_LOG="${request_log}"
+export HEARTWOOD_UNUSED_MODEL_API_KEY="synthetic-unused-model-key"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
 
@@ -65,6 +66,12 @@ heartwood --workspace "${workspace}" models add local-smoke \
   --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
   --credential-kind none \
   --select | tee -a "${transcript}"
+heartwood --workspace "${workspace}" models add inactive-smoke \
+  --model openai/heartwood-inactive-runtime \
+  --base-url http://127.0.0.1:8765/v1 \
+  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
+  --credential-kind environment \
+  --api-key-env HEARTWOOD_UNUSED_MODEL_API_KEY | tee -a "${transcript}"
 heartwood --workspace "${workspace}" models validate local-smoke | tee -a "${transcript}"
 heartwood --workspace "${workspace}" --session-id "${session_id}" detect | tee -a "${transcript}"
 heartwood --workspace "${workspace}" --session-id "${session_id}" chat \

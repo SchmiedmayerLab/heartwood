@@ -25,7 +25,7 @@ from heartwood.gateway._model_settings import (
 )
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.schemas import JsonValue
-from heartwood.session import SessionCommand
+from heartwood.session import SessionCommand, validate_session_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +122,10 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(settings))
         if len(parts) != 3 or parts[0] != "sessions":
             return _error(404, "unknown gateway route")
-        session_id = parts[1]
+        try:
+            session_id = validate_session_id(parts[1])
+        except ValueError as error:
+            return _error(422, error)
         resource = parts[2]
         if request.method == "POST" and resource == "commands":
             return self._handle_command(session_id=session_id, body=request.body)

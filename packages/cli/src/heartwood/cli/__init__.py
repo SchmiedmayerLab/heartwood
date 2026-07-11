@@ -28,7 +28,14 @@ from heartwood.gateway import (
     SessionGateway,
     SkillSettingsError,
 )
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    JsonValue,
+    SessionCommand,
+    SessionEvent,
+    validate_session_id,
+)
 
 __all__ = ["__version__", "main"]
 
@@ -56,7 +63,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_WORKSPACE,
         help="Directory for local session state and model settings.",
     )
-    parser.add_argument("--session-id", default="session-local", help="Session identifier.")
+    parser.add_argument(
+        "--session-id",
+        default="session-local",
+        type=_session_id_argument,
+        help="Session identifier.",
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
 
     chat = subparsers.add_parser(
@@ -688,6 +700,13 @@ def _mapping_payload(value: JsonValue, name: str) -> dict[str, JsonValue]:
         msg = f"expected {name} payload to be an object"
         raise TypeError(msg)
     return value
+
+
+def _session_id_argument(value: str) -> str:
+    try:
+        return validate_session_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def _float_payload(value: JsonValue) -> float:

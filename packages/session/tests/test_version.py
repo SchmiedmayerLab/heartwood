@@ -8,8 +8,17 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 import heartwood.session
-from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    SessionCommand,
+    SessionEvent,
+    validate_session_id,
+)
 
 
 def test_version_is_nonempty_string() -> None:
@@ -52,3 +61,19 @@ def test_session_event_contract_carries_hash_chain_pointer() -> None:
     )
     assert event.kind == "detection.proposed"
     assert event.sequence == 0
+
+
+@pytest.mark.parametrize("session_id", ["../escape", "invalid session", "a" * 129])
+def test_session_ids_reject_unsafe_or_oversized_values(session_id: str) -> None:
+    """Session identifiers are safe for persistence and transport boundaries."""
+    with pytest.raises(ValueError, match="session id must start"):
+        validate_session_id(session_id)
+
+    with pytest.raises(ValidationError, match="session_id"):
+        SessionCommand(
+            command_id="command-1",
+            session_id=session_id,
+            kind=CommandKind.DETECT,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )

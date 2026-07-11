@@ -47,7 +47,7 @@ Provider configuration is runtime state:
 
 Model profiles and the selected action-confirmation mode are stored in separate mode-`0600` JSON files outside session directories. Neither file contains credential values. Deployment policy must allow the selected capability tier, confirmation mode, and non-secret credential reference in addition to the endpoint. `credential_allowlist` uses environment-variable names, absolute mounted-file paths, or `managed-identity`. Valid settings cannot bypass a policy denial.
 
-For an environment-referenced provider key, Heartwood passes the value to the in-process OpenHands model client and blanks that variable in OpenHands terminal subprocesses. A mounted credential file or platform managed identity available to the container user is not isolated from agent-executed code by this interactive-container architecture. Use least-privilege identities and a deployment-owned process, remote-workspace, or platform boundary when a model credential must be inaccessible to coding tools.
+For an environment-referenced provider key, Heartwood passes only the active value to the in-process OpenHands model client and blanks every configured model-key environment reference in OpenHands terminal subprocesses. A mounted credential file or platform managed identity available to the container user is not isolated from agent-executed code by this interactive-container architecture. Use least-privilege identities and a deployment-owned process, remote-workspace, or platform boundary when a model credential must be inaccessible to coding tools.
 
 For local models, use one of three equivalent deployment patterns:
 

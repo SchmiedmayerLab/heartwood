@@ -39,7 +39,7 @@ Unchecked items are planned work and are not current capability or support claim
 
 - Non-secret model profiles map directly to OpenHands `LLM` fields and support local OpenAI-compatible services and common LiteLLM provider identifiers.
 - Credentials are runtime references to environment variables, mounted files, or managed identity. Provider turns are denied until deployment policy authorizes the declared normalized policy endpoint, capability tier, confirmation mode, and credential reference; platform controls enforce the actual network destination.
-- The active environment-referenced provider key is blanked in OpenHands terminal subprocesses after being resolved into the in-process model client.
+- Every configured environment-referenced provider key is blanked in OpenHands terminal subprocesses; only the active key is resolved into the in-process model client.
 - Published images contain a CPU llama.cpp runtime and reviewed Hugging Face artifact metadata but no model weights. Downloads are explicit, revision-pinned, size-checked, digest-checked, and stored outside image layers.
 - Repository-verified biomedical Skills load through the OpenHands native loader. Mounted extensions require validation and one recorded installation decision before entering persistent Skill storage.
 - Session events capture researcher messages, agent messages, and action summaries required for complete client replay. Exported audit records retain route decisions, action risk, confirmation, tool identity and outcome, Skill identity, and exports while scrubbing prompt, response, action-summary, filesystem-path, row, and secret values.
@@ -61,7 +61,7 @@ Unchecked items are planned work and are not current capability or support claim
 7. **Session persistence assumes one writer.** The file-backed session and audit stores do not coordinate independent CLI and web processes, so concurrent writers and crash recovery are not release-validated.
 8. **Ingress trust is deployment-dependent.** The gateway binds to loopback by default and relies on the platform proxy for authentication, but trusted-proxy configuration, forwarded-prefix handling, WebSocket origin checks, and explicit non-loopback startup policy are not a complete deployment contract.
 9. **The web UI is functional but operator-oriented.** It exposes the shared conversation, confirmations, Skills, activity, model profiles, and downloads, but session selection is a raw identifier, technical settings dominate the secondary panel, and researcher usability, responsive behavior, accessibility, and Jupyter-proxy ergonomics have not completed a target-user acceptance pass.
-10. **Tool credential isolation is deployment-dependent.** The selected environment-referenced provider key is masked from terminal subprocesses, but a mounted credential file or managed identity available to the interactive workspace user is not isolated from agent-executed code by the current in-process architecture.
+10. **Tool credential isolation is deployment-dependent.** Configured environment-referenced provider keys are masked from terminal subprocesses, but a mounted credential file or managed identity available to the interactive workspace user is not isolated from agent-executed code by the current in-process architecture.
 
 ## Priority 1 — Release-Candidate Runtime Contract
 

@@ -9,14 +9,11 @@
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 from typing import TextIO
 
 from heartwood.audit import scrub_json_value
-from heartwood.session import SessionCommand, SessionEvent
-
-_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+from heartwood.session import SessionCommand, SessionEvent, validate_session_id
 
 
 class SessionStoreBoundaryError(ValueError):
@@ -28,9 +25,10 @@ class FileSessionStore:
 
     def __init__(self, root: Path, session_id: str) -> None:
         """Initialize a root-confined session store."""
-        if not _SESSION_ID.fullmatch(session_id):
-            msg = f"invalid session id: {session_id}"
-            raise SessionStoreBoundaryError(msg)
+        try:
+            validate_session_id(session_id)
+        except ValueError as error:
+            raise SessionStoreBoundaryError(str(error)) from error
         self.root = root.resolve()
         self.session_id = session_id
         self.session_dir = (self.root / session_id).resolve()

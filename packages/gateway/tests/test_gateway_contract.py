@@ -85,6 +85,21 @@ def test_rest_event_replay_supports_reconnect_after_sequence(tmp_path: Path) -> 
     assert [event.sequence for event in stream.receive()] == [1, 2, 3, 4, 5]
 
 
+def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) -> None:
+    response = RestGateway(_gateway(tmp_path)).handle(
+        RestRequest(method="GET", path="/sessions/invalid!session/events")
+    )
+
+    assert response.status_code == 422
+    assert response.body == {
+        "error": (
+            "session id must start with a letter or number and contain at most 128 "
+            "letters, numbers, dots, hyphens, or underscores"
+        )
+    }
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
     rest = RestGateway(_gateway(tmp_path))
 

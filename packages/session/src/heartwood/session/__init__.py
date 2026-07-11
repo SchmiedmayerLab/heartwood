@@ -6,8 +6,8 @@
 
 """Shared session command/event contract for Heartwood.
 
-Every Heartwood interface — the primary CLI, the notebook API, and future UI
-surfaces — drives the same session by issuing commands and consuming a single
+Every Heartwood interface — the primary CLI, notebook API, and web UI — drives
+the same session by issuing commands and consuming a single
 structured event stream. This package will hold that contract so no interface
 owns separate execution semantics.
 
@@ -23,6 +23,7 @@ from heartwood.session._contracts import (
     JsonValue,
     SessionCommand,
     SessionEvent,
+    validate_session_id,
 )
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "SessionCommand",
     "SessionEvent",
     "__version__",
+    "validate_session_id",
 ]
 
 __version__ = "0.0.0"

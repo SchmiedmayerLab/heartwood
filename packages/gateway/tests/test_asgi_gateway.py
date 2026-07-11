@@ -254,6 +254,25 @@ def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
     assert [event["sequence"] for event in data["events"]] == [1, 2, 3, 4, 5]
 
 
+def test_asgi_sse_rejects_invalid_session_id(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        return await _http_call(
+            GatewayAsgiApp(_gateway(tmp_path)),
+            method="GET",
+            path="/sessions/invalid!session/events/stream",
+        )
+
+    sent = asyncio.run(scenario())
+
+    assert sent[0]["status"] == 422
+    assert json.loads(cast(bytes, sent[1]["body"])) == {
+        "error": (
+            "session id must start with a letter or number and contain at most 128 "
+            "letters, numbers, dots, hyphens, or underscores"
+        )
+    }
+
+
 def test_asgi_static_serves_web_assets_under_proxy_prefix(tmp_path: Path) -> None:
     static_dir = tmp_path / "dist"
     assets_dir = static_dir / "assets"
@@ -335,6 +354,33 @@ def test_asgi_websocket_rejects_invalid_route(tmp_path: Path) -> None:
             sent.append(message)
 
         await app({"type": "websocket", "path": "/unknown", "query_string": b""}, receive, send)
+        return sent
+
+    sent = asyncio.run(scenario())
+
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+def test_asgi_websocket_rejects_invalid_session_id(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        app = GatewayAsgiApp(_gateway(tmp_path))
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return {"type": "websocket.disconnect"}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await app(
+            {
+                "type": "websocket",
+                "path": "/sessions/invalid!session/events",
+                "query_string": b"",
+            },
+            receive,
+            send,
+        )
         return sent
 
     sent = asyncio.run(scenario())

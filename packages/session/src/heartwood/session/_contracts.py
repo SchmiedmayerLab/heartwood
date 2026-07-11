@@ -8,12 +8,33 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-__all__ = ["CommandKind", "EventKind", "JsonValue", "SessionCommand", "SessionEvent"]
+__all__ = [
+    "CommandKind",
+    "EventKind",
+    "JsonValue",
+    "SessionCommand",
+    "SessionEvent",
+    "validate_session_id",
+]
+
+_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def validate_session_id(value: str) -> str:
+    """Validate a session identifier before it reaches persistence or transport state."""
+    if _SESSION_ID_PATTERN.fullmatch(value) is None:
+        msg = (
+            "session id must start with a letter or number and contain at most 128 "
+            "letters, numbers, dots, hyphens, or underscores"
+        )
+        raise ValueError(msg)
+    return value
 
 
 class CommandKind(StrEnum):
@@ -71,7 +92,11 @@ class SessionCommand(_SessionRecord):
 
     schema_version: Literal["heartwood.session-command.v1"] = "heartwood.session-command.v1"
     command_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
+    session_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_SESSION_ID_PATTERN.pattern,
+    )
     kind: CommandKind
     actor_id: str = Field(default="human", min_length=1)
     created_at: str = Field(min_length=1)
@@ -83,7 +108,11 @@ class SessionEvent(_SessionRecord):
 
     schema_version: Literal["heartwood.session-event.v1"] = "heartwood.session-event.v1"
     event_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
+    session_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=_SESSION_ID_PATTERN.pattern,
+    )
     sequence: int = Field(ge=0)
     kind: EventKind
     occurred_at: str = Field(min_length=1)

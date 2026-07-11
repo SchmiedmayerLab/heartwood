@@ -16,8 +16,10 @@ from heartwood.core_adapter import (
     BackendEvent,
     BackendEventKind,
     DeterministicAgentBackend,
+    FileSessionStore,
     ProposedToolCall,
     SessionService,
+    SessionStoreBoundaryError,
 )
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
@@ -33,6 +35,11 @@ def test_detection_persists_replayable_events(tmp_path: Path) -> None:
         EventKind.DETECTION_PROPOSED.value,
     ]
     assert service.replay_events() == result.events
+
+
+def test_file_store_rejects_session_ids_outside_the_workspace(tmp_path: Path) -> None:
+    with pytest.raises(SessionStoreBoundaryError, match="session id must start"):
+        FileSessionStore(tmp_path, "../escape")
 
 
 def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path: Path) -> None:

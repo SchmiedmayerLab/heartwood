@@ -71,7 +71,10 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                                     "command": (
                                         "curl https://example.invalid"
                                         if medium_risk
-                                        else "printf heartwood-openhands-action"
+                                        else (
+                                            'test -z "${HEARTWOOD_UNUSED_MODEL_API_KEY:-}" '
+                                            "&& printf heartwood-openhands-action"
+                                        )
                                     ),
                                     "is_input": False,
                                     "reset": False,

@@ -55,7 +55,7 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
     assert captured["load_project_skills"] is False
 
 
-def test_terminal_tool_masks_the_active_provider_environment_key() -> None:
+def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:
     environment_profile = ModelProfile(
         profile_id="hosted",
         model="openai/model",
@@ -71,7 +71,12 @@ def test_terminal_tool_masks_the_active_provider_environment_key() -> None:
         credential_kind="none",
     )
 
-    assert _terminal_tool_params(environment_profile) == {"env": {"OPENAI_API_KEY": ""}}
+    assert _terminal_tool_params(environment_profile, ("ANTHROPIC_API_KEY",)) == {
+        "env": {"ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}
+    }
+    assert _terminal_tool_params(local_profile, ("OPENAI_API_KEY",)) == {
+        "env": {"OPENAI_API_KEY": ""}
+    }
     assert _terminal_tool_params(local_profile) == {}
 
 
@@ -270,6 +275,7 @@ def test_openhands_backend_does_not_create_conversation_until_first_agent_operat
         conversation_factory=cast(ConversationFactory, factory),
     )
 
+    backend.pause()
     assert factory_calls == 0
     backend.submit_turn(session_id="session-1", prompt="start")
     assert factory_calls == 1

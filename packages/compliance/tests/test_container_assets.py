@@ -154,6 +154,7 @@ def test_bake_file_has_one_runtime_and_one_platform_variant() -> None:
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     compose = _read("images/generic/compose.yaml")
     smoke = _read("images/generic/scripts/offline_stack_smoke.sh")
+    model_stub = _read("images/generic/scripts/local_model_stub.py")
 
     assert "network_mode: none" in compose
     assert "read_only: true" in compose
@@ -166,7 +167,10 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert '"${state_root}/openhands"' in smoke
     assert '"${state_root}/workspaces"' in smoke
     assert "models add local-smoke" in smoke
+    assert "models add inactive-smoke" in smoke
     assert "--credential-kind none" in smoke
+    assert "HEARTWOOD_UNUSED_MODEL_API_KEY" in smoke
+    assert "HEARTWOOD_UNUSED_MODEL_API_KEY" in model_stub
     assert "models validate local-smoke" in smoke
     assert "chat" in smoke
     assert "call-heartwood-offline-smoke" in smoke

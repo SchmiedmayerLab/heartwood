@@ -18,7 +18,7 @@ from urllib.parse import parse_qs
 
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._rest import RestGateway, RestRequest
-from heartwood.session import JsonValue, SessionEvent
+from heartwood.session import JsonValue, SessionEvent, validate_session_id
 
 AsgiMessage = dict[str, object]
 AsgiReceive = Callable[[], Awaitable[AsgiMessage]]
@@ -71,6 +71,11 @@ class GatewayAsgiApp:
         gateway_path = _gateway_path(raw_path, static_base_path=self.static_base_path)
         route = None if gateway_path is None else _session_events_stream_route(gateway_path)
         if route is not None and _scope_string(scope, "method") == "GET":
+            try:
+                route = validate_session_id(route)
+            except ValueError as error:
+                await _send_json_response(send, status_code=422, body={"error": str(error)})
+                return
             try:
                 after = _optional_int(_query_values(scope).get("after", [None])[0])
             except ValueError:
@@ -163,6 +168,7 @@ class GatewayAsgiApp:
             await send({"type": "websocket.close", "code": 1008})
             return
         try:
+            route = validate_session_id(route)
             after = _optional_int(_query_values(scope).get("after", [None])[0])
         except ValueError:
             await send({"type": "websocket.close", "code": 1008})
