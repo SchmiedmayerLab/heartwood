@@ -23,7 +23,8 @@ concurrency:
 
 jobs:
   build:
-    name: Build generic image (${{ matrix.platform }})
+    name: Stage and validate generic image (${{ matrix.platform }})
+    if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -51,7 +52,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push image by digest
+      - name: Build and stage image by digest
+        id: candidate
         env:
           DOCKER_PLATFORM: ${{ matrix.platform }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
@@ -63,10 +65,57 @@ jobs:
             --metadata-file /tmp/metadata.json \
             runtime
           digest="$(jq -r '.runtime["containerimage.digest"]' /tmp/metadata.json)"
-          test "${digest}" != "null"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "generic build returned an invalid image digest: ${digest}" >&2
+            exit 1
+          fi
           mkdir -p /tmp/digests
           touch "/tmp/digests/${digest#sha256:}"
-      - name: Upload image digest
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Pull staged generic candidate
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: docker pull --platform "${DOCKER_PLATFORM}" "${CANDIDATE_REFERENCE}"
+      - name: Run staged generic OpenHands smoke
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          docker run --rm --init --platform "${DOCKER_PLATFORM}"
+          --network none --read-only
+          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256
+          --tmpfs /tmp:rw,nosuid,nodev,size=1g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+          --env HEARTWOOD_AGENT_BACKEND=openhands-sdk
+          "${CANDIDATE_REFERENCE}"
+          bash images/generic/scripts/offline_stack_smoke.sh
+      - name: Download and verify CI-only model fixture
+        run: |
+          mkdir -p /tmp/heartwood-model
+          curl --fail --location --show-error --retry 5 \
+            https://huggingface.co/ggml-org/models-moved/resolve/96f460f/tinyllamas/stories260K.gguf \
+            --output /tmp/heartwood-model/stories260K.gguf
+          test "$(stat --format=%s /tmp/heartwood-model/stories260K.gguf)" -eq 1185376
+          echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  /tmp/heartwood-model/stories260K.gguf" | sha256sum --check -
+      - name: Run staged generic local inference smoke
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          docker run --rm --init --platform "${DOCKER_PLATFORM}"
+          --network none --read-only
+          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256
+          --tmpfs /tmp:rw,nosuid,nodev,size=1g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+          --volume /tmp/heartwood-model:/models:ro
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
+          "${CANDIDATE_REFERENCE}"
+          bash images/generic/scripts/local_inference_smoke.sh
+      - name: Upload validated image digest
         uses: actions/upload-artifact@v7
         with:
           name: generic-digest-${{ matrix.suffix }}
@@ -75,7 +124,8 @@ jobs:
           retention-days: 1
 
   publish:
-    name: Publish multi-platform generic image
+    name: Promote validated multi-platform generic image
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     needs: build
     steps:
@@ -96,51 +146,104 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish generic image tags
+      - name: Create and verify immutable generic commit tag
+        id: commit
         env:
           GIT_SHA: ${{ github.sha }}
-          IMAGE_CHANNEL: edge
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
           sources=()
           for digest in /tmp/digests/*; do
-            sources+=("${IMAGE_NAME}@sha256:$(basename "${digest}")")
+            digest_value="$(basename "${digest}")"
+            [[ "${digest_value}" =~ ^[0-9a-f]{64}$ ]]
+            sources+=("${IMAGE_NAME}@sha256:${digest_value}")
           done
           test "${#sources[@]}" -eq 2
-          docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
-            --tag "${IMAGE_NAME}:sha-${GIT_SHA}" \
-            "${sources[@]}"
-      - name: Verify generic image tags
+          docker buildx imagetools create --progress=none --dry-run \
+            "${sources[@]}" > /tmp/generic-candidate-index.json
+          jq -e '
+            (([
+              .manifests[]
+              | select(
+                  .platform.os != "unknown"
+                  or .platform.architecture != "unknown"
+                )
+              | "\(.platform.os)/\(.platform.architecture)"
+            ] | sort) == ["linux/amd64", "linux/arm64"])
+            and all(
+              .manifests[];
+              (
+                .platform.os == "linux"
+                and (
+                  .platform.architecture == "amd64"
+                  or .platform.architecture == "arm64"
+                )
+              )
+              or (
+                .platform.os == "unknown"
+                and .platform.architecture == "unknown"
+                and .annotations["vnd.docker.reference.type"] == "attestation-manifest"
+              )
+            )
+          ' /tmp/generic-candidate-index.json
+          proposed_manifest="$(jq -cS '.manifests |= sort_by(.digest)' /tmp/generic-candidate-index.json)"
+          commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}"
+          if raw="$(docker buildx imagetools inspect --raw "${commit_ref}" 2>/dev/null)"; then
+            existing_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
+            if [ "${existing_manifest}" != "${proposed_manifest}" ]; then
+              echo "immutable generic commit tag already exists with a different manifest" >&2
+              exit 1
+            fi
+            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
+          else
+            docker buildx imagetools create \
+              --tag "${commit_ref}" \
+              --metadata-file /tmp/generic-commit-metadata.json \
+              "${sources[@]}"
+            commit_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/generic-commit-metadata.json)"
+            raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
+            published_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
+            if [ "${published_manifest}" != "${proposed_manifest}" ]; then
+              echo "newly created generic commit tag does not match validated candidate manifest" >&2
+              exit 1
+            fi
+          fi
+          if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "generic commit tag returned an invalid image digest: ${commit_digest}" >&2
+            exit 1
+          fi
+          jq -e '
+            ([
+              .manifests[]
+              | select(.platform.os == "linux")
+              | "\(.platform.os)/\(.platform.architecture)"
+            ] | sort) == ["linux/amd64", "linux/arm64"]
+          ' <<<"${raw}"
+          echo "digest=${commit_digest}" >> "${GITHUB_OUTPUT}"
+      - name: Promote generic moving tag
         env:
+          COMMIT_DIGEST: ${{ steps.commit.outputs.digest }}
           GIT_SHA: ${{ github.sha }}
           IMAGE_CHANNEL: edge
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          for tag in "${IMAGE_CHANNEL}" "sha-${GIT_SHA}"; do
-            raw="$(docker buildx imagetools inspect --raw "${IMAGE_NAME}:${tag}")"
-            grep -Eq '"architecture"[[:space:]]*:[[:space:]]*"amd64"' <<<"${raw}"
-            grep -Eq '"architecture"[[:space:]]*:[[:space:]]*"arm64"' <<<"${raw}"
-          done
-      - name: Pull published generic image
-        env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: docker pull "${IMAGE_NAME}:edge"
-      - name: Run published generic OpenHands smoke
-        env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: >-
-          docker run --rm --init --network none --read-only
-          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256
-          --tmpfs /tmp:rw,nosuid,nodev,size=1g
-          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
-          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
-          --env HEARTWOOD_AGENT_BACKEND=openhands-sdk
-          "${IMAGE_NAME}:edge"
-          bash images/generic/scripts/offline_stack_smoke.sh
+          current_main="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          if [ "${current_main}" != "${GIT_SHA}" ]; then
+            echo "refusing to move the generic channel tag from a stale main workflow" >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
+            --metadata-file /tmp/generic-edge-metadata.json \
+            "${IMAGE_NAME}:sha-${GIT_SHA}"
+          edge_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/generic-edge-metadata.json)"
+          test "${edge_digest}" = "${COMMIT_DIGEST}"
+          docker pull --platform linux/amd64 "${IMAGE_NAME}:${IMAGE_CHANNEL}"
 
   build-terra:
-    name: Build and verify Terra image (linux/amd64)
+    name: Stage, validate, and promote Terra image (linux/amd64)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -158,52 +261,145 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Terra image
+      - name: Build and stage Terra image by digest
+        id: candidate
         env:
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
-          GIT_SHA: ${{ github.sha }}
-          IMAGE_CHANNEL: edge
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: docker buildx bake --file docker-bake.hcl terra-runtime
-      - name: Verify Terra image tags
+        run: |
+          docker buildx bake --file docker-bake.hcl \
+            --set terra-runtime.tags="${IMAGE_NAME}" \
+            --set "terra-runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false" \
+            --metadata-file /tmp/terra-metadata.json \
+            terra-runtime
+          digest="$(jq -r '.terra-runtime["containerimage.digest"]' /tmp/terra-metadata.json)"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Terra build returned an invalid image digest: ${digest}" >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Verify staged Terra registry contract
         env:
-          GIT_SHA: ${{ github.sha }}
-          IMAGE_CHANNEL: edge
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: >-
           python3 images/platform/scripts/verify_registry_manifest.py
           --manifest images/platforms.toml
           --platform terra
           --image-name "${IMAGE_NAME}"
-          --image-channel "${IMAGE_CHANNEL}"
-          --git-sha "${GIT_SHA}"
-      - name: Pull published Terra image
+          --reference "${CANDIDATE_DIGEST}"
+      - name: Pull staged Terra candidate
         env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: docker pull "${IMAGE_NAME}:edge-terra"
-      - name: Run published Terra Jupyter contract smoke
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+        run: docker pull --platform linux/amd64 "${CANDIDATE_REFERENCE}"
+      - name: Run staged Terra Jupyter contract smoke
         env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --entrypoint bash
-          "${IMAGE_NAME}:edge-terra"
+          "${CANDIDATE_REFERENCE}"
           /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
-      - name: Run published Terra OpenHands smoke
+      - name: Run staged Terra OpenHands smoke
         env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --workdir /opt/heartwood --entrypoint bash
-          "${IMAGE_NAME}:edge-terra"
+          "${CANDIDATE_REFERENCE}"
           images/generic/scripts/offline_stack_smoke.sh
-      - name: Run published Terra Jupyter launch smoke
+      - name: Download and verify CI-only model fixture
+        run: |
+          mkdir -p /tmp/heartwood-model
+          curl --fail --location --show-error --retry 5 \
+            https://huggingface.co/ggml-org/models-moved/resolve/96f460f/tinyllamas/stories260K.gguf \
+            --output /tmp/heartwood-model/stories260K.gguf
+          test "$(stat --format=%s /tmp/heartwood-model/stories260K.gguf)" -eq 1185376
+          echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  /tmp/heartwood-model/stories260K.gguf" | sha256sum --check -
+      - name: Run staged Terra local inference smoke
         env:
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: bash images/platform/scripts/terra_jupyter_launch_smoke.sh "${IMAGE_NAME}:edge-terra"
-      - name: Run published Terra Leonardo Jupyter launch smoke
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+        run: >-
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /opt/heartwood --entrypoint bash
+          --volume /tmp/heartwood-model:/models:ro
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
+          "${CANDIDATE_REFERENCE}"
+          images/generic/scripts/local_inference_smoke.sh
+      - name: Run staged Terra Jupyter launch smoke
         env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+        run: >-
+          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
+          "${CANDIDATE_REFERENCE}"
+      - name: Run staged Terra Leonardo Jupyter launch smoke
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
           HEARTWOOD_TERRA_HOST_PORT: "8001"
           HEARTWOOD_TERRA_JUPYTER_MODE: leonardo
+        run: >-
+          bash images/platform/scripts/terra_jupyter_launch_smoke.sh
+          "${CANDIDATE_REFERENCE}"
+      - name: Create and verify immutable Terra commit tag
+        id: commit
+        env:
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          GIT_SHA: ${{ github.sha }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: bash images/platform/scripts/terra_jupyter_launch_smoke.sh "${IMAGE_NAME}:edge-terra"
+        run: |
+          commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-terra"
+          commit_tag_existed="false"
+          if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then
+            commit_tag_existed="true"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
+          else
+            docker buildx imagetools create --prefer-index=false \
+              --tag "${commit_ref}" \
+              --metadata-file /tmp/terra-commit-metadata.json \
+              "${CANDIDATE_REFERENCE}"
+            commit_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/terra-commit-metadata.json)"
+          fi
+          if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Terra commit tag returned an invalid image digest: ${commit_digest}" >&2
+            exit 1
+          fi
+          if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
+            if [ "${commit_tag_existed}" = "true" ]; then
+              echo "immutable Terra commit tag already exists with a different digest" >&2
+            else
+              echo "newly created Terra commit tag does not match staged candidate digest" >&2
+            fi
+            exit 1
+          fi
+          python3 images/platform/scripts/verify_registry_manifest.py \
+            --manifest images/platforms.toml \
+            --platform terra \
+            --image-name "${IMAGE_NAME}" \
+            --reference "sha-${GIT_SHA}-terra"
+          echo "digest=${commit_digest}" >> "${GITHUB_OUTPUT}"
+      - name: Promote Terra moving tag
+        env:
+          COMMIT_DIGEST: ${{ steps.commit.outputs.digest }}
+          GIT_SHA: ${{ github.sha }}
+          IMAGE_CHANNEL: edge
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          current_main="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          if [ "${current_main}" != "${GIT_SHA}" ]; then
+            echo "refusing to move the Terra channel tag from a stale main workflow" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --prefer-index=false \
+            --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra" \
+            --metadata-file /tmp/terra-edge-metadata.json \
+            "${IMAGE_NAME}:sha-${GIT_SHA}-terra"
+          edge_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/terra-edge-metadata.json)"
+          test "${edge_digest}" = "${COMMIT_DIGEST}"
+          python3 images/platform/scripts/verify_registry_manifest.py \
+            --manifest images/platforms.toml \
+            --platform terra \
+            --image-name "${IMAGE_NAME}" \
+            --image-channel "${IMAGE_CHANNEL}" \
+            --git-sha "${GIT_SHA}"

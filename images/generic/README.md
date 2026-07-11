@@ -22,4 +22,4 @@ The image contains no model weights, provider credentials, generated model profi
 
 `images/generic/scripts/start_demo_stack.sh` serves the web UI without starting a model by default. Set `HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1` and provide an explicit `HEARTWOOD_LOCAL_MODEL_PATH` to start the included CPU `llama-server`; otherwise configure an existing local or hosted endpoint through the web panel or `heartwood models` commands.
 
-Public generic tags are `edge` and `sha-<git-sha>`. Architecture builds are pushed by digest and merged into these multi-platform tags without persistent helper tags.
+Public generic tags are `edge` and `sha-<git-sha>`. Native architecture builds are staged without tags and tested by digest before their validated descriptors are merged into the immutable commit tag; `edge` is moved to that verified manifest last. No persistent architecture helper tags are created.
