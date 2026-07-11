@@ -33,23 +33,23 @@ Unchecked items are planned work and are not current capability or support claim
 
 - The gateway owns one OpenHands SDK adapter that configures `Conversation`, `Agent`, `LLM`, terminal and file-editor tools, native Skills, persistence, upstream security analyzers, and confirmation policies.
 - The CLI, web UI, and notebook bridge use one Heartwood command and event contract for tasks, messages, actions, allow or reject decisions, pause and resume, replay, settings, and audit export. The gateway also owns persisted session creation, listing, title metadata, status derivation, and selection used by the web session rail.
-- The web UI is conversation-first and implements persisted session navigation, title editing, typed platform and dataset context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, repository-verification labels for Skills, readable audit activity, and progressively disclosed model settings. Absent boundary evidence and workflow progress are identified as planned rather than inferred.
+- The web UI is conversation-first and implements persisted session navigation, title editing, typed platform and dataset context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, repository-verification labels for Skills, readable audit activity, gateway-owned provider presets, advanced model profiles, and byte-level local-model download progress. Absent boundary evidence and workflow progress are identified as planned rather than inferred.
 - **Ask Every Time** maps to OpenHands `AlwaysConfirm`. **Auto-Approve Low Risk** maps to OpenHands `ConfirmRisky` with a `MEDIUM` threshold and unknown actions confirmed. Deployment policy controls which modes may be selected.
 - The deterministic backend is limited to unit tests, replay, and no-model integration checks.
 
 ### Models, Skills, Policy, And Audit
 
-- Non-secret model profiles map directly to OpenHands `LLM` fields and support local OpenAI-compatible services and common LiteLLM provider identifiers.
+- Non-secret model profiles map directly to OpenHands `LLM` fields and support local OpenAI-compatible services and common LiteLLM provider identifiers. The simplified gateway operation expands a preset id and model name into the same validated profile contract; deployment-specific routes continue to use advanced profiles.
 - Credentials are runtime references to environment variables, mounted files, or managed identity. Provider turns are denied until deployment policy authorizes the declared normalized policy endpoint, capability tier, confirmation mode, and credential reference; platform controls enforce the actual network destination.
 - Every configured environment-referenced provider key is blanked in OpenHands terminal subprocesses; only the active key is resolved into the in-process model client.
-- Published images contain a CPU llama.cpp runtime and reviewed Hugging Face artifact metadata but no model weights. Downloads are explicit, revision-pinned, size-checked, digest-checked, and stored outside image layers. The catalog separates a tool-capable agent demonstration artifact from a coding-output experiment rather than assuming that coding text quality implies OpenHands tool compatibility.
+- Published images contain a CPU llama.cpp runtime and reviewed Hugging Face artifact metadata but no model weights. Downloads are explicit, revision-pinned, size-checked, digest-checked, stored outside image layers, and report byte progress through the gateway. The catalog separates a tool-capable agent demonstration artifact from a coding-output experiment rather than assuming that coding text quality implies OpenHands tool compatibility.
 - Repository-verified biomedical Skills load through the OpenHands native loader. Mounted extensions require validation and one recorded installation decision before entering persistent Skill storage.
 - Session events capture researcher messages, agent messages, and action summaries required for complete client replay. Exported audit records retain route decisions, action risk, confirmation, tool identity and outcome, Skill identity, and exports while scrubbing prompt, response, action-summary, filesystem-path, row, and secret values.
 
 ### Packaging And Verification
 
 - Generic images build natively for `linux/amd64` and `linux/arm64` and publish one multi-platform manifest. Terra publishes a separate AMD64 Docker schema-2 manifest compatible with Leonardo image detection.
-- CI verifies no-weight image contents, OpenHands loopback orchestration, both confirmation modes, native Skill loading, a separately mounted llama.cpp fixture, web and CLI contracts, Jupyter startup, proxy routing, Terra image contracts, and registry media types. An opt-in workflow-dispatch job runs the pinned 7B agent artifact through a network-disabled OpenHands terminal action without making it a pull-request dependency.
+- CI verifies no-weight image contents, OpenHands loopback orchestration, both confirmation modes, native Skill loading, fresh named-volume ownership and cross-container recovery, a separately mounted llama.cpp fixture, web and CLI contracts, Jupyter startup, proxy routing, Terra image contracts, and registry media types. An opt-in workflow-dispatch job runs the pinned 7B agent artifact through a network-disabled OpenHands terminal action without making it a pull-request dependency.
 - Python, TypeScript, documentation, licensing, secret scanning, dependency review, CodeQL, container checks, and synthetic replay are repository gates.
 
 ## Material Readiness Gaps
@@ -64,6 +64,7 @@ Unchecked items are planned work and are not current capability or support claim
 8. **Ingress trust is deployment-dependent.** The gateway binds to loopback by default and relies on the platform proxy for authentication, but trusted-proxy configuration, forwarded-prefix handling, WebSocket origin checks, and explicit non-loopback startup policy are not a complete deployment contract.
 9. **The web UI has not completed target-user acceptance.** The conversation-first shell, persisted session rail, responsive sheets, inline actions, activity, Skills, and progressive model settings are implemented and automated at desktop and narrow Jupyter viewports. Boundary evidence and workflow progress still lack typed events, denied and degraded states need broader accessibility coverage, and no representative-researcher or platform-administrator walkthrough has been completed.
 10. **Tool credential isolation is deployment-dependent.** Configured environment-referenced provider keys are masked from terminal subprocesses, but a mounted credential file or managed identity available to the interactive workspace user is not isolated from agent-executed code by the current in-process architecture.
+11. **First-run and persistence setup is not unified.** The generic runtime uses a state volume and a model-cache volume, path overrides remain distributed, and no shared setup flow verifies durable storage or migrates prior state. [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) owns this work.
 
 ## Priority 1 — Release-Candidate Runtime Contract
 
@@ -74,6 +75,7 @@ Unchecked items are planned work and are not current capability or support claim
 - [ ] Replace the implicit synthetic data-source default with an explicit unconfigured data source. Enable the synthetic OMOP adapter only through a named fixture or demonstration configuration.
 - [ ] Add a minimal Terra platform adapter selected from detector evidence. It must expose platform identity, persistent paths, proxy assumptions, and a conservative default policy without implementing a parallel Terra client.
 - [ ] Make the gateway the sole writer for an active session. Route CLI operations through the running gateway or enforce an interprocess session lock, and add concurrent-command, duplicate-writer, interrupted-append, and recovery tests.
+- [ ] Implement the canonical versioned state root, one-volume default, optional split model cache, migration, restart checks, and shared first-run setup defined in [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22).
 - [ ] Define and enforce the ingress trust contract: loopback by default, explicit trusted-proxy mode for platform deployment, validated base-path and forwarded-prefix handling, WebSocket origin checks, and refusal of accidental unauthenticated non-loopback exposure.
 - [ ] Define and validate the model-only credential isolation contract. Keep provider environment values out of tool subprocesses, require least-privilege identities for analysis, and use a supported OpenHands remote workspace or platform-native process boundary whenever mounted model credentials or identity tokens must be inaccessible to coding tools.
 - [ ] Publish immutable generic and Terra image tags from one commit and record the image, base-image, and application dependency digests.
@@ -85,6 +87,7 @@ Unchecked items are planned work and are not current capability or support claim
 - Terra detection selects the Terra adapter and a conservative policy without adding a Terra client or credential store.
 - Independent writers cannot corrupt or fork a session, and interrupted writes recover deterministically.
 - The CLI and web UI create, list, and resume the same gateway-owned sessions without raw-path access or browser-owned session state.
+- Generic and Terra deployments recover the same non-secret configuration and session state after restart through one documented persistence contract; secrets remain external runtime references.
 - The gateway cannot be exposed beyond loopback without explicit trusted-proxy configuration and origin validation.
 - Model-only credentials are not readable by terminal or file tools in the declared release deployment; identities intentionally shared with analysis code have documented least privilege and platform evidence.
 - Immutable generic and Terra candidate images from one commit pass the complete CI and registry contract.
@@ -234,5 +237,4 @@ Unchecked items are planned work and are not current capability or support claim
 - Keep generic and platform-derived images in one build graph so every platform variant consumes the same Heartwood payload and dependency lock.
 - Keep repository-verified Skills checked in until external distribution has independent ownership, immutable releases, signature verification, revocation, and compatibility testing.
 - Split a component only when it has an independent release cadence, named maintainers, a stable versioned contract, and a demonstrated need that cannot be met by the current workspace.
-- Keep design documents canonical for product and architecture. Use GitHub Issues and Projects for assignment and delivery status, with links back to the relevant roadmap acceptance gate.
-- [ ] Create one issue for each active roadmap deliverable with an owner, dependency, acceptance evidence, and target release; use a project view for delivery status without duplicating design rationale.
+- Keep design documents canonical for product and architecture. Use GitHub Issues and Projects for assignment and delivery status, with links back to the relevant roadmap acceptance gate. Create a focused issue when a roadmap deliverable becomes active and record its owner, dependencies, acceptance evidence, and target release without duplicating design rationale; [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) is the first-run and persistence work item.

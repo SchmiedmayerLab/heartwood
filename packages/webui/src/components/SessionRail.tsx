@@ -113,7 +113,7 @@ export const SessionRailContent = ({
         onClick={() => onOpenPanel("settings")}
       >
         <Settings size={17} />
-        Model &amp; policy
+        Model setup
       </Button>
       <Button variant="ghost" onClick={onExportAudit}>
         <Download size={17} />

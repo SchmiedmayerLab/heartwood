@@ -96,6 +96,8 @@ RUN set -eux; \
     tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
     rm /tmp/llama.cpp.tar.gz
 
+ENV HF_HOME=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models/.huggingface
+
 WORKDIR /opt/heartwood
 
 COPY pyproject.toml uv.lock ./

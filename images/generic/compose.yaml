@@ -8,6 +8,7 @@
 
 services:
   heartwood:
+    image: heartwood-runtime-smoke:local
     build:
       context: ../..
       dockerfile: images/generic/Dockerfile

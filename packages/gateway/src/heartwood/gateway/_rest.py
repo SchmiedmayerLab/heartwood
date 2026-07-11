@@ -126,6 +126,8 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(validation))
         if parts == ("settings", "models", "profiles") and request.method == "POST":
             return self._handle_model_profile(body=request.body)
+        if parts == ("settings", "models", "connect") and request.method == "POST":
+            return self._handle_model_connection(body=request.body)
         if parts == ("settings", "models", "active") and request.method == "PUT":
             return self._handle_model_selection(body=request.body)
         if (
@@ -232,6 +234,25 @@ class RestGateway:
             settings = self.gateway.save_model_profile(profile)
         except json.JSONDecodeError:
             return _error(400, "request body must be valid JSON")
+        except ModelSettingsError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(settings))
+
+    def _handle_model_connection(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return _error(422, "request body must be an object")
+        if set(payload) - {"model_name", "preset_id"}:
+            return _error(422, "provider connection contains unsupported fields")
+        preset_id = payload.get("preset_id")
+        model_name = payload.get("model_name")
+        if not isinstance(preset_id, str) or not isinstance(model_name, str):
+            return _error(422, "preset_id and model_name must be strings")
+        try:
+            settings = self.gateway.connect_model_provider(preset_id, model_name)
         except ModelSettingsError as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(settings))

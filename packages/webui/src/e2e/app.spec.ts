@@ -54,11 +54,11 @@ test("supports the researcher conversation and session workflow", async ({
   await page.getByRole("button", { name: "Close" }).click();
 
   const modelPolicyButton = page.getByRole("button", {
-    name: "Model & policy",
+    name: "Model setup",
   });
   await modelPolicyButton.click();
   await expect(
-    page.getByRole("heading", { name: "Model & policy" }),
+    page.getByRole("heading", { name: "Model setup" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Ask Every Time" }),
@@ -67,10 +67,14 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByRole("button", { name: "Auto-Approve Low Risk" }),
   ).toBeVisible();
   await expect(page.getByText("No reviewed models available")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.getByLabel("Model name").fill("local-model");
+  await page.getByRole("button", { name: "Save and use" }).click();
   await expect(
-    page.getByRole("heading", { name: "Model & policy" }),
-  ).toBeHidden();
+    page.getByLabel("Active model profile", { exact: true }),
+  ).toHaveValue("local-openai-compatible");
+  await expect(page.getByText("allow", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Model setup" })).toBeHidden();
   await expect(modelPolicyButton).toBeFocused();
 
   const task = page.getByRole("textbox", { name: "Task", exact: true });
@@ -113,6 +117,23 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   let sessions: SessionSummary[] = [
     summary("session-test", "Synthetic analysis", 7),
   ];
+  let modelSettings = {
+    schema_version: "heartwood.model-settings.v1",
+    active_profile: null as string | null,
+    profiles: [] as Array<Record<string, unknown>>,
+    presets: [
+      {
+        preset_id: "local-openai-compatible",
+        label: "Local OpenAI-Compatible",
+        model_prefix: "openai/",
+        credential_kind: "none",
+        api_key_env: null,
+        base_url: "http://127.0.0.1:8765/v1",
+        policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+        description: "Local runtime",
+      },
+    ],
+  };
 
   await page.route("**/sessions", async (route) => {
     if (route.request().method() === "POST") {
@@ -169,6 +190,45 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       downloads: [],
     }),
   );
+  await page.route("**/settings/models/connect", async (route) => {
+    const payload = route.request().postDataJSON() as {
+      model_name: string;
+      preset_id: string;
+    };
+    const profile = {
+      profile_id: payload.preset_id,
+      model: `openai/${payload.model_name}`,
+      policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+      capability_tier: "supervised",
+      base_url: "http://127.0.0.1:8765/v1",
+      credential_kind: "none",
+      api_key_env: null,
+      api_key_file: null,
+      api_version: null,
+      aws_region_name: null,
+      aws_profile_name: null,
+      description: "Local runtime",
+      credential_status: "configured",
+    };
+    modelSettings = {
+      ...modelSettings,
+      active_profile: payload.preset_id,
+      profiles: [profile],
+    };
+    await json(route, modelSettings);
+  });
+  await page.route("**/settings/models/validation**", (route) =>
+    json(route, {
+      profile: modelSettings.profiles[0],
+      credential_status: "configured",
+      action_confirmation_mode: "always-confirm",
+      policy_decision: {
+        decision: "allow",
+        endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+        reason: "Local route allowed",
+      },
+    }),
+  );
   await page.route("**/settings/actions", (route) =>
     json(route, {
       schema_version: "heartwood.action-settings.v1",
@@ -183,14 +243,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       ],
     }),
   );
-  await page.route("**/settings/models", (route) =>
-    json(route, {
-      schema_version: "heartwood.model-settings.v1",
-      active_profile: null,
-      profiles: [],
-      presets: [],
-    }),
-  );
+  await page.route("**/settings/models", (route) => json(route, modelSettings));
   await page.route("**/settings/skills", (route) =>
     json(route, {
       skills: [

@@ -18,8 +18,8 @@ import {
   SheetTitle,
 } from "@stanfordspezi/spezi-web-design-system/components/Sheet";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
-import { Download, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
-import { useMemo } from "react";
+import { Check, Download, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import type {
   ActionConfirmationMode,
   ActionSettings,
@@ -48,6 +48,7 @@ interface UtilitySheetProps {
   settings: ModelSettings | null;
   validation: ModelValidation | null;
   onClose: () => void;
+  onConnectProvider: (presetId: string, modelName: string) => void;
   onDownload: (artifactId: string) => void;
   onExportAudit: () => void;
   onInspectSkill: () => void;
@@ -240,6 +241,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
     settings,
     validation,
     onDownload,
+    onConnectProvider,
     onProfileDraft,
     onRefreshSettings,
     onRemoveProfile,
@@ -267,9 +269,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
   return (
     <>
       <SheetHeader>
-        <SheetTitle>Model &amp; policy</SheetTitle>
+        <SheetTitle>Model setup</SheetTitle>
         <SheetDescription>
-          Provider routing and OpenHands action approvals
+          Model provider, local artifacts, and action approvals
         </SheetDescription>
       </SheetHeader>
       <div className="sheet-toolbar">
@@ -292,7 +294,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
             </option>
             {settings?.profiles.map((profile) => (
               <option key={profile.profile_id} value={profile.profile_id}>
-                {profile.profile_id} · {profile.model}
+                {profileLabel(profile, settings)}
               </option>
             ))}
           </select>
@@ -326,6 +328,8 @@ const SettingsContent = (props: UtilitySheetProps) => {
           </div>
         : null}
       </section>
+
+      <ProviderSetup settings={settings} onConnect={onConnectProvider} />
 
       <section className="panel-section">
         <h3>Action approvals</h3>
@@ -365,22 +369,32 @@ const SettingsContent = (props: UtilitySheetProps) => {
                 <div>
                   <strong>{artifact.model_alias}</strong>
                   <span>{formatBytes(artifact.artifact_size_bytes)}</span>
-                  {download ?
-                    <small>
-                      {download.path ?? download.error ?? download.status}
-                    </small>
-                  : null}
+                  <ArtifactDownloadStatus
+                    alias={artifact.model_alias}
+                    download={download}
+                  />
                 </div>
-                <Tooltip tooltip={`Download ${artifact.model_alias}`}>
+                <Tooltip
+                  tooltip={
+                    download?.status === "ready" ?
+                      `${artifact.model_alias} is ready`
+                    : `Download ${artifact.model_alias}`
+                  }
+                >
                   <Button
                     aria-label={`Download ${artifact.model_alias}`}
-                    disabled={download?.status === "downloading"}
+                    disabled={
+                      download?.status === "downloading" ||
+                      download?.status === "ready"
+                    }
                     isPending={download?.status === "downloading"}
                     size="sm"
                     variant="outline"
                     onClick={() => onDownload(artifact.artifact_id)}
                   >
-                    <Download size={15} />
+                    {download?.status === "ready" ?
+                      <Check size={15} />
+                    : <Download size={15} />}
                   </Button>
                 </Tooltip>
               </div>
@@ -390,7 +404,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
       </section>
 
       <details className="advanced-section">
-        <summary>Provider profiles</summary>
+        <summary>More options</summary>
         <div className="advanced-section-content">
           <div className="profile-list">
             {settings?.profiles.map((profile) => (
@@ -423,6 +437,119 @@ const SettingsContent = (props: UtilitySheetProps) => {
       </details>
     </>
   );
+};
+
+const ProviderSetup = ({
+  settings,
+  onConnect,
+}: {
+  settings: ModelSettings | null;
+  onConnect: (presetId: string, modelName: string) => void;
+}) => {
+  const available = settings?.presets.filter(
+    (preset) => preset.policy_endpoint !== null,
+  );
+  const [presetId, setPresetId] = useState<string | null>(null);
+  const [modelName, setModelName] = useState("");
+  const selectedId = presetId ?? available?.[0]?.preset_id ?? "";
+  const selected = available?.find((preset) => preset.preset_id === selectedId);
+  return (
+    <section className="panel-section provider-setup">
+      <h3>Model provider</h3>
+      <label>
+        Provider
+        <select
+          aria-label="Model provider"
+          value={selectedId}
+          onChange={(event) => {
+            setPresetId(event.target.value);
+            setModelName("");
+          }}
+        >
+          {available?.map((preset) => (
+            <option key={preset.preset_id} value={preset.preset_id}>
+              {preset.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Model name
+        <Input
+          value={modelName}
+          onChange={(event) => setModelName(event.target.value)}
+        />
+      </label>
+      {selected ?
+        <div className="provider-summary">
+          <span>{selected.description}</span>
+          <small>{providerCredentialLabel(selected)}</small>
+        </div>
+      : null}
+      <Button
+        disabled={!selectedId || !modelName.trim()}
+        onClick={() => onConnect(selectedId, modelName.trim())}
+      >
+        Save and use
+      </Button>
+    </section>
+  );
+};
+
+const ArtifactDownloadStatus = ({
+  alias,
+  download,
+}: {
+  alias: string;
+  download: ModelArtifacts["downloads"][number] | undefined;
+}) => {
+  if (!download) return null;
+  if (download.status === "ready") {
+    return <small role="status">Ready in model storage</small>;
+  }
+  if (download.status === "error") {
+    return <small role="alert">{download.error ?? "Download failed"}</small>;
+  }
+  const total = download.bytes_total;
+  const downloaded = Math.min(download.bytes_downloaded, total);
+  const percentage = Math.round((downloaded / total) * 100);
+  return (
+    <div className="download-progress" role="status">
+      <progress
+        aria-label={`Download progress for ${alias}`}
+        max={total}
+        value={downloaded}
+      />
+      <small>
+        {percentage}% · {formatBytes(downloaded)} of {formatBytes(total)}
+      </small>
+    </div>
+  );
+};
+
+const providerCredentialLabel = (
+  preset: ModelSettings["presets"][number],
+): string => {
+  if (preset.credential_kind === "none") return "No provider credential";
+  if (preset.credential_kind === "managed-identity") return "Managed identity";
+  return preset.api_key_env ?
+      `Runtime credential: ${preset.api_key_env}`
+    : "Runtime credential";
+};
+
+const profileLabel = (
+  profile: ModelProfile,
+  settings: ModelSettings,
+): string => {
+  const preset = settings.presets.find(
+    (item) => item.preset_id === profile.profile_id,
+  );
+  if (!preset) return `${profile.profile_id} · ${profile.model}`;
+  const modelName =
+    profile.model.startsWith(preset.model_prefix) ?
+      profile.model.slice(preset.model_prefix.length)
+    : profile.model;
+  return `${preset.label} · ${modelName}`;
 };
 
 const ProfileEditor = ({

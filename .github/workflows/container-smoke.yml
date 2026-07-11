@@ -54,21 +54,25 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: docker compose -f images/generic/compose.yaml run --rm --build heartwood
+      - name: Verify named-volume persistence
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+        run: bash images/generic/scripts/container_persistence_smoke.sh
       - name: Download and verify CI-only model fixture
-        run: |
-          mkdir -p /tmp/heartwood-model
-          curl --fail --location --show-error --retry 5 \
-            https://huggingface.co/ggml-org/models-moved/resolve/96f460f/tinyllamas/stories260K.gguf \
-            --output /tmp/heartwood-model/stories260K.gguf
-          test "$(stat --format=%s /tmp/heartwood-model/stories260K.gguf)" -eq 1185376
-          echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  /tmp/heartwood-model/stories260K.gguf" | sha256sum --check -
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          docker run --rm
+          --volume heartwood-ci-model:/home/heartwood/.cache/heartwood/models
+          heartwood-runtime-smoke:local
+          heartwood models download llama-cpp-stories260k-ci
       - name: Run mounted local inference without network
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: >-
           docker compose -f images/generic/compose.yaml run --rm --no-deps
-          --volume /tmp/heartwood-model:/models:ro
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
+          --volume heartwood-ci-model:/models:ro
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
           heartwood bash images/generic/scripts/local_inference_smoke.sh
 
   capable-model:

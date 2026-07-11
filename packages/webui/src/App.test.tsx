@@ -71,9 +71,12 @@ class FakeClient implements HeartwoodClient {
   auditExportCalls = 0;
   listCalls = 0;
   replayCalls = 0;
+  artifactCalls = 0;
   savedProfile: ModelProfile | null = null;
+  connectedProvider: { presetId: string; modelName: string } | null = null;
   currentSettings = settings();
   currentActions = actions();
+  currentDownloads: ModelDownload[] = [];
   downloadedArtifact: string | null = null;
   installedSkill: string | null = null;
   currentSessions: SessionSummary[] = [sessionSummary("session-test")];
@@ -168,6 +171,25 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve(this.currentSettings);
   }
 
+  connectModelProvider(
+    presetId: string,
+    modelName: string,
+  ): Promise<ModelSettings> {
+    this.connectedProvider = { presetId, modelName };
+    const profile = {
+      ...localProfile(),
+      profile_id: presetId,
+      model:
+        modelName.startsWith("openai/") ? modelName : `openai/${modelName}`,
+    };
+    this.currentSettings = {
+      ...this.currentSettings,
+      active_profile: presetId,
+      profiles: [profile],
+    };
+    return Promise.resolve(this.currentSettings);
+  }
+
   getActionSettings(): Promise<ActionSettings> {
     return Promise.resolve(this.currentActions);
   }
@@ -180,6 +202,21 @@ class FakeClient implements HeartwoodClient {
   }
 
   getModelArtifacts(): Promise<ModelArtifacts> {
+    this.artifactCalls += 1;
+    if (
+      this.downloadedArtifact !== null &&
+      this.currentDownloads[0]?.status === "downloading" &&
+      this.artifactCalls > 1
+    ) {
+      this.currentDownloads = [
+        {
+          ...this.currentDownloads[0],
+          status: "ready",
+          bytes_downloaded: 256 * 1024 * 1024,
+          path: "/models/stories260k/model.gguf",
+        },
+      ];
+    }
     return Promise.resolve({
       schema_version: "heartwood.local-model-catalog.v1",
       artifacts: [
@@ -199,18 +236,22 @@ class FakeClient implements HeartwoodClient {
           recommended_resource_envelope: null,
         },
       ],
-      downloads: [],
+      downloads: this.currentDownloads,
     });
   }
 
   downloadModelArtifact(artifactId: string): Promise<ModelDownload> {
     this.downloadedArtifact = artifactId;
-    return Promise.resolve({
+    const download: ModelDownload = {
       artifact_id: artifactId,
       status: "downloading",
+      bytes_downloaded: 64 * 1024 * 1024,
+      bytes_total: 256 * 1024 * 1024,
       path: null,
       error: null,
-    });
+    };
+    this.currentDownloads = [download];
+    return Promise.resolve(download);
   }
 
   getSkillSettings(): Promise<SkillSettings> {
@@ -406,16 +447,31 @@ describe("App", () => {
   it("configures and validates model profiles in the settings panel", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
-    fireEvent.click(screen.getByRole("button", { name: "Model & policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
 
-    await screen.findByRole("heading", { name: "Model & policy" });
+    await screen.findByRole("heading", { name: "Model setup" });
     fireEvent.click(
       screen.getByRole("button", { name: "Auto-Approve Low Risk" }),
     );
     await waitFor(() =>
       expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
     );
-    fireEvent.click(screen.getByText("Provider profiles"));
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: "local-model" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save and use" }));
+    await waitFor(() =>
+      expect(client.connectedProvider).toEqual({
+        presetId: "local-openai-compatible",
+        modelName: "local-model",
+      }),
+    );
+    expect(
+      screen.getByRole("option", {
+        name: "Local OpenAI-Compatible · local-model",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText("More options"));
     fireEvent.change(screen.getByLabelText("Provider preset"), {
       target: { value: "local-openai-compatible" },
     });
@@ -438,7 +494,13 @@ describe("App", () => {
     expect(screen.getByText("configured")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Download Stories 260K"));
     await waitFor(() => expect(client.downloadedArtifact).toBe("stories260k"));
-    expect(await screen.findByText("downloading")).toBeInTheDocument();
+    const progress = await screen.findByRole("progressbar", {
+      name: "Download progress for Stories 260K",
+    });
+    expect(progress).toHaveAttribute("value", String(64 * 1024 * 1024));
+    expect(
+      await screen.findByText("Ready in model storage"),
+    ).toBeInTheDocument();
   });
 
   it("disables action modes blocked by platform policy", async () => {
@@ -452,11 +514,26 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Model & policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
 
     expect(
       await screen.findByRole("button", { name: "Auto-Approve Low Risk" }),
     ).toBeDisabled();
+  });
+
+  it("keeps setup incomplete when the selected credential is unavailable", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      profiles: [{ ...localProfile(), credential_status: "missing" }],
+    };
+
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(
+      await screen.findByText("Model setup is incomplete."),
+    ).toBeInTheDocument();
   });
 
   it("supports secondary activity, settings, rejection, and pause controls", async () => {
@@ -483,10 +560,10 @@ describe("App", () => {
     await waitFor(() => expect(client.replayCalls).toBeGreaterThan(1));
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Model & policy" }));
-    await screen.findByRole("heading", { name: "Model & policy" });
+    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+    await screen.findByRole("heading", { name: "Model setup" });
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    fireEvent.click(screen.getByText("Provider profiles"));
+    fireEvent.click(screen.getByText("More options"));
     fireEvent.click(
       screen.getByRole("button", { name: /local.*openai\/local-model/u }),
     );
@@ -511,7 +588,7 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(
-      screen.queryByRole("heading", { name: "Model & policy" }),
+      screen.queryByRole("heading", { name: "Model setup" }),
     ).not.toBeInTheDocument();
   });
 

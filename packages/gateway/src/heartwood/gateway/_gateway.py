@@ -44,6 +44,7 @@ from heartwood.gateway._model_settings import (
     ModelSettings,
     ModelSettingsError,
     ModelSettingsStore,
+    model_profile_from_preset,
     model_settings_path,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
@@ -306,6 +307,14 @@ class SessionGateway:
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or replace a non-secret profile and reset active services."""
         settings = self.settings_store.load().with_profile(profile)
+        self.settings_store.save(settings)
+        self._reset_services()
+        return self.model_settings()
+
+    def connect_model_provider(self, preset_id: str, model_name: str) -> dict[str, object]:
+        """Configure and select a provider using gateway-owned preset defaults."""
+        profile = model_profile_from_preset(preset_id, model_name)
+        settings = self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
         self.settings_store.save(settings)
         self._reset_services()
         return self.model_settings()

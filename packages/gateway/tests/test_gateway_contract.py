@@ -369,11 +369,20 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     )
     artifacts = rest.handle(RestRequest(method="GET", path="/settings/models/artifacts"))
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/local"))
+    connected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/connect",
+            body=json.dumps({"preset_id": "local-openai-compatible", "model_name": "local-model"}),
+        )
+    )
 
     assert saved.status_code == 200
     assert selected.body["active_profile"] == "local"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
+    assert removed.body["active_profile"] is None
+    assert connected.body["active_profile"] == "local-openai-compatible"
     artifact_ids = {
         artifact["artifact_id"]
         for artifact in cast(list[dict[str, JsonValue]], artifacts.body["artifacts"])
@@ -383,7 +392,6 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
-    assert removed.body["active_profile"] is None
 
 
 def test_rest_starts_artifact_download_and_validates_payloads(
@@ -395,7 +403,12 @@ def test_rest_starts_artifact_download_and_validates_payloads(
     monkeypatch.setattr(
         gateway,
         "download_model_artifact",
-        lambda artifact_id: {"artifact_id": artifact_id, "status": "downloading"},
+        lambda artifact_id: {
+            "artifact_id": artifact_id,
+            "status": "downloading",
+            "bytes_downloaded": 0,
+            "bytes_total": 1,
+        },
     )
 
     response = rest.handle(
@@ -438,10 +451,34 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
             )
         ),
         rest.handle(RestRequest(method="GET", path="/settings/models/validation")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/connect", body="{")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/connect", body="[]")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/connect", body="{}")),
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/connect",
+                body=json.dumps(
+                    {"preset_id": "openai", "model_name": "model", "api_key": "secret"}
+                ),
+            )
+        ),
         rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/missing")),
     )
 
-    assert [response.status_code for response in responses] == [400, 422, 400, 422, 422, 422, 422]
+    assert [response.status_code for response in responses] == [
+        400,
+        422,
+        400,
+        422,
+        422,
+        422,
+        400,
+        422,
+        422,
+        422,
+        422,
+    ]
 
 
 def test_gateway_rejects_unknown_backend_configuration(tmp_path: Path) -> None:

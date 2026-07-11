@@ -241,6 +241,71 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("configures a provider through the simplified settings route", async () => {
+    const settings = {
+      schema_version: "heartwood.model-settings.v1",
+      active_profile: "openai",
+      profiles: [],
+      presets: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.connectModelProvider("openai", "configured-model");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/settings/models/connect",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model_name: "configured-model",
+          preset_id: "openai",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("lists and starts reviewed model downloads", async () => {
+    const artifacts = {
+      schema_version: "heartwood.local-model-catalog.v1",
+      artifacts: [],
+      downloads: [],
+    };
+    const download = {
+      artifact_id: "reviewed-model",
+      status: "downloading",
+      bytes_downloaded: 0,
+      bytes_total: 1024,
+      path: null,
+      error: null,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(artifacts)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(download)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.getModelArtifacts();
+    await client.downloadModelArtifact("reviewed-model");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/artifacts",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/downloads",
+      expect.objectContaining({
+        body: JSON.stringify({ artifact_id: "reviewed-model" }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("selects the shared action-confirmation mode", async () => {
     const actions = {
       schema_version: "heartwood.action-settings.v1",

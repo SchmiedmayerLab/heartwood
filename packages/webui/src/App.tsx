@@ -193,6 +193,34 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       .catch((caught: unknown) => setError(errorMessage(caught)));
   }, [resolvedClient]);
 
+  const modelDownloadActive =
+    modelArtifacts?.downloads.some(
+      (download) => download.status === "downloading",
+    ) ?? false;
+
+  useEffect(() => {
+    if (!modelDownloadActive) return;
+    let active = true;
+    let timer: number | null = null;
+    const poll = async (): Promise<void> => {
+      try {
+        const artifacts = await resolvedClient.getModelArtifacts();
+        if (!active) return;
+        setModelArtifacts(artifacts);
+        if (artifacts.downloads.some((item) => item.status === "downloading")) {
+          timer = window.setTimeout(() => void poll(), 500);
+        }
+      } catch (caught) {
+        if (active) setError(errorMessage(caught));
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 500);
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [modelDownloadActive, resolvedClient]);
+
   const viewModel = useMemo(() => buildViewModel(events), [events]);
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === sessionId) ?? null,
@@ -205,6 +233,15 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       ) ?? null,
     [modelSettings],
   );
+  const activeValidation =
+    validation?.profile.profile_id === activeProfile?.profile_id ?
+      validation
+    : null;
+  const modelReady =
+    activeProfile !== null &&
+    activeProfile.credential_status !== "missing" &&
+    (activeValidation === null ||
+      activeValidation.policy_decision.decision === "allow");
   const conversation = useMemo(
     () =>
       mergeConversationMessages(
@@ -363,6 +400,23 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     }
   };
 
+  const connectProvider = async (presetId: string, modelName: string) => {
+    try {
+      const settings = await resolvedClient.connectModelProvider(
+        presetId,
+        modelName,
+      );
+      setModelSettings(settings);
+      setValidation(
+        await resolvedClient.validateModelProfile(
+          settings.active_profile ?? undefined,
+        ),
+      );
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
   const selectProfile = async (profileId: string) => {
     try {
       setModelSettings(await resolvedClient.selectModelProfile(profileId));
@@ -420,7 +474,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           <ConversationWorkspace
             conversation={conversation}
             conversationEndRef={conversationEndRef}
-            modelConfigured={activeProfile !== null}
+            modelConfigured={modelReady}
             paused={viewModel.paused}
             pendingActions={pendingActions}
             prompt={prompt}
@@ -459,6 +513,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           skillSource={skillSource}
           validation={validation}
           onClose={() => setPanel(null)}
+          onConnectProvider={(presetId, modelName) =>
+            void connectProvider(presetId, modelName)
+          }
           onDownload={(artifactId) =>
             void resolvedClient
               .downloadModelArtifact(artifactId)

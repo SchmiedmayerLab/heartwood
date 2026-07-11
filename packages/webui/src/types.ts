@@ -203,6 +203,8 @@ export interface ModelArtifact {
 export interface ModelDownload {
   artifact_id: string;
   status: "downloading" | "error" | "ready";
+  bytes_downloaded: number;
+  bytes_total: number;
   path: string | null;
   error: string | null;
 }

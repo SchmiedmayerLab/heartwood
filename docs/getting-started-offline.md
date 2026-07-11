@@ -109,7 +109,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
-Open `http://127.0.0.1:8767/`. Use the model settings control to add, select, and validate profiles or to start a reviewed artifact download. Downloads go to the mounted cache. The web UI does not hide process ownership: an operator must start the corresponding local inference service or supply a reachable provider endpoint.
+Open `http://127.0.0.1:8767/`. Model setup accepts a provider and model name for routes with complete defaults, saves and selects the gateway-owned profile, and validates its policy and credential reference. Deployment-specific endpoints remain under **More options**. Reviewed artifact downloads go to the mounted cache and report transferred bytes until integrity verification completes. The web UI does not hide process ownership: an operator must start the corresponding local inference service or supply a reachable provider endpoint.
 
 To start the included local runtime with the web UI in one container, first download the artifact into the mounted volume, then run:
 

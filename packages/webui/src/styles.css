@@ -803,6 +803,7 @@ summary:focus-visible {
 }
 
 .advanced-section-content label,
+.provider-setup label,
 .profile-editor label {
   display: grid;
   gap: 5px;
@@ -821,6 +822,50 @@ summary:focus-visible {
   border-radius: 5px;
   background: #fff;
   color: #18241d;
+}
+
+.provider-summary,
+.download-progress {
+  display: grid;
+  gap: 5px;
+}
+
+.provider-summary span,
+.provider-summary small,
+.download-progress small {
+  color: #68756d;
+  font-size: 0.73rem;
+  line-height: 1.4;
+}
+
+.provider-setup > button {
+  justify-self: start;
+}
+
+.download-progress {
+  width: min(100%, 280px);
+  margin-top: 3px;
+}
+
+.download-progress progress {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  accent-color: #237a5b;
+}
+
+.download-progress progress::-webkit-progress-bar {
+  background: #dfe6e1;
+}
+
+.download-progress progress::-webkit-progress-value {
+  background: #237a5b;
+}
+
+.download-progress progress::-moz-progress-bar {
+  background: #237a5b;
 }
 
 .skill-review {

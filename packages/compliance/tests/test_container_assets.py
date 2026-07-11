@@ -32,11 +32,15 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified" in dockerfile
     assert "HEARTWOOD_MODEL_CATALOG=" in dockerfile
     assert "HEARTWOOD_MODEL_CACHE=" in dockerfile
+    assert "HF_HOME=/home/heartwood/.cache/heartwood/models/.huggingface" in dockerfile
     assert "LITELLM_LOCAL_MODEL_COST_MAP=True" in dockerfile
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.tar.gz" in dockerfile
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz" in dockerfile
     assert "sha256sum --check" in dockerfile
+    assert "/home/heartwood/.local/share/heartwood" in dockerfile
+    assert "/home/heartwood/.cache/heartwood/models" in dockerfile
+    assert "chown -R heartwood:heartwood /opt/heartwood /home/heartwood" in dockerfile
     _assert_no_embedded_model_contract(dockerfile)
 
 
@@ -77,6 +81,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified",
         "HEARTWOOD_MODEL_CATALOG=",
         "HEARTWOOD_MODEL_CACHE=",
+        "HF_HOME=",
         "HEARTWOOD_WEB_ROOT=",
         "ARG LLAMA_CPP_VERSION=b9937",
         "LITELLM_LOCAL_MODEL_COST_MAP=True",
@@ -164,6 +169,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "no-new-privileges:true" in compose
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in compose
     assert "HEARTWOOD_AGENT_BACKEND: openhands-sdk" in compose
+    assert "image: heartwood-runtime-smoke:local" in compose
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
     assert '"${state_root}/openhands"' in smoke
     assert '"${state_root}/workspaces"' in smoke
@@ -189,6 +195,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     scripts = (
         "images/generic/scripts/offline_stack_smoke.sh",
+        "images/generic/scripts/container_persistence_smoke.sh",
         "images/generic/scripts/local_inference_smoke.sh",
         "images/generic/scripts/start_demo_stack.sh",
         "images/generic/scripts/start_local_runtime.sh",
@@ -247,8 +254,11 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "--print terra-runtime terra-ci" in smoke
     assert "edge-terra-ci" in smoke
     assert "images/generic/scripts/offline_stack_smoke.sh" in smoke
+    assert "container_persistence_smoke.sh" in smoke
     assert "Download and verify CI-only model fixture" in smoke
-    assert "--volume /tmp/heartwood-model:/models:ro" in smoke
+    assert "heartwood models download llama-cpp-stories260k-ci" in smoke
+    assert "--volume heartwood-ci-model:/home/heartwood/.cache/heartwood/models" in smoke
+    assert "--volume heartwood-ci-model:/models:ro" in smoke
     assert "local_inference_smoke.sh" in smoke
     assert "run_capable_model" in smoke
     assert "github.event_name == 'workflow_dispatch'" in smoke

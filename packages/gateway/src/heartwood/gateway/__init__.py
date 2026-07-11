@@ -36,6 +36,7 @@ from heartwood.gateway._model_settings import (
     ModelSettingsError,
     ModelSettingsStore,
     model_profile_from_mapping,
+    model_profile_from_preset,
     model_settings_from_mapping,
     model_settings_path,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "download_model_artifact",
     "load_model_artifact_catalog",
     "model_profile_from_mapping",
+    "model_profile_from_preset",
     "model_settings_from_mapping",
     "model_settings_path",
 ]

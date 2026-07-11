@@ -55,7 +55,7 @@ export const ConversationWorkspace = ({
   <section className="conversation-workspace" aria-label="Agent conversation">
     {!modelConfigured ?
       <div className="configuration-banner" role="status">
-        <span>No model profile is selected.</span>
+        <span>Model setup is incomplete.</span>
         <Button size="sm" variant="outline" onClick={onOpenSettings}>
           <Settings size={15} />
           Configure model

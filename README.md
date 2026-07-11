@@ -36,7 +36,7 @@ See [Architecture](design/03-architecture.md), [Security And Compliance](design/
 
 The generic runtime, OpenHands SDK integration, two action-confirmation modes, model profiles, reviewed local-artifact workflow, repository-verified Skill loading, CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, audit path, multi-platform generic image, and Terra-derived image are implemented and CI-validated with synthetic data. The project is pre-release: the Terra image has not completed its live workspace evidence pass, normal runtime construction still uses the generic platform policy and synthetic OMOP data-source fixture, concurrent independent writers to one file-backed session are not supported, and no platform path is institution-approved by the repository.
 
-The web UI provides persisted session creation and selection, title editing, typed context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, Skills, audit activity, and progressive model setup. Boundary evidence and workflow progress remain planned until typed gateway events exist, and representative-user acceptance has not been completed.
+The web UI provides persisted session creation and selection, title editing, typed context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, Skills, audit activity, simple provider selection, advanced profiles, and byte-level local-model download progress. Boundary evidence and workflow progress remain planned until typed gateway events exist, and representative-user acceptance has not been completed.
 
 See [Platform Support](docs/platform-support.md) for the current support matrix. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets until their separate adapters, images, policies, and live evidence are implemented.
 
@@ -89,7 +89,7 @@ cd ../..
 uv run heartwood serve --web-root packages/webui/dist
 ```
 
-Open `http://127.0.0.1:8767/`. The conversation is primary; model profiles, optional reviewed local downloads, policy validation, activity, and audit export are available from secondary controls.
+Open `http://127.0.0.1:8767/`. The conversation is primary; model setup, optional reviewed local downloads, policy validation, activity, and audit export are available from secondary controls. Model setup accepts a provider and model name for routes with complete gateway defaults, while deployment-specific endpoints remain under **More options**.
 
 Action confirmation defaults to **Ask Every Time**. Generic synthetic development may select the only automatic mode from the CLI or the same two-choice web settings control:
 

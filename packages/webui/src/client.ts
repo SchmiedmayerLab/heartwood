@@ -52,6 +52,10 @@ export interface HeartwoodClient {
     mode: ActionConfirmationMode,
   ): Promise<ActionSettings>;
   getModelSettings(): Promise<ModelSettings>;
+  connectModelProvider(
+    presetId: string,
+    modelName: string,
+  ): Promise<ModelSettings>;
   saveModelProfile(profile: ModelProfile): Promise<ModelSettings>;
   selectModelProfile(profileId: string): Promise<ModelSettings>;
   removeModelProfile(profileId: string): Promise<ModelSettings>;
@@ -167,6 +171,19 @@ export class GatewayClient implements HeartwoodClient {
   async getModelSettings(): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models")),
+    );
+  }
+
+  async connectModelProvider(
+    presetId: string,
+    modelName: string,
+  ): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(this.url("/settings/models/connect"), {
+        body: JSON.stringify({ model_name: modelName, preset_id: presetId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
     );
   }
 

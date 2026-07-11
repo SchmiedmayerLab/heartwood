@@ -71,6 +71,8 @@ docker run --rm -p 127.0.0.1:8767:8767 \
 
 The service starts without a secret or model. Configure a profile from the web settings panel or the CLI. Action confirmation defaults to **Ask Every Time**; generic synthetic development can select **Auto-Approve Low Risk** through the same panel or `heartwood actions`. To use a runtime credential, pass an environment variable or mount a secret file at container start. Never use Docker `ARG` or Dockerfile `ENV` for a secret value.
 
+The state volume contains sessions, non-secret model and action settings, installed Skills, OpenHands state, workspaces, and audit data. The separate model volume allows large weights to use a different quota and retention policy and also owns Hugging Face transfer metadata through `HF_HOME`. Override `HEARTWOOD_MODEL_CACHE` and `HF_HOME` together when mounting a different model path. [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) tracks a canonical versioned root and one-volume default while preserving the split cache as an advanced option; the current two-volume layout remains the supported contract until that migration is implemented and restart-tested.
+
 Run an explicitly mounted local model in the same container:
 
 ```bash
@@ -109,6 +111,7 @@ Pull requests run:
 - Docker Buildx checks for both Dockerfiles;
 - the generic runtime on native AMD64 and ARM64 runners;
 - a no-network Compose smoke that uses the deterministic OpenAI-compatible fixture through a real OpenHands `Conversation`;
+- fresh named-volume creation and cross-container recovery for state and model storage;
 - OpenHands native loading of every repository-verified Skill;
 - model profile and artifact integrity tests;
 - a no-weight Terra CI image built through the production platform Dockerfile;
