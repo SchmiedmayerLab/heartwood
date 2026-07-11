@@ -18,6 +18,7 @@ These documents describe commands, images, interfaces, and validation paths impl
 
 - [Platform Support](platform-support.md) records the current support and validation status for each platform.
 - [Container Images](container-images.md) defines published tags, image contents, runtime configuration, and continuous integration.
+- [Model Connections](model-connections.md) defines built-in, platform-provided, local, cloud, and custom model configuration.
 - [Getting Started With Local And Offline Models](getting-started-offline.md) is the runnable generic-container and local-inference guide.
 - [Terra Jupyter Demo](terra-jupyter-demo.md) is the synthetic Terra validation runbook.
 - [Platform Image Extension Guide](platform-images.md) documents the implemented shared mechanism for maintaining or adding a platform-derived image.

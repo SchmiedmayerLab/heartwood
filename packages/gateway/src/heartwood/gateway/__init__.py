@@ -28,6 +28,18 @@ from heartwood.gateway._model_artifacts import (
     download_model_artifact,
     load_model_artifact_catalog,
 )
+from heartwood.gateway._model_catalog import (
+    BUILT_IN_MODEL_CONNECTIONS,
+    ModelCatalog,
+    ModelCatalogEntry,
+    ModelCatalogError,
+    ModelCatalogService,
+    ModelConnection,
+    ProviderModel,
+    custom_model_connection,
+    load_model_connections,
+    model_connections_path,
+)
 from heartwood.gateway._model_settings import (
     MODEL_PRESETS,
     ModelPreset,
@@ -57,6 +69,7 @@ from heartwood.gateway._stream import GatewayEventStream
 
 __all__ = [
     "ACTION_MODE_OPTIONS",
+    "BUILT_IN_MODEL_CONNECTIONS",
     "MODEL_PRESETS",
     "ActionModeOption",
     "ActionSettings",
@@ -68,6 +81,11 @@ __all__ = [
     "ModelArtifactCatalog",
     "ModelArtifactError",
     "ModelArtifactManager",
+    "ModelCatalog",
+    "ModelCatalogEntry",
+    "ModelCatalogError",
+    "ModelCatalogService",
+    "ModelConnection",
     "ModelDownload",
     "ModelPreset",
     "ModelProfile",
@@ -76,6 +94,7 @@ __all__ = [
     "ModelSettingsStore",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
+    "ProviderModel",
     "RestGateway",
     "RestRequest",
     "RestResponse",
@@ -89,8 +108,11 @@ __all__ = [
     "SkillSummary",
     "action_settings_from_mapping",
     "action_settings_path",
+    "custom_model_connection",
     "download_model_artifact",
     "load_model_artifact_catalog",
+    "load_model_connections",
+    "model_connections_path",
     "model_profile_from_mapping",
     "model_profile_from_preset",
     "model_settings_from_mapping",

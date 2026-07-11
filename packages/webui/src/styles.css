@@ -657,6 +657,35 @@ summary:focus-visible {
   padding: 14px 0 4px;
 }
 
+.settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 40px;
+  margin-top: 16px;
+  padding: 2px;
+  border: 1px solid #bdc8c1;
+  border-radius: 6px;
+  background: #e8ede9;
+}
+
+.settings-tabs button {
+  min-width: 0;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #45564c;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-tabs button[aria-selected="true"] {
+  background: #fff;
+  color: #18241d;
+  box-shadow: 0 1px 2px rgb(23 33 27 / 15%);
+}
+
 .panel-section {
   display: grid;
   gap: 11px;
@@ -668,6 +697,107 @@ summary:focus-visible {
   margin: 4px 0;
   color: #69766e;
   font-size: 0.8rem;
+}
+
+.model-connections,
+.connection-group,
+.connection-form,
+.connection-form > div:first-child,
+.model-choice-status {
+  display: grid;
+  gap: 9px;
+}
+
+.connection-group + .connection-group {
+  margin-top: 4px;
+}
+
+.connection-list {
+  display: grid;
+  border-top: 1px solid #e1e6e2;
+}
+
+.connection-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 58px;
+  padding: 9px 0;
+  border-bottom: 1px solid #e1e6e2;
+}
+
+.connection-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.connection-row strong {
+  color: #1f3026;
+  font-size: 0.82rem;
+}
+
+.connection-row span,
+.connection-form span,
+.model-choice-status span {
+  color: #68756d;
+  font-size: 0.73rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.connection-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #ccd5cf;
+  border-radius: 5px;
+  background: #f5f7f5;
+  color: #42564a;
+}
+
+.connection-form {
+  margin-top: 6px;
+  padding: 16px 0 2px;
+  border-top: 1px solid #cfd8d2;
+}
+
+.connection-form label {
+  display: grid;
+  gap: 5px;
+  color: #3c4d43;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.connection-form select {
+  width: 100%;
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid #bdc8c1;
+  border-radius: 5px;
+  background: #fff;
+  color: #18241d;
+}
+
+.connection-form > button,
+.connection-error > button {
+  justify-self: start;
+}
+
+.connection-error {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  border-left: 3px solid #a94442;
+  background: #fff7f6;
+}
+
+.model-choice-status {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
 }
 
 .activity-list {

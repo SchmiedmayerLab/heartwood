@@ -57,24 +57,31 @@ test("supports the researcher conversation and session workflow", async ({
     name: "Model setup",
   });
   await modelPolicyButton.click();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  const localConnection = page.locator(".connection-row").filter({
+    has: page.getByText("Local", { exact: true }),
+  });
+  await localConnection.getByRole("button", { name: "Choose" }).click();
+  await page.getByRole("button", { name: "Load models" }).click();
+  await expect(page.getByLabel("Models available from Local")).toHaveValue(
+    "local-model",
+  );
+  await page.getByRole("button", { name: "Use model" }).click();
   await expect(
-    page.getByRole("heading", { name: "Model setup" }),
-  ).toBeVisible();
+    page.getByLabel("Active model profile", { exact: true }),
+  ).toHaveValue("local");
+  await expect(page.getByText("Authorized", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Approvals" }).click();
   await expect(
     page.getByRole("button", { name: "Ask Every Time" }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByRole("button", { name: "Auto-Approve Low Risk" }),
   ).toBeVisible();
+  await page.getByRole("tab", { name: "Models" }).click();
   await expect(page.getByText("No reviewed models available")).toBeVisible();
-  await page.getByLabel("Model name").fill("local-model");
-  await page.getByRole("button", { name: "Save and use" }).click();
-  await expect(
-    page.getByLabel("Active model profile", { exact: true }),
-  ).toHaveValue("local-openai-compatible");
-  await expect(page.getByText("allow", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { name: "Model setup" })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeHidden();
   await expect(modelPolicyButton).toBeFocused();
 
   const task = page.getByRole("textbox", { name: "Task", exact: true });
@@ -121,6 +128,28 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     schema_version: "heartwood.model-settings.v1",
     active_profile: null as string | null,
     profiles: [] as Array<Record<string, unknown>>,
+    connections: [
+      {
+        connection_id: "local",
+        label: "Local",
+        protocol: "openai-compatible",
+        model_prefix: "openai/",
+        source: "built-in",
+        credential_kind: "none",
+        policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+        catalog_endpoint: "http://127.0.0.1:8765/v1/models",
+        base_url: "http://127.0.0.1:8765/v1",
+        api_key_env: null,
+        api_key_file: null,
+        api_version: null,
+        aws_region_name: null,
+        aws_profile_name: null,
+        description: "Models installed on this device",
+        static_models: [],
+        accepts_token: false,
+        credential_status: "configured",
+      },
+    ],
     presets: [
       {
         preset_id: "local-openai-compatible",
@@ -190,14 +219,32 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       downloads: [],
     }),
   );
+  await page.route("**/settings/models/catalog", (route) =>
+    json(route, {
+      schema_version: "heartwood.model-catalog.v1",
+      connection: modelSettings.connections[0],
+      models: [
+        {
+          model_id: "local-model",
+          display_name: "Local Model",
+          execution_model: "openai/local-model",
+          availability: "available",
+          reason: "Verified by the pinned OpenHands SDK",
+          context_window: 32_768,
+          supports_tools: true,
+        },
+      ],
+      refreshed_at: 1_783_683_200,
+    }),
+  );
   await page.route("**/settings/models/connect", async (route) => {
     const payload = route.request().postDataJSON() as {
-      model_name: string;
-      preset_id: string;
+      connection_id: string;
+      model_id: string;
     };
     const profile = {
-      profile_id: payload.preset_id,
-      model: `openai/${payload.model_name}`,
+      profile_id: payload.connection_id,
+      model: `openai/${payload.model_id}`,
       policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
       capability_tier: "supervised",
       base_url: "http://127.0.0.1:8765/v1",
@@ -212,7 +259,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     };
     modelSettings = {
       ...modelSettings,
-      active_profile: payload.preset_id,
+      active_profile: payload.connection_id,
       profiles: [profile],
     };
     await json(route, modelSettings);

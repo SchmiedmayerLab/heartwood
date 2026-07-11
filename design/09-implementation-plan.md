@@ -19,7 +19,7 @@ Unchecked items are planned work and are not current capability or support claim
 - Keep the common researcher path conversation-first and low-configuration across the CLI and web UI, with the notebook bridge exposing the same persisted session.
 - Delegate the agent loop, terminal and file tools, action-risk analysis, action confirmation, conversation persistence, provider protocol, and native `SKILL.md` loading to OpenHands and LiteLLM.
 - Keep Heartwood focused on biomedical Skill curation, platform and dataset adaptation, route authorization, data-use policy, content-minimized audit records, attestations, and controlled export.
-- Support local, air-gapped, and institution-authorized model routes through one non-secret model-profile contract.
+- Support local, air-gapped, and institution-authorized model routes through one non-secret connection catalog that materializes the existing model-profile execution contract.
 - Never place model weights, credentials, generated settings, prompt content, response content, or participant-level records in image layers or public artifacts.
 - Keep one command and event contract across the CLI, notebook bridge, web UI, scripts, replay, and tests.
 - Keep generic AMD64 and ARM64 images aligned and keep platform-derived images as thin extensions of the same Heartwood payload.
@@ -33,13 +33,13 @@ Unchecked items are planned work and are not current capability or support claim
 
 - The gateway owns one OpenHands SDK adapter that configures `Conversation`, `Agent`, `LLM`, terminal and file-editor tools, native Skills, persistence, upstream security analyzers, and confirmation policies.
 - The CLI, web UI, and notebook bridge use one Heartwood command and event contract for tasks, messages, actions, allow or reject decisions, pause and resume, replay, settings, and audit export. The gateway also owns persisted session creation, listing, title metadata, status derivation, and selection used by the web session rail.
-- The web UI is conversation-first and implements persisted session navigation, title editing, typed platform and dataset context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, repository-verification labels for Skills, readable audit activity, gateway-owned provider presets, advanced model profiles, and byte-level local-model download progress. Absent boundary evidence and workflow progress are identified as planned rather than inferred.
+- The web UI is conversation-first and implements persisted session navigation, title editing, typed platform and dataset context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, repository-verification labels for Skills, readable audit activity, local, platform, cloud, and custom model connections, advanced model profiles, and byte-level local-model download progress. Absent boundary evidence and workflow progress are identified as planned rather than inferred.
 - **Ask Every Time** maps to OpenHands `AlwaysConfirm`. **Auto-Approve Low Risk** maps to OpenHands `ConfirmRisky` with a `MEDIUM` threshold and unknown actions confirmed. Deployment policy controls which modes may be selected.
 - The deterministic backend is limited to unit tests, replay, and no-model integration checks.
 
 ### Models, Skills, Policy, And Audit
 
-- Non-secret model profiles map directly to OpenHands `LLM` fields and support local OpenAI-compatible services and common LiteLLM provider identifiers. The simplified gateway operation expands a preset id and model name into the same validated profile contract; deployment-specific routes continue to use advanced profiles.
+- A versioned non-secret model-connection and catalog contract discovers local OpenAI-compatible, OpenAI, Anthropic, custom API, and platform-provided research models through one gateway service. Official provider SDKs own cloud listing and pagination, OpenHands and LiteLLM provide compatibility metadata, and the selected exact identifier materializes the existing model-profile execution contract. The CLI and web UI project the same catalog; raw profiles remain an advanced compatibility path.
 - Credentials are runtime references to environment variables, mounted files, or managed identity. Provider turns are denied until deployment policy authorizes the declared normalized policy endpoint, capability tier, confirmation mode, and credential reference; platform controls enforce the actual network destination.
 - Every configured environment-referenced provider key is blanked in OpenHands terminal subprocesses; only the active key is resolved into the in-process model client.
 - Published images contain a CPU llama.cpp runtime and reviewed Hugging Face artifact metadata but no model weights. Downloads are explicit, revision-pinned, size-checked, digest-checked, stored outside image layers, and report byte progress through the gateway. The catalog separates a tool-capable agent demonstration artifact from a coding-output experiment rather than assuming that coding text quality implies OpenHands tool compatibility.
@@ -117,6 +117,7 @@ Unchecked items are planned work and are not current capability or support claim
 ### Exit Criteria
 
 - A researcher can create or resume a session, configure or select an authorized model route, submit a task, follow model and tool activity, allow or reject an action, pause or resume, and export the audit record without reading operator documentation.
+- OpenAI, Anthropic, custom OpenAI-compatible, local-runtime, and platform-provided research connections expose the exact models available through their upstream source without a Heartwood cloud-model table; the web UI and CLI project the same normalized catalog.
 - The web UI and CLI act on the same persisted session and produce equivalent command and event outcomes through the gateway, including through the Jupyter proxy.
 - Every boundary, route, Skill, risk, tool, and export label is traceable to typed gateway data; unknown state remains visible and no vendor, compliance, or model-capability claim is hard-coded.
 - Automated desktop, mobile, keyboard, accessibility, restart, and Jupyter-proxy tests pass, and the formative walkthrough has no unresolved release-blocking usability finding.

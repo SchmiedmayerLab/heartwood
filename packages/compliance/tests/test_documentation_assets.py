@@ -174,9 +174,10 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
         assert "model weights" in document.lower()
         assert "OpenHands" in document
         assert "policy" in document.lower()
-    assert "heartwood models add" in readme
+    assert "heartwood models refresh local" in readme
+    assert "heartwood models connect local <model-id>" in readme
     assert "heartwood models download" in readme
-    assert "environment variables, mounted files, or managed identity" in readme
+    assert "environment variables, mounted files, managed identity" in readme
     assert "business associate agreement" in readme
     assert "pushes each result by digest" in container
     assert "persistent `-amd64` and `-arm64` helper tags" in container
@@ -189,6 +190,7 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     assert "reachability graph" in container
     assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
     assert "deterministic loopback model fixture" in local
+    assert "allowed_model_catalog_endpoints" in local
     assert "mounted capable-model test" in local
     assert "capable_model_e2e.sh" in local
     assert "`AlwaysConfirm`" in local
@@ -196,6 +198,23 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
         assert stale not in readme
         assert stale not in container
         assert stale not in local
+
+
+def test_model_connection_guide_defines_shared_provider_and_platform_contracts() -> None:
+    guide = _read("docs/model-connections.md")
+
+    assert "heartwood.model-connections.v1" in guide
+    assert "heartwood models refresh <connection-id>" in guide
+    assert "heartwood models connect <connection-id> <model-id>" in guide
+    assert "Official OpenAI model-list operation" in guide
+    assert "Official Anthropic model-list operation" in guide
+    assert "HEARTWOOD_MODEL_CONNECTIONS" in guide
+    assert "allowed_model_catalog_endpoints" in guide
+    assert "allowed_model_endpoints" in guide
+    assert "api_version" in guide
+    assert "aws_region_name" in guide
+    assert "aws_profile_name" in guide
+    assert "The CLI has no token argument" in guide
 
 
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
@@ -207,8 +226,10 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
     assert "Leonardo rejects an Open Container Initiative index" in runbook
     assert "heartwood-workspace/models" in runbook
-    assert "models add institutional" in runbook
-    assert "models add local" in runbook
+    assert "models refresh <connection-id>" in runbook
+    assert "models connect" in runbook
+    assert "models refresh local" in runbook
+    assert "HEARTWOOD_MODEL_CONNECTIONS" in runbook
     assert "business associate agreement" in runbook
     assert "Allow once or Reject" in runbook
     assert "custom image and base image digests" in runbook

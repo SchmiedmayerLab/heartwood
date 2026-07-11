@@ -15,7 +15,14 @@ from typing import cast
 
 import pytest
 
-from heartwood.gateway import RestGateway, RestRequest, RestResponse, SessionGateway
+from heartwood.gateway import (
+    ModelCatalogService,
+    ProviderModel,
+    RestGateway,
+    RestRequest,
+    RestResponse,
+    SessionGateway,
+)
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -361,7 +368,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "description": "Local fixture",
     }
 
-    assert rest.handle(RestRequest(method="GET", path="/settings/models")).status_code == 200
+    initial = rest.handle(RestRequest(method="GET", path="/settings/models"))
     saved = rest.handle(
         RestRequest(
             method="POST",
@@ -389,6 +396,17 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         )
     )
 
+    assert initial.status_code == 200
+    connections = cast(list[dict[str, JsonValue]], initial.body["connections"])
+    assert [connection["connection_id"] for connection in connections] == [
+        "local",
+        "openai",
+        "anthropic",
+        "custom-api",
+    ]
+    assert all(
+        "token" not in connection and "api_key" not in connection for connection in connections
+    )
     assert saved.status_code == 200
     assert selected.body["active_profile"] == "local"
     assert validated.status_code == 200
@@ -404,6 +422,56 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
+
+
+def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) -> None:
+    service = ModelCatalogService(
+        openai_lister=lambda _connection, _api_key: (ProviderModel("local-coder", "Local Coder"),),
+        compatibility=lambda _connection, _model: (
+            "available",
+            "Verified by the pinned OpenHands SDK",
+            32_768,
+            True,
+        ),
+    )
+    gateway = SessionGateway(
+        workspace=tmp_path / "sessions",
+        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        model_catalog_service=service,
+    )
+    rest = RestGateway(gateway)
+
+    catalog = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/catalog",
+            body=json.dumps({"connection_id": "local", "refresh": True}),
+        )
+    )
+    connected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/connect",
+            body=json.dumps({"connection_id": "local", "model_id": "local-coder"}),
+        )
+    )
+
+    assert catalog.status_code == 200
+    assert catalog.body["models"] == [
+        {
+            "model_id": "local-coder",
+            "display_name": "Local Coder",
+            "execution_model": "openai/local-coder",
+            "availability": "available",
+            "reason": "Verified by the pinned OpenHands SDK",
+            "context_window": 32_768,
+            "supports_tools": True,
+        }
+    ]
+    assert connected.status_code == 200
+    assert connected.body["active_profile"] == "local"
+    profiles = cast(list[dict[str, JsonValue]], connected.body["profiles"])
+    assert profiles[0]["model"] == "openai/local-coder"
 
 
 def test_rest_starts_artifact_download_and_validates_payloads(
@@ -475,6 +543,23 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
                 ),
             )
         ),
+        rest.handle(RestRequest(method="POST", path="/settings/models/catalog", body="{")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/catalog", body="[]")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/catalog", body="{}")),
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/catalog",
+                body=json.dumps({"connection_id": "local", "refresh": "yes"}),
+            )
+        ),
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/connect",
+                body=json.dumps({"connection_id": "local", "model_id": 7}),
+            )
+        ),
         rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/missing")),
     )
 
@@ -486,6 +571,11 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
         422,
         422,
         400,
+        422,
+        422,
+        422,
+        400,
+        422,
         422,
         422,
         422,

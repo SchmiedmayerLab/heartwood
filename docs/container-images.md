@@ -87,7 +87,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
-The local server binds to loopback by default. Configure an OpenAI-compatible profile with base URL `http://127.0.0.1:8765/v1`, policy endpoint `http://127.0.0.1:8765/v1/chat/completions`, and credential kind `none`.
+The local server binds to loopback by default. Use `heartwood models refresh local` and `heartwood models connect local <model-id>` to select the identifier reported by its OpenAI-compatible model-list route.
 
 CPU and memory requirements are determined by the selected model and runtime, not the Heartwood image. The catalog records a reviewed envelope for each optional artifact. GPU acceleration requires a separately installed and tested GPU-capable runtime; attaching a GPU does not make the baseline CPU `llama-server` use it.
 
@@ -115,7 +115,7 @@ Pull requests run:
 - a no-network Compose smoke that uses the deterministic OpenAI-compatible fixture through a real OpenHands `Conversation`;
 - fresh named-volume creation and cross-container recovery for state and model storage;
 - OpenHands native loading of every repository-verified Skill;
-- model profile and artifact integrity tests;
+- model connection, catalog, profile, and artifact integrity tests;
 - a no-weight Terra CI image built through the production platform Dockerfile;
 - Terra Jupyter contract, platform payload, inherited entrypoint, Leonardo route, and OpenHands loopback smokes.
 

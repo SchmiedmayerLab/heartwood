@@ -23,6 +23,10 @@ import type {
   ActionSettings,
   AuditExport,
   ModelArtifacts,
+  ModelCatalog,
+  ModelCatalogRequest,
+  ModelConnectRequest,
+  ModelConnection,
   ModelDownload,
   ModelProfile,
   ModelSettings,
@@ -39,6 +43,19 @@ const settings = (): ModelSettings => ({
   schema_version: "heartwood.model-settings.v1",
   active_profile: null,
   profiles: [],
+  connections: [
+    modelConnection("local", "Local", "built-in", "configured", false),
+    modelConnection(
+      "research-ai",
+      "Research AI Service",
+      "platform",
+      "configured",
+      false,
+    ),
+    modelConnection("openai", "OpenAI", "built-in", "missing", true),
+    modelConnection("anthropic", "Anthropic", "built-in", "missing", true),
+    modelConnection("custom-api", "Custom API", "user", "missing", true),
+  ],
   presets: [
     {
       preset_id: "local-openai-compatible",
@@ -74,6 +91,9 @@ class FakeClient implements HeartwoodClient {
   artifactCalls = 0;
   savedProfile: ModelProfile | null = null;
   connectedProvider: { presetId: string; modelName: string } | null = null;
+  catalogRequest: ModelCatalogRequest | null = null;
+  catalogError: Error | null = null;
+  modelConnectionRequest: ModelConnectRequest | null = null;
   currentSettings = settings();
   currentActions = actions();
   currentDownloads: ModelDownload[] = [];
@@ -168,6 +188,67 @@ class FakeClient implements HeartwoodClient {
   }
 
   getModelSettings(): Promise<ModelSettings> {
+    return Promise.resolve(this.currentSettings);
+  }
+
+  discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog> {
+    this.catalogRequest = request;
+    if (this.catalogError) return Promise.reject(this.catalogError);
+    const connection = this.currentSettings.connections.find(
+      (candidate) => candidate.connection_id === request.connection_id,
+    );
+    if (!connection) return Promise.reject(new Error("unknown connection"));
+    return Promise.resolve({
+      schema_version: "heartwood.model-catalog.v1",
+      connection: { ...connection, credential_status: "available" },
+      models: [
+        {
+          model_id: "provider-coder",
+          display_name: "Provider Coder",
+          execution_model:
+            connection.connection_id === "research-ai" ?
+              "litellm_proxy/provider-coder"
+            : "openai/provider-coder",
+          availability: "available",
+          reason: "Verified by the pinned OpenHands SDK",
+          context_window: 128_000,
+          supports_tools: true,
+        },
+        {
+          model_id: "provider-experimental",
+          display_name: "Provider Experimental",
+          execution_model: "openai/provider-experimental",
+          availability: "experimental",
+          reason: "Not verified by the pinned OpenHands SDK",
+          context_window: null,
+          supports_tools: null,
+        },
+      ],
+      refreshed_at: 1_783_683_200,
+    });
+  }
+
+  connectModel(request: ModelConnectRequest): Promise<ModelSettings> {
+    this.modelConnectionRequest = request;
+    const connection = this.currentSettings.connections.find(
+      (candidate) => candidate.connection_id === request.connection_id,
+    );
+    if (!connection) return Promise.reject(new Error("unknown connection"));
+    const profile: ModelProfile = {
+      ...localProfile(),
+      profile_id: connection.connection_id,
+      model:
+        connection.connection_id === "research-ai" ?
+          `litellm_proxy/${request.model_id}`
+        : `openai/${request.model_id}`,
+      credential_kind: connection.credential_kind,
+      api_key_env: connection.api_key_env,
+    };
+    this.currentSettings = {
+      ...this.currentSettings,
+      active_profile: profile.profile_id,
+      profiles: [profile],
+    };
     return Promise.resolve(this.currentSettings);
   }
 
@@ -449,29 +530,51 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
     fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
 
-    await screen.findByRole("heading", { name: "Model setup" });
+    await screen.findByRole("heading", { name: "Settings" });
+    const researchConnection = screen
+      .getByText("Research AI Service")
+      .closest(".connection-row");
+    expect(researchConnection).not.toBeNull();
+    fireEvent.click(
+      within(researchConnection as HTMLElement).getByRole("button", {
+        name: "Choose",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    const modelSelect = await screen.findByLabelText(
+      "Models available from Research AI Service",
+    );
+    expect(modelSelect).toHaveValue("provider-coder");
+    fireEvent.click(screen.getByRole("button", { name: "Use model" }));
+    await waitFor(() =>
+      expect(client.modelConnectionRequest).toEqual({
+        connection_id: "research-ai",
+        model_id: "provider-coder",
+      }),
+    );
+    expect(client.catalogRequest).toEqual({
+      connection_id: "research-ai",
+      refresh: true,
+    });
+    expect(
+      screen.getByRole("option", {
+        name: "Research AI Service · provider-coder",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Approvals" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Auto-Approve Low Risk" }),
     );
     await waitFor(() =>
       expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
     );
-    fireEvent.change(screen.getByLabelText("Model name"), {
-      target: { value: "local-model" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save and use" }));
-    await waitFor(() =>
-      expect(client.connectedProvider).toEqual({
-        presetId: "local-openai-compatible",
-        modelName: "local-model",
+    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    fireEvent.click(screen.getByText("More options"));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /research-ai.*litellm_proxy\/provider-coder/u,
       }),
     );
-    expect(
-      screen.getByRole("option", {
-        name: "Local OpenAI-Compatible · local-model",
-      }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByText("More options"));
     fireEvent.change(screen.getByLabelText("Provider preset"), {
       target: { value: "local-openai-compatible" },
     });
@@ -483,15 +586,9 @@ describe("App", () => {
     await waitFor(() =>
       expect(client.savedProfile?.model).toBe("openai/local-model"),
     );
-    fireEvent.change(screen.getByLabelText("Active model profile"), {
-      target: { value: "local" },
-    });
-    await waitFor(() =>
-      expect(client.currentSettings.active_profile).toBe("local"),
-    );
     fireEvent.click(screen.getByLabelText("Validate active model profile"));
-    expect(await screen.findByText("allow")).toBeInTheDocument();
-    expect(screen.getByText("configured")).toBeInTheDocument();
+    expect(await screen.findByText("Authorized")).toBeInTheDocument();
+    expect(screen.getByText("Allowed by this environment")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Download Stories 260K"));
     await waitFor(() => expect(client.downloadedArtifact).toBe("stories260k"));
     const progress = await screen.findByRole("progressbar", {
@@ -501,6 +598,85 @@ describe("App", () => {
     expect(
       await screen.findByText("Ready in model storage"),
     ).toBeInTheDocument();
+  });
+
+  it("uses a transient cloud token to discover and select a model", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+
+    const openAiConnection = (await screen.findByText("OpenAI")).closest(
+      ".connection-row",
+    );
+    expect(openAiConnection).not.toBeNull();
+    fireEvent.click(
+      within(openAiConnection as HTMLElement).getByRole("button", {
+        name: "Connect",
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("API token"), {
+      target: { value: "runtime-only-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    await screen.findByLabelText("Models available from OpenAI");
+    fireEvent.click(screen.getByRole("button", { name: "Use model" }));
+
+    await waitFor(() =>
+      expect(client.modelConnectionRequest).toEqual({
+        connection_id: "openai",
+        model_id: "provider-coder",
+      }),
+    );
+    expect(client.catalogRequest).toEqual({
+      connection_id: "openai",
+      token: "runtime-only-token",
+      refresh: true,
+    });
+    expect(screen.getByLabelText("API token")).toHaveValue("");
+    expect(JSON.stringify(client.currentSettings)).not.toContain(
+      "runtime-only-token",
+    );
+  });
+
+  it("allows a manual identifier only when a custom catalog is unavailable", async () => {
+    const client = new FakeClient();
+    client.catalogError = new Error("model provider catalog is unavailable");
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+
+    const customConnection = (await screen.findByText("Custom API")).closest(
+      ".connection-row",
+    );
+    expect(customConnection).not.toBeNull();
+    fireEvent.click(
+      within(customConnection as HTMLElement).getByRole("button", {
+        name: "Connect",
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("Server URL"), {
+      target: { value: "https://models.example/v1" },
+    });
+    fireEvent.change(screen.getByLabelText("Token (optional for local)"), {
+      target: { value: "runtime-only-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "model provider catalog is unavailable",
+    );
+    fireEvent.change(screen.getByLabelText("Model identifier"), {
+      target: { value: "custom-coder" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Use model" }));
+
+    await waitFor(() =>
+      expect(client.modelConnectionRequest).toEqual({
+        connection_id: "custom-api",
+        model_id: "custom-coder",
+        base_url: "https://models.example/v1",
+        manual: true,
+      }),
+    );
   });
 
   it("disables action modes blocked by platform policy", async () => {
@@ -515,6 +691,7 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Approvals" }));
 
     expect(
       await screen.findByRole("button", { name: "Auto-Approve Low Risk" }),
@@ -561,7 +738,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
-    await screen.findByRole("heading", { name: "Model setup" });
+    await screen.findByRole("heading", { name: "Settings" });
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     fireEvent.click(screen.getByText("More options"));
     fireEvent.click(
@@ -588,7 +765,7 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(
-      screen.queryByRole("heading", { name: "Model setup" }),
+      screen.queryByRole("heading", { name: "Settings" }),
     ).not.toBeInTheDocument();
   });
 
@@ -679,6 +856,48 @@ const localProfile = (): ModelProfile => ({
   aws_region_name: null,
   aws_profile_name: null,
   description: "Local model",
+});
+
+const modelConnection = (
+  connectionId: string,
+  label: string,
+  source: ModelConnection["source"],
+  credentialStatus: string,
+  acceptsToken: boolean,
+): ModelConnection => ({
+  connection_id: connectionId,
+  label,
+  protocol:
+    connectionId === "anthropic" ? "anthropic"
+    : connectionId === "research-ai" ? "static"
+    : "openai-compatible",
+  model_prefix: connectionId === "research-ai" ? "litellm_proxy/" : "openai/",
+  source,
+  credential_kind:
+    connectionId === "local" ? "none"
+    : connectionId === "research-ai" ? "managed-identity"
+    : "environment",
+  policy_endpoint:
+    connectionId === "custom-api" ? null : (
+      "http://127.0.0.1:8765/v1/chat/completions"
+    ),
+  catalog_endpoint:
+    connectionId === "custom-api" ? null : "http://127.0.0.1:8765/v1/models",
+  base_url: connectionId === "local" ? "http://127.0.0.1:8765/v1" : null,
+  api_key_env:
+    acceptsToken ?
+      connectionId === "custom-api" ?
+        "HEARTWOOD_CUSTOM_MODEL_API_KEY"
+      : "OPENAI_API_KEY"
+    : null,
+  api_key_file: null,
+  api_version: null,
+  aws_region_name: null,
+  aws_profile_name: null,
+  description: `${label} models`,
+  static_models: [],
+  accepts_token: acceptsToken,
+  credential_status: credentialStatus,
 });
 
 const bundledSkill = (): SkillSummary => ({

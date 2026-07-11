@@ -26,17 +26,17 @@ Participant-level data must remain within an institution-approved deployment bou
 - OpenHands owns the agent loop, coding tools, action-risk analysis, action confirmation, conversation state, LiteLLM provider compatibility, and native `SKILL.md` loading.
 - Heartwood owns biomedical Skill curation, deployment route authorization, platform and dataset detection, audit and attestation records, and safe export controls.
 - The CLI and web UI provide the same conversation workflow: submit a task, inspect messages and actions, allow or reject a pending action, pause or resume, replay, and export the audit trail.
-- Provider settings contain only model identifiers, endpoints, and credential references. Secret values are read from environment variables, mounted files, or managed identity at runtime.
+- Model connections discover provider, platform, and local catalogs; the selected entry becomes the existing non-secret OpenHands model profile. Secret values are read from environment variables, mounted files, managed identity, or a web-submitted token retained only by the running gateway.
 - Generic and Terra-derived images include an optional CPU llama.cpp runtime but no model weights. Local weights are explicitly downloaded to or mounted from persistent storage.
-- A provider preset is not a compliance claim. The deploying institution remains responsible for business associate agreements, covered-service configuration, retention settings, identity, region, and network controls.
+- A model connection is not a compliance claim. The deploying institution remains responsible for business associate agreements, covered-service configuration, retention settings, identity, region, and network controls.
 
 See [Architecture](design/03-architecture.md), [Security And Compliance](design/05-security-compliance.md), and the [Delivery Roadmap](design/09-implementation-plan.md) for the complete contract.
 
 ## Current Status
 
-The generic runtime, OpenHands SDK integration, two action-confirmation modes, model profiles, reviewed local-artifact workflow, repository-verified Skill loading, CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, audit path, multi-platform generic image, and Terra-derived image are implemented and CI-validated with synthetic data. The project is pre-release: the Terra image has not completed its live workspace evidence pass, normal runtime construction still uses the generic platform policy and synthetic OMOP data-source fixture, concurrent independent writers to one file-backed session are not supported, and no platform path is institution-approved by the repository.
+The generic runtime, OpenHands SDK integration, two action-confirmation modes, model connections and profiles, reviewed local-artifact workflow, repository-verified Skill loading, CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, audit path, multi-platform generic image, and Terra-derived image are implemented and CI-validated with synthetic data. The project is pre-release: the Terra image has not completed its live workspace evidence pass, normal runtime construction still uses the generic platform policy and synthetic OMOP data-source fixture, concurrent independent writers to one file-backed session are not supported, and no platform path is institution-approved by the repository.
 
-The web UI provides persisted session creation and selection, title editing, typed context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, Skills, audit activity, simple provider selection, advanced profiles, and byte-level local-model download progress. Boundary evidence and workflow progress remain planned until typed gateway events exist, and representative-user acceptance has not been completed.
+The web UI provides persisted session creation and selection, title editing, typed context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, Skills, audit activity, installed local models, platform-provided research services, cloud and custom API connections, advanced profiles, and byte-level local-model download progress. Boundary evidence and workflow progress remain planned until typed gateway events exist, and representative-user acceptance has not been completed.
 
 See [Platform Support](docs/platform-support.md) for the current support matrix. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets until their separate adapters, images, policies, and live evidence are implemented.
 
@@ -51,33 +51,23 @@ uv run heartwood detect
 uv run heartwood models list
 ```
 
-Configure any local OpenAI-compatible endpoint:
+Start a local OpenAI-compatible service on `127.0.0.1:8765` that implements model listing and chat completions, then select one of the identifiers it reports:
 
 ```bash
-uv run heartwood models add local \
-  --model openai/local-model \
-  --base-url http://127.0.0.1:8765/v1 \
-  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
-  --credential-kind none \
-  --select
-uv run heartwood models validate
+uv run heartwood models refresh local
+uv run heartwood models connect local <model-id>
 uv run heartwood chat
 ```
 
-For a hosted provider, use the corresponding LiteLLM model identifier and reference a runtime credential without writing its value to Heartwood state:
+For a hosted provider, expose its credential through the provider's standard environment variable and select an identifier returned by the official provider API:
 
 ```bash
 export OPENAI_API_KEY="..."
-uv run heartwood models add hosted \
-  --model openai/<model-name> \
-  --policy-endpoint https://api.openai.com/v1/chat/completions \
-  --credential-kind environment \
-  --api-key-env OPENAI_API_KEY \
-  --select
-uv run heartwood models validate
+uv run heartwood models refresh openai
+uv run heartwood models connect openai <model-id>
 ```
 
-Heartwood denies a turn until the deployment policy supplied through `HEARTWOOD_POLICY_PROFILE` authorizes the profile's declared normalized policy endpoint, capability tier, action-confirmation mode, and non-secret credential reference. A custom `base_url` must share that endpoint's origin. Platform network controls remain authoritative for the provider destination and must independently restrict actual traffic. Credential allowlist entries are environment-variable names, absolute mounted-file paths, or `managed-identity`; secret values never enter policy.
+Heartwood authorizes the exact catalog endpoint before discovery and separately denies a turn until the deployment policy supplied through `HEARTWOOD_POLICY_PROFILE` authorizes the selected profile's normalized completion endpoint, capability tier, action-confirmation mode, and non-secret credential reference. A custom `base_url` must share those endpoints' origin. Platform network controls remain authoritative for the provider destination and must independently restrict actual traffic. Credential allowlist entries are environment-variable names, absolute mounted-file paths, or `managed-identity`; secret values never enter policy. See [Model Connections](docs/model-connections.md) for platform and custom configuration.
 
 Build and serve the web UI:
 
@@ -89,7 +79,7 @@ cd ../..
 uv run heartwood serve --web-root packages/webui/dist
 ```
 
-Open `http://127.0.0.1:8767/`. The conversation is primary; model setup, optional reviewed local downloads, policy validation, activity, and audit export are available from secondary controls. Model setup accepts a provider and model name for routes with complete gateway defaults, while deployment-specific endpoints remain under **More options**.
+Open `http://127.0.0.1:8767/`. The conversation is primary; model setup, optional reviewed local downloads, policy validation, activity, and audit export are available from secondary controls. Model setup groups installed local models, platform-provided research services, OpenAI, Anthropic, and a custom OpenAI-compatible API. Raw execution profiles remain under **More options** for operators and compatibility.
 
 Action confirmation defaults to **Ask Every Time**. Generic synthetic development may select the only automatic mode from the CLI or the same two-choice web settings control:
 
@@ -123,7 +113,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
-Open `http://127.0.0.1:8767/` and configure an authorized model profile. Pass provider credentials through runtime environment or secret mounts, never image build arguments.
+Open `http://127.0.0.1:8767/` and choose an authorized model connection. Pass durable provider credentials through runtime environment or secret mounts, never image build arguments.
 
 The image includes a pinned CPU `llama-server`. List and explicitly download reviewed demonstration artifacts into the mounted cache with:
 
@@ -137,7 +127,7 @@ docker run --rm \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
-The download command prints the verified path. `qwen25-7b-instruct-q4_k_m` is the reviewed local agent demonstration artifact because the pinned llama.cpp runtime supports its native tool-call format; `qwen25-coder-7b-instruct-q4_k_m` remains available for coding-output experiments but is not the default OpenHands tool-use acceptance model. Neither artifact has a biomedical, production, or benchmark-backed quality claim. Set `HEARTWOOD_LOCAL_MODEL_PATH` to the selected path and `HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1` when starting the demo stack, then configure the loopback profile shown above. Existing Ollama, vLLM, SGLang, llama.cpp, or other OpenAI-compatible services can be selected without using Heartwood’s artifact catalog.
+The download command prints the verified path. `qwen25-7b-instruct-q4_k_m` is the reviewed local agent demonstration artifact because the pinned llama.cpp runtime supports its native tool-call format; `qwen25-coder-7b-instruct-q4_k_m` remains available for coding-output experiments but is not the default OpenHands tool-use acceptance model. Neither artifact has a biomedical, production, or benchmark-backed quality claim. Set `HEARTWOOD_LOCAL_MODEL_PATH` to the selected path and `HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1` when starting the demo stack, then choose the model reported by the Local connection. Existing Ollama, vLLM, SGLang, llama.cpp, or other OpenAI-compatible services can be selected without using Heartwood's artifact catalog.
 
 From a checkout, the isolated CI path builds the same no-weight image and uses a deterministic loopback model fixture with real OpenHands SDK orchestration:
 

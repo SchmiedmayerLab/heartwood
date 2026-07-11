@@ -21,6 +21,26 @@ class LocalModelHandler(BaseHTTPRequestHandler):
 
     request_log: ClassVar[Path]
 
+    def do_GET(self) -> None:
+        """Return the model catalog used by every Heartwood client."""
+        if self.path != "/v1/models":
+            self.send_response(404)
+            self.end_headers()
+            return
+        self._send_json(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "heartwood-local-runtime",
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "heartwood",
+                    }
+                ],
+            }
+        )
+
     def do_POST(self) -> None:
         """Return a deterministic stub response."""
         if self.path != "/v1/chat/completions":
@@ -110,7 +130,11 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "total_tokens": 2,
             },
         }
-        encoded = json.dumps(response, sort_keys=True).encode("utf-8")
+        self._send_json(response)
+
+    def _send_json(self, value: object) -> None:
+        """Write one deterministic JSON response."""
+        encoded = json.dumps(value, sort_keys=True).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))

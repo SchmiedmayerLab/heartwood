@@ -24,7 +24,7 @@ This matrix records current repository implementation and validation status. Hea
 
 ## Current Image Contracts
 
-The generic and Terra images contain the same Heartwood application, OpenHands SDK adapter, repository-verified Skills, CLI, notebook bridge, web UI, policy layer, audit implementation, and optional CPU llama.cpp runtime. They contain no model weights or provider credentials.
+The generic and Terra images contain the same Heartwood application, OpenHands SDK adapter, model-connection catalog, repository-verified Skills, CLI, notebook bridge, web UI, policy layer, audit implementation, and optional CPU llama.cpp runtime. They contain no model weights or provider credentials. Both interfaces discover and select local, cloud, custom, and platform-provided research models through the same gateway contract; platform connections are deployment configuration rather than image variants.
 
 The Terra image is an implemented packaging and Jupyter integration target, not a complete Terra runtime adapter. Unless a deployment supplies an explicit policy and injected adapters, session construction uses `GenericPlatformAdapter` and the synthetic OMOP data-source fixture. Real Terra policy, identity, workspace-data detection, and OMOP access remain delivery requirements.
 
@@ -36,7 +36,7 @@ The Terra image currently extends the pinned `us.gcr.io/broad-dsp-gcr-public/ter
 
 Repository continuous integration demonstrates software integration with synthetic fixtures. It does not establish a business associate agreement, Health Insurance Portability and Accountability Act eligibility, dataset authorization, private networking, identity binding, retention policy, clinical validity, or institutional approval.
 
-A platform moves from CI-validated to live-validated only after the published immutable image passes the documented synthetic workflow in the real control plane, including startup, proxy routing, persistent storage, autopause and resume, model-profile authorization, action confirmation, Skills, replay, and scrubbed audit export. The [Terra Jupyter Demo](terra-jupyter-demo.md) defines that evidence for Terra.
+A platform moves from CI-validated to live-validated only after the published immutable image passes the documented synthetic workflow in the real control plane, including startup, proxy routing, persistent storage, autopause and resume, model-catalog discovery, profile authorization, action confirmation, Skills, replay, and scrubbed audit export. The [Terra Jupyter Demo](terra-jupyter-demo.md) defines that evidence for Terra.
 
 ## Authoritative Platform References
 

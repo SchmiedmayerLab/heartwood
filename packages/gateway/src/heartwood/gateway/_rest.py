@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from heartwood.gateway._action_settings import ActionSettingsError
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._model_artifacts import ModelArtifactError
+from heartwood.gateway._model_catalog import ModelCatalogError
 from heartwood.gateway._model_settings import (
     ModelSettingsError,
     model_profile_from_mapping,
@@ -109,6 +110,8 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(settings))
         if parts == ("settings", "models", "artifacts") and request.method == "GET":
             return RestResponse(status_code=200, body=_json_object(self.gateway.model_artifacts()))
+        if parts == ("settings", "models", "catalog") and request.method == "POST":
+            return self._handle_model_catalog(body=request.body)
         if parts == ("settings", "models", "downloads") and request.method == "POST":
             try:
                 payload = json.loads(request.body)
@@ -251,17 +254,76 @@ class RestGateway:
             return _error(400, "request body must be valid JSON")
         if not isinstance(payload, dict):
             return _error(422, "request body must be an object")
-        if set(payload) - {"model_name", "preset_id"}:
-            return _error(422, "provider connection contains unsupported fields")
-        preset_id = payload.get("preset_id")
-        model_name = payload.get("model_name")
-        if not isinstance(preset_id, str) or not isinstance(model_name, str):
-            return _error(422, "preset_id and model_name must be strings")
+        if set(payload) <= {"model_name", "preset_id"}:
+            preset_id = payload.get("preset_id")
+            model_name = payload.get("model_name")
+            if not isinstance(preset_id, str) or not isinstance(model_name, str):
+                return _error(422, "preset_id and model_name must be strings")
+            try:
+                settings = self.gateway.connect_model_provider(preset_id, model_name)
+            except ModelSettingsError as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(settings))
+        allowed = {"base_url", "connection_id", "manual", "model_id", "token"}
+        if set(payload) - allowed:
+            return _error(422, "model connection contains unsupported fields")
+        connection_id = payload.get("connection_id")
+        model_id = payload.get("model_id")
+        token = payload.get("token")
+        base_url = payload.get("base_url")
+        manual = payload.get("manual", False)
+        if not isinstance(connection_id, str) or not isinstance(model_id, str):
+            return _error(422, "connection_id and model_id must be strings")
+        if token is not None and not isinstance(token, str):
+            return _error(422, "token must be a string when provided")
+        if base_url is not None and not isinstance(base_url, str):
+            return _error(422, "base_url must be a string when provided")
+        if not isinstance(manual, bool):
+            return _error(422, "manual must be a boolean")
         try:
-            settings = self.gateway.connect_model_provider(preset_id, model_name)
-        except ModelSettingsError as error:
+            settings = self.gateway.connect_model(
+                connection_id,
+                model_id,
+                token=token,
+                base_url=base_url,
+                manual=manual,
+            )
+        except (ModelCatalogError, ModelSettingsError) as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(settings))
+
+    def _handle_model_catalog(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return _error(422, "request body must be an object")
+        allowed = {"base_url", "connection_id", "refresh", "token"}
+        if set(payload) - allowed:
+            return _error(422, "model catalog request contains unsupported fields")
+        connection_id = payload.get("connection_id")
+        token = payload.get("token")
+        base_url = payload.get("base_url")
+        refresh = payload.get("refresh", False)
+        if not isinstance(connection_id, str):
+            return _error(422, "connection_id must be a string")
+        if token is not None and not isinstance(token, str):
+            return _error(422, "token must be a string when provided")
+        if base_url is not None and not isinstance(base_url, str):
+            return _error(422, "base_url must be a string when provided")
+        if not isinstance(refresh, bool):
+            return _error(422, "refresh must be a boolean")
+        try:
+            catalog = self.gateway.discover_models(
+                connection_id,
+                token=token,
+                base_url=base_url,
+                refresh=refresh,
+            )
+        except ModelCatalogError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(catalog))
 
     def _handle_model_selection(self, *, body: str) -> RestResponse:
         try:

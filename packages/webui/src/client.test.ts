@@ -268,6 +268,94 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("discovers and selects a model through the shared connection routes", async () => {
+    const connection = {
+      connection_id: "openai",
+      label: "OpenAI",
+      protocol: "openai",
+      model_prefix: "openai/",
+      source: "built-in",
+      credential_kind: "environment",
+      policy_endpoint: "https://api.openai.com/v1/chat/completions",
+      catalog_endpoint: "https://api.openai.com/v1/models",
+      base_url: null,
+      api_key_env: "OPENAI_API_KEY",
+      api_key_file: null,
+      api_version: null,
+      aws_region_name: null,
+      aws_profile_name: null,
+      description: "OpenAI models",
+      static_models: [],
+      accepts_token: true,
+      credential_status: "missing",
+    };
+    const catalog = {
+      schema_version: "heartwood.model-catalog.v1",
+      connection,
+      models: [
+        {
+          model_id: "provider-coder",
+          display_name: "provider-coder",
+          execution_model: "openai/provider-coder",
+          availability: "available",
+          reason: "Verified by the pinned OpenHands SDK",
+          context_window: 128_000,
+          supports_tools: true,
+        },
+      ],
+      refreshed_at: 1_783_683_200,
+    };
+    const settings = {
+      schema_version: "heartwood.model-settings.v1",
+      active_profile: "openai",
+      profiles: [],
+      connections: [connection],
+      presets: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(catalog)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.discoverModels({
+      connection_id: "openai",
+      token: "runtime-only-token",
+      refresh: true,
+    });
+    await client.connectModel({
+      connection_id: "openai",
+      model_id: "provider-coder",
+      token: "runtime-only-token",
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/catalog",
+      expect.objectContaining({
+        body: JSON.stringify({
+          connection_id: "openai",
+          token: "runtime-only-token",
+          refresh: true,
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/connect",
+      expect.objectContaining({
+        body: JSON.stringify({
+          connection_id: "openai",
+          model_id: "provider-coder",
+          token: "runtime-only-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("lists and starts reviewed model downloads", async () => {
     const artifacts = {
       schema_version: "heartwood.local-model-catalog.v1",

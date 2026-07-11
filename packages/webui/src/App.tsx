@@ -31,6 +31,8 @@ import type {
   ConversationMessage,
   JsonValue,
   ModelArtifacts,
+  ModelCatalogRequest,
+  ModelConnectRequest,
   ModelProfile,
   ModelSettings,
   ModelValidation,
@@ -400,12 +402,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     }
   };
 
-  const connectProvider = async (presetId: string, modelName: string) => {
+  const connectModel = async (request: ModelConnectRequest) => {
     try {
-      const settings = await resolvedClient.connectModelProvider(
-        presetId,
-        modelName,
-      );
+      const settings = await resolvedClient.connectModel(request);
       setModelSettings(settings);
       setValidation(
         await resolvedClient.validateModelProfile(
@@ -414,8 +413,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       );
     } catch (caught) {
       setError(errorMessage(caught));
+      throw caught;
     }
   };
+
+  const discoverModels = (request: ModelCatalogRequest) =>
+    resolvedClient.discoverModels(request);
 
   const selectProfile = async (profileId: string) => {
     try {
@@ -513,9 +516,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           skillSource={skillSource}
           validation={validation}
           onClose={() => setPanel(null)}
-          onConnectProvider={(presetId, modelName) =>
-            void connectProvider(presetId, modelName)
-          }
+          onConnectModel={connectModel}
+          onDiscoverModels={discoverModels}
           onDownload={(artifactId) =>
             void resolvedClient
               .downloadModelArtifact(artifactId)

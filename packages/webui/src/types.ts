@@ -155,6 +155,64 @@ export interface ModelProfile {
   credential_status?: string;
 }
 
+export type ModelConnectionProtocol =
+  "anthropic" | "openai" | "openai-compatible" | "static";
+
+export type ModelConnectionSource = "built-in" | "platform" | "user";
+
+export interface ModelConnection {
+  connection_id: string;
+  label: string;
+  protocol: ModelConnectionProtocol;
+  model_prefix: string;
+  source: ModelConnectionSource;
+  credential_kind: CredentialKind;
+  policy_endpoint: string | null;
+  catalog_endpoint: string | null;
+  base_url: string | null;
+  api_key_env: string | null;
+  api_key_file: string | null;
+  api_version: string | null;
+  aws_region_name: string | null;
+  aws_profile_name: string | null;
+  description: string;
+  static_models: string[];
+  accepts_token: boolean;
+  credential_status: string;
+}
+
+export interface ModelCatalogEntry {
+  model_id: string;
+  display_name: string;
+  execution_model: string;
+  availability: "available" | "experimental" | "unsupported";
+  reason: string;
+  context_window: number | null;
+  supports_tools: boolean | null;
+}
+
+export interface ModelCatalog {
+  schema_version: "heartwood.model-catalog.v1";
+  connection: ModelConnection;
+  models: ModelCatalogEntry[];
+  refreshed_at: number;
+}
+
+export interface ModelCatalogRequest {
+  connection_id: string;
+  token?: string;
+  base_url?: string;
+  refresh?: boolean;
+}
+
+export interface ModelConnectRequest {
+  connection_id: string;
+  model_id: string;
+  token?: string;
+  base_url?: string;
+  manual?: boolean;
+}
+
 export interface ModelPreset {
   preset_id: string;
   label: string;
@@ -170,6 +228,7 @@ export interface ModelSettings {
   schema_version: "heartwood.model-settings.v1";
   active_profile: string | null;
   profiles: ModelProfile[];
+  connections: ModelConnection[];
   presets: ModelPreset[];
 }
 

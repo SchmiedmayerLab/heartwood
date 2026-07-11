@@ -18,7 +18,7 @@ Per session, Heartwood records:
 
 - commands and actor identity;
 - platform and dataset detection proposals with evidence and confidence;
-- selected model profile identifier, endpoint, capability tier, action-confirmation mode, and route decision without credentials;
+- selected model profile identifier, which equals the connection identifier for catalog-selected models, endpoint, capability tier, action-confirmation mode, and route decision without credentials or the provider catalog;
 - researcher and agent message events in the in-boundary session stream;
 - proposed tool name and risk in both records, with the model-generated action summary retained only in the in-boundary session stream;
 - confirmation request and allow-once or reject result when the selected mode requires review;

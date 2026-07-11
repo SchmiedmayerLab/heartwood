@@ -18,13 +18,27 @@ import {
   SheetTitle,
 } from "@stanfordspezi/spezi-web-design-system/components/Sheet";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
-import { Check, Download, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import {
+  Building2,
+  Check,
+  Cloud,
+  Download,
+  HardDrive,
+  RotateCcw,
+  Server,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
   ActionConfirmationMode,
   ActionSettings,
   CredentialKind,
   ModelArtifacts,
+  ModelCatalog,
+  ModelCatalogRequest,
+  ModelConnectRequest,
+  ModelConnection,
   ModelProfile,
   ModelSettings,
   ModelValidation,
@@ -48,7 +62,8 @@ interface UtilitySheetProps {
   settings: ModelSettings | null;
   validation: ModelValidation | null;
   onClose: () => void;
-  onConnectProvider: (presetId: string, modelName: string) => void;
+  onConnectModel: (request: ModelConnectRequest) => Promise<void>;
+  onDiscoverModels: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
   onDownload: (artifactId: string) => void;
   onExportAudit: () => void;
   onInspectSkill: () => void;
@@ -240,8 +255,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
     profileDraft,
     settings,
     validation,
+    onConnectModel,
     onDownload,
-    onConnectProvider,
+    onDiscoverModels,
     onProfileDraft,
     onRefreshSettings,
     onRemoveProfile,
@@ -250,6 +266,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
     onSelectProfile,
     onValidateProfile,
   } = props;
+  const [settingsView, setSettingsView] = useState<"models" | "approvals">(
+    "models",
+  );
   const applyPreset = (presetId: string) => {
     const preset = settings?.presets.find(
       (item) => item.preset_id === presetId,
@@ -269,231 +288,515 @@ const SettingsContent = (props: UtilitySheetProps) => {
   return (
     <>
       <SheetHeader>
-        <SheetTitle>Model setup</SheetTitle>
-        <SheetDescription>
-          Model provider, local artifacts, and action approvals
-        </SheetDescription>
+        <SheetTitle>Settings</SheetTitle>
+        <SheetDescription>Models and action approvals</SheetDescription>
       </SheetHeader>
-      <div className="sheet-toolbar">
-        <Button size="sm" variant="outline" onClick={onRefreshSettings}>
-          <RotateCcw size={15} />
-          Refresh
-        </Button>
+      <div aria-label="Settings view" className="settings-tabs" role="tablist">
+        <button
+          aria-selected={settingsView === "models"}
+          role="tab"
+          type="button"
+          onClick={() => setSettingsView("models")}
+        >
+          Models
+        </button>
+        <button
+          aria-selected={settingsView === "approvals"}
+          role="tab"
+          type="button"
+          onClick={() => setSettingsView("approvals")}
+        >
+          Approvals
+        </button>
       </div>
 
-      <section className="panel-section">
-        <h3>Active model</h3>
-        <div className="inline-control">
-          <select
-            aria-label="Active model profile"
-            value={settings?.active_profile ?? ""}
-            onChange={(event) => onSelectProfile(event.target.value)}
-          >
-            <option disabled value="">
-              Not configured
-            </option>
-            {settings?.profiles.map((profile) => (
-              <option key={profile.profile_id} value={profile.profile_id}>
-                {profileLabel(profile, settings)}
-              </option>
-            ))}
-          </select>
-          <Tooltip tooltip="Validate active profile">
-            <Button
-              aria-label="Validate active model profile"
-              disabled={!settings?.active_profile}
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                onValidateProfile(settings?.active_profile ?? undefined)
-              }
-            >
-              <ShieldCheck size={16} />
+      {settingsView === "models" ?
+        <>
+          <div className="sheet-toolbar">
+            <Button size="sm" variant="outline" onClick={onRefreshSettings}>
+              <RotateCcw size={15} />
+              Refresh
             </Button>
-          </Tooltip>
-        </div>
-        {validation ?
-          <div className="validation-status">
-            <Badge
-              variant={
-                validation.policy_decision.decision === "allow" ?
-                  "secondary"
-                : "destructiveLight"
-              }
-            >
-              {validation.policy_decision.decision}
-            </Badge>
-            <span>{validation.credential_status}</span>
-            <small>{validation.policy_decision.reason}</small>
           </div>
-        : null}
-      </section>
-
-      <ProviderSetup settings={settings} onConnect={onConnectProvider} />
-
-      <section className="panel-section">
-        <h3>Action approvals</h3>
-        <div
-          aria-label="Action approval mode"
-          className="mode-control"
-          role="group"
-        >
-          {actions?.modes.map((option) => (
-            <button
-              aria-pressed={actions.confirmation_mode === option.mode}
-              disabled={!option.allowed}
-              key={option.mode}
-              title={
-                option.allowed ?
-                  option.label
-                : `${option.label} is not allowed by platform policy`
-              }
-              type="button"
-              onClick={() => onSelectActionMode(option.mode)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel-section artifact-list">
-        <h3>Reviewed local models</h3>
-        {artifacts?.artifacts.length ?
-          artifacts.artifacts.map((artifact) => {
-            const download = artifacts.downloads.find(
-              (item) => item.artifact_id === artifact.artifact_id,
-            );
-            return (
-              <div className="artifact-row" key={artifact.artifact_id}>
-                <div>
-                  <strong>{artifact.model_alias}</strong>
-                  <span>{formatBytes(artifact.artifact_size_bytes)}</span>
-                  <ArtifactDownloadStatus
-                    alias={artifact.model_alias}
-                    download={download}
-                  />
-                </div>
-                <Tooltip
-                  tooltip={
-                    download?.status === "ready" ?
-                      `${artifact.model_alias} is ready`
-                    : `Download ${artifact.model_alias}`
+          <section className="panel-section">
+            <h3>Active model</h3>
+            <div className="inline-control">
+              <select
+                aria-label="Active model profile"
+                value={settings?.active_profile ?? ""}
+                onChange={(event) => onSelectProfile(event.target.value)}
+              >
+                <option disabled value="">
+                  Not configured
+                </option>
+                {settings?.profiles.map((profile) => (
+                  <option key={profile.profile_id} value={profile.profile_id}>
+                    {profileLabel(profile, settings)}
+                  </option>
+                ))}
+              </select>
+              <Tooltip tooltip="Validate active profile">
+                <Button
+                  aria-label="Validate active model profile"
+                  disabled={!settings?.active_profile}
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    onValidateProfile(settings?.active_profile ?? undefined)
                   }
                 >
-                  <Button
-                    aria-label={`Download ${artifact.model_alias}`}
-                    disabled={
-                      download?.status === "downloading" ||
-                      download?.status === "ready"
-                    }
-                    isPending={download?.status === "downloading"}
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onDownload(artifact.artifact_id)}
-                  >
-                    {download?.status === "ready" ?
-                      <Check size={15} />
-                    : <Download size={15} />}
-                  </Button>
-                </Tooltip>
+                  <ShieldCheck size={16} />
+                </Button>
+              </Tooltip>
+            </div>
+            {validation ?
+              <div className="validation-status">
+                <Badge
+                  variant={
+                    validation.policy_decision.decision === "allow" ?
+                      "secondary"
+                    : "destructiveLight"
+                  }
+                >
+                  {validation.policy_decision.decision === "allow" ?
+                    "Authorized"
+                  : "Not authorized"}
+                </Badge>
+                <span>
+                  {credentialStatusLabel(validation.credential_status)}
+                </span>
+                <small>
+                  {validation.policy_decision.decision === "allow" ?
+                    "Allowed by this environment"
+                  : validation.policy_decision.reason}
+                </small>
               </div>
-            );
-          })
-        : <p className="panel-empty">No reviewed models available</p>}
-      </section>
+            : null}
+          </section>
 
-      <details className="advanced-section">
-        <summary>More options</summary>
-        <div className="advanced-section-content">
-          <div className="profile-list">
-            {settings?.profiles.map((profile) => (
-              <div className="profile-row" key={profile.profile_id}>
-                <button type="button" onClick={() => onProfileDraft(profile)}>
-                  <strong>{profile.profile_id}</strong>
-                  <span>{profile.model}</span>
-                </button>
-                <Tooltip tooltip={`Remove ${profile.profile_id}`}>
-                  <Button
-                    aria-label={`Remove ${profile.profile_id}`}
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onRemoveProfile(profile.profile_id)}
-                  >
-                    <Trash2 size={15} />
-                  </Button>
-                </Tooltip>
+          <ModelConnectionSetup
+            settings={settings}
+            onConnect={onConnectModel}
+            onDiscover={onDiscoverModels}
+          />
+
+          <section className="panel-section artifact-list">
+            <h3>Models available to download</h3>
+            {artifacts?.artifacts.length ?
+              artifacts.artifacts.map((artifact) => {
+                const download = artifacts.downloads.find(
+                  (item) => item.artifact_id === artifact.artifact_id,
+                );
+                return (
+                  <div className="artifact-row" key={artifact.artifact_id}>
+                    <div>
+                      <strong>{artifact.model_alias}</strong>
+                      <span>{formatBytes(artifact.artifact_size_bytes)}</span>
+                      <ArtifactDownloadStatus
+                        alias={artifact.model_alias}
+                        download={download}
+                      />
+                    </div>
+                    <Tooltip
+                      tooltip={
+                        download?.status === "ready" ?
+                          `${artifact.model_alias} is ready`
+                        : `Download ${artifact.model_alias}`
+                      }
+                    >
+                      <Button
+                        aria-label={`Download ${artifact.model_alias}`}
+                        disabled={
+                          download?.status === "downloading" ||
+                          download?.status === "ready"
+                        }
+                        isPending={download?.status === "downloading"}
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onDownload(artifact.artifact_id)}
+                      >
+                        {download?.status === "ready" ?
+                          <Check size={15} />
+                        : <Download size={15} />}
+                      </Button>
+                    </Tooltip>
+                  </div>
+                );
+              })
+            : <p className="panel-empty">No reviewed models available</p>}
+          </section>
+
+          <details className="advanced-section">
+            <summary>More options</summary>
+            <div className="advanced-section-content">
+              <div className="profile-list">
+                {settings?.profiles.map((profile) => (
+                  <div className="profile-row" key={profile.profile_id}>
+                    <button
+                      type="button"
+                      onClick={() => onProfileDraft(profile)}
+                    >
+                      <strong>{profile.profile_id}</strong>
+                      <span>{profile.model}</span>
+                    </button>
+                    <Tooltip tooltip={`Remove ${profile.profile_id}`}>
+                      <Button
+                        aria-label={`Remove ${profile.profile_id}`}
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onRemoveProfile(profile.profile_id)}
+                      >
+                        <Trash2 size={15} />
+                      </Button>
+                    </Tooltip>
+                  </div>
+                ))}
               </div>
+              <ProfileEditor
+                draft={profileDraft}
+                settings={settings}
+                onApplyPreset={applyPreset}
+                onDraft={onProfileDraft}
+                onSave={onSaveProfile}
+              />
+            </div>
+          </details>
+        </>
+      : <section className="panel-section">
+          <h3>Action approvals</h3>
+          <div
+            aria-label="Action approval mode"
+            className="mode-control"
+            role="group"
+          >
+            {actions?.modes.map((option) => (
+              <button
+                aria-pressed={actions.confirmation_mode === option.mode}
+                disabled={!option.allowed}
+                key={option.mode}
+                title={
+                  option.allowed ?
+                    option.label
+                  : `${option.label} is not allowed by platform policy`
+                }
+                type="button"
+                onClick={() => onSelectActionMode(option.mode)}
+              >
+                {option.label}
+              </button>
             ))}
           </div>
-          <ProfileEditor
-            draft={profileDraft}
-            settings={settings}
-            onApplyPreset={applyPreset}
-            onDraft={onProfileDraft}
-            onSave={onSaveProfile}
-          />
-        </div>
-      </details>
+        </section>
+      }
     </>
   );
 };
 
-const ProviderSetup = ({
+const ModelConnectionSetup = ({
   settings,
   onConnect,
+  onDiscover,
 }: {
   settings: ModelSettings | null;
-  onConnect: (presetId: string, modelName: string) => void;
+  onConnect: (request: ModelConnectRequest) => Promise<void>;
+  onDiscover: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
 }) => {
-  const available = settings?.presets.filter(
-    (preset) => preset.policy_endpoint !== null,
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [token, setToken] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [manualModel, setManualModel] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const connections = settings?.connections ?? [];
+  const connection = connections.find(
+    (candidate) => candidate.connection_id === connectionId,
   );
-  const [presetId, setPresetId] = useState<string | null>(null);
-  const [modelName, setModelName] = useState("");
-  const selectedId = presetId ?? available?.[0]?.preset_id ?? "";
-  const selected = available?.find((preset) => preset.preset_id === selectedId);
+  const effectiveConnection = catalog?.connection ?? connection;
+  const groups = connectionGroups(connections);
+
+  const choose = (next: ModelConnection) => {
+    setConnectionId(next.connection_id);
+    setCatalog(null);
+    setSelectedModel("");
+    setToken("");
+    setBaseUrl(next.base_url ?? "");
+    setManualModel("");
+    setError(null);
+  };
+
+  const discover = async () => {
+    if (!connection) return;
+    setPending(true);
+    setError(null);
+    setCatalog(null);
+    setSelectedModel("");
+    try {
+      const discovered = await onDiscover({
+        connection_id: connection.connection_id,
+        ...(token.trim() ? { token: token.trim() } : {}),
+        ...(connection.connection_id === "custom-api" ?
+          { base_url: baseUrl.trim() }
+        : {}),
+        refresh: true,
+      });
+      setCatalog(discovered);
+      const first = discovered.models.find(
+        (model) => model.availability !== "unsupported",
+      );
+      setSelectedModel(first?.model_id ?? "");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const activateModel = async (manual: boolean) => {
+    if (!connection) return;
+    const modelId = manual ? manualModel.trim() : selectedModel;
+    if (!modelId) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onConnect({
+        connection_id: connection.connection_id,
+        model_id: modelId,
+        ...(connection.connection_id === "custom-api" ?
+          { base_url: baseUrl.trim() }
+        : {}),
+        ...(manual ? { manual: true } : {}),
+      });
+      setToken("");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
-    <section className="panel-section provider-setup">
-      <h3>Model provider</h3>
-      <label>
-        Provider
-        <select
-          aria-label="Model provider"
-          value={selectedId}
-          onChange={(event) => {
-            setPresetId(event.target.value);
-            setModelName("");
-          }}
-        >
-          {available?.map((preset) => (
-            <option key={preset.preset_id} value={preset.preset_id}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Model name
-        <Input
-          value={modelName}
-          onChange={(event) => setModelName(event.target.value)}
-        />
-      </label>
-      {selected ?
-        <div className="provider-summary">
-          <span>{selected.description}</span>
-          <small>{providerCredentialLabel(selected)}</small>
+    <section className="panel-section model-connections">
+      {groups.map((group) =>
+        group.connections.length ?
+          <div className="connection-group" key={group.label}>
+            <h3>{group.label}</h3>
+            <div className="connection-list">
+              {group.connections.map((item) => (
+                <div className="connection-row" key={item.connection_id}>
+                  <span className="connection-icon">
+                    <ConnectionIcon connection={item} />
+                  </span>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <span>{connectionStatus(item)}</span>
+                  </div>
+                  <Button
+                    aria-pressed={item.connection_id === connectionId}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => choose(item)}
+                  >
+                    {(
+                      item.credential_status === "missing" && item.accepts_token
+                    ) ?
+                      "Connect"
+                    : "Choose"}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        : null,
+      )}
+
+      {connection && effectiveConnection ?
+        <div className="connection-form">
+          <div>
+            <strong>{connection.label}</strong>
+            <span>{connection.description}</span>
+          </div>
+          {connection.connection_id === "custom-api" ?
+            <label>
+              Server URL
+              <Input
+                placeholder="https://provider.example/v1"
+                type="url"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </label>
+          : null}
+          {(
+            connection.accepts_token &&
+            (connection.credential_status === "missing" ||
+              connection.connection_id === "custom-api")
+          ) ?
+            <label>
+              {connection.connection_id === "custom-api" ?
+                "Token (optional for local)"
+              : "API token"}
+              <Input
+                autoComplete="off"
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            </label>
+          : null}
+          <Button
+            disabled={
+              pending ||
+              (connection.connection_id === "custom-api" && !baseUrl.trim()) ||
+              (connection.accepts_token &&
+                connection.credential_status === "missing" &&
+                connection.connection_id !== "custom-api" &&
+                !token.trim())
+            }
+            isPending={pending}
+            variant="outline"
+            onClick={() => void discover()}
+          >
+            Load models
+          </Button>
+
+          {catalog ?
+            <>
+              <label>
+                Model
+                <select
+                  aria-label={`Models available from ${connection.label}`}
+                  value={selectedModel}
+                  onChange={(event) => setSelectedModel(event.target.value)}
+                >
+                  <option disabled value="">
+                    Select a model
+                  </option>
+                  {catalog.models.map((model) => (
+                    <option
+                      disabled={model.availability === "unsupported"}
+                      key={model.model_id}
+                      value={model.model_id}
+                    >
+                      {model.display_name === model.model_id ?
+                        model.model_id
+                      : `${model.display_name} - ${model.model_id}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {catalog.models.length ?
+                <ModelChoiceStatus
+                  catalog={catalog}
+                  selectedModel={selectedModel}
+                />
+              : <p className="panel-empty">No models available</p>}
+              <Button
+                disabled={pending || !selectedModel}
+                isPending={pending}
+                onClick={() => void activateModel(false)}
+              >
+                Use model
+              </Button>
+            </>
+          : null}
+
+          {error ?
+            <div className="connection-error" role="alert">
+              <span>{error}</span>
+              {(
+                connection.connection_id === "custom-api" &&
+                supportsManualModelFallback(error)
+              ) ?
+                <>
+                  <label>
+                    Model identifier
+                    <Input
+                      value={manualModel}
+                      onChange={(event) => setManualModel(event.target.value)}
+                    />
+                  </label>
+                  <Button
+                    disabled={pending || !manualModel.trim()}
+                    onClick={() => void activateModel(true)}
+                  >
+                    Use model
+                  </Button>
+                </>
+              : null}
+            </div>
+          : null}
         </div>
       : null}
-      <Button
-        disabled={!selectedId || !modelName.trim()}
-        onClick={() => onConnect(selectedId, modelName.trim())}
-      >
-        Save and use
-      </Button>
     </section>
   );
+};
+
+const ModelChoiceStatus = ({
+  catalog,
+  selectedModel,
+}: {
+  catalog: ModelCatalog;
+  selectedModel: string;
+}) => {
+  const model = catalog.models.find(
+    (entry) => entry.model_id === selectedModel,
+  );
+  if (!model) return null;
+  const status = modelAvailabilityStatus(model.availability);
+  return (
+    <div className="model-choice-status" role="status">
+      <Badge
+        variant={model.availability === "available" ? "secondary" : "outline"}
+      >
+        {status.label}
+      </Badge>
+      <span>{status.detail}</span>
+    </div>
+  );
+};
+
+const connectionGroups = (connections: ModelConnection[]) => [
+  {
+    label: "On this device",
+    connections: connections.filter(
+      (connection) => connection.connection_id === "local",
+    ),
+  },
+  {
+    label: "Research environment",
+    connections: connections.filter(
+      (connection) => connection.source === "platform",
+    ),
+  },
+  {
+    label: "Cloud",
+    connections: connections.filter(
+      (connection) =>
+        connection.source !== "platform" &&
+        connection.connection_id !== "local",
+    ),
+  },
+];
+
+const ConnectionIcon = ({ connection }: { connection: ModelConnection }) => {
+  if (connection.connection_id === "local") return <HardDrive size={16} />;
+  if (connection.source === "platform") return <Building2 size={16} />;
+  if (connection.connection_id === "custom-api") return <Server size={16} />;
+  return <Cloud size={16} />;
+};
+
+const connectionStatus = (connection: ModelConnection): string => {
+  if (connection.source === "platform") {
+    return connection.credential_status === "missing" ?
+        "Setup required"
+      : "Provided here";
+  }
+  if (connection.connection_id === "local") return "Local runtime";
+  return connection.credential_status === "missing" ?
+      "Not connected"
+    : "Connected";
 };
 
 const ArtifactDownloadStatus = ({
@@ -527,20 +830,20 @@ const ArtifactDownloadStatus = ({
   );
 };
 
-const providerCredentialLabel = (
-  preset: ModelSettings["presets"][number],
-): string => {
-  if (preset.credential_kind === "none") return "No provider credential";
-  if (preset.credential_kind === "managed-identity") return "Managed identity";
-  return preset.api_key_env ?
-      `Runtime credential: ${preset.api_key_env}`
-    : "Runtime credential";
-};
-
 const profileLabel = (
   profile: ModelProfile,
   settings: ModelSettings,
 ): string => {
+  const connection = settings.connections.find(
+    (item) => item.connection_id === profile.profile_id,
+  );
+  if (connection) {
+    const modelName =
+      profile.model.startsWith(connection.model_prefix) ?
+        profile.model.slice(connection.model_prefix.length)
+      : profile.model;
+    return `${connection.label} · ${modelName}`;
+  }
   const preset = settings.presets.find(
     (item) => item.preset_id === profile.profile_id,
   );
@@ -658,6 +961,39 @@ const ProfileEditor = ({
         />
       </label>
     : null}
+    <label>
+      API version
+      <Input
+        value={draft.api_version ?? ""}
+        onChange={(event) =>
+          onDraft({ ...draft, api_version: nullIfEmpty(event.target.value) })
+        }
+      />
+    </label>
+    <label>
+      AWS region
+      <Input
+        value={draft.aws_region_name ?? ""}
+        onChange={(event) =>
+          onDraft({
+            ...draft,
+            aws_region_name: nullIfEmpty(event.target.value),
+          })
+        }
+      />
+    </label>
+    <label>
+      AWS profile
+      <Input
+        value={draft.aws_profile_name ?? ""}
+        onChange={(event) =>
+          onDraft({
+            ...draft,
+            aws_profile_name: nullIfEmpty(event.target.value),
+          })
+        }
+      />
+    </label>
     <Button onClick={onSave}>Save profile</Button>
   </div>
 );
@@ -669,3 +1005,38 @@ const formatBytes = (value: number): string => {
   if (gibibytes >= 1) return `${gibibytes.toFixed(1)} GiB`;
   return `${(value / 1024 ** 2).toFixed(0)} MiB`;
 };
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const credentialStatusLabel = (status: string): string => {
+  if (status === "missing") return "Credential required";
+  if (status === "available") return "Credential available";
+  if (status === "configured") return "Ready";
+  return "Credential status unknown";
+};
+
+const modelAvailabilityStatus = (
+  availability: ModelCatalog["models"][number]["availability"],
+): { label: string; detail: string } => {
+  if (availability === "available") {
+    return {
+      label: "Available",
+      detail: "Supported by the current agent runtime",
+    };
+  }
+  if (availability === "experimental") {
+    return {
+      label: "Experimental",
+      detail: "Not yet verified with the current agent runtime",
+    };
+  }
+  return {
+    label: "Unavailable",
+    detail: "This model does not support the required agent workflow",
+  };
+};
+
+const supportsManualModelFallback = (error: string | null): boolean =>
+  error?.includes("catalog is unavailable") === true ||
+  error?.includes("catalog request failed") === true;

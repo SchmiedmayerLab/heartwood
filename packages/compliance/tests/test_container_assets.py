@@ -173,12 +173,13 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
     assert '"${state_root}/openhands"' in smoke
     assert '"${state_root}/workspaces"' in smoke
-    assert "models add local-smoke" in smoke
+    assert "models refresh local" in smoke
+    assert "models connect local heartwood-local-runtime" in smoke
     assert "models add inactive-smoke" in smoke
-    assert "--credential-kind none" in smoke
     assert "HEARTWOOD_UNUSED_MODEL_API_KEY" in smoke
     assert "HEARTWOOD_UNUSED_MODEL_API_KEY" in model_stub
-    assert "models validate local-smoke" in smoke
+    assert 'self.path != "/v1/models"' in model_stub
+    assert "models validate local" in smoke
     assert "chat" in smoke
     assert "call-heartwood-offline-smoke" in smoke
     assert " allow " in smoke

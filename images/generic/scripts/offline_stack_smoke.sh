@@ -60,19 +60,16 @@ while time.time() < deadline:
 raise SystemExit("loopback model fixture did not become ready")
 PY
 
-heartwood --workspace "${workspace}" models add local-smoke \
-  --model openai/heartwood-local-runtime \
-  --base-url http://127.0.0.1:8765/v1 \
-  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
-  --credential-kind none \
-  --select | tee -a "${transcript}"
+heartwood --workspace "${workspace}" models refresh local | tee -a "${transcript}"
+heartwood --workspace "${workspace}" models connect local heartwood-local-runtime \
+  | tee -a "${transcript}"
 heartwood --workspace "${workspace}" models add inactive-smoke \
   --model openai/heartwood-inactive-runtime \
   --base-url http://127.0.0.1:8765/v1 \
   --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
   --credential-kind environment \
   --api-key-env HEARTWOOD_UNUSED_MODEL_API_KEY | tee -a "${transcript}"
-heartwood --workspace "${workspace}" models validate local-smoke | tee -a "${transcript}"
+heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
 heartwood --workspace "${workspace}" --session-id "${session_id}" detect | tee -a "${transcript}"
 heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
   --prompt "Respond to this synthetic offline integration check." | tee -a "${transcript}"

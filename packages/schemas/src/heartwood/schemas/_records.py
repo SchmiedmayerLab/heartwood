@@ -52,6 +52,7 @@ class PolicyProfile(_HeartwoodRecord):
     platform_id: str = Field(min_length=1)
     deny_egress_by_default: bool = True
     allowed_model_endpoints: tuple[str, ...] = ()
+    allowed_model_catalog_endpoints: tuple[str, ...] = ()
     allowed_capability_tiers: tuple[CapabilityTier, ...] = Field(
         default=("supervised",),
         min_length=1,

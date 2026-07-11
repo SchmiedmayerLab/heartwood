@@ -12,6 +12,9 @@ import type {
   AuditExport,
   CommandKind,
   JsonValue,
+  ModelCatalog,
+  ModelCatalogRequest,
+  ModelConnectRequest,
   ModelArtifacts,
   ModelDownload,
   ModelProfile,
@@ -52,6 +55,8 @@ export interface HeartwoodClient {
     mode: ActionConfirmationMode,
   ): Promise<ActionSettings>;
   getModelSettings(): Promise<ModelSettings>;
+  discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog>;
+  connectModel(request: ModelConnectRequest): Promise<ModelSettings>;
   connectModelProvider(
     presetId: string,
     modelName: string,
@@ -171,6 +176,26 @@ export class GatewayClient implements HeartwoodClient {
   async getModelSettings(): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models")),
+    );
+  }
+
+  async discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog> {
+    return parseJsonResponse<ModelCatalog>(
+      await fetch(this.url("/settings/models/catalog"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async connectModel(request: ModelConnectRequest): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(this.url("/settings/models/connect"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
     );
   }
 

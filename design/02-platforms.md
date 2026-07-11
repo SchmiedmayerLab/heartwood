@@ -48,7 +48,7 @@ Egress is blocked, so models are reached **inside the perimeter**:
 | AWS (Seven Bridges / DNAnexus) | Amazon Bedrock | Applicable agreement, covered model/service, regional and retention controls, PrivateLink/VPC endpoint where required, and endpoint allowlisting. |
 | Any | Local Ollama, vLLM, SGLang, or llama.cpp | Reviewed model artifact, sufficient hardware, loopback/private binding, and platform egress controls. |
 
-OpenHands `LLM` and LiteLLM provide provider compatibility across these paths. Heartwood selects one non-secret model profile and denies the turn unless the profile's declared normalized policy endpoint is allowlisted. A configured custom base URL must share that endpoint's origin; provider-native routing without a custom base remains subject to authoritative platform network controls. No preset is itself a compliance claim.
+OpenHands `LLM` and LiteLLM provide provider compatibility across these paths. Heartwood discovers models through built-in or platform-provided connections, materializes the selection as one non-secret model profile, and denies the turn unless the profile's declared normalized policy endpoint is allowlisted. Catalog discovery has its own exact endpoint allowlist. A configured custom base URL must share those endpoints' origin; provider-native routing without a custom base remains subject to authoritative platform network controls. No connection is itself a compliance claim.
 
 ## Surfacing The Interface
 

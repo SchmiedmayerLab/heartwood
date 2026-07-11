@@ -1675,6 +1675,7 @@ name = "heartwood-gateway"
 version = "0.0.0"
 source = { editable = "packages/gateway" }
 dependencies = [
+    { name = "anthropic" },
     { name = "heartwood-adapters" },
     { name = "heartwood-core-adapter" },
     { name = "heartwood-model-policy" },
@@ -1682,6 +1683,7 @@ dependencies = [
     { name = "heartwood-session" },
     { name = "heartwood-skills" },
     { name = "huggingface-hub" },
+    { name = "openai" },
 ]
 
 [package.optional-dependencies]
@@ -1692,6 +1694,7 @@ agent = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = "==0.116.0" },
     { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-core-adapter", editable = "packages/core-adapter" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },
@@ -1699,6 +1702,7 @@ requires-dist = [
     { name = "heartwood-session", editable = "packages/session" },
     { name = "heartwood-skills", editable = "packages/skills" },
     { name = "huggingface-hub", specifier = "==1.22.0" },
+    { name = "openai", specifier = "==2.44.0" },
     { name = "openhands-sdk", marker = "python_full_version >= '3.12' and extra == 'agent'", specifier = "==1.33.0" },
     { name = "openhands-tools", marker = "python_full_version >= '3.12' and extra == 'agent'", specifier = "==1.34.0" },
 ]

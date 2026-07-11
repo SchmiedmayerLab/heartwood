@@ -50,19 +50,16 @@ The current image pins `terra-jupyter-python:1.1.6`, which remains listed in Ter
 
 The image contains no model weights. Choose one path.
 
-For an institution-authorized endpoint, open a terminal and create a profile whose secret is supplied through the workspace environment, mounted secret file, or managed identity:
+For an institution-authorized endpoint, the deployment supplies a platform connection manifest or enables a built-in connection. Its credential remains in the workspace environment, mounted secret file, or managed identity. List the available connections and select an exact identifier returned by the authorized catalog:
 
 ```bash
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models add institutional \
-  --model <litellm-provider>/<model-name> \
-  --policy-endpoint https://<approved-endpoint>/<route> \
-  --credential-kind environment \
-  --api-key-env <RUNTIME_SECRET_ENV> \
-  --select
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models validate institutional
+heartwood --workspace /home/jupyter/heartwood-workspace/sessions models list
+heartwood --workspace /home/jupyter/heartwood-workspace/sessions models refresh <connection-id>
+heartwood --workspace /home/jupyter/heartwood-workspace/sessions models connect \
+  <connection-id> <model-id>
 ```
 
-The workspace must supply `HEARTWOOD_POLICY_PROFILE` with the exact approved endpoint, capability tier, and non-secret credential reference such as the environment-variable name. A provider name does not establish HIPAA eligibility or a business associate agreement.
+The workspace must supply `HEARTWOOD_POLICY_PROFILE` with the exact catalog endpoint, completion endpoint, capability tier, and non-secret credential reference such as the environment-variable name. `HEARTWOOD_MODEL_CONNECTIONS` may point to a platform-owned manifest that exposes every model available to the workspace identity. See [Model Connections](model-connections.md). A provider name does not establish HIPAA eligibility or a business associate agreement.
 
 For a local synthetic demo, list and download a reviewed artifact to Terra-persistent storage:
 
@@ -81,16 +78,12 @@ HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/heartwood-workspace/models/qwen25-7b-in
   bash images/generic/scripts/start_local_runtime.sh
 ```
 
-In another terminal, add the loopback profile:
+In another terminal, discover and select the model reported by the loopback runtime:
 
 ```bash
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models add local \
-  --model openai/local-model \
-  --base-url http://127.0.0.1:8765/v1 \
-  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
-  --credential-kind none \
-  --select
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models validate local
+heartwood --workspace /home/jupyter/heartwood-workspace/sessions models refresh local
+heartwood --workspace /home/jupyter/heartwood-workspace/sessions models connect \
+  local <model-id>
 ```
 
 Choose a machine and disk based on the selected model manifest. The current reviewed Qwen artifact records 4 vCPU and 16 GB RAM as a minimum demonstration envelope and 8 vCPU and 32 GB RAM as the recommended envelope. It is CPU-only in the baseline runtime; attaching a GPU does not accelerate it.
@@ -109,7 +102,7 @@ HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions \
 
 Open the Jupyter proxy route for port `8767`. The browser path normally ends in `/proxy/8767/`; Heartwood infers that prefix while the internal gateway remains root-relative.
 
-Submit a synthetic coding task in the conversation. Verify that agent messages appear, a proposed terminal or file action appears inline, and Allow once or Reject updates the same conversation. Use Activity for the event trace and Export Audit for the scrubbed audit record. Do not expect model route or repository-verified Skill activation prompts; those are deployment and installation decisions, not conversational action confirmation.
+Open Settings and confirm that the selected model appears under the platform, local, or cloud connection used above. Submit a synthetic coding task in the conversation. Verify that agent messages appear, a proposed terminal or file action appears inline, and Allow once or Reject updates the same conversation. Use Activity for the event trace and Export Audit for the scrubbed audit record. Do not expect model route or repository-verified Skill activation prompts; those are deployment and installation decisions, not conversational action confirmation.
 
 Action confirmation defaults to **Ask Every Time**. To validate the deployment-allowed risk-based path with synthetic data, select **Auto-Approve Low Risk** in Settings or run `heartwood --workspace /home/jupyter/heartwood-workspace/sessions actions set auto-approve-low-risk`. Confirm that low-risk actions still appear in Activity and that medium-, high-, and unknown-risk actions retain Allow once and Reject controls.
 

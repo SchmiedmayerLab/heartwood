@@ -64,13 +64,10 @@ run_heartwood() {
   timeout "${command_timeout}" heartwood "$@"
 }
 
-run_heartwood --workspace "${workspace}" models add capable-local \
-  --model openai/heartwood-local-runtime \
-  --base-url http://127.0.0.1:8765/v1 \
-  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
-  --credential-kind none \
-  --select | tee -a "${transcript}"
-run_heartwood --workspace "${workspace}" models validate capable-local | tee -a "${transcript}"
+run_heartwood --workspace "${workspace}" models refresh local | tee -a "${transcript}"
+run_heartwood --workspace "${workspace}" models connect local heartwood-local-runtime \
+  | tee -a "${transcript}"
+run_heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
   --prompt "Call the terminal tool exactly once. In that one call, execute this exact command: printf %s '${expected_content}' > model-proof.txt. Do not use echo, do not add a newline, and do not describe the command as text. Wait for the terminal result before calling any completion or finish action, and do not write the file again. After the command succeeds, report completion." \

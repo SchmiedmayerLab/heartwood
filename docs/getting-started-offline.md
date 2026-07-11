@@ -22,24 +22,19 @@ From a repository checkout:
 docker compose -f images/generic/compose.yaml run --rm --build heartwood
 ```
 
-Compose disables container networking and uses a read-only root filesystem, dropped capabilities, `no-new-privileges`, and temporary write points. Inside that boundary the smoke test starts the deterministic loopback model fixture, creates and validates a local model profile, runs an OpenHands SDK conversation, exercises both action-confirmation modes, loads the repository-verified Skills through OpenHands, records route and action events, and exports a scrubbed audit log. This proves the no-network orchestration, policy, approval, Skill, audit, CLI, web-support, and notebook contracts without claiming real model inference. The mounted capable-model test below is the separate inference and tool-execution gate.
+Compose disables container networking and uses a read-only root filesystem, dropped capabilities, `no-new-privileges`, and temporary write points. Inside that boundary the smoke test starts the deterministic loopback model fixture, discovers and selects its reported model through the shared catalog, runs an OpenHands SDK conversation, exercises both action-confirmation modes, loads the repository-verified Skills through OpenHands, records route and action events, and exports a scrubbed audit log. This proves the no-network catalog, orchestration, policy, approval, Skill, audit, CLI, web-support, and notebook contracts without claiming real model inference. The mounted capable-model test below is the separate inference and tool-execution gate.
 
 ## Use An Existing Local Service
 
-Start Ollama, vLLM, SGLang, llama.cpp, or another service that provides an OpenAI-compatible chat-completions route. Then add a profile:
+Start Ollama, vLLM, SGLang, llama.cpp, or another service on `127.0.0.1:8765` that provides OpenAI-compatible model-list and chat-completions routes. Then inspect and select an exact reported identifier:
 
 ```bash
-heartwood models add local \
-  --model openai/local-model \
-  --base-url http://127.0.0.1:8765/v1 \
-  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
-  --credential-kind none \
-  --select
-heartwood models validate local
+heartwood models refresh local
+heartwood models connect local <model-id>
 heartwood chat
 ```
 
-Credential kind `none` is accepted only for loopback HTTP endpoints. For a service on another host, use the credential and deployment-policy controls appropriate to that route.
+The Local connection is fixed to loopback and requires no credential. For a service on another port or host, use Custom API with the credential and deployment-policy controls appropriate to that route. Remote custom services require HTTPS and a token. See [Model Connections](model-connections.md).
 
 ## Download A Reviewed Artifact
 
@@ -64,7 +59,7 @@ HEARTWOOD_LOCAL_MODEL_PATH=/path/to/persistent/models/qwen25-7b-instruct-q4_k_m/
   bash images/generic/scripts/start_local_runtime.sh
 ```
 
-In another shell, configure the loopback profile shown above. The local server binds to `127.0.0.1:8765` and does not require network access after the artifact is present. The catalog also contains `qwen25-coder-7b-instruct-q4_k_m` for coding-output experiments, but it is not the default OpenHands tool-use acceptance artifact because coding text quality and reliable structured tool calling are separate capabilities.
+In another shell, refresh the Local connection and select the identifier reported by the server. The local server binds to `127.0.0.1:8765` and does not require external network access after the artifact is present. The artifact catalog also contains `qwen25-coder-7b-instruct-q4_k_m` for coding-output experiments, but it is not the default OpenHands tool-use acceptance artifact because coding text quality and reliable structured tool calling are separate capabilities.
 
 ## Verify Mounted Model Tool Execution
 
@@ -111,7 +106,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
-Open `http://127.0.0.1:8767/`. Model setup accepts a provider and model name for routes with complete defaults, saves and selects the gateway-owned profile, and validates its policy and credential reference. Deployment-specific endpoints remain under **More options**. Reviewed artifact downloads go to the mounted cache and report transferred bytes until integrity verification completes. The web UI does not hide process ownership: an operator must start the corresponding local inference service or supply a reachable provider endpoint.
+Open `http://127.0.0.1:8767/`. Model setup groups models installed in the active local runtime, platform-provided research services, OpenAI, Anthropic, and Custom API. It discovers the source catalog, materializes the selected model as the gateway-owned execution profile, and displays route validation. Deployment-specific execution fields remain under **More options**. Reviewed artifact downloads go to the mounted cache and report transferred bytes until integrity verification completes. An operator must still start the corresponding local inference service or supply a reachable provider endpoint.
 
 To start the included local runtime with the web UI in one container, first download the artifact into the mounted volume, then run:
 
@@ -125,7 +120,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
-Configure the loopback profile from the UI. CLI and web operations use the same model settings, command/event contract, OpenHands backend, action confirmation, and audit store.
+Choose the model under **On this device** in the UI. CLI and web operations use the same connection catalog, model settings, command/event contract, OpenHands backend, action confirmation, and audit store.
 
 ## Work Air-Gapped
 
@@ -135,7 +130,7 @@ Prepare all assets before entering the isolated environment:
 2. Download and verify the selected artifact into a transferable or platform-persistent model directory.
 3. Record the image digest, model manifest, model digest, runtime profile, and policy profile.
 4. Import the image and model directory through the platform-approved path.
-5. Start the local service on loopback and validate the model profile.
+5. Start the local service on loopback, refresh the Local connection, and select its reported model.
 6. Disable runtime network access at the platform or container layer.
 7. Run a synthetic task, inspect any proposed action, allow or reject it, replay the session, and export the scrubbed audit log.
 
@@ -143,17 +138,12 @@ Heartwood route policy is an application-layer record and gate. Network isolatio
 
 ## Use An Institution-Approved API
 
-Common provider presets expose only the OpenHands/LiteLLM fields. For example:
+The OpenAI and Anthropic connections retrieve the models visible to the configured provider credential. For example:
 
 ```bash
 export ANTHROPIC_API_KEY="..."
-heartwood models add institutional \
-  --model anthropic/<model-name> \
-  --policy-endpoint https://api.anthropic.com/v1/messages \
-  --credential-kind environment \
-  --api-key-env ANTHROPIC_API_KEY \
-  --select
-heartwood models validate institutional
+heartwood models refresh anthropic
+heartwood models connect anthropic <model-id>
 ```
 
 Point `HEARTWOOD_POLICY_PROFILE` to a deployment-owned JSON file that authorizes the exact route and non-secret credential reference:
@@ -164,6 +154,9 @@ Point `HEARTWOOD_POLICY_PROFILE` to a deployment-owned JSON file that authorizes
   "policy_id": "institutional-models",
   "platform_id": "deployment",
   "deny_egress_by_default": true,
+  "allowed_model_catalog_endpoints": [
+    "https://api.anthropic.com/v1/models"
+  ],
   "allowed_model_endpoints": [
     "https://api.anthropic.com/v1/messages"
   ],
@@ -180,7 +173,7 @@ Point `HEARTWOOD_POLICY_PROFILE` to a deployment-owned JSON file that authorizes
 }
 ```
 
-`credential_allowlist` entries are environment-variable names, absolute mounted-secret paths, or `managed-identity`, never secret values. Before controlled-data use, the institution must verify the business associate agreement or equivalent contract, the covered product and feature, data retention and training settings, regional processing, account identity, logging, and private or controlled network path. Heartwood does not infer those properties from a provider name.
+Catalog discovery and model completion are separately authorized. `credential_allowlist` entries are environment-variable names, absolute mounted-secret paths, or `managed-identity`, never secret values. A model not verified by the pinned OpenHands SDK is labeled experimental and also requires `experimental` in `allowed_capability_tiers`. Before controlled-data use, the institution must verify the business associate agreement or equivalent contract, the covered product and feature, data retention and training settings, regional processing, account identity, logging, and private or controlled network path. Heartwood does not infer those properties from a provider name.
 
 ## Action Confirmation
 
