@@ -7,13 +7,14 @@
  */
 
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import type { HeartwoodClient, SessionEventResponse } from "./client";
 import { event, syntheticEvents } from "./test/fixtures";
@@ -68,6 +69,7 @@ const actions = (): ActionSettings => ({
 class FakeClient implements HeartwoodClient {
   commands: SessionCommand[] = [];
   auditExportCalls = 0;
+  listCalls = 0;
   replayCalls = 0;
   savedProfile: ModelProfile | null = null;
   currentSettings = settings();
@@ -75,8 +77,10 @@ class FakeClient implements HeartwoodClient {
   downloadedArtifact: string | null = null;
   installedSkill: string | null = null;
   currentSessions: SessionSummary[] = [sessionSummary("session-test")];
+  streamListener: ((events: SessionEvent[]) => void) | null = null;
 
   listSessions(): Promise<SessionList> {
+    this.listCalls += 1;
     return Promise.resolve({ sessions: this.currentSessions });
   }
 
@@ -148,9 +152,16 @@ class FakeClient implements HeartwoodClient {
   streamEvents(
     _sessionId: string,
     _afterSequence: number | undefined,
-    _onEvents: (events: SessionEvent[]) => void,
+    onEvents: (events: SessionEvent[]) => void,
   ): () => void {
-    return vi.fn();
+    this.streamListener = onEvents;
+    return () => {
+      if (this.streamListener === onEvents) this.streamListener = null;
+    };
+  }
+
+  emitStream(events: SessionEvent[]): void {
+    this.streamListener?.(events);
   }
 
   getModelSettings(): Promise<ModelSettings> {
@@ -300,6 +311,23 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a new session selected when initialization resolves later", async () => {
+    const client = new DeferredInitializationClient();
+    render(<App client={client} />);
+    await waitFor(() => expect(client.listCalls).toBe(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "New analysis" }));
+    await screen.findByRole("heading", { name: "Untitled session" });
+    await act(async () => {
+      client.completeInitialization([sessionSummary("session-test")]);
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Untitled session" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders session state and sends detection commands", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
@@ -341,6 +369,24 @@ describe("App", () => {
         screen.getByRole("log", { name: "Conversation transcript" }),
       ).getAllByText("Inspect the synthetic cohort"),
     ).toHaveLength(1);
+  });
+
+  it("coalesces session refreshes for streamed event batches", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    const initialListCalls = client.listCalls;
+
+    act(() => {
+      client.emitStream([
+        event(7, "agent_message.emitted", { content: "First update" }),
+      ]);
+      client.emitStream([
+        event(8, "agent_message.emitted", { content: "Second update" }),
+      ]);
+    });
+
+    await waitFor(() => expect(client.listCalls).toBe(initialListCalls + 1));
   });
 
   it("renders pending OpenHands actions inline and sends allow once", async () => {
@@ -499,6 +545,28 @@ class PendingClient extends FakeClient {
   override replayEvents(): Promise<SessionEventResponse> {
     this.replayCalls += 1;
     return Promise.resolve({ events: syntheticEvents() });
+  }
+}
+
+class DeferredInitializationClient extends FakeClient {
+  private readonly initialization: Promise<SessionList>;
+  private resolveInitialization: (sessions: SessionList) => void = () =>
+    undefined;
+
+  constructor() {
+    super();
+    this.initialization = new Promise((resolve) => {
+      this.resolveInitialization = resolve;
+    });
+  }
+
+  override listSessions(): Promise<SessionList> {
+    this.listCalls += 1;
+    return this.initialization;
+  }
+
+  completeInitialization(sessions: SessionSummary[]): void {
+    this.resolveInitialization({ sessions });
   }
 }
 

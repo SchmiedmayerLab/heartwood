@@ -106,6 +106,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [skillSource, setSkillSource] = useState("");
   const [skillApproved, setSkillApproved] = useState(false);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const selectionGeneration = useRef(0);
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -116,18 +117,19 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   useEffect(() => {
     let active = true;
+    const generation = selectionGeneration.current;
     initialization.current ??= initializeSessions(
       resolvedClient,
       initialSessionId,
     );
     void initialization.current
       .then((state) => {
-        if (!active) return;
+        if (!active || selectionGeneration.current !== generation) return;
         setSessions(state.sessions);
         setSessionId(state.selectedSessionId);
       })
       .catch((caught: unknown) => {
-        if (!active) return;
+        if (!active || selectionGeneration.current !== generation) return;
         setError(errorMessage(caught));
         setRequestStatus("error");
       });
@@ -139,6 +141,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   useEffect(() => {
     if (sessionId === null) return;
     let active = true;
+    let refreshTimer: number | null = null;
     resolvedClient
       .replayEvents(sessionId)
       .then(({ events: replayed }) => {
@@ -157,14 +160,19 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       sessionId,
       undefined,
       (streamed) => {
+        if (!active) return;
         setEvents((current) => mergeEvents(current, streamed));
-        void refreshSessions().catch((caught: unknown) =>
-          setError(errorMessage(caught)),
-        );
+        refreshTimer ??= window.setTimeout(() => {
+          refreshTimer = null;
+          void refreshSessions().catch((caught: unknown) =>
+            setError(errorMessage(caught)),
+          );
+        }, 250);
       },
     );
     return () => {
       active = false;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       cleanup();
     };
   }, [refreshSessions, resolvedClient, sessionId]);
@@ -269,10 +277,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   };
 
   const createSession = async () => {
+    const generation = ++selectionGeneration.current;
     setError(null);
     try {
       const created = await resolvedClient.createSession();
       setSessions((current) => mergeSessionSummaries(current, [created]));
+      if (selectionGeneration.current !== generation) return;
       setEvents([]);
       setPrompt("");
       setSessionId(created.session_id);
@@ -293,6 +303,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   };
 
   const selectSession = (nextSessionId: string) => {
+    selectionGeneration.current += 1;
     setEvents([]);
     setPrompt("");
     setSessionId(nextSessionId);

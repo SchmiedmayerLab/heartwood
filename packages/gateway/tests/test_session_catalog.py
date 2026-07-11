@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -101,6 +102,31 @@ def test_catalog_skips_corrupt_metadata_without_hiding_other_sessions(tmp_path: 
         catalog.get("corrupt-session")
 
 
+def test_catalog_closes_temporary_descriptor_when_metadata_open_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed_descriptors: list[int] = []
+    real_close = os.close
+
+    def fail_fdopen(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic open failure")
+
+    def record_close(descriptor: int) -> None:
+        closed_descriptors.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr("heartwood.gateway._session_catalog.os.fdopen", fail_fdopen)
+    monkeypatch.setattr("heartwood.gateway._session_catalog.os.close", record_close)
+
+    with pytest.raises(OSError, match="synthetic open failure"):
+        SessionCatalog(tmp_path).create()
+
+    assert len(closed_descriptors) == 1
+    session_dir = next(tmp_path.iterdir())
+    assert list(session_dir.glob(".metadata-*")) == []
+
+
 def test_catalog_rejects_invalid_titles_and_unknown_renames(tmp_path: Path) -> None:
     catalog = SessionCatalog(tmp_path)
 
@@ -157,6 +183,8 @@ def test_rest_exposes_session_creation_listing_and_rename(tmp_path: Path) -> Non
         ("POST", "/sessions", '{"title": 2}', 422),
         ("GET", "/sessions/missing", "", 422),
         ("PATCH", "/sessions/missing", "{}", 422),
+        ("GET", "/sessions/invalid!session", "", 422),
+        ("PATCH", "/sessions/invalid!session", '{"title": "Valid"}', 422),
     ],
 )
 def test_rest_validates_session_metadata_requests(

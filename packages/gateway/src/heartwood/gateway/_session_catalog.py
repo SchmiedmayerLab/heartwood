@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -253,8 +254,10 @@ def _write_metadata(path: Path, metadata: _SessionMetadata) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=".metadata-", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        file = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor = -1
+        with file:
+            os.fchmod(file.fileno(), 0o600)
             json.dump(payload, file, separators=(",", ":"))
             file.write("\n")
             file.flush()
@@ -262,6 +265,9 @@ def _write_metadata(path: Path, metadata: _SessionMetadata) -> None:
         temporary_path.replace(path)
         path.chmod(0o600)
     except Exception:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
         temporary_path.unlink(missing_ok=True)
         raise
 

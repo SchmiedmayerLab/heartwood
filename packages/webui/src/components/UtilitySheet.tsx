@@ -19,6 +19,7 @@ import {
 } from "@stanfordspezi/spezi-web-design-system/components/Sheet";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
 import { Download, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { useMemo } from "react";
 import type {
   ActionConfirmationMode,
   ActionSettings,
@@ -96,7 +97,7 @@ const ActivityContent = ({
   onExportAudit,
   onRefreshActivity,
 }: UtilitySheetProps) => {
-  const viewModel = buildViewModel(events);
+  const viewModel = useMemo(() => buildViewModel(events), [events]);
   return (
     <>
       <SheetHeader>
@@ -354,36 +355,38 @@ const SettingsContent = (props: UtilitySheetProps) => {
 
       <section className="panel-section artifact-list">
         <h3>Reviewed local models</h3>
-        {artifacts?.artifacts.map((artifact) => {
-          const download = artifacts.downloads.find(
-            (item) => item.artifact_id === artifact.artifact_id,
-          );
-          return (
-            <div className="artifact-row" key={artifact.artifact_id}>
-              <div>
-                <strong>{artifact.model_alias}</strong>
-                <span>{formatBytes(artifact.artifact_size_bytes)}</span>
-                {download ?
-                  <small>
-                    {download.path ?? download.error ?? download.status}
-                  </small>
-                : null}
+        {artifacts?.artifacts.length ?
+          artifacts.artifacts.map((artifact) => {
+            const download = artifacts.downloads.find(
+              (item) => item.artifact_id === artifact.artifact_id,
+            );
+            return (
+              <div className="artifact-row" key={artifact.artifact_id}>
+                <div>
+                  <strong>{artifact.model_alias}</strong>
+                  <span>{formatBytes(artifact.artifact_size_bytes)}</span>
+                  {download ?
+                    <small>
+                      {download.path ?? download.error ?? download.status}
+                    </small>
+                  : null}
+                </div>
+                <Tooltip tooltip={`Download ${artifact.model_alias}`}>
+                  <Button
+                    aria-label={`Download ${artifact.model_alias}`}
+                    disabled={download?.status === "downloading"}
+                    isPending={download?.status === "downloading"}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onDownload(artifact.artifact_id)}
+                  >
+                    <Download size={15} />
+                  </Button>
+                </Tooltip>
               </div>
-              <Tooltip tooltip={`Download ${artifact.model_alias}`}>
-                <Button
-                  aria-label={`Download ${artifact.model_alias}`}
-                  disabled={download?.status === "downloading"}
-                  isPending={download?.status === "downloading"}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onDownload(artifact.artifact_id)}
-                >
-                  <Download size={15} />
-                </Button>
-              </Tooltip>
-            </div>
-          );
-        })}
+            );
+          })
+        : <p className="panel-empty">No reviewed models available</p>}
       </section>
 
       <details className="advanced-section">

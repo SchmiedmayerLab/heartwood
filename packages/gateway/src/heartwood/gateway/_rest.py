@@ -62,12 +62,17 @@ class RestGateway:
             return self._handle_session_creation(body=request.body)
         if len(parts) == 2 and parts[0] == "sessions" and request.method == "GET":
             try:
-                session = self.gateway.session(parts[1])
-            except SessionCatalogError as error:
+                session_id = validate_session_id(parts[1])
+                session = self.gateway.session(session_id)
+            except (SessionCatalogError, ValueError) as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(session))
         if len(parts) == 2 and parts[0] == "sessions" and request.method == "PATCH":
-            return self._handle_session_rename(session_id=parts[1], body=request.body)
+            try:
+                session_id = validate_session_id(parts[1])
+            except ValueError as error:
+                return _error(422, error)
+            return self._handle_session_rename(session_id=session_id, body=request.body)
         if parts == ("settings", "actions") and request.method == "GET":
             try:
                 settings = self.gateway.action_settings()

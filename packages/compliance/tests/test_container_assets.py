@@ -223,6 +223,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
+    capable_model = _read("images/generic/scripts/capable_model_e2e.sh")
 
     assert "packages: write" in publish
     assert "push-by-digest=true" in publish
@@ -254,6 +255,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "qwen25-7b-instruct-q4_k_m" in smoke
     assert "capable_model_e2e.sh" in smoke
     assert "--network none --read-only" in smoke
+    assert "len(terminal_executions) != 1" in capable_model
+    assert 'read_text(encoding="utf-8") != expected_content' in capable_model
+    assert 'read_text(encoding="utf-8").strip()' not in capable_model
 
 
 def test_platform_registry_verifier_checks_only_public_terra_tags(tmp_path: Path) -> None:

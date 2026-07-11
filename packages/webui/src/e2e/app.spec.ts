@@ -66,6 +66,7 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(
     page.getByRole("button", { name: "Auto-Approve Low Risk" }),
   ).toBeVisible();
+  await expect(page.getByText("No reviewed models available")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("heading", { name: "Model & policy" }),
@@ -126,8 +127,9 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   await page.route("**/sessions/**", async (route) => {
     const request = route.request();
     const parts = new URL(request.url()).pathname.split("/").filter(Boolean);
-    const sessionId = decodeURIComponent(parts[1] ?? "");
-    const resource = parts[2];
+    const sessionsIndex = parts.lastIndexOf("sessions");
+    const sessionId = decodeURIComponent(parts[sessionsIndex + 1] ?? "");
+    const resource = parts[sessionsIndex + 2];
     if (resource === "events") {
       await json(route, {
         events: sessionId === "session-test" ? syntheticEvents() : [],

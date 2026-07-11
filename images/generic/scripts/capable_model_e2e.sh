@@ -73,7 +73,7 @@ run_heartwood --workspace "${workspace}" models add capable-local \
 run_heartwood --workspace "${workspace}" models validate capable-local | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
-  --prompt "Call the terminal tool exactly once to create model-proof.txt in the current workspace with exactly the text '${expected_content}'. Execute the tool; do not describe it as text. Wait for the terminal result before calling any completion or finish action, and do not write the file again. After the command succeeds, report completion." \
+  --prompt "Call the terminal tool exactly once. In that one call, execute this exact command: printf %s '${expected_content}' > model-proof.txt. Do not use echo, do not add a newline, and do not describe the command as text. Wait for the terminal result before calling any completion or finish action, and do not write the file again. After the command succeeds, report completion." \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do
@@ -146,11 +146,11 @@ terminal_executions = [
     if event["kind"] == "tool.execution.recorded"
     and event["payload"].get("tool_name") == "terminal"
 ]
-if not terminal_executions or any(event["payload"].get("exit_code") != 0 for event in terminal_executions):
-    raise SystemExit("capable-model session has no successful terminal execution")
+if len(terminal_executions) != 1 or terminal_executions[0]["payload"].get("exit_code") != 0:
+    raise SystemExit("capable-model session must have exactly one successful terminal execution")
 if not proof_path.is_file():
     raise SystemExit(f"capable model did not create {proof_path}")
-if proof_path.read_text(encoding="utf-8").strip() != expected_content:
+if proof_path.read_text(encoding="utf-8") != expected_content:
     raise SystemExit("capable model created unexpected proof content")
 decisions = [
     event["payload"]["decision"]["decision"]
