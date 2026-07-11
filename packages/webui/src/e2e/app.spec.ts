@@ -23,7 +23,7 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(newAnalysis).toHaveCSS("gap", "8px");
   await expect(newAnalysis).toHaveCSS("border-top-width", "1px");
   await expect(
-    page.getByRole("heading", { name: "Synthetic analysis" }),
+    page.getByRole("heading", { name: "Synthetic cohort analysis" }),
   ).toBeVisible();
   await expect(
     page.getByRole("log", { name: "Conversation transcript" }),
@@ -39,17 +39,17 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByText("Workflow progress", { exact: true }),
   ).toHaveCount(0);
   await expect(
-    page.getByText("I will inspect the synthetic workspace."),
+    page.getByText("I will run the repository-verified cohort Skill."),
   ).toBeVisible();
   await expect(page.getByText("generic", { exact: true })).toBeVisible();
   await expect(page.getByText("omop-cdm", { exact: true })).toBeVisible();
 
   const approval = page.getByRole("region", {
-    name: "Approval required for heartwood.local.write_summary",
+    name: "Approval required for terminal",
   });
   await expect(approval.getByText("low risk")).toBeVisible();
   await expect(
-    approval.getByText("write a synthetic workspace summary artifact"),
+    approval.getByText("build the aggregate synthetic target-condition cohort"),
   ).toBeVisible();
   await expect(page.getByLabel("Allow session-test-toolcall-0")).toBeVisible();
 
@@ -60,6 +60,8 @@ test("supports the researcher conversation and session workflow", async ({
 
   await page.getByRole("button", { name: "Skills" }).click();
   await expect(page.getByRole("heading", { name: "Skills" })).toBeVisible();
+  await expect(page.getByText("omop-cohort-summary")).toBeVisible();
+  await expect(page.getByText("baseline-model")).toBeVisible();
   await expect(page.getByText("aggregate-export")).toBeVisible();
   await page.getByRole("button", { name: "Close" }).click();
 
@@ -107,10 +109,10 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(modelPolicyButton).toBeFocused();
   await expect(task).toBeEnabled();
 
-  await task.fill("Summarize the synthetic workspace");
+  await task.fill("Fit a training-only age-only condition-history baseline");
   await task.press("Enter");
   await expect(
-    page.getByText("Summarize the synthetic workspace"),
+    page.getByText("Fit a training-only age-only condition-history baseline"),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "New analysis" }).click();
@@ -132,13 +134,13 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Synthetic analysis" }),
+    page.getByRole("heading", { name: "Synthetic cohort analysis" }),
   ).toBeVisible();
   await page.getByLabel("Open sessions").click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(
     page.getByRole("button", {
-      name: /Synthetic analysis, Approval needed/u,
+      name: /Synthetic cohort analysis, Approval needed/u,
     }),
   ).toBeVisible();
   await expect(page.getByText("Ask Every Time", { exact: true })).toBeVisible();
@@ -147,7 +149,7 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
 
 const installGatewayRoutes = async (page: Page): Promise<void> => {
   let sessions: SessionSummary[] = [
-    summary("session-test", "Synthetic analysis", 7),
+    summary("session-test", "Synthetic cohort analysis", 7),
   ];
   let modelSettings = {
     schema_version: "heartwood.model-settings.v1",
@@ -319,6 +321,27 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   await page.route("**/settings/skills", (route) =>
     json(route, {
       skills: [
+        {
+          name: "omop-cohort-summary",
+          skill_id: "heartwood.synthetic.omop-cohort-summary",
+          description: "Target-condition cohort and aggregate quality checks",
+          trust_tier: "verified",
+          source: "bundled",
+          approval_summary: "Reads localized synthetic OMOP tables.",
+          declared_tools: ["read-synthetic-tables", "write-aggregate-json"],
+          requires_network: false,
+        },
+        {
+          name: "baseline-model",
+          skill_id: "heartwood.synthetic.baseline-model",
+          description: "Training-only age baseline with aggregate diagnostics",
+          trust_tier: "verified",
+          source: "bundled",
+          approval_summary:
+            "Reads synthetic tables and writes model diagnostics.",
+          declared_tools: ["read-synthetic-tables", "write-aggregate-json"],
+          requires_network: false,
+        },
         {
           name: "aggregate-export",
           skill_id: "heartwood.synthetic.aggregate-export",

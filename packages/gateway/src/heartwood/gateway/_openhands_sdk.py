@@ -411,13 +411,15 @@ def _tool_observation(event: object) -> BackendEvent:
         metadata = getattr(observation, "metadata", None)
         exit_code = getattr(metadata, "exit_code", None)
     is_error = bool(getattr(observation, "is_error", False))
+    resolved_exit_code = exit_code if isinstance(exit_code, int) else (1 if is_error else 0)
+    failed = is_error or resolved_exit_code != 0
     tool_name = str(getattr(event, "tool_name", "unknown-tool"))
     return BackendEvent(
         kind=BackendEventKind.TOOL_EXECUTION,
         tool_execution=ToolExecution(
             tool_name=tool_name,
-            exit_code=exit_code if isinstance(exit_code, int) else (1 if is_error else 0),
-            summary=f"{tool_name} {'failed' if is_error else 'completed'}",
+            exit_code=resolved_exit_code,
+            summary=f"{tool_name} {'failed' if failed else 'completed'}",
         ),
     )
 

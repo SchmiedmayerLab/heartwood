@@ -181,7 +181,9 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert 'self.path != "/v1/models"' in model_stub
     assert "models validate local" in smoke
     assert "chat" in smoke
+    assert "call-heartwood-reference-analysis" in smoke
     assert "call-heartwood-offline-smoke" in smoke
+    assert "cohort-summary.json" in smoke
     assert " allow " in smoke
     assert " reject " in smoke
     assert "Action approved" in smoke
@@ -311,8 +313,10 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert offline_guide.count("uid=10001,gid=10001,mode=0700") == 2
     assert "len(terminal_executions) != 1" in capable_model
-    assert 'read_text(encoding="utf-8") != expected_content' in capable_model
-    assert 'read_text(encoding="utf-8").strip()' not in capable_model
+    assert "cohort_path.is_file()" in capable_model
+    assert 'summary["source_participant_count"] != 24' in capable_model
+    assert 'summary["participant_count"] != 20' in capable_model
+    assert 'checks["row_values_exported"] is not False' in capable_model
 
 
 def test_platform_registry_verifier_checks_only_public_terra_tags(tmp_path: Path) -> None:

@@ -82,7 +82,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "run",
         help="Compatibility alias for one coding-agent task.",
     )
-    run.add_argument("prompt", nargs="?", default="run the synthetic workflow")
+    run.add_argument(
+        "prompt",
+        nargs="?",
+        default="build the synthetic target-condition cohort and report aggregate quality checks",
+    )
     subparsers.add_parser("detect", help="Detect the platform and dataset without running code.")
 
     allow = subparsers.add_parser(

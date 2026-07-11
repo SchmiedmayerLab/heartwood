@@ -16,8 +16,8 @@ This matrix records current repository implementation and validation status. Hea
 
 | Platform path | Repository status | Published image | Automated evidence | Live-platform status |
 |---|---|---|---|---|
-| Generic Linux or Jupyter environment | Implemented | `edge` and `sha-<git-sha>` for `linux/amd64` and `linux/arm64` | Native architecture builds; exact-digest no-weight, real OpenHands loopback, action-confirmation, mounted llama.cpp, and fresh named-volume checks before tag promotion; gateway-owned web sessions, responsive Chromium, notebook proxy, Skills, and audit export | Self-hosted deployments must validate their own identity, storage, network, and data controls. |
-| Terra Jupyter | Implemented platform-derived image | `edge-terra` and `sha-<git-sha>-terra` for `linux/amd64` as Docker schema 2 | Real pinned Terra base on main; exact-digest Jupyter environment, kernel, entrypoint, `/notebooks/...` route, Leonardo-compatible manifest, OpenHands, mounted llama.cpp, CLI, web, notebook proxy, and audit checks before tag promotion | Real Terra workspace validation remains required before a supported or institution-approved deployment claim. |
+| Generic Linux or Jupyter environment | Implemented | `edge` and `sha-<git-sha>` for `linux/amd64` and `linux/arm64` | Native architecture builds; exact-digest no-weight, real OpenHands loopback, action-confirmation, mounted llama.cpp, and fresh named-volume checks before tag promotion; live-browser cohort, baseline, aggregate-export, audit, and CLI replay; responsive Chromium and notebook-proxy contracts | Self-hosted deployments must validate their own identity, storage, network, and data controls. |
+| Terra Jupyter | Implemented platform-derived image | `edge-terra` and `sha-<git-sha>-terra` for `linux/amd64` as Docker schema 2 | Real pinned Terra base on main; exact-digest Jupyter environment, Heartwood kernel, entrypoint, `/notebooks/...` route, Leonardo-compatible manifest, OpenHands reference cohort, mounted llama.cpp, CLI, web, notebook proxy, and audit checks before tag promotion | Real Terra workspace validation remains required before a supported or institution-approved deployment claim. |
 | All of Us or AnVIL through Terra | Design target only | No separately validated image | No platform-specific live evidence | Not currently supported as a distinct deployment. Dataset policy, identity, image base, and live control-plane behavior require separate validation. |
 | Seven Bridges or Velsera | Design target only | None | None | Not currently supported. |
 | DNAnexus or UK Biobank Research Analysis Platform | Design target only | None | None | Not currently supported. |
@@ -42,4 +42,6 @@ A platform moves from CI-validated to live-validated only after the published im
 
 - [Terra custom cloud environment tutorial](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks)
 - [Terra cloud environment customization](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app)
+- [Terra architecture and persistent-disk mounts](https://support.terra.bio/hc/en-us/articles/360058163311-Terra-architecture-where-your-data-and-tools-live)
+- [Accessing workspace-bucket data from a notebook](https://support.terra.bio/hc/en-us/articles/360046617372-Accessing-data-from-the-workspace-Bucket-in-a-notebook)
 - [DataBiosphere Terra Docker image catalog](https://github.com/DataBiosphere/terra-docker)

@@ -10,6 +10,7 @@
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -21,10 +22,6 @@ const webRoot = path.join(packageRoot, "dist");
 const workspace = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-web-gateway-"),
 );
-const port = process.env.HEARTWOOD_WEB_SMOKE_PORT || "8767";
-const basePath = `/proxy/${port}/`;
-const origin = `http://127.0.0.1:${port}`;
-const proxiedBaseUrl = `${origin}${basePath}`;
 const logs = [];
 
 main().catch((error) => {
@@ -37,6 +34,12 @@ async function main() {
     throw new Error("web UI assets are missing; run npm run build first");
   }
 
+  const port =
+    process.env.HEARTWOOD_WEB_SMOKE_PORT ||
+    String(await availableLoopbackPort());
+  const basePath = `/proxy/${port}/`;
+  const origin = `http://127.0.0.1:${port}`;
+  const proxiedBaseUrl = `${origin}${basePath}`;
   const server = spawn(
     heartwoodExecutable,
     [
@@ -76,7 +79,7 @@ async function main() {
   });
 
   try {
-    await Promise.race([waitForServer(proxiedBaseUrl), spawnError]);
+    await Promise.race([waitForServer(proxiedBaseUrl, server), spawnError]);
     const html = await fetchText(proxiedBaseUrl);
     if (!html.includes('<div id="root"></div>')) {
       throw new Error(
@@ -191,10 +194,15 @@ async function main() {
   }
 }
 
-async function waitForServer(url) {
+async function waitForServer(url, server) {
   const deadline = Date.now() + 15000;
   let lastError;
   while (Date.now() < deadline) {
+    if (server.exitCode !== null || server.signalCode !== null) {
+      throw new Error(
+        `gateway process exited before becoming ready\n${logs.join("")}`,
+      );
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -211,6 +219,23 @@ async function waitForServer(url) {
   throw new Error(
     `gateway server did not become ready: ${lastError}\n${logs.join("")}`,
   );
+}
+
+async function availableLoopbackPort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("unable to allocate a loopback port");
+  }
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error === undefined ? resolve() : reject(error)));
+  });
+  return address.port;
 }
 
 async function fetchText(url) {

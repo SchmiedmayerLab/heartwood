@@ -26,6 +26,7 @@ from heartwood.gateway._openhands_sdk import (
     _security_configuration,
     _terminal_tool_params,
     _tool_call,
+    _tool_observation,
 )
 
 
@@ -170,6 +171,19 @@ def test_openhands_translation_reports_ensemble_risk_and_fails_closed() -> None:
 
     assert tool_call.risk == "medium"
     assert _analyzed_risk(_FailingAnalyzer(), ActionEvent()) == "high"
+
+
+def test_openhands_translation_marks_nonzero_terminal_exit_as_failed() -> None:
+    translated = _tool_observation(
+        SimpleNamespace(
+            tool_name="terminal",
+            observation=SimpleNamespace(exit_code=127, is_error=False),
+        )
+    )
+
+    assert translated.tool_execution is not None
+    assert translated.tool_execution.exit_code == 127
+    assert translated.tool_execution.summary == "terminal failed"
 
 
 def test_openhands_backend_allows_one_pending_action_and_continues(tmp_path: Path) -> None:

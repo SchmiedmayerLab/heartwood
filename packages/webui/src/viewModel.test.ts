@@ -18,17 +18,17 @@ describe("buildViewModel", () => {
     expect(viewModel.conversation).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          content: "Inspect the synthetic workspace",
+          content: "Build the synthetic target-condition cohort",
           label: "You",
           role: "user",
         }),
         expect.objectContaining({
-          content: "I will inspect the synthetic workspace.",
+          content: "I will run the repository-verified cohort Skill.",
           label: "Agent",
           role: "agent",
         }),
         expect.objectContaining({
-          content: "Proposed tool: heartwood.local.write_summary",
+          content: "Proposed tool: terminal",
           label: "Trace",
           role: "trace",
         }),
@@ -39,10 +39,10 @@ describe("buildViewModel", () => {
       expect.objectContaining({
         decision: null,
         risk: "low",
-        summary: "write a synthetic workspace summary artifact",
+        summary: "build the aggregate synthetic target-condition cohort",
         targetId: "session-test-toolcall-0",
         targetType: "tool-call",
-        toolName: "heartwood.local.write_summary",
+        toolName: "terminal",
       }),
     ]);
     expect(viewModel.context).toEqual({

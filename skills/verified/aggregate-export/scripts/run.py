@@ -43,6 +43,14 @@ def build_export(
             "reason": "cohort is below the aggregate count floor",
             "aggregates": {},
         }
+    aggregates = {
+        "participant_count": participant_count,
+        "condition_occurrence_count": int(summary_payload.get("condition_occurrence_count", 0)),
+    }
+    if "target_condition_occurrence_count" in summary_payload:
+        aggregates["target_condition_occurrence_count"] = int(
+            summary_payload["target_condition_occurrence_count"]
+        )
     return {
         "schema_version": "heartwood.skill-output.v1",
         "skill_id": _SKILL_ID,
@@ -50,10 +58,7 @@ def build_export(
         "suppressed": False,
         "aggregate_count_floor": aggregate_count_floor,
         "reason": "aggregate output satisfies the count floor",
-        "aggregates": {
-            "participant_count": participant_count,
-            "condition_occurrence_count": int(summary_payload.get("condition_occurrence_count", 0)),
-        },
+        "aggregates": aggregates,
     }
 
 

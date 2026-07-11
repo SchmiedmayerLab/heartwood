@@ -65,8 +65,12 @@ def test_omop_like_csv_fixtures_have_expected_synthetic_shape() -> None:
         "condition_concept_id",
         "condition_start_year",
     }
-    assert len(person_rows) == 3
-    assert len(condition_rows) == 3
+    assert len(person_rows) == 24
+    assert len(condition_rows) == 39
+    assert sum(row["condition_concept_id"] == "201826" for row in condition_rows) == 20
+    assert {row["person_id"] for row in condition_rows} == {
+        str(person_id) for person_id in range(1, 25)
+    }
 
 
 def test_policy_fixture_matches_policy_profile_schema() -> None:

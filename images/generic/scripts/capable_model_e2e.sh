@@ -16,8 +16,8 @@ action_settings="${HEARTWOOD_ACTION_SETTINGS:-${state_root}/actions.json}"
 transcript="${HEARTWOOD_TRANSCRIPT:-${state_root}/transcript.txt}"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${state_root}/llama-server.log}"
 command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-600}"
-expected_content="heartwood-capable-model-ok"
-proof_path="${state_root}/workspaces/${session_id}/model-proof.txt"
+runtime_root="${HEARTWOOD_RUNTIME_ROOT:-/opt/heartwood}"
+cohort_path="${state_root}/workspaces/${session_id}/cohort-summary.json"
 events_path="${workspace}/${session_id}/events.jsonl"
 
 export HEARTWOOD_AGENT_BACKEND="openhands-sdk"
@@ -30,12 +30,15 @@ export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
 export HEARTWOOD_LOCAL_MODEL_ALIAS="heartwood-local-runtime"
 export HEARTWOOD_LOCAL_MODEL_CONTEXT="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-8192}"
 export HEARTWOOD_LOCAL_MODEL_THREADS="${HEARTWOOD_LOCAL_MODEL_THREADS:-8}"
+export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
 
 rm -rf "${workspace}" "${state_root}/openhands" "${state_root}/workspaces"
 rm -f "${settings}" "${action_settings}" "${transcript}" "${runtime_log}"
-mkdir -p "${state_root}"
+mkdir -p "${state_root}/workspaces/${session_id}/input"
+cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv \
+  "${state_root}/workspaces/${session_id}/input/"
 
 bash images/generic/scripts/start_local_runtime.sh >"${runtime_log}" 2>&1 &
 runtime_pid="$!"
@@ -70,7 +73,7 @@ run_heartwood --workspace "${workspace}" models connect local heartwood-local-ru
 run_heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
-  --prompt "Call the terminal tool exactly once. In that one call, execute this exact command: printf %s '${expected_content}' > model-proof.txt. Do not use echo, do not add a newline, and do not describe the command as text. Wait for the terminal result before calling any completion or finish action, and do not write the file again. After the command succeeds, report completion." \
+  --prompt "Call the terminal tool exactly once. In that one call, execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json. Do not describe the command as text. Wait for the terminal result before calling any completion or finish action, and do not write the file again. After the command succeeds, report the aggregate cohort result." \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do
@@ -105,14 +108,13 @@ done
 run_heartwood --workspace "${workspace}" --session-id "${session_id}" audit export \
   --output "${state_root}/audit-export.jsonl" | tee -a "${transcript}"
 
-python - "${events_path}" "${proof_path}" "${expected_content}" <<'PY'
+python - "${events_path}" "${cohort_path}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 events_path = Path(sys.argv[1])
-proof_path = Path(sys.argv[2])
-expected_content = sys.argv[3]
+cohort_path = Path(sys.argv[2])
 events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
 kinds = {event["kind"] for event in events}
 required = {
@@ -145,10 +147,21 @@ terminal_executions = [
 ]
 if len(terminal_executions) != 1 or terminal_executions[0]["payload"].get("exit_code") != 0:
     raise SystemExit("capable-model session must have exactly one successful terminal execution")
-if not proof_path.is_file():
-    raise SystemExit(f"capable model did not create {proof_path}")
-if proof_path.read_text(encoding="utf-8") != expected_content:
-    raise SystemExit("capable model created unexpected proof content")
+if not cohort_path.is_file():
+    raise SystemExit(f"capable model did not create {cohort_path}")
+cohort = json.loads(cohort_path.read_text(encoding="utf-8"))
+summary = cohort["summary"]
+if summary["source_participant_count"] != 24 or summary["participant_count"] != 20:
+    raise SystemExit(f"capable model produced an unexpected reference cohort: {summary}")
+if summary["source_condition_occurrence_count"] != 39:
+    raise SystemExit(f"capable model produced an unexpected source condition count: {summary}")
+if summary["condition_occurrence_count"] != 35:
+    raise SystemExit(f"capable model produced an unexpected condition count: {summary}")
+if not cohort["export_guard"]["exportable"]:
+    raise SystemExit("capable model reference cohort unexpectedly failed the count floor")
+checks = cohort["quality_checks"]
+if checks["row_values_exported"] is not False:
+    raise SystemExit("capable model reference artifact contains row-level output")
 decisions = [
     event["payload"]["decision"]["decision"]
     for event in events
