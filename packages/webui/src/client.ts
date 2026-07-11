@@ -7,10 +7,19 @@
  */
 
 import type {
+  ActionConfirmationMode,
+  ActionSettings,
   CommandKind,
   JsonValue,
+  ModelArtifacts,
+  ModelDownload,
+  ModelProfile,
+  ModelSettings,
+  ModelValidation,
   SessionCommand,
   SessionEvent,
+  SkillSettings,
+  SkillSummary,
 } from "./types";
 
 const noopCleanup = (): void => undefined;
@@ -30,6 +39,21 @@ export interface HeartwoodClient {
     afterSequence: number | undefined,
     onEvents: (events: SessionEvent[]) => void,
   ): () => void;
+  getActionSettings(): Promise<ActionSettings>;
+  selectActionConfirmationMode(
+    mode: ActionConfirmationMode,
+  ): Promise<ActionSettings>;
+  getModelSettings(): Promise<ModelSettings>;
+  saveModelProfile(profile: ModelProfile): Promise<ModelSettings>;
+  selectModelProfile(profileId: string): Promise<ModelSettings>;
+  removeModelProfile(profileId: string): Promise<ModelSettings>;
+  validateModelProfile(profileId?: string): Promise<ModelValidation>;
+  getModelArtifacts(): Promise<ModelArtifacts>;
+  downloadModelArtifact(artifactId: string): Promise<ModelDownload>;
+  getSkillSettings(): Promise<SkillSettings>;
+  inspectSkill(source: string): Promise<SkillSummary>;
+  installSkill(source: string): Promise<SkillSettings>;
+  removeSkill(name: string): Promise<SkillSettings>;
 }
 
 export const createCommand = (
@@ -71,6 +95,119 @@ export class GatewayClient implements HeartwoodClient {
       this.url(`/sessions/${sessionId}/events${query}`),
     );
     return parseResponse(response);
+  }
+
+  async getActionSettings(): Promise<ActionSettings> {
+    return parseJsonResponse<ActionSettings>(
+      await fetch(this.url("/settings/actions")),
+    );
+  }
+
+  async selectActionConfirmationMode(
+    mode: ActionConfirmationMode,
+  ): Promise<ActionSettings> {
+    return parseJsonResponse<ActionSettings>(
+      await fetch(this.url("/settings/actions/confirmation"), {
+        body: JSON.stringify({ mode }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      }),
+    );
+  }
+
+  async getModelSettings(): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(this.url("/settings/models")),
+    );
+  }
+
+  async saveModelProfile(profile: ModelProfile): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(this.url("/settings/models/profiles"), {
+        body: JSON.stringify(profile),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async selectModelProfile(profileId: string): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(this.url("/settings/models/active"), {
+        body: JSON.stringify({ profile_id: profileId }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      }),
+    );
+  }
+
+  async removeModelProfile(profileId: string): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(
+        this.url(`/settings/models/profiles/${encodeURIComponent(profileId)}`),
+        { method: "DELETE" },
+      ),
+    );
+  }
+
+  async validateModelProfile(profileId?: string): Promise<ModelValidation> {
+    const query =
+      profileId === undefined ? "" : (
+        `?profile_id=${encodeURIComponent(profileId)}`
+      );
+    return parseJsonResponse<ModelValidation>(
+      await fetch(this.url(`/settings/models/validation${query}`)),
+    );
+  }
+
+  async getModelArtifacts(): Promise<ModelArtifacts> {
+    return parseJsonResponse<ModelArtifacts>(
+      await fetch(this.url("/settings/models/artifacts")),
+    );
+  }
+
+  async downloadModelArtifact(artifactId: string): Promise<ModelDownload> {
+    return parseJsonResponse<ModelDownload>(
+      await fetch(this.url("/settings/models/downloads"), {
+        body: JSON.stringify({ artifact_id: artifactId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async getSkillSettings(): Promise<SkillSettings> {
+    return parseJsonResponse<SkillSettings>(
+      await fetch(this.url("/settings/skills")),
+    );
+  }
+
+  async inspectSkill(source: string): Promise<SkillSummary> {
+    return parseJsonResponse<SkillSummary>(
+      await fetch(this.url("/settings/skills/inspect"), {
+        body: JSON.stringify({ source }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async installSkill(source: string): Promise<SkillSettings> {
+    return parseJsonResponse<SkillSettings>(
+      await fetch(this.url("/settings/skills/install"), {
+        body: JSON.stringify({ approved: true, source }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async removeSkill(name: string): Promise<SkillSettings> {
+    return parseJsonResponse<SkillSettings>(
+      await fetch(this.url(`/settings/skills/${encodeURIComponent(name)}`), {
+        method: "DELETE",
+      }),
+    );
   }
 
   streamEvents(
@@ -172,6 +309,20 @@ const parseResponse = async (
     error?: string;
   };
   return { events: payload.events ?? [] };
+};
+
+const parseJsonResponse = async <Value>(response: Response): Promise<Value> => {
+  if (!response.ok) {
+    let error = `Gateway request failed with status ${response.status}`;
+    try {
+      const payload = (await response.json()) as { error?: string };
+      error = payload.error ?? error;
+    } catch {
+      // Preserve the gateway status when an upstream proxy returns HTML/text.
+    }
+    throw new Error(error);
+  }
+  return (await response.json()) as Value;
 };
 
 const parseEventPayload = (payload: string): SessionEventResponse => {

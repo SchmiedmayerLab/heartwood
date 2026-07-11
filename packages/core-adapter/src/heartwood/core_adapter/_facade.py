@@ -4,14 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Event-streaming execution facade for the agent backend.
-
-The facade mirrors the OpenHands agent-server model: a turn produces a stream of
-typed events (assistant message, proposed tool call, confirmation gate, tool
-execution) rather than a single result. Deterministic replay remains available
-for tests, while local runtime profiles can select a workspace-backed tool
-executor that performs a real bounded filesystem action.
-"""
+"""Small execution facade shared by deterministic and OpenHands backends."""
 
 from __future__ import annotations
 
@@ -22,17 +15,19 @@ from typing import Literal, Protocol
 
 
 class BackendEventKind(StrEnum):
-    """Kinds of event a backend emits while running a turn."""
+    """Kinds of event emitted by an execution backend."""
 
     AGENT_MESSAGE = "agent_message"
     TOOL_CALL_PROPOSED = "tool_call_proposed"
-    CONFIRMATION = "confirmation"
+    CONFIRMATION_REQUESTED = "confirmation_requested"
+    CONFIRMATION_RESOLVED = "confirmation_resolved"
     TOOL_EXECUTION = "tool_execution"
+    ERROR = "error"
 
 
 @dataclass(frozen=True, slots=True)
 class ToolExecution:
-    """Structured summary of a tool execution."""
+    """Content-minimized summary of a tool observation."""
 
     tool_name: str
     exit_code: int
@@ -41,7 +36,7 @@ class ToolExecution:
 
 @dataclass(frozen=True, slots=True)
 class ProposedToolCall:
-    """A tool call proposed by the backend before execution."""
+    """A tool action proposed before execution."""
 
     tool_call_id: str
     tool_name: str
@@ -51,11 +46,7 @@ class ProposedToolCall:
 
 @dataclass(frozen=True, slots=True)
 class BackendEvent:
-    """One event in a backend turn stream.
-
-    Exactly one of ``message``, ``tool_call``, ``approved``, or
-    ``tool_execution`` is populated, according to ``kind``.
-    """
+    """One SDK-neutral event emitted by an agent backend."""
 
     kind: BackendEventKind
     message: str | None = None
@@ -65,88 +56,214 @@ class BackendEvent:
 
 
 class AgentBackend(Protocol):
-    """Stable facade for an event-streaming execution backend."""
+    """Stable facade over OpenHands and deterministic test conversations."""
 
     @property
     def backend_id(self) -> str:
         """Return the backend id."""
 
-    def chat_turn(self, *, session_id: str, prompt_length: int) -> tuple[BackendEvent, ...]:
-        """Return the event stream for a chat-only turn (no tool execution)."""
+    @property
+    def configuration_error(self) -> str | None:
+        """Return a content-minimized reason the backend cannot start a turn."""
 
-    def run_turn(
-        self, *, session_id: str, prompt_length: int, approved: bool
+    @property
+    def model_endpoint(self) -> str:
+        """Return the declared normalized endpoint evaluated by Heartwood policy."""
+
+    @property
+    def model_profile_id(self) -> str:
+        """Return the stable non-secret model profile identifier."""
+
+    @property
+    def capability_tier(self) -> str:
+        """Return the configured model capability tier."""
+
+    @property
+    def credential_reference(self) -> str | None:
+        """Return the non-secret credential reference evaluated by policy."""
+
+    @property
+    def action_confirmation_mode(self) -> str:
+        """Return the selected OpenHands action-confirmation mode."""
+
+    @property
+    def continuation_requires_model_authorization(self) -> bool:
+        """Return whether approval or resume can continue model execution."""
+
+    def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+        """Submit a user task and run until completion or confirmation."""
+
+    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:
+        """Restore pending confirmation state from the Heartwood event log."""
+
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        """Return the event stream for a turn that proposes and gates a tool call."""
+        """Resolve the pending action; a rejection must not continue the model."""
+
+    def pause(self) -> None:
+        """Pause the conversation."""
+
+    def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+        """Resume a paused conversation."""
+
+    def close(self) -> None:
+        """Release backend resources."""
 
 
 class DeterministicAgentBackend:
-    """Offline backend used by tests and synthetic replay.
+    """Deterministic conversation used by unit tests and replay fixtures."""
 
-    It never executes external tools or reaches a model; it emits a fixed,
-    content-free event stream so sessions replay deterministically.
-    """
+    def __init__(self, *, action_confirmation_mode: str = "always-confirm") -> None:
+        if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
+            msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
+            raise ValueError(msg)
+        self._action_confirmation_mode = action_confirmation_mode
+        self._pending: ProposedToolCall | None = None
 
     @property
     def backend_id(self) -> str:
         """Return the backend id."""
         return "deterministic-local"
 
-    def _tool_call(self, session_id: str) -> ProposedToolCall:
-        return ProposedToolCall(
+    @property
+    def configuration_error(self) -> str | None:
+        """Return no configuration error for the deterministic fixture."""
+        return None
+
+    @property
+    def model_endpoint(self) -> str:
+        """Return the synthetic endpoint covered by the generic policy."""
+        return "https://model.local.invalid/v1/chat/completions"
+
+    @property
+    def model_profile_id(self) -> str:
+        """Return the deterministic fixture profile identifier."""
+        return "deterministic-local"
+
+    @property
+    def capability_tier(self) -> str:
+        """Return the deterministic capability tier."""
+        return "supervised"
+
+    @property
+    def credential_reference(self) -> str | None:
+        """Return no credential for the deterministic backend."""
+        return None
+
+    @property
+    def action_confirmation_mode(self) -> str:
+        """Return the selected deterministic confirmation mode."""
+        return self._action_confirmation_mode
+
+    @property
+    def continuation_requires_model_authorization(self) -> bool:
+        """Return false because the deterministic backend makes no model calls."""
+        return False
+
+    def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+        """Emit a message and one pending synthetic action."""
+        if self._pending is not None:
+            return (
+                BackendEvent(
+                    kind=BackendEventKind.ERROR,
+                    message="resolve the pending action before submitting another task",
+                ),
+            )
+        self._pending = ProposedToolCall(
             tool_call_id=f"{session_id}-toolcall-0",
             tool_name="heartwood.synthetic.noop",
             risk="low",
             summary="run the synthetic aggregate no-op",
         )
-
-    def _agent_message(self, session_id: str, prompt_length: int) -> BackendEvent:
-        return BackendEvent(
-            kind=BackendEventKind.AGENT_MESSAGE,
-            message=(
-                "Planned a synthetic aggregate analysis over the detected dataset "
-                f"(session_id={session_id}, prompt_length={prompt_length})."
+        events = (
+            BackendEvent(
+                kind=BackendEventKind.AGENT_MESSAGE,
+                message=(
+                    "Planned a synthetic aggregate analysis over the detected dataset "
+                    f"(session_id={session_id}, prompt_length={len(prompt)})."
+                ),
             ),
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=self._pending),
+        )
+        if self.action_confirmation_mode == "confirm-risky":
+            self._pending = None
+            return (
+                *events,
+                BackendEvent(
+                    kind=BackendEventKind.TOOL_EXECUTION,
+                    tool_execution=ToolExecution(
+                        tool_name="heartwood.synthetic.noop",
+                        exit_code=0,
+                        summary=f"automatically executed low-risk action; session_id={session_id}",
+                    ),
+                ),
+            )
+        return (
+            *events,
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=self._pending),
         )
 
-    def chat_turn(self, *, session_id: str, prompt_length: int) -> tuple[BackendEvent, ...]:
-        """Emit a single synthetic assistant message for a chat turn."""
-        return (self._agent_message(session_id, prompt_length),)
+    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:
+        """Restore pending deterministic confirmation state."""
+        self._pending = tool_call
 
-    def run_turn(
-        self, *, session_id: str, prompt_length: int, approved: bool
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        """Emit message, proposed tool call, confirmation gate, and execution."""
-        tool_call = self._tool_call(session_id)
-        summary = "approved deterministic no-op" if approved else "approval required"
+        """Resolve and clear the pending synthetic action."""
+        pending = self._pending
+        if pending is None or pending.tool_call_id != tool_call_id:
+            return (
+                BackendEvent(
+                    kind=BackendEventKind.ERROR,
+                    message=f"no matching pending action: {tool_call_id}",
+                ),
+            )
+        self._pending = None
+        resolved = BackendEvent(
+            kind=BackendEventKind.CONFIRMATION_RESOLVED,
+            tool_call=pending,
+            approved=approved,
+        )
+        if not approved:
+            return (resolved,)
         return (
-            self._agent_message(session_id, prompt_length),
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
-            BackendEvent(
-                kind=BackendEventKind.CONFIRMATION, tool_call=tool_call, approved=approved
-            ),
+            resolved,
             BackendEvent(
                 kind=BackendEventKind.TOOL_EXECUTION,
                 tool_execution=ToolExecution(
-                    tool_name=tool_call.tool_name,
-                    exit_code=0 if approved else 1,
-                    summary=f"{summary}; prompt_length={prompt_length}; session_id={session_id}",
+                    tool_name=pending.tool_name,
+                    exit_code=0,
+                    summary=f"approved deterministic action; session_id={session_id}",
                 ),
             ),
         )
 
+    def pause(self) -> None:
+        """Pause the deterministic backend."""
 
-class LocalWorkspaceAgentBackend:
-    """Local backend that executes a bounded workspace-writing tool.
+    def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
+        """Resume the deterministic backend without producing events."""
+        return ()
 
-    The backend writes only synthetic, content-free metadata derived from the
-    session envelope. It gives the offline image a real tool-execution path
-    without introducing participant data, prompt text, shell access, or public
-    network behavior into the first local-runtime smoke test.
-    """
+    def close(self) -> None:
+        """Release deterministic backend resources."""
+
+
+class LocalWorkspaceAgentBackend(DeterministicAgentBackend):
+    """Deterministic test backend that writes one bounded local artifact."""
 
     def __init__(self, artifact_dir: Path) -> None:
-        """Initialize the backend with a root-confined artifact directory."""
+        super().__init__()
         self.artifact_dir = artifact_dir.resolve()
 
     @property
@@ -154,58 +271,60 @@ class LocalWorkspaceAgentBackend:
         """Return the backend id."""
         return "local-workspace"
 
-    def _tool_call(self, session_id: str) -> ProposedToolCall:
-        return ProposedToolCall(
-            tool_call_id=f"{session_id}-toolcall-0",
+    def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+        """Emit one pending bounded workspace action."""
+        events = super().submit_turn(session_id=session_id, prompt=prompt)
+        if self._pending is None:
+            return events
+        self._pending = ProposedToolCall(
+            tool_call_id=self._pending.tool_call_id,
             tool_name="heartwood.local.write_summary",
             risk="low",
             summary="write a synthetic workspace summary artifact",
         )
-
-    def _agent_message(self, session_id: str, prompt_length: int) -> BackendEvent:
-        return BackendEvent(
-            kind=BackendEventKind.AGENT_MESSAGE,
-            message=(
-                "Prepared a local workspace action over the detected synthetic dataset "
-                f"(session_id={session_id}, prompt_length={prompt_length})."
-            ),
-        )
-
-    def chat_turn(self, *, session_id: str, prompt_length: int) -> tuple[BackendEvent, ...]:
-        """Emit a content-free assistant message for a chat turn."""
-        return (self._agent_message(session_id, prompt_length),)
-
-    def run_turn(
-        self, *, session_id: str, prompt_length: int, approved: bool
-    ) -> tuple[BackendEvent, ...]:
-        """Write the local artifact only after the confirmation gate resolves."""
-        tool_call = self._tool_call(session_id)
-        if approved:
-            artifact_path = self._write_summary(session_id=session_id, prompt_length=prompt_length)
-            execution = ToolExecution(
-                tool_name=tool_call.tool_name,
-                exit_code=0,
-                summary=(
-                    "wrote synthetic workspace artifact: "
-                    f"{artifact_path.parent.name}/{artifact_path.name}"
-                ),
-            )
-        else:
-            execution = ToolExecution(
-                tool_name=tool_call.tool_name,
-                exit_code=1,
-                summary="approval required before writing workspace artifact",
-            )
         return (
-            self._agent_message(session_id, prompt_length),
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
-            BackendEvent(
-                kind=BackendEventKind.CONFIRMATION, tool_call=tool_call, approved=approved
-            ),
-            BackendEvent(kind=BackendEventKind.TOOL_EXECUTION, tool_execution=execution),
+            events[0],
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=self._pending),
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=self._pending),
         )
 
-    def _write_summary(self, *, session_id: str, prompt_length: int) -> Path:
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        approved: bool,
+    ) -> tuple[BackendEvent, ...]:
+        """Write the bounded artifact after an allow-once decision."""
+        pending = self._pending
+        if pending is None or pending.tool_call_id != tool_call_id:
+            return super().resolve_confirmation(
+                session_id=session_id,
+                tool_call_id=tool_call_id,
+                approved=approved,
+            )
+        self._pending = None
+        resolved = BackendEvent(
+            kind=BackendEventKind.CONFIRMATION_RESOLVED,
+            tool_call=pending,
+            approved=approved,
+        )
+        if not approved:
+            return (resolved,)
+        path = self._write_summary(session_id)
+        return (
+            resolved,
+            BackendEvent(
+                kind=BackendEventKind.TOOL_EXECUTION,
+                tool_execution=ToolExecution(
+                    tool_name=pending.tool_name,
+                    exit_code=0,
+                    summary=(f"wrote synthetic workspace artifact: {path.parent.name}/{path.name}"),
+                ),
+            ),
+        )
+
+    def _write_summary(self, session_id: str) -> Path:
         path = (self.artifact_dir / "synthetic-workspace-summary.md").resolve()
         if path.parent != self.artifact_dir:
             msg = f"artifact path escapes backend directory: {path}"
@@ -217,7 +336,6 @@ class LocalWorkspaceAgentBackend:
                     "# Synthetic Workspace Summary",
                     "",
                     f"- Session: `{session_id}`",
-                    f"- Prompt length: `{prompt_length}`",
                     "- Dataset: synthetic OMOP fixture",
                     "- Tool action: local workspace artifact write",
                     "- Persisted prompt content: none",

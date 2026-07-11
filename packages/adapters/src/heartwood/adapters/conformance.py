@@ -12,12 +12,9 @@ from collections.abc import Mapping
 
 from heartwood.adapters._protocols import (
     DataSourceAdapter,
-    ModelCallRequest,
-    ModelProviderAdapter,
     PlatformAdapter,
     RegistryAdapter,
 )
-from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
 
 def _assert_confidence(value: float) -> None:
@@ -39,34 +36,6 @@ def assert_platform_adapter_conforms(
     profile = adapter.default_policy_profile()
     assert profile.platform_id == adapter.adapter_id
     assert profile.deny_egress_by_default is True
-
-
-def assert_model_provider_adapter_conforms(
-    adapter: ModelProviderAdapter,
-    request: ModelCallRequest | None = None,
-) -> None:
-    """Assert the shared minimum contract for model-provider adapters."""
-    assert adapter.provider_id
-    assert adapter.capability_tier in {"autonomous", "supervised", "experimental"}
-    default_request = request is None
-    if request is None:
-        request = ModelCallRequest(
-            endpoint="https://model.example.invalid",
-            capability_tier=adapter.capability_tier,
-            purpose="synthetic conformance check",
-        )
-    decision = adapter.evaluate_model_call(request)
-    if decision.endpoint != "[invalid-endpoint]":
-        try:
-            assert decision.endpoint == normalize_endpoint(request.endpoint)
-        except PolicyInputError:
-            assert decision.decision == "deny"
-    else:
-        assert decision.decision == "deny"
-    assert decision.capability_tier == request.capability_tier
-    assert decision.reason
-    if default_request:
-        assert decision.decision == "deny"
 
 
 def assert_data_source_adapter_conforms(

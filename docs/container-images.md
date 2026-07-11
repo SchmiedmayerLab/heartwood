@@ -10,119 +10,114 @@ SPDX-License-Identifier: MIT
 
 # Container Images
 
-Heartwood publishes one image family from one Dockerfile and one Buildx Bake file. Image flavors differ by build arguments, tags, model artifact inclusion, and intended use; they do not fork the security baseline.
+Heartwood publishes one generic runtime and thin platform-derived runtimes. Every published image contains the same Heartwood application, OpenHands SDK adapter, repository-verified Skills, CLI, notebook bridge, web UI, policy controls, audit implementation, and optional `llama-server` runtime. Images never contain model weights or credentials.
 
-## Tag Scheme
+This document describes current image and publication behavior. [Platform Support](platform-support.md) records which paths are implemented, CI-validated, or still awaiting live-platform evidence. Future image and release work belongs in the [Delivery Roadmap](../design/09-implementation-plan.md).
 
-| Tag | Meaning |
-|---|---|
-| `edge` | Moving main-branch runtime image with the bundled Qwen2.5-Coder-7B-Instruct Q4_K_M local coding model. Not a stable release. |
-| `edge-coder-7b` | Model-explicit alias for `edge`, useful when demos should name the bundled local model family directly. |
-| `edge-smoke` | Moving main-branch smoke image with the tiny verified GGUF artifact for offline CI and diagnostics. |
-| `edge-providers` | Moving main-branch provider-route image with file-based provider secret configuration support and no bundled model weights. |
-| `edge-terra` | Moving main-branch Terra-derived notebook image built from the selected Terra Jupyter Python base, with the bundled Qwen2.5-Coder-7B-Instruct Q4_K_M local coding model. |
-| `edge-terra-coder-7b` | Model-explicit alias for `edge-terra`, useful when Terra demos should name the bundled local model family directly. |
-| `edge-terra-smoke` | Moving main-branch Terra-derived notebook image with the tiny verified GGUF artifact for CI smoke. |
-| `sha-<git-sha>` | Exact runtime image for one commit. |
-| `sha-<git-sha>-coder-7b` | Exact model-explicit runtime alias for one commit. |
-| `sha-<git-sha>-smoke` | Exact smoke image for one commit. |
-| `sha-<git-sha>-providers` | Exact provider-route image for one commit. |
-| `sha-<git-sha>-terra` | Exact Terra-derived runtime image for one commit. |
-| `sha-<git-sha>-terra-coder-7b` | Exact model-explicit Terra runtime alias for one commit. |
-| `sha-<git-sha>-terra-smoke` | Exact Terra-derived smoke image for one commit. |
-| `v<semver>` | Future stable runtime release. |
-| `v<semver>-<flavor>` | Future stable release for a non-default flavor. |
+## Current Published Tags
 
-Do not use `latest` until the first stable release exists. Do not use branch names such as `main` or informal tags such as `dev-main` for user-facing image references.
+| Tag | Platform | Purpose |
+|---|---|---|
+| `edge` | `linux/amd64`, `linux/arm64` | Moving main-branch generic runtime. |
+| `sha-<git-sha>` | `linux/amd64`, `linux/arm64` | Immutable generic runtime for one commit. |
+| `edge-terra` | `linux/amd64` | Moving main-branch runtime derived from the pinned Terra Jupyter base. |
+| `sha-<git-sha>-terra` | `linux/amd64` | Immutable Terra-derived runtime for one commit. |
 
-The generic publish workflow builds `linux/amd64` and `linux/arm64` on native GitHub-hosted runners, pushes architecture helper tags such as `edge-amd64`, `edge-arm64`, `edge-coder-7b-amd64`, and `edge-coder-7b-arm64`, creates the public multi-architecture generic tags with `docker buildx imagetools create`, keeps Buildx SBOM/provenance attestations on those generic image artifacts, and verifies the public tags through an unauthenticated registry inspection before the workflow succeeds. Treat architecture helper tags as publication internals for debugging and manifest assembly, not stable user-facing references. Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests with media type `application/vnd.docker.distribution.manifest.v2+json` because the selected Terra notebook base is amd64 and Terra Leonardo image auto-detection accepts Docker manifest v2 media types but not OCI indexes. The Terra publish path disables Buildx default attestations for `edge-terra`, `edge-terra-coder-7b`, `edge-terra-smoke`, and commit-SHA Terra tags because attached attestations would force an OCI image index that Leonardo rejects. Platform-derived tag checks are driven by `images/platform/scripts/verify_registry_manifest.py` and the `images/platforms.toml` manifest so future platforms can declare their own manifest media type, config media type, supported architecture set, and non-platform manifest policy. Pull-request CI uses `edge-terra-smoke-ci` only as a local test tag built from a lightweight Terra-compatible base; it is not published as a user-facing platform image.
+Do not publish `latest` before the first stable release. Model names, provider names, branch names, and architecture-helper suffixes are not public flavor tags.
 
-The `SchmiedmayerLab/heartwood` GHCR package must stay public because Terra cannot use the main demo tags without anonymous pull access. If GitHub reports the package as private, change the package visibility from the GitHub package settings page before relying on the image in Terra. The workflow verifies Terra tags with the same unauthenticated Docker schema-2 manifest request shape that Leonardo uses; this manual check is stricter than `docker manifest inspect`, which can succeed on OCI indexes that Leonardo rejects:
+## Future Release Tags
 
-```bash
-python3 images/platform/scripts/verify_registry_manifest.py --manifest images/platforms.toml --platform terra --image-name ghcr.io/schmiedmayerlab/heartwood --git-sha <published-git-sha>
-```
+Stable `v<semver>` tags are not published yet. Their retention, signing, release notes, and compatibility policy must be implemented before the first stable release.
 
-Registry maintenance must protect public moving tags, commit-SHA tags retained by policy, future semver tags, generic SBOM/provenance artifacts, and any manifest referenced by a public multi-architecture index. Terra user-facing tags intentionally lack Buildx attestations until Leonardo accepts OCI indexes or OCI image manifests. Cleanup automation should begin with dry-run reports, delete only stale helper tags or unreferenced versions outside the retention window, and record the GHCR permissions required to perform deletions. The next documentation and governance pass must keep post-publish registry verification aligned with this tag policy and add the dry-run cleanup policy.
+The generic workflow builds on native AMD64 and ARM64 GitHub runners, pushes each result by digest, transfers only digest markers between jobs, and joins the digests into the final multi-platform tags. This avoids persistent `-amd64` and `-arm64` helper tags. Generic images retain software bill of materials and provenance attestations.
 
-## Current Flavors
+Terra is intentionally separate. Leonardo image auto-detection requires a single-platform Docker schema-2 manifest and does not accept the generic multi-platform Open Container Initiative index. Terra publication therefore emits `application/vnd.docker.distribution.manifest.v2+json`, disables attestations that would wrap the image in an index, and validates anonymous registry access, media type, platform, user, workdir, entrypoint, ports, and required environment through `images/platform/scripts/verify_registry_manifest.py`.
 
-| Flavor | Bake Target | Moving Tag | Bundled Model Artifact | Intended Use |
-|---|---|---|---|---|
-| Runtime | `runtime` | `edge`, `edge-coder-7b` | Yes, Qwen2.5-Coder-7B Q4_K_M | Default platform-ready image for CLI, gateway, notebook bridge, built researcher web UI, OpenHands launcher, local inference runtime dependencies, provider route config/invocation support, and useful out-of-the-box local coding-model demos. |
-| Smoke | `smoke` | `edge-smoke` | Yes, tiny checked GGUF | Pull-request CI, main-branch CI, and diagnostics proving offline load/query, gateway policy, OpenHands bash execution, audit export, and reviewer packet generation with a tiny artifact. |
-| Providers | `providers` | `edge-providers` | No | Platform embedding where model access is supplied by in-boundary provider endpoints and credentials are mounted at runtime. |
-| Terra Runtime | `terra-runtime` | `edge-terra`, `edge-terra-coder-7b` | Yes, Qwen2.5-Coder-7B Q4_K_M | Terra-derived Jupyter notebook image built from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, with Heartwood installed under `/opt/heartwood`, a registered Heartwood kernel, and a useful default local coding model. |
-| Terra Smoke | `terra-smoke` | `edge-terra-smoke` | Yes, tiny checked GGUF | Terra-derived Jupyter notebook image for CI and tiny-model diagnostics, proving local inference, gateway policy, OpenHands bash execution, notebook API, web UI, audit export, and reviewer packet generation. |
+## Model And Credential Policy
 
-The default runtime images intentionally bundle the Qwen2.5-Coder-7B Q4_K_M artifact so Docker and Terra demos produce useful local model output without mounting weights or configuring an external provider. The smoke flavor exists to prove the stack runs air-gapped with a small artifact in CI; it is not a coding-quality, biomedical, or production model.
+No Dockerfile accepts a model path or model manifest build argument, and no build step downloads weights. `images/generic/image-flavors.toml`, `images/platforms.toml`, and static tests enforce this contract.
 
-## Resource Requirements
+Provider configuration is runtime state:
 
-These requirements describe one active local-model demo session using the bundled Qwen2.5-Coder-7B Q4_K_M artifact and the current `llama-cpp-cpu` runtime with a 4096-token context and 768-token response budget. They are operational starting points, not benchmark claims.
+- `model` is a LiteLLM provider/model identifier consumed by OpenHands.
+- `base_url` points to a custom or local OpenAI-compatible service when needed and must share the policy endpoint's origin.
+- `policy_endpoint` is the declared normalized route Heartwood authorizes before initial task submission and before an approved or resumed continuation that may call the model. For provider-native routing without `base_url`, platform network controls must independently enforce the actual destination.
+- `credential_kind` is `environment`, `file`, `managed-identity`, or `none` for loopback-only endpoints.
+- `api_key_env` and `api_key_file` are references. Secret values are resolved only in memory.
 
-| Deployment | Minimum | Recommended | Notes |
-|---|---|---|---|
-| Local Docker demo on `edge` or `edge-coder-7b` | 4 vCPU, 16 GB RAM, 25 GB free Docker disk | 8 vCPU, 32 GB RAM, 50 GB free Docker disk | Docker Desktop should be configured with enough CPU, memory, and disk before pulling the image. Lower memory may start the gateway but fail or swap heavily once llama.cpp loads the 4.68 GB GGUF artifact and KV cache. |
-| Terra demo on `edge-terra` or `edge-terra-coder-7b` | Standard VM, 4 vCPU, 16 GB RAM, 50 GB persistent disk | Standard VM, 8 vCPU, 32 GB RAM, 75 GB persistent disk | Disk must cover the Terra base, Heartwood layers, pulled image layers, image extraction, the 4.68 GB model artifact, Jupyter state, audit/reviewer exports, and the workspace. |
-| CI smoke on `edge-smoke`, `edge-terra-smoke`, or `edge-terra-smoke-ci` | 2 vCPU, 4 GB RAM, 10 GB free disk | 4 vCPU, 8 GB RAM, 20 GB free disk | Smoke images use the tiny checked GGUF artifact and are not representative of coding-model output quality. |
-| Provider-route image `edge-providers` | 2 vCPU, 4 GB RAM, 10 GB free disk | 4 vCPU, 8 GB RAM, 20 GB free disk | No local model weights are bundled; capacity is dominated by the gateway, OpenHands process, notebook/web serving, and provider latency. |
+Model profiles and the selected action-confirmation mode are stored in separate mode-`0600` JSON files outside session directories. Neither file contains credential values. Deployment policy must allow the selected capability tier, confirmation mode, and non-secret credential reference in addition to the endpoint. `credential_allowlist` uses environment-variable names, absolute mounted-file paths, or `managed-identity`. Valid settings cannot bypass a policy denial.
 
-The current default model path is single-session oriented. For a multi-user hosted setup, run one local-model worker per active session or scale the container horizontally; do not assume several concurrent Qwen2.5-Coder-7B generations will fit in the minimum memory envelope. Increase `HEARTWOOD_LOCAL_MODEL_CONTEXT`, `HEARTWOOD_LOCAL_MODEL_MAX_TOKENS`, or concurrent sessions only after measuring memory and latency in the target platform.
+For an environment-referenced provider key, Heartwood passes only the active value to the in-process OpenHands model client and blanks every configured model-key environment reference in OpenHands terminal subprocesses. A mounted credential file or platform managed identity available to the container user is not isolated from agent-executed code by this interactive-container architecture. Use least-privilege identities and a deployment-owned process, remote-workspace, or platform boundary when a model credential must be inaccessible to coding tools.
 
-Attaching a GPU to the current image does not accelerate the bundled local model. The shipped runtime uses the CPU-only `llama-cpp-cpu` profile and an Ubuntu CPU `llama-server` binary, and the launchers do not request Docker GPU devices. Terra supports GPUs for Jupyter Cloud Environments, but Heartwood will use them only after a separate GPU runtime profile, CUDA-capable llama.cpp or vLLM/SGLang image, device configuration, and GPU-capable tests are implemented. Until then, choose CPU and memory first; a Terra GPU may help unrelated notebook code that uses PyTorch or TensorFlow, but it will not improve Heartwood local-model inference.
+For local models, use one of three equivalent deployment patterns:
 
-## Platform Notebook Images
+1. Run Ollama, vLLM, SGLang, llama.cpp, or another OpenAI-compatible service beside Heartwood and configure its endpoint.
+2. Mount an existing model artifact and set `HEARTWOOD_LOCAL_MODEL_PATH` before starting `images/generic/scripts/start_local_runtime.sh`.
+3. Explicitly download a reviewed catalog artifact into mounted storage with `heartwood models download <artifact-id>`, then pass the printed path to the local runtime launcher.
 
-The generic image family is the portable Heartwood runtime baseline. It is suitable for local Docker, Docker Compose, CI, and as the source runtime for platform-specific images, but it is not the Terra custom notebook image users should select in Terra. The repeatable mechanism for adding or adapting a platform-derived notebook image is defined in [Platform Image Extension Guide](platform-images.md).
+The reviewed downloader pins the Hugging Face repository revision, byte size, SHA-256 digest, format, and license posture. Download success is an integrity check, not a model-quality or biomedical-suitability claim.
 
-Terra's current Jupyter custom-environment documentation directs custom notebook images to extend a Terra Jupyter base image or a project-specific image accepted by Terra's notebook service. The implemented Terra target derives from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`, installs Heartwood under `/opt/heartwood`, preserves `/opt/heartwood/docs/terra-jupyter-demo.ipynb`, registers a `heartwood` Jupyter kernel under `/opt/conda`, keeps Terra's Conda Jupyter environment ahead of Heartwood's virtual environment, restores `/home/jupyter` as the final working directory, preserves Jupyter on port `8000` with the Terra `/notebooks/...` service path, keeps `/etc/jupyter/scripts/run-jupyter.sh` usable for the Leonardo launch path, and exposes the Heartwood gateway on loopback for notebook-proxy access.
+## Generic Runtime
 
-Use `ghcr.io/schmiedmayerlab/heartwood:edge-terra` or the equivalent model-explicit alias `ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b` for the first synthetic Terra demo after the main-branch publish workflow completes and the GHCR package is public. Use `edge-terra-smoke` only when validating the tiny-model CI path. Do not document generic `edge`, `edge-smoke`, or `edge-providers` as supported Terra custom environment images. CI proves the platform Dockerfile and offline smoke path through the Terra-compatible CI base, while the main-branch publish workflow builds the real Terra-derived image and fails if an unauthenticated Leonardo-compatible Docker manifest request cannot inspect the published tag; live Terra workspace validation must still record the Terra base image digest, Heartwood image digest, VM shape, startup behavior, proxy path behavior, one synthetic web UI conversation command with user prompt, model preview, agent message, and trace summary, CLI/notebook replay evidence, audit export path, reviewer packet path, and any identity headers available to the gateway.
-
-The pull-request Terra smoke job builds `images/platform/terra-ci-base.Dockerfile` with real Jupyter notebook packages and a Terra-style `jupyter_notebook_config.py`, then builds `terra-smoke-ci` through the same `images/platform/Dockerfile`. That job validates Heartwood packaging, the Jupyter home/prefix assumptions, platform Python remaining ahead of the Heartwood virtual environment, kernel registration, the platform smoke script, the offline stack with runtime network disabled, the inherited Jupyter entrypoint serving `/notebooks/` while `/` returns the expected Jupyter 404, and the Leonardo-style `run-jupyter.sh` path serving `/notebooks/<project>/<cluster>/`, without pulling the multi-gigabyte Terra base or 7B model on every pull request. The main-branch publish job builds `terra-runtime` and `terra-smoke` from the real Terra base after freeing runner disk space, verifies the published Terra tags, image config, entrypoint, working directory, exposed notebook port, and launch-critical environment settings, then frees Docker build cache and pulls the published `edge-terra-smoke` image to run the same Jupyter contract and route smokes against a real-base image without unpacking the 7B runtime model layer on the constrained GitHub runner.
-
-## Provider Secrets
-
-Provider credentials are runtime inputs, never image inputs. Do not place provider API keys in Dockerfile `ARG`, Dockerfile `ENV`, labels, checked-in TOML values, shell scripts, examples, logs, session events, audit exports, or reviewer packets.
-
-Provider routes use file-based secret references:
-
-```toml
-[[routes]]
-route_id = "openai"
-provider = "openai"
-endpoint = "https://api.openai.com/v1/chat/completions"
-model = "configured-by-platform"
-capability_tier = "supervised"
-auth = "secret-file"
-secret_file = "/run/secrets/openai_api_key"
-```
-
-Docker Compose mounts secrets under `/run/secrets/<name>`. Terra, Seven Bridges, DNAnexus, and other controlled platforms should map their own secret or identity mechanisms into a runtime file path or managed identity route, then the active policy profile must explicitly allowlist the endpoint before any invocation. The implemented provider invocation path supports OpenAI-compatible chat-completions routes, including local loopback, OpenAI, Azure OpenAI, llama.cpp, and vLLM routes; managed identity routes are validated as metadata and require a platform adapter before invocation.
-
-## Researcher Web UI
-
-The generic image builds `packages/webui` during the Docker build and copies the static `dist` assets into `/opt/heartwood/packages/webui/dist`. The final image does not carry `node_modules`; runtime serving uses the Python gateway only.
-
-Start the self-contained local demo from the default runtime image with:
+Start the unconfigured web interface with persistent state and model cache volumes:
 
 ```bash
-docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_demo_stack.sh
+docker run --rm -p 127.0.0.1:8767:8767 \
+  -v heartwood-state:/home/heartwood/.local/share/heartwood \
+  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
+  ghcr.io/schmiedmayerlab/heartwood:edge \
+  bash images/generic/scripts/start_demo_stack.sh
 ```
 
-`images/generic/scripts/start_demo_stack.sh` starts the bundled Qwen2.5-Coder-7B llama.cpp runtime, seeds the synthetic model-call approval for `session-local`, enables the demo-only bounded synthetic response preview, sets the local-model response budget to 768 tokens, starts the gateway-managed localhost OpenHands child server, and serves the packaged web UI on `0.0.0.0:8767` for local Docker port publishing. Set `HEARTWOOD_DEMO_WEB_HOST` only when the demo container must bind a different internal host. Use `images/generic/scripts/start_web_ui.sh` directly when the local model is supplied elsewhere or when serving through Terra/Jupyter, where the default `127.0.0.1` bind address is expected. The launcher reads `HEARTWOOD_WORKSPACE`, `HEARTWOOD_WEB_HOST`, `HEARTWOOD_WEB_PORT`, `HEARTWOOD_WEB_ROOT`, and `HEARTWOOD_WEB_BASE_PATH`. Use `HEARTWOOD_WEB_BASE_PATH=/proxy/<port>/` when the upstream proxy preserves the prefix before forwarding. For `jupyter-server-proxy` routes that expose `/user/<name>/proxy/<port>/` in the browser and strip that prefix before the request reaches Heartwood, keep the launcher base path at `/`; the web UI infers the browser proxy base for gateway calls, while the gateway serves root-relative static and session routes internally. When the selected backend is `openhands-bash` or `openhands-agent-server`, the launcher enables the gateway-managed localhost OpenHands child server unless callers explicitly override `HEARTWOOD_AGENT_SERVER_ENABLED`. CI covers both proxy shapes, including a stripped Jupyter-style route that verifies static assets, command submission, replay, and Server-Sent Events through the external notebook URL. The generic image also carries `images/generic/scripts/terra_jupyter_demo_smoke.py`, a Python-only runtime smoke that verifies the packaged static assets and notebook API without Node.js or a repository checkout. The web UI is a presentation adapter over the same session command/event contract as the CLI and notebook bridge, uses WebSocket as the primary stream, falls back to Server-Sent Events, and replays persisted events after reconnect.
+The service starts without a secret or model. Configure a profile from the web settings panel or the CLI. Action confirmation defaults to **Ask Every Time**; generic synthetic development can select **Auto-Approve Low Risk** through the same panel or `heartwood actions`. To use a runtime credential, pass an environment variable or mount a secret file at container start. Never use Docker `ARG` or Dockerfile `ENV` for a secret value.
 
-The image also carries `README.md`, `ACRONYMS.md`, `docs/`, and `design/` under `/opt/heartwood` so a packaged runtime contains the tutorial notebook and design record needed for an offline demonstration.
+Run an explicitly mounted local model in the same container:
 
-## Local Model Strategy
+```bash
+docker run --rm -p 127.0.0.1:8767:8767 \
+  -v heartwood-state:/home/heartwood/.local/share/heartwood \
+  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
+  -e HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1 \
+  -e HEARTWOOD_LOCAL_MODEL_PATH=/home/heartwood/.cache/heartwood/models/<artifact-id>/<file>.gguf \
+  ghcr.io/schmiedmayerlab/heartwood:edge \
+  bash images/generic/scripts/start_demo_stack.sh
+```
 
-The default published local coding model is `qwen25-coder-7b-instruct-q4_k_m`, recorded in `images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml`. It is bundled in `edge`, `edge-coder-7b`, `edge-terra`, and `edge-terra-coder-7b`, pinned to `unsloth/Qwen2.5-Coder-7B-Instruct-GGUF` revision `0ecf11859560b2bf42e703207f9371186d02245f`, byte size `4683073504`, and SHA-256 `9a961bb225cb2b9fd84b2297df0d53089895c049d7d9dc5f5f8aebbcd3247872`. It is selected because it is materially more useful for offline coding-agent demos than the tiny smoke model while staying plausible for CPU-only Docker and Terra demonstrations.
+The local server binds to loopback by default. Configure an OpenAI-compatible profile with base URL `http://127.0.0.1:8765/v1`, policy endpoint `http://127.0.0.1:8765/v1/chat/completions`, and credential kind `none`.
 
-The implemented smoke model is `llama-cpp-stories260k-ci`, recorded in `images/generic/local-runtime/models/stories260k.toml`. It is bundled only in `edge-smoke`, `edge-terra-smoke`, `edge-terra-smoke-ci`, and commit-pinned smoke tags for CI and diagnostics.
+CPU and memory requirements are determined by the selected model and runtime, not the Heartwood image. The catalog records a reviewed envelope for each optional artifact. GPU acceleration requires a separately installed and tested GPU-capable runtime; attaching a GPU does not make the baseline CPU `llama-server` use it.
 
-Higher-capability local coding-agent models such as `Qwen/Qwen3-Coder-30B-A3B-Instruct` belong in separate high-resource or GPU profiles, not in required pull-request CI and not in the default runtime image until the image size, memory envelope, Terra VM shape, GPU path, and publication cost are explicitly accepted.
+## Terra Runtime
 
-## Future Tracking
+The Terra Dockerfile starts from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6` and adds Heartwood under `/opt/heartwood`. It deliberately preserves:
 
-The Markdown implementation plan remains the source of truth during the repository bootstrap. After the image flavors, provider-route config, and documentation site are stable, move remaining implementation tasks into GitHub Issues and a GitHub Project with fields for phase, platform, risk, owner, status, and required evidence. The design documents should then link to the project board instead of carrying long operational task lists.
+- user `jupyter` and home `/home/jupyter`;
+- the platform Jupyter environment ahead of Heartwood on `PATH`;
+- the inherited Jupyter notebook entrypoint and port `8000`;
+- the Leonardo `/notebooks/...` launch behavior;
+- a separate registered `Python 3 (Heartwood)` kernel;
+- persistent Heartwood state and model cache paths under `/home/jupyter/heartwood-workspace`.
+
+The Terra runtime is no-weight for the same reason as the generic image. Use workspace-persistent storage for optional local artifacts or configure an institution-authorized endpoint. A hosted service is appropriate for regulated data only when the institution has verified its agreement, covered product, identity, regional, logging, retention, and network configuration.
+
+The image and publication contract are implemented and CI-validated. Live synthetic validation in the Terra control plane remains outstanding, so the repository does not yet claim live Terra support for a specific institutional deployment.
+
+## Continuous Integration
+
+Pull requests run:
+
+- Docker Buildx checks for both Dockerfiles;
+- the generic runtime on native AMD64 and ARM64 runners;
+- a no-network Compose smoke that uses the deterministic OpenAI-compatible fixture through a real OpenHands `Conversation`;
+- OpenHands native loading of every repository-verified Skill;
+- model profile and artifact integrity tests;
+- a no-weight Terra CI image built through the production platform Dockerfile;
+- Terra Jupyter contract, platform payload, inherited entrypoint, Leonardo route, and OpenHands loopback smokes.
+
+Main publication repeats the integration checks against the published generic and real Terra-derived tags. The CI fixture validates orchestration, policy, audit, and interface wiring; it makes no model capability claim.
+
+## Registry Maintenance
+
+Protect moving tags, retained commit tags, stable release tags, generic attestations, and manifests referenced by a multi-platform index. The digest-based build does not create architecture helper tags. Any cleanup automation must begin in report-only mode, preserve protected tags and referenced digests, define a retention window for unreferenced commit artifacts, and use narrowly scoped package deletion permissions.
+
+See the [Platform Image Extension Guide](platform-images.md) for adding another platform-derived runtime.

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from heartwood.schemas import JsonValue, ModelCallDecision, PolicyProfile
+from heartwood.schemas import JsonValue, PolicyProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,25 +32,6 @@ class DatasetFingerprint:
     dataset_type: str
     confidence: float
     evidence: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ModelCallRequest:
-    """A proposed model call before policy evaluation."""
-
-    endpoint: str
-    capability_tier: str
-    purpose: str
-
-
-@dataclass(frozen=True, slots=True)
-class ModelInvocationRequest:
-    """A content-free model invocation request after policy approval."""
-
-    endpoint: str
-    model: str
-    prompt_length: int
-    purpose: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,24 +69,6 @@ class PlatformAdapter(Protocol):
 
     def default_policy_profile(self) -> PolicyProfile:
         """Return the default egress and credential policy for this platform."""
-
-
-class ModelProviderAdapter(Protocol):
-    """Adapter surface for in-boundary model-provider integration."""
-
-    @property
-    def provider_id(self) -> str:
-        """Return the stable model-provider adapter id."""
-
-    @property
-    def capability_tier(self) -> str:
-        """Return the measured capability tier enforced by policy."""
-
-    def evaluate_model_call(self, request: ModelCallRequest) -> ModelCallDecision:
-        """Return the policy decision for a proposed model call."""
-
-    def invoke_model_call(self, request: ModelInvocationRequest) -> JsonValue:
-        """Invoke an approved model call and return a JSON provider response."""
 
 
 class DataSourceAdapter(Protocol):

@@ -29,18 +29,16 @@ ARG HEARTWOOD_PLATFORM_BASE_IMAGE
 ARG HEARTWOOD_PLATFORM_BASE_PLATFORM
 ARG HEARTWOOD_PLATFORM=terra
 ARG HEARTWOOD_IMAGE_FLAVOR=terra-runtime
-ARG HEARTWOOD_BUNDLE_LOCAL_MODEL=0
 ARG HEARTWOOD_RUNTIME_ARCH=amd64
 ARG HEARTWOOD_PLATFORM_HOME=/home/jupyter
 ARG HEARTWOOD_PLATFORM_USER=jupyter
 ARG HEARTWOOD_JUPYTER_PREFIX=/opt/conda
-ARG HEARTWOOD_LOCAL_MODEL_MANIFEST=images/generic/local-runtime/models/stories260k.toml
 ARG LLAMA_CPP_VERSION=b9937
 ARG LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3
 ARG LLAMA_CPP_UBUNTU_ARM64_SHA256=c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4
 
 LABEL org.opencontainers.image.title="Heartwood Platform Runtime" \
-    org.opencontainers.image.description="Platform-derived Heartwood runtime with CLI, gateway, notebook bridge, web UI, local inference, and OpenHands smoke path." \
+    org.opencontainers.image.description="Platform-derived Heartwood runtime with CLI, web UI, notebook bridge, policy and audit controls, verified skills, OpenHands, and optional local inference." \
     org.opencontainers.image.source="https://github.com/SchmiedmayerLab/heartwood" \
     org.opencontainers.image.licenses="MIT" \
     org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}" \
@@ -50,15 +48,18 @@ LABEL org.opencontainers.image.title="Heartwood Platform Runtime" \
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    LITELLM_LOCAL_MODEL_COST_MAP=True \
+    OPENHANDS_SUPPRESS_BANNER=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/heartwood/.venv \
     UV_PYTHON_INSTALL_DIR=/opt/heartwood/python \
     UV_PYTHON_PREFERENCE=managed \
     HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu \
-    HEARTWOOD_LOCAL_MODEL_PATH=/opt/heartwood/local-runtime/models/model.gguf \
-    HEARTWOOD_AGENT_BACKEND=openhands-bash \
-    HEARTWOOD_PROVIDER_CONFIG=/opt/heartwood/images/generic/providers/provider-routes.example.toml \
+    HEARTWOOD_AGENT_BACKEND=auto \
+    HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified \
+    HEARTWOOD_MODEL_CATALOG=/opt/heartwood/images/generic/local-runtime/model-catalog.toml \
+    HEARTWOOD_MODEL_CACHE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models \
     HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     HEARTWOOD_WORKSPACE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions \
     HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python \
@@ -112,8 +113,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-extras --python 3.12
 
 RUN ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood \
-    && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python \
-    && ln -sf /opt/heartwood/.venv/bin/agent-server /usr/local/bin/agent-server
+    && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python
 
 RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
       HOME=/tmp IPYTHONDIR=/tmp/heartwood-ipython \
@@ -121,13 +121,6 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
         --prefix "${HEARTWOOD_JUPYTER_PREFIX}" \
         --name heartwood \
         --display-name "Python 3 (Heartwood)"; \
-    fi
-
-RUN if [ "${HEARTWOOD_BUNDLE_LOCAL_MODEL}" = "1" ]; then \
-      /opt/heartwood/.venv/bin/python images/generic/scripts/download_model_artifact.py \
-        --manifest "${HEARTWOOD_LOCAL_MODEL_MANIFEST}" \
-        --output "${HEARTWOOD_LOCAL_MODEL_PATH}" \
-        --skip-existing; \
     fi
 
 RUN mkdir -p "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace" \

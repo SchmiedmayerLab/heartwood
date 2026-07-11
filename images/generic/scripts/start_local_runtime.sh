@@ -11,7 +11,7 @@ profile="${HEARTWOOD_LOCAL_RUNTIME_PROFILE:-llama-cpp-cpu}"
 host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"
 port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.jsonl}"
-model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-/opt/heartwood/local-runtime/models/model.gguf}"
+model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"
 model_alias="${HEARTWOOD_LOCAL_MODEL_ALIAS:-heartwood-local-runtime}"
 default_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-4096}"
@@ -30,8 +30,8 @@ case "${profile}" in
       --request-log "${request_log}"
     ;;
   llama-cpp-cpu)
-    if [[ ! -f "${model_path}" ]]; then
-      echo "local runtime profile llama-cpp-cpu requires HEARTWOOD_LOCAL_MODEL_PATH=${model_path}" >&2
+    if [[ -z "${model_path}" || ! -f "${model_path}" ]]; then
+      echo "llama-cpp-cpu requires HEARTWOOD_LOCAL_MODEL_PATH to reference a mounted or downloaded GGUF file" >&2
       exit 66
     fi
     if ! command -v llama-server >/dev/null 2>&1; then

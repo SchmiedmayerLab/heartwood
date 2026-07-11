@@ -8,39 +8,63 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 05 — Security and compliance
+# 05 — Security And Compliance
 
-## Threat model
+## Threat Model
 
-heartwood defends against: PHI exfiltration (via a model call, a skill script, a tool, a log, or a dependency fetch); malicious or careless community skills (a large fraction of public skills carry security flaws); prompt injection (direct and indirect); and silent incorrectness (a plausible-but-wrong analysis presented authoritatively).
+Heartwood addresses protected-data exfiltration through model calls, tools, Skills, logs, or dependency fetches; malicious or careless extensions; direct and indirect prompt injection; credential exposure; unauthorized export; and plausible but incorrect analyses.
 
-## In-boundary by default (the load-bearing control)
+Heartwood does not make a trusted interactive container equivalent to a hardened multi-tenant sandbox. The platform owns the operating-system, network, identity, storage, and controlled-data boundary.
 
-- The network posture is **deny-egress**. Only the configured in-perimeter model endpoint is reachable — enforced by the gateway's model-policy egress proxy in front of the agent-server and by the platform's own egress controls.
-- **Per-platform policy profiles** encode each dataset's data-use rules (e.g. All of Us: no individual-level egress; aggregate only, ≥20 count; no dissemination of models trained on participant data) and hard-block non-compliant actions.
-- **Credentials are a per-platform allowlist**, not a blanket deny: the platforms inject data-access credentials via env vars/metadata, so exactly the sanctioned data-path credentials are allowed and nothing else.
+## Deployment Boundary
 
-## Skill trust (four enforced layers)
+- Platform egress policy is the authoritative network control. Air-gapped deployments disable runtime networking; connected deployments allow only reviewed destinations through platform controls.
+- Heartwood evaluates the selected model profile's declared normalized policy endpoint, capability tier, credential reference, and action-confirmation mode before initial task submission and before an approved or resumed continuation that may call the model. Rejecting a pending action does not continue the model. A custom base URL must share the policy endpoint's origin. Provider-native routing without a custom base URL remains an audited deployment assertion that authoritative platform network controls must enforce. Deployment policy defaults to the supervised tier and `always-confirm` mode only. This is a deny-by-default application gate and audit record, not a substitute for a firewall, private endpoint, or workspace sandbox.
+- Model profiles contain no secret values. Credentials are resolved at runtime from an environment variable, mounted file, or managed identity only after policy allows that non-secret reference. Policy records and audit exports never include the credential value.
+- The active environment-referenced provider key is passed directly to the in-process OpenHands model client, while every environment-variable reference in the configured model profiles is blanked in OpenHands terminal subprocesses. This does not isolate mounted credential files or a managed identity from code running as the workspace user; those credentials require least privilege and a deployment-owned process, remote-workspace, or platform boundary when tools must not access them.
+- Provider presets are configuration templates, not Health Insurance Portability and Accountability Act eligibility claims. The deploying institution must verify the business associate agreement, covered service, identity, region, retention, training, logging, and network path.
+- Images contain no model weights. Optional artifacts are explicit runtime inputs in mounted or platform-persistent storage and are checked against an immutable source revision, byte size, SHA-256 digest, format, and license metadata.
 
-1. **Curation tiers** — only `verified` skills are pre-seeded into a PHI image; `community` requires an approval step; `experimental` is opt-in only.
-2. **Signing and provenance** — Sigstore/SLSA attestations bind a skill version to its source; verified at **build time** (where transparency-log lookups work) **and at load time** (catching runtime/long-tail additions).
-3. **Sandboxing** — skill `scripts/` run under OS-level isolation (bubblewrap) via non-overridable managed settings: sandbox on, fail-closed, empty network allowlist, credential-file reads denied. Execution stays in the platform's own container via a non-Docker Local runtime; the agent-server binds localhost and is reachable only through the gateway, so no new network surface is opened. The hostname-based proxy is TLS-blind, so the sandbox is defense-in-depth paired with platform egress-deny — documented, not overclaimed.
-4. **Static scan + pinning + approval UX** — a security scan gates community skills in CI and re-runs on a schedule; dependencies are pinned with no runtime installs; before first use of a non-verified skill a plain-language summary ("can read the dataset mount; cannot access network; last reviewed …") is shown for a single approve/reject, recorded to the audit log.
+## Human Decisions
 
-## PHI handling
+Heartwood keeps three decisions separate:
 
-- **Synthetic-only test fixtures** — recorded traces/fixtures use Synthea-style synthetic data; recording against live PHI is forbidden and a CI scrubber fails on PHI-shaped content.
-- **Logs record destinations, not content** by default; prompt/response content logging is opt-in and stays on the in-perimeter workspace disk. Content-bearing session events (assistant and user messages) are scrubbed from the exported audit log so message text never leaves the perimeter.
-- **Air-gapped image** — all dependencies vendored and pre-staged in the platform's registry; no public PyPI at runtime.
+1. Deployment authorization: administrators define permitted model and data routes. A researcher cannot override a denied route with a conversational click.
+2. Extension trust: repository-verified Skills ship in the image and activate without repeated prompts; community or experimental Skills require one installation-time review before entering the runtime Skill directory.
+3. Agent action confirmation: **Ask Every Time** uses OpenHands `AlwaysConfirm` and is the default. A deployment may also permit **Auto-Approve Low Risk**, which uses OpenHands `ConfirmRisky` at the `MEDIUM` threshold with unknown actions confirmed. Both modes use OpenHands deterministic policy-rail and pattern analyzers plus its model risk analyzer; Heartwood does not maintain its own classifier. Medium-, high-, and unknown-risk actions remain Allow once or Reject decisions in the CLI and web UI.
 
-## Clinical-correctness gate
+The OpenHands analyzers are defense in depth, not a sandbox, complete shell parser, prompt-injection solution, or hard-deny boundary. Heartwood invokes tools only through the OpenHands conversation loop because direct SDK tool execution bypasses analyzer and confirmation policy processing. `NeverConfirm` is not a researcher-facing option in the current interactive-container architecture.
 
-A skill can be safe (signed, sandboxed) yet clinically wrong. The `verified` tier therefore requires **two independent, both-mandatory reviews** — security and clinical/statistical — tracked separately.
+Export remains an explicit researcher action under platform and dataset policy.
 
-## Compliance kit
+## Skill Trust
 
-Per platform, heartwood ships a copy-paste kit that turns per-site review into an artifact hand-off: pre-filled IRB / security-review language, a data-flow diagram, the policy-profile statement, and the egress-attestation report ([06](06-observability-audit.md)). The kit is validated against real institutional reviews before release.
+- Repository-verified Skills are checked in, included by the reviewed bundle catalog, and loaded through the OpenHands native `SKILL.md` loader.
+- Repository verification identifies the Skill bytes shipped in the reviewed image; it does not make a writable same-user container immutable. A deployment that relies on runtime Skill integrity must keep application and bundled-Skill paths read-only or place tools in a separate workspace boundary.
+- Current local verification checks metadata consistency, trust tier, declared tools, network posture, entrypoint confinement, and provenance-field shape. It does not cryptographically verify the existing Sigstore placeholders.
+- Verified status requires independent security and clinical or statistical review before controlled-data use.
+- External Skills are not fetched at runtime. The current installer accepts only a mounted local directory, rejects symbolic links and path escapes, validates declared permissions, records the trust decision, and copies atomically. Automatic OpenHands user, public-marketplace, and project-workspace Skill loading is disabled. Remote acquisition, immutable-source resolution, digest verification, and cryptographic signature verification remain future distribution controls.
+- Skill instructions do not create process isolation. OpenHands local terminal and file tools start from the configured workspace inside the interactive container, but the local workspace is not a filesystem sandbox and same-user code can reach other readable paths. A deployment that needs stronger isolation must supply a supported remote workspace, operating-system sandbox, or platform-native job boundary and validate it independently.
+
+## Data And Log Handling
+
+- Source control, public examples, CI, replay traces, and screenshots use synthetic fixtures only.
+- Researcher and agent message text remains in the in-boundary OpenHands conversation and Heartwood session event stores so every client can replay the same transcript, but exported audit records omit content by default.
+- Heartwood creates each session directory with owner-only access and writes command, event, audit, and audit-export files with owner-only permissions. The deployment must independently protect the containing volume, OpenHands persistence, backups, and platform snapshots.
+- Exported audit records capture route decisions, the selected action-confirmation mode, analyzer risk, confirmation results when requested, tool identity, exit status, Skill identity, and export metadata. Prompt and response content, model-generated action summaries, filesystem paths, row values, and secret values are scrubbed. The in-boundary session store retains the conversation and action summaries required for replay.
+- Live protected health information must never be copied into fixtures, public logs, issue reports, or reviewer artifacts.
+- Dependencies and repository-verified Skills are installed at image build time. Runtime package installation is not part of a normal researcher workflow.
+
+## Audit And Tamper Evidence
+
+Heartwood translates OpenHands events into one session stream and appends a separate hash-chained audit record. Hash chaining detects edits but cannot make a researcher-controlled local disk immutable. Authoritative retention, signing, and off-workspace copies require deployment integration and must be described as such.
+
+## Compliance Evidence
+
+Per-platform evidence should include the data-flow diagram, deployment policy profile, image and base digests, model route and credential-reference mechanism, artifact digest when local inference is used, network posture, identity binding, synthetic action-confirmation trace, scrubbed audit export, platform proxy behavior, and documented limitations.
+
+The repository’s generated reviewer artifacts are a synthetic evidence aid, not a substitute for institutional security, privacy, clinical, or statistical review.
 
 ## Governance
 
-The initial maintenance home is the **Stanford Schmiedmayer Lab**, with documented governance and a succession plan. Later phases add external maintainers and, once there is traction, a neutral home (e.g. the Linux Foundation Agentic AI Foundation or a bio-consortium). A realistic funding model underwrites long-term maintenance.
+The Stanford Schmiedmayer Lab maintains the repository. Named review ownership, release authority, security response, deprecation policy, and succession are required before controlled-data production use or external Skill distribution expands.

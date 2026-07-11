@@ -18,14 +18,16 @@ from heartwood.session import CommandKind, JsonValue, SessionCommand
 def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Path) -> None:
     workspace = tmp_path / "sessions"
     session_id = "review-session"
-    gateway = SessionGateway(workspace=workspace)
+    gateway = SessionGateway(
+        workspace=workspace,
+        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+    )
     gateway.handle(_command(session_id, CommandKind.DETECT))
     gateway.handle(
         _command(
             session_id,
             CommandKind.RUN,
             prompt="participant-level prompt must not appear",
-            endpoint="https://public.example.invalid/v1/chat/completions",
         )
     )
     gateway.handle(_command(session_id, CommandKind.AUDIT_EXPORT))
@@ -52,16 +54,22 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     limitations_text = (packet.output_dir / "current-limitations.md").read_text(encoding="utf-8")
     assert "Synthetic Reviewer Packet" in packet_text
     assert "Data-Flow Diagram" in packet_text
+    assert "Auto-Approve Low Risk" in packet_text
+    assert "platform controls remain authoritative for network egress" in packet_text
+    assert "In-boundary model endpoint" not in packet_text
+    assert "Allowed action-confirmation modes: `always-confirm, confirm-risky`" in packet_text
     assert "participant-level prompt must not appear" not in audit_text
     assert "[scrubbed]" in audit_text
-    assert "local synthetic smoke artifact" in limitations_text
-    assert "bounded bash execution" in limitations_text
-    assert "larger local model" in limitations_text
-    assert "llama-cpp-cpu" in limitations_text
-    assert "next documentation pass" in limitations_text
+    assert "Images contain no model weights" in limitations_text
+    assert "pinned OpenHands SDK" in limitations_text
+    assert "provider agreement" in limitations_text
+    assert "application-layer route policy" in limitations_text
+    assert "unattended operation" in limitations_text
+    assert "Ask Every Time is the action-confirmation default" in limitations_text
+    assert "published documentation site" in limitations_text.lower()
     assert "Jupyter-style proxy smoke" in limitations_text
     assert "live controlled-platform validation remains future work" in limitations_text
-    assert "planned after the documentation-site pass" not in limitations_text
+    assert "Platform-specific policy, identity, network" in limitations_text
 
 
 def test_reviewer_packet_can_fall_back_to_checked_in_audit_fixture(tmp_path: Path) -> None:

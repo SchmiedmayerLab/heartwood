@@ -8,104 +8,179 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Getting Started With The Offline Stack
+# Getting Started With Local And Offline Models
 
-This guide runs the generic Heartwood local-model stack without public runtime network access after the image has been pulled. It demonstrates the intended shipping shape: one multi-architecture image family with a default runtime image that bundles Qwen2.5-Coder-7B-Instruct Q4_K_M, a tiny smoke image for CI, a provider-route image for platform embedding, the CLI, gateway-backed session flow, notebook package, researcher web UI, synthetic fixtures, verified skills, policy-gated local model path, a pinned OpenHands agent-server package, audit export, and a synthetic evidence bundle.
+This guide configures Heartwood with either an existing local OpenAI-compatible service or an explicitly downloaded reviewed artifact. Heartwood images contain the inference runtime and artifact metadata but no model weights.
 
-The default local-runtime profile in this guide is `llama-cpp-cpu`. The default runtime image starts the pinned llama.cpp `llama-server` binary on `127.0.0.1`, loads the bundled Qwen2.5-Coder-7B GGUF artifact, runs approved local model calls through the gateway policy path, starts the gateway-managed OpenHands agent-server, and writes a bounded synthetic workspace artifact through authenticated OpenHands `/api/bash/execute_bash_command` execution. The deterministic `stub-loopback` profile remains available for fixture checks by setting `HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback`.
+This is current operational documentation for the generic runtime. Current platform status is recorded in [Platform Support](platform-support.md), design rationale is recorded in [03 — Architecture](../design/03-architecture.md), and unimplemented work is recorded in the [Delivery Roadmap](../design/09-implementation-plan.md).
 
-## Local Inference Scope
+## Validate The No-Weight Integration
 
-The default local-model demo proves offline load, query, policy gating, event flow, tool execution, audit export, and evidence-bundle generation with a model large enough to produce useful coding-agent responses. The checked-in default model manifest pins `unsloth/Qwen2.5-Coder-7B-Instruct-GGUF` `Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf` by URL, revision, byte size, and SHA-256. The smoke manifest still pins `ggml-org/models-moved` `tinyllamas/stories260K.gguf` for CI only. Images download and verify their selected artifact during the image build, then run it without public network access at runtime.
-
-## Image Flavors
-
-| Flavor | Tag | Use |
-|---|---|---|
-| Runtime | `edge`, `edge-coder-7b` | Default platform-ready image with the bundled Qwen2.5-Coder-7B Q4_K_M artifact. |
-| Smoke | `edge-smoke` | Offline stack CI image with the tiny verified GGUF artifact. |
-| Providers | `edge-providers` | Provider-route image with file-based secret references and no provider secrets. |
-| Terra Runtime | `edge-terra`, `edge-terra-coder-7b` | Terra-derived notebook image with the bundled Qwen2.5-Coder-7B Q4_K_M artifact. |
-| Terra Smoke | `edge-terra-smoke` | Terra-derived notebook image with the tiny verified GGUF artifact for CI smoke. |
-
-The `edge-terra-smoke-ci` tag is a local CI tag only. It is built from a lightweight Terra-compatible base to test the platform Dockerfile, notebook assumptions, packaged web UI, local model path, and offline stack without pulling the real Terra base in every pull request.
-
-Commit-pinned tags use `sha-<git-sha>`, `sha-<git-sha>-smoke`, and `sha-<git-sha>-providers`. Stable release tags will use `v<semver>` after the first release; `latest` is intentionally not used before then.
-
-The default published artifact is intentionally useful for demos, while the CI artifact is intentionally tiny so pull-request CI can exercise the same runtime contract on `linux/amd64` and `linux/arm64` without pulling multi-gigabyte weights. Larger future tutorial models can be added as explicit manifests after their source, license posture, redistribution allowance, checksum, GPU or CPU runtime, and resource envelope are recorded.
-
-## Architecture And Acceleration Scope
-
-The image family is expected to publish and smoke-test `linux/amd64` and `linux/arm64` variants. The current technology stack is Python-first with a built static web UI and portable container tooling, so both architectures are reasonable baseline targets. GitHub-hosted CI uses native `ubuntu-24.04` and `ubuntu-24.04-arm` runners for the smoke path so the ARM image is not validated through QEMU runtime emulation.
-
-Docker can expose GPUs to containers, but GPU support is a host capability, not something a portable CPU image can guarantee. The baseline real runtime therefore remains `llama-cpp-cpu`; NVIDIA acceleration is tracked separately as `llama-cpp-cuda`, requiring an explicit CUDA-enabled runtime, Docker GPU device exposure, and self-hosted GPU CI or scheduled platform checks. The CPU profile must keep working without a GPU.
-
-## Local Resource Requirements
-
-For the default `edge` demo with Qwen2.5-Coder-7B Q4_K_M, configure Docker for at least 4 vCPU, 16 GB RAM, and 25 GB free Docker disk. Use 8 vCPU, 32 GB RAM, and 50 GB free Docker disk when possible; this avoids heavy swapping while llama.cpp loads the 4.68 GB GGUF artifact, allocates runtime buffers and KV cache, serves the gateway, and runs the OpenHands child process. The tiny `edge-smoke` CI image can run on substantially smaller machines, but it is only a load/query diagnostic and should not be used to judge demo model quality.
-
-These numbers describe one active local-model generation. If the host needs multiple simultaneous sessions, scale out with one local-model worker per active session or raise CPU, memory, and disk based on measured peak usage. A GPU attached to the host will not improve the current `edge` demo unless a future GPU profile is selected; the shipped launcher uses the CPU-only llama.cpp binary.
-
-## Agent-Server Scope
-
-The generic image installs `openhands-agent-server==1.34.0`, `openhands-tools==1.34.0`, and `libtmux==0.61.0` for Python 3.12 and includes `images/generic/scripts/start_agent_server.sh`, which binds only to loopback, configures a local session key, disables VSCode/VNC/tool-preload services for the smoke path, and stores OpenHands state under a temporary workspace. The offline smoke run enables `HEARTWOOD_AGENT_SERVER_ENABLED=1` for the agentic CLI turn so the session gateway starts and stops the OpenHands process as a managed localhost child. `HEARTWOOD_AGENT_BACKEND=openhands-bash` then lists registered OpenHands tools and executes a bounded bash command through authenticated OpenHands `/api` routes after approval.
-
-The local session key is not baked into the Dockerfile as an `ARG` or `ENV`. The smoke scripts provide a local-only runtime default and allow callers to override it with `HEARTWOOD_AGENT_SERVER_API_KEY`; production deployments should provide their own runtime secret through the platform secret mechanism rather than an image layer. Pull-request CI runs Docker's Buildx Dockerfile checks before the Compose smoke so secret-like `ARG` or `ENV` warnings are treated as build hygiene failures.
-
-## Provider Routes
-
-Provider route examples live in `images/generic/providers/provider-routes.example.toml`. Routes can name OpenAI-compatible local endpoints, OpenAI, Azure OpenAI, Anthropic, Vertex AI, Bedrock, and other future provider adapters, but credentials are never stored inline. Secret-bearing routes use `auth = "secret-file"` and point to a runtime mount such as `/run/secrets/openai_api_key`; cloud identity routes use `auth = "managed-identity"`. The active policy profile must still explicitly allowlist the selected endpoint before invocation.
-
-## Run From The Published Image
-
-After the main-branch image is published, run the interactive local-model demo with Docker only:
+From a repository checkout:
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:edge
-docker run --rm -p 8767:8767 ghcr.io/schmiedmayerlab/heartwood:edge bash images/generic/scripts/start_demo_stack.sh
+docker compose -f images/generic/compose.yaml run --rm --build heartwood
 ```
 
-Open `http://127.0.0.1:8767/`, click **Run Local Model**, then inspect the Conversation, Local Model, Policy, Approvals, Activity, and Exports panels. The Conversation panel shows the prompt submitted in the current browser session, the local model response preview, the agent message, and compact event-derived trace summaries for policy and tool steps; it does not expose hidden model chain-of-thought or persist prompt text into replay logs by default. The demo stack starts the bundled Qwen2.5-Coder-7B model on `127.0.0.1:8765`, starts the gateway-managed OpenHands child server, pre-approves the synthetic model-call decision for `session-local`, enables `HEARTWOOD_DEMO_RESPONSE_PREVIEW=1`, and sets `HEARTWOOD_LOCAL_MODEL_MAX_TOKENS=768` so the UI can show a useful bounded response preview. Set `HEARTWOOD_DEMO_SEED_APPROVALS=0` to exercise the approval gate manually: the first run records the model-call decision, the Approvals panel exposes the approval action, and the second run invokes the local model after approval. The UI renders the same session events as the CLI and notebook bridge, uses WebSocket streaming with Server-Sent Events fallback, and replays the persisted event log after reconnects.
+Compose disables container networking and uses a read-only root filesystem, dropped capabilities, `no-new-privileges`, and temporary write points. Inside that boundary the smoke test starts the deterministic loopback model fixture, creates and validates a local model profile, runs an OpenHands SDK conversation, loads the repository-verified Skills through OpenHands, records the route decision and conversation events, and exports a scrubbed audit log. This proves the offline integration path without downloading or embedding a model.
 
-The packaged image includes the project README, acronym glossary, `docs/`, and `design/` under `/opt/heartwood`, including `/opt/heartwood/docs/terra-jupyter-demo.ipynb`. This lets a runtime image carry the tutorial material needed for a local or platform notebook demonstration without a repository checkout.
+## Use An Existing Local Service
 
-To run the CI smoke path with the tiny model artifact, use the smoke image with runtime network disabled:
+Start Ollama, vLLM, SGLang, llama.cpp, or another service that provides an OpenAI-compatible chat-completions route. Then add a profile:
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:edge-smoke
-docker run --rm --network none ghcr.io/schmiedmayerlab/heartwood:edge-smoke bash images/generic/scripts/offline_stack_smoke.sh
+heartwood models add local \
+  --model openai/local-model \
+  --base-url http://127.0.0.1:8765/v1 \
+  --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
+  --credential-kind none \
+  --select
+heartwood models validate local
+heartwood chat
 ```
 
-The command starts the `llama-cpp-cpu` runtime profile with the tiny smoke artifact, runs detection, approves the synthetic model call, invokes `heartwood run --local-model` with `HEARTWOOD_LOCAL_MODEL_MAX_TOKENS=16`, starts the gateway-managed OpenHands process for the agentic run, executes `openhands.bash.execute`, writes `agent-artifacts/synthetic-workspace-summary.md`, exports a scrubbed audit JSONL file, writes the synthetic evidence bundle under `/tmp/heartwood-reviewer-packet`, then runs the Python-only Terra-style Jupyter demo smoke against the packaged web UI and notebook API.
+Credential kind `none` is accepted only for loopback HTTP endpoints. For a service on another host, use the credential and deployment-policy controls appropriate to that route.
 
-Heartwood supports both common notebook proxy shapes: preserved-prefix routes such as `/proxy/8767/`, where `HEARTWOOD_WEB_BASE_PATH=/proxy/8767/` is passed to the launcher, and stripped `jupyter-server-proxy` routes such as `/user/<name>/proxy/8767/`, where the gateway serves `/` and the proxy strips the browser prefix before forwarding. CI smoke tests both the preserved-prefix gateway route and the stripped Jupyter-style route used by Terra-like notebook environments. See [Terra-Style Jupyter Demo](terra-jupyter-demo.md) for the synthetic workspace walkthrough.
+## Download A Reviewed Artifact
 
-## Run From A Checkout
-
-From a repository checkout, run the same smoke test through Docker Compose:
+List the small reviewed catalog:
 
 ```bash
-docker compose -f images/generic/compose.yaml run --rm heartwood
+heartwood models artifacts
 ```
 
-Compose builds the local image, pulls the current base image tag, disables runtime network access with `network_mode: none`, pins the runtime user to the image's non-root UID/GID, and runs the same offline smoke script used by CI.
+Download one artifact to persistent storage:
 
-## What The Smoke Test Proves
+```bash
+heartwood models download qwen25-coder-7b-instruct-q4_k_m --cache /path/to/persistent/models
+```
 
-- The CLI can drive the gateway-backed session contract inside the image.
-- The generic policy allows only configured model endpoints and includes the loopback chat-completions endpoint.
-- The llama-cpp model call happens over `127.0.0.1` after the image is pulled; the smoke image additionally proves the path with external runtime network disabled.
-- Model response content is not persisted by default. The interactive Docker demo enables a bounded synthetic response preview with `HEARTWOOD_DEMO_RESPONSE_PREVIEW=1`; audit exports remain scrubbed.
-- The OpenHands-backed backend emits tool proposal, confirmation, and execution events after the model call, calls authenticated OpenHands `/api` routes, and writes a bounded synthetic artifact through the agent-server bash service.
-- The audit export and reviewer packet can be produced from the same offline session.
-- The packaged web UI can be served by the gateway from self-contained assets without a CDN, and the same session event stream can be surfaced through WebSocket or Server-Sent Events under local or Jupyter-style proxy routes.
-- The Jupyter-style smoke path serves the UI through an external `/user/synthetic/proxy/<port>/` route, strips that prefix before forwarding to the gateway, and verifies static assets, command submission, event replay, and Server-Sent Events through the external notebook URL shape.
-- The packaged runtime image can execute the same Jupyter-style smoke without Node.js or a repository checkout; the smoke uses only Python, the installed `heartwood` executable, packaged static assets, and the notebook bridge.
+Heartwood downloads from the pinned Hugging Face repository revision and verifies the path, exact byte size, and SHA-256 digest before returning the file. The command prints the final path. Review the model card, license, resource envelope, and deployment policy before use; catalog inclusion is not a production or biomedical-quality endorsement.
 
-## What It Does Not Prove Yet
+Start the included CPU runtime:
 
-- It does not validate controlled data.
-- It does not yet validate optional GPU acceleration; that belongs to a separate CUDA profile and a GPU-capable runner.
-- It does not yet prove autonomous coding quality beyond a first local coding-model demo; the 7B default model is suitable for showing value, while the tool-execution smoke remains intentionally bounded and deterministic after approval.
-- It does not validate Terra, Seven Bridges, or DNAnexus controlled-platform identity binding; Terra platform-image CI is local and synthetic until a real Terra workspace smoke records platform launch, proxy behavior, and identity evidence.
-- It does not publish the static documentation site; that belongs with the next documentation-site pass.
+```bash
+HEARTWOOD_LOCAL_MODEL_PATH=/path/to/persistent/models/qwen25-coder-7b-instruct-q4_k_m/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
+  bash images/generic/scripts/start_local_runtime.sh
+```
+
+In another shell, configure the loopback profile shown above. The local server binds to `127.0.0.1:8765` and does not require network access after the artifact is present.
+
+## Run The Container UI
+
+Create persistent volumes and start the no-weight interface:
+
+```bash
+docker run --rm -p 127.0.0.1:8767:8767 \
+  -v heartwood-state:/home/heartwood/.local/share/heartwood \
+  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
+  ghcr.io/schmiedmayerlab/heartwood:edge \
+  bash images/generic/scripts/start_demo_stack.sh
+```
+
+Open `http://127.0.0.1:8767/`. Use the model settings control to add, select, and validate profiles or to start a reviewed artifact download. Downloads go to the mounted cache. The web UI does not hide process ownership: an operator must start the corresponding local inference service or supply a reachable provider endpoint.
+
+To start the included local runtime with the web UI in one container, first download the artifact into the mounted volume, then run:
+
+```bash
+docker run --rm -p 127.0.0.1:8767:8767 \
+  -v heartwood-state:/home/heartwood/.local/share/heartwood \
+  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
+  -e HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1 \
+  -e HEARTWOOD_LOCAL_MODEL_PATH=/home/heartwood/.cache/heartwood/models/qwen25-coder-7b-instruct-q4_k_m/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
+  ghcr.io/schmiedmayerlab/heartwood:edge \
+  bash images/generic/scripts/start_demo_stack.sh
+```
+
+Configure the loopback profile from the UI. CLI and web operations use the same model settings, command/event contract, OpenHands backend, action confirmation, and audit store.
+
+## Work Air-Gapped
+
+Prepare all assets before entering the isolated environment:
+
+1. Pull the exact `sha-<git-sha>` image for the target architecture.
+2. Download and verify the selected artifact into a transferable or platform-persistent model directory.
+3. Record the image digest, model manifest, model digest, runtime profile, and policy profile.
+4. Import the image and model directory through the platform-approved path.
+5. Start the local service on loopback and validate the model profile.
+6. Disable runtime network access at the platform or container layer.
+7. Run a synthetic task, inspect any proposed action, allow or reject it, replay the session, and export the scrubbed audit log.
+
+Heartwood route policy is an application-layer record and gate. Network isolation, filesystem isolation, identity, and controlled-data access remain deployment responsibilities.
+
+## Use An Institution-Approved API
+
+Common provider presets expose only the OpenHands/LiteLLM fields. For example:
+
+```bash
+export ANTHROPIC_API_KEY="..."
+heartwood models add institutional \
+  --model anthropic/<model-name> \
+  --policy-endpoint https://api.anthropic.com/v1/messages \
+  --credential-kind environment \
+  --api-key-env ANTHROPIC_API_KEY \
+  --select
+heartwood models validate institutional
+```
+
+Point `HEARTWOOD_POLICY_PROFILE` to a deployment-owned JSON file that authorizes the exact route and non-secret credential reference:
+
+```json
+{
+  "schema_version": "heartwood.policy-profile.v1",
+  "policy_id": "institutional-models",
+  "platform_id": "deployment",
+  "deny_egress_by_default": true,
+  "allowed_model_endpoints": [
+    "https://api.anthropic.com/v1/messages"
+  ],
+  "allowed_capability_tiers": [
+    "supervised"
+  ],
+  "allowed_action_confirmation_modes": [
+    "always-confirm"
+  ],
+  "credential_allowlist": [
+    "ANTHROPIC_API_KEY"
+  ],
+  "aggregate_count_floor": 20
+}
+```
+
+`credential_allowlist` entries are environment-variable names, absolute mounted-secret paths, or `managed-identity`, never secret values. Before controlled-data use, the institution must verify the business associate agreement or equivalent contract, the covered product and feature, data retention and training settings, regional processing, account identity, logging, and private or controlled network path. Heartwood does not infer those properties from a provider name.
+
+## Action Confirmation
+
+Heartwood exposes two OpenHands-native modes through `heartwood actions` and the web settings panel:
+
+- **Ask Every Time** is the default and maps to OpenHands `AlwaysConfirm`.
+- **Auto-Approve Low Risk** maps to OpenHands `ConfirmRisky` with a `MEDIUM` threshold and unknown actions confirmed.
+
+Both modes use the OpenHands ensemble of deterministic policy-rail and pattern analyzers plus its model risk analyzer. In the automatic mode, only low-risk actions execute without a prompt; medium-, high-, and unknown-risk actions show the pending action identifier and offer two decisions:
+
+- Allow once: execute the current action and continue until the next confirmation or completion.
+- Reject: return the rejection to OpenHands and stop without another model call; resume explicitly when further model work is wanted.
+
+Generic synthetic development permits both modes:
+
+```bash
+heartwood actions
+heartwood actions set auto-approve-low-risk
+heartwood actions set ask-every-time
+```
+
+Managed policies default to `allowed_action_confirmation_modes: ["always-confirm"]`. Risk analysis is defense in depth rather than a sandbox or complete prompt-injection defense, and OpenHands `NeverConfirm` is not available through researcher settings.
+
+Model route authorization is not a conversational approval. Repository-verified bundled Skills do not prompt on every activation. Community or experimental Skills require a separate installation-time trust decision. Export authorization remains an independent policy decision.
+
+## Install A Skill Extension
+
+Verified bundled Skills are available to OpenHands automatically. A mounted community or experimental extension enters the runtime only through an installation-time trust decision:
+
+```bash
+heartwood skills inspect /path/to/mounted-skill
+heartwood skills install /path/to/mounted-skill --approve
+heartwood skills list
+```
+
+Inspection displays the trust tier, declared tools, network requirement, and plain-language permission summary. Installation rejects unsupported tools, network-requiring Skills, path escapes, symbolic links, malformed metadata, and replacement of a bundled Skill. The approved source is copied atomically into persistent Heartwood state and the decision is appended to `skill-installations.jsonl` without prompt or data content. Remove only installed extensions with `heartwood skills remove <name>`.

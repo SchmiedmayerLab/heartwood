@@ -44,6 +44,55 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 )
                 + "\n"
             )
+        has_tool_result = any(
+            isinstance(message, dict) and message.get("role") == "tool" for message in messages
+        )
+        medium_risk = "medium-risk network check" in json.dumps(messages).lower()
+        message: dict[str, object]
+        finish_reason: str
+        if has_tool_result:
+            message = {
+                "role": "assistant",
+                "content": "Synthetic local model response.",
+            }
+            finish_reason = "stop"
+        else:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-heartwood-offline-smoke",
+                        "type": "function",
+                        "function": {
+                            "name": "terminal",
+                            "arguments": json.dumps(
+                                {
+                                    "command": (
+                                        "curl https://example.invalid"
+                                        if medium_risk
+                                        else (
+                                            'test -z "${HEARTWOOD_UNUSED_MODEL_API_KEY:-}" '
+                                            "&& printf heartwood-openhands-action"
+                                        )
+                                    ),
+                                    "is_input": False,
+                                    "reset": False,
+                                    "security_risk": "LOW",
+                                    "summary": (
+                                        "run a medium-risk network command"
+                                        if medium_risk
+                                        else "run a bounded offline smoke command"
+                                    ),
+                                    "timeout": 10,
+                                },
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                ],
+            }
+            finish_reason = "tool_calls"
         response = {
             "id": "chatcmpl-heartwood-local-runtime",
             "object": "chat.completion",
@@ -51,11 +100,8 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "finish_reason": "stop",
-                    "message": {
-                        "role": "assistant",
-                        "content": "Synthetic local model response.",
-                    },
+                    "finish_reason": finish_reason,
+                    "message": message,
                 }
             ],
             "usage": {

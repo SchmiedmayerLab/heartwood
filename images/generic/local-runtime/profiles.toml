@@ -6,122 +6,50 @@
 
 schema_version = "1"
 default_profile = "llama-cpp-cpu"
-selected_real_profile = "llama-cpp-cpu"
 fallback_fixture_profile = "stub-loopback"
+model_weight_policy = "No runtime profile embeds model weights in an image."
 
 [profiles.stub-loopback]
 status = "implemented"
-purpose = "Deterministic integration fixture for the offline session, policy, audit, and CLI path."
+purpose = "Deterministic OpenAI-compatible fixture for the OpenHands, policy, audit, CLI, and web integration path."
 runtime = "heartwood-loopback-stub"
 inference_runtime = false
 model_artifact_required = false
 quality_claim = false
-serving_api = "OpenAI-compatible chat-completions subset"
 endpoint = "http://127.0.0.1:8765/v1/chat/completions"
-startup = "Start images/generic/scripts/start_local_runtime.sh with HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback."
-shutdown = "Terminate the launcher process group; no child model worker is left running."
+startup = "Set HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback and run images/generic/scripts/start_local_runtime.sh."
 runtime_network = "none"
 supported_platforms = ["linux/amd64", "linux/arm64"]
-ci_scope = "Pull requests, pushes to main, and local Compose smoke tests on linux/amd64 and linux/arm64."
-ships_in_generic_image = true
-image_flavors = ["runtime", "smoke", "providers"]
+ci_scope = "Pull requests, pushes to main, and local Compose smoke tests."
 
 [profiles.llama-cpp-cpu]
 status = "implemented"
-purpose = "First real local inference profile for the Docker-only offline stack smoke test and model-mounted runtime images."
-runtime = "llama.cpp llama-server binary"
-runtime_dependency = "ggml-org/llama.cpp b9937 Ubuntu CPU binary, architecture-selected for linux/amd64 and linux/arm64"
+purpose = "Portable CPU inference for an explicitly downloaded or mounted GGUF artifact."
+runtime = "llama.cpp llama-server"
+runtime_dependency = "ggml-org/llama.cpp b9937 Ubuntu CPU binary selected for linux/amd64 or linux/arm64"
 runtime_binary = "/opt/llama.cpp/llama-server"
 runtime_artifacts = [
   "llama-b9937-bin-ubuntu-x64.tar.gz SHA-256 937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3",
   "llama-b9937-bin-ubuntu-arm64.tar.gz SHA-256 c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4",
 ]
-inference_runtime = true
 model_artifact_required = true
-quality_claim = false
-serving_api = "OpenAI-compatible chat-completions endpoint on 127.0.0.1"
+artifact_format = "GGUF"
 endpoint = "http://127.0.0.1:8765/v1/chat/completions"
 host = "127.0.0.1"
 port = 8765
-cpu_expectation = "Linux CPU execution is required on both linux/amd64 and linux/arm64."
-gpu_expectation = "No GPU is required for this profile; hardware acceleration must be introduced as an explicit separate profile."
 supported_platforms = ["linux/amd64", "linux/arm64"]
-memory_floor = "The bundled CI artifact is tiny; local tutorial models must document their own memory floor before use."
-startup = "Validate the pinned llama-server binary, verify the bundled model artifact checksum, start the server on localhost, then wait for readiness before the CLI turn."
-shutdown = "Terminate the smoke-entrypoint-owned local runtime process during stack cleanup."
-failure_modes = [
-  "missing runtime dependency",
-  "missing model artifact",
-  "checksum mismatch",
-  "license metadata missing",
-  "server readiness timeout",
-  "non-loopback bind",
-  "model response timeout",
-]
-artifact_format = "GGUF"
-default_artifact_manifest = "images/generic/local-runtime/models/stories260k.toml"
-demo_coding_artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
-artifact_source = "Build-selected GGUF artifact manifest. Smoke uses ggml-org/models-moved tinyllamas/stories260K.gguf; coder demos use unsloth/Qwen2.5-Coder-7B-Instruct-GGUF Q4_K_M."
-artifact_source_url = "Build-selected source_url from the selected model manifest."
-artifact_license = "Build-selected license_posture from the selected model manifest."
-artifact_checksum_policy = "Use the artifact_sha256 recorded in the selected model manifest."
-artifact_size_policy = "Use the artifact_size_bytes recorded in the selected model manifest."
-artifact_cache = "/opt/heartwood/local-runtime/models"
-build_time_resolution = "Download the pinned artifact only for image flavors that opt into HEARTWOOD_BUNDLE_LOCAL_MODEL=1; fail if checksum, size, or provenance validation fails."
-runtime_resolution = "Bundled local-model flavors load only the checked artifact path whose checksum matches the selected manifest; provider-only or externally supplied deployments must mount an explicit artifact or select a provider route."
-ci_scope = "Pull-request and main-branch container smoke tests run the bundled GGUF artifact without public runtime network access on linux/amd64 and linux/arm64."
-ships_in_generic_image = true
-image_flavors = ["runtime", "smoke", "providers", "coder-7b", "terra-runtime", "terra-smoke", "terra-coder-7b"]
-artifact_bundled_in_flavors = ["runtime", "smoke", "coder-7b", "terra-runtime", "terra-smoke", "terra-coder-7b"]
-artifact_not_bundled_in_flavors = ["providers"]
-
-[agent_server.openhands]
-status = "implemented"
-runtime_dependency = "openhands-agent-server==1.34.0, openhands-tools==1.34.0, libtmux==0.61.0"
-command = "agent-server --host 127.0.0.1 --port 8766"
-launcher = "images/generic/scripts/start_agent_server.sh"
-host = "127.0.0.1"
-port = 8766
-gateway_owned = true
-direct_client_endpoint = false
-api_auth = "X-Session-API-Key from HEARTWOOD_AGENT_SERVER_API_KEY, mirrored to OH_SESSION_API_KEYS_0 in the launcher."
-tool_execution_backend = "HEARTWOOD_AGENT_BACKEND=openhands-bash executes a bounded workspace write through POST /api/bash/execute_bash_command."
-ci_scope = "The generic image starts it as a gateway-owned localhost child, calls authenticated /api routes, executes a bounded bash command, and validates the resulting synthetic artifact during runtime smoke."
+startup = "Set HEARTWOOD_LOCAL_MODEL_PATH to a verified downloaded or mounted GGUF file and run images/generic/scripts/start_local_runtime.sh."
+artifact_cache = "HEARTWOOD_MODEL_CACHE, backed by a mounted volume or platform-persistent directory"
+runtime_resolution = "Load only the path selected by the operator; reviewed catalog downloads verify immutable revision, byte size, and SHA-256 before use."
+ci_scope = "CI tests the OpenHands integration with a deterministic loopback fixture and tests artifact verification separately; CI never embeds weights in images."
 
 [profiles.llama-cpp-cuda]
 status = "deferred"
-purpose = "Optional NVIDIA GPU acceleration profile for controlled environments with host GPU runtime support."
-runtime = "llama.cpp CUDA-capable llama-server binary"
+purpose = "Optional NVIDIA GPU acceleration when a controlled deployment justifies a separate tested runtime."
 base_profile = "llama-cpp-cpu"
-inference_runtime = true
-model_artifact_required = true
-quality_claim = false
-serving_api = "OpenAI-compatible chat-completions endpoint on 127.0.0.1"
-endpoint = "http://127.0.0.1:8765/v1/chat/completions"
-host = "127.0.0.1"
-port = 8765
-cpu_expectation = "The application path must match llama-cpp-cpu; CPU fallback is allowed only by explicit profile selection."
-gpu_expectation = "NVIDIA GPU access is provided by Docker through --gpus or Compose device reservations on a host with the NVIDIA container stack."
 supported_platforms = ["linux/amd64"]
-memory_floor = "Same model artifact policy as llama-cpp-cpu plus sufficient GPU memory for the selected quantization."
-startup = "Verify the CUDA-enabled llama-server binary, validate GPU visibility, verify the model artifact checksum, then start the localhost server."
-shutdown = "Terminate the selected local runtime process during stack cleanup."
-failure_modes = [
-  "missing CUDA runtime dependency",
-  "host GPU unavailable",
-  "container GPU reservation unavailable",
-  "model artifact too large for available GPU memory",
-  "checksum mismatch",
-  "server readiness timeout",
-  "non-loopback bind",
-  "model response timeout",
+implementation_requirements = [
+  "Select and pin a CUDA-capable runtime image or binary.",
+  "Test host GPU visibility and the no-weight mounted-artifact path on a GPU runner.",
+  "Keep the model profile, policy, OpenHands, and audit contracts identical to llama-cpp-cpu.",
 ]
-artifact_format = "GGUF"
-artifact_source = "Same artifact policy as llama-cpp-cpu unless a GPU-specific artifact is explicitly selected and reviewed."
-artifact_license = "Must match the llama-cpp-cpu redistribution and provenance requirements."
-artifact_checksum = "SHA-256 checksum recorded in the profile before the image can claim this profile is implemented."
-artifact_cache = "/opt/heartwood/local-runtime/models"
-build_time_resolution = "Deferred until CPU local inference is implemented and a GPU-enabled image variant is justified."
-runtime_resolution = "Load only the checked artifact path or an explicitly mounted artifact whose checksum matches the manifest."
-ci_scope = "Self-hosted GPU runner or scheduled platform check; not required on standard GitHub-hosted pull-request runners."
-ships_in_generic_image = false

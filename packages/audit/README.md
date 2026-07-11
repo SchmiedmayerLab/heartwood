@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-audit
+# Heartwood Audit
 
 Hash-chained audit logging for Heartwood sessions.
 

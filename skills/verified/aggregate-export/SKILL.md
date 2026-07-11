@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 # SPDX-License-Identifier: MIT
 id: "heartwood.synthetic.aggregate-export"
-name: "Synthetic aggregate export"
+name: "aggregate-export"
 description: "Apply the aggregate count floor before exporting synthetic cohort summaries."
 tools: "write-aggregate-json"
 approval-summary: "Reads a synthetic cohort summary artifact and writes only aggregate outputs that satisfy the configured count floor."

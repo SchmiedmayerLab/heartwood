@@ -14,28 +14,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
-from heartwood.gateway import (
-    AgentServerConfig,
-    GatewayAsgiApp,
-    ManagedAgentServer,
-    SessionGateway,
-)
+from heartwood.gateway import GatewayAsgiApp, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
-
-
-class _FakeProcess:
-    def __init__(self) -> None:
-        self.terminated = False
-
-    def poll(self) -> int | None:
-        return None if not self.terminated else 0
-
-    def terminate(self) -> None:
-        self.terminated = True
-
-    def wait(self, timeout: float | None = None) -> int:
-        assert timeout is None or timeout >= 0
-        return 0
 
 
 def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: JsonValue) -> bytes:
@@ -50,9 +30,13 @@ def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: Jso
     return command.model_dump_json().encode("utf-8")
 
 
+def _gateway(workspace: Path) -> SessionGateway:
+    return SessionGateway(workspace=workspace, env={"HEARTWOOD_AGENT_BACKEND": "deterministic"})
+
+
 def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        app = GatewayAsgiApp(SessionGateway(workspace=tmp_path))
+        app = GatewayAsgiApp(_gateway(tmp_path))
         return await _http_call(
             app,
             method="POST",
@@ -73,7 +57,7 @@ def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
 def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
         app = GatewayAsgiApp(
-            SessionGateway(workspace=tmp_path),
+            _gateway(tmp_path),
             static_base_path="/proxy/8767",
         )
         return await _http_call(
@@ -95,7 +79,7 @@ def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> 
 
 def test_asgi_http_replays_session_events(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        gateway = SessionGateway(workspace=tmp_path)
+        gateway = _gateway(tmp_path)
         app = GatewayAsgiApp(gateway)
         await _http_call(
             app,
@@ -114,12 +98,12 @@ def test_asgi_http_replays_session_events(tmp_path: Path) -> None:
 
     assert sent[0]["status"] == 200
     body = json.loads(cast(bytes, sent[1]["body"]).decode("utf-8"))
-    assert [event["sequence"] for event in body["events"]] == [1]
+    assert [event["sequence"] for event in body["events"]] == [1, 2, 3, 4, 5]
 
 
 def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        gateway = SessionGateway(workspace=tmp_path)
+        gateway = _gateway(tmp_path)
         app = GatewayAsgiApp(gateway)
         incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         sent: list[dict[str, object]] = []
@@ -154,13 +138,17 @@ def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
     payload = json.loads(cast(str, sent[1]["text"]))
     assert [event["kind"] for event in payload["events"]] == [
         EventKind.COMMAND_RECEIVED.value,
+        EventKind.USER_MESSAGE_RECORDED.value,
+        EventKind.MODEL_CALL_DECISION_RECORDED.value,
         EventKind.AGENT_MESSAGE_EMITTED.value,
+        EventKind.TOOL_CALL_PROPOSED.value,
+        EventKind.CONFIRMATION_REQUESTED.value,
     ]
 
 
 def test_asgi_websocket_replays_events_after_sequence(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        gateway = SessionGateway(workspace=tmp_path)
+        gateway = _gateway(tmp_path)
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
         app = GatewayAsgiApp(gateway)
         incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -188,12 +176,12 @@ def test_asgi_websocket_replays_events_after_sequence(tmp_path: Path) -> None:
 
     assert sent[0]["type"] == "websocket.accept"
     payload = json.loads(cast(str, sent[1]["text"]))
-    assert [event["sequence"] for event in payload["events"]] == [1]
+    assert [event["sequence"] for event in payload["events"]] == [1, 2, 3, 4, 5]
 
 
 def test_asgi_websocket_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        gateway = SessionGateway(workspace=tmp_path)
+        gateway = _gateway(tmp_path)
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
         app = GatewayAsgiApp(gateway, static_base_path="/proxy/8767")
         incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -221,12 +209,12 @@ def test_asgi_websocket_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path
 
     assert sent[0]["type"] == "websocket.accept"
     payload = json.loads(cast(str, sent[1]["text"]))
-    assert [event["sequence"] for event in payload["events"]] == [1]
+    assert [event["sequence"] for event in payload["events"]] == [1, 2, 3, 4, 5]
 
 
 def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        gateway = SessionGateway(workspace=tmp_path)
+        gateway = _gateway(tmp_path)
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
         app = GatewayAsgiApp(gateway)
         incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -263,7 +251,26 @@ def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
     body = cast(bytes, sent[1]["body"]).decode("utf-8")
     assert body.startswith("event: heartwood-session-events\n")
     data = json.loads(body.split("data: ", maxsplit=1)[1])
-    assert [event["sequence"] for event in data["events"]] == [1]
+    assert [event["sequence"] for event in data["events"]] == [1, 2, 3, 4, 5]
+
+
+def test_asgi_sse_rejects_invalid_session_id(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        return await _http_call(
+            GatewayAsgiApp(_gateway(tmp_path)),
+            method="GET",
+            path="/sessions/invalid!session/events/stream",
+        )
+
+    sent = asyncio.run(scenario())
+
+    assert sent[0]["status"] == 422
+    assert json.loads(cast(bytes, sent[1]["body"])) == {
+        "error": (
+            "session id must start with a letter or number and contain at most 128 "
+            "letters, numbers, dots, hyphens, or underscores"
+        )
+    }
 
 
 def test_asgi_static_serves_web_assets_under_proxy_prefix(tmp_path: Path) -> None:
@@ -275,7 +282,7 @@ def test_asgi_static_serves_web_assets_under_proxy_prefix(tmp_path: Path) -> Non
 
     async def scenario() -> list[dict[str, object]]:
         app = GatewayAsgiApp(
-            SessionGateway(workspace=tmp_path / "sessions"),
+            _gateway(tmp_path / "sessions"),
             static_dir=static_dir,
             static_base_path="/proxy/8767",
         )
@@ -298,7 +305,7 @@ def test_asgi_static_falls_back_to_index_for_client_routes(tmp_path: Path) -> No
 
     async def scenario() -> list[dict[str, object]]:
         app = GatewayAsgiApp(
-            SessionGateway(workspace=tmp_path / "sessions"),
+            _gateway(tmp_path / "sessions"),
             static_dir=static_dir,
         )
         return await _http_call(
@@ -313,9 +320,31 @@ def test_asgi_static_falls_back_to_index_for_client_routes(tmp_path: Path) -> No
     assert cast(bytes, sent[1]["body"]).decode("utf-8") == '<div id="root"></div>'
 
 
+def test_asgi_unknown_settings_route_does_not_fall_back_to_spa(tmp_path: Path) -> None:
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+
+    async def scenario() -> list[dict[str, object]]:
+        app = GatewayAsgiApp(
+            _gateway(tmp_path / "sessions"),
+            static_dir=static_dir,
+        )
+        return await _http_call(
+            app,
+            method="GET",
+            path="/settings/unknown",
+        )
+
+    sent = asyncio.run(scenario())
+
+    assert sent[0]["status"] == 404
+    assert json.loads(cast(bytes, sent[1]["body"])) == {"error": "unknown gateway route"}
+
+
 def test_asgi_websocket_rejects_invalid_route(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
-        app = GatewayAsgiApp(SessionGateway(workspace=tmp_path))
+        app = GatewayAsgiApp(_gateway(tmp_path))
         sent: list[dict[str, object]] = []
 
         async def receive() -> dict[str, object]:
@@ -332,19 +361,37 @@ def test_asgi_websocket_rejects_invalid_route(tmp_path: Path) -> None:
     assert sent == [{"type": "websocket.close", "code": 1008}]
 
 
-def test_asgi_lifespan_starts_and_stops_gateway_dependencies(tmp_path: Path) -> None:
-    async def scenario() -> _FakeProcess:
-        process = _FakeProcess()
+def test_asgi_websocket_rejects_invalid_session_id(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        app = GatewayAsgiApp(_gateway(tmp_path))
+        sent: list[dict[str, object]] = []
 
-        def process_factory(command: tuple[str, ...]) -> _FakeProcess:
-            assert command == ("agent-server", "--local")
-            return process
+        async def receive() -> dict[str, object]:
+            return {"type": "websocket.disconnect"}
 
-        server = ManagedAgentServer(
-            AgentServerConfig(command=("agent-server", "--local"), port=8765, enabled=True),
-            process_factory=process_factory,
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await app(
+            {
+                "type": "websocket",
+                "path": "/sessions/invalid!session/events",
+                "query_string": b"",
+            },
+            receive,
+            send,
         )
-        app = GatewayAsgiApp(SessionGateway(workspace=tmp_path, agent_server=server))
+        return sent
+
+    sent = asyncio.run(scenario())
+
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+def test_asgi_lifespan_starts_and_stops_gateway_dependencies(tmp_path: Path) -> None:
+    async def scenario() -> _LifecycleGateway:
+        gateway = _LifecycleGateway(workspace=tmp_path)
+        app = GatewayAsgiApp(gateway)
         message_values: tuple[dict[str, object], ...] = (
             {"type": "lifespan.startup"},
             {"type": "lifespan.shutdown"},
@@ -361,11 +408,25 @@ def test_asgi_lifespan_starts_and_stops_gateway_dependencies(tmp_path: Path) -> 
             }
 
         await app({"type": "lifespan"}, receive, send)
-        return process
+        return gateway
 
-    process = asyncio.run(scenario())
+    gateway = asyncio.run(scenario())
 
-    assert process.terminated is True
+    assert gateway.started is True
+    assert gateway.stopped is True
+
+
+class _LifecycleGateway(SessionGateway):
+    def __init__(self, *, workspace: Path) -> None:
+        super().__init__(workspace=workspace)
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
 
 
 async def _http_call(

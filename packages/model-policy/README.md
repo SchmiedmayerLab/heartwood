@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-model-policy
+# Heartwood Model Policy
 
 Deny-by-default model-call policy evaluation for Heartwood.
 
-The package evaluates proposed model calls against a `PolicyProfile`, requires exact normalized endpoint matches, enforces allowed capability tiers, and produces both decision and attestation records.
+The package evaluates proposed model profiles against a `PolicyProfile`, requires exact matches for the declared normalized policy endpoint, enforces allowed capability tiers, action-confirmation modes, and non-secret credential references, and produces application-layer decision and attestation records without credential values. Platform network controls remain authoritative for actual traffic.

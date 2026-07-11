@@ -7,12 +7,11 @@
 schema_version = "heartwood.local-model-catalog.v1"
 default_smoke_model = "llama-cpp-stories260k-ci"
 default_demo_coding_model = "qwen25-coder-7b-instruct-q4_k_m"
-high_capability_agent_candidate = "qwen3-coder-30b-a3b-instruct"
+storage_policy = "Artifacts are downloaded only after an explicit CLI or web request and must be stored outside the container image in mounted or platform-persistent storage."
 
 [models.llama-cpp-stories260k-ci]
 status = "implemented"
-purpose = "Tiny GGUF load/query artifact for CI and tutorial smoke tests only."
-image_flavors = ["smoke", "terra-smoke", "terra-smoke-ci"]
+purpose = "Tiny GGUF load and query artifact for CI only; it has no coding-quality claim."
 runtime_profile = "llama-cpp-cpu"
 artifact_manifest = "images/generic/local-runtime/models/stories260k.toml"
 quality_claim = false
@@ -20,80 +19,9 @@ production_use = false
 
 [models.qwen25-coder-7b-instruct-q4_k_m]
 status = "implemented"
-purpose = "First bundled coding-model demo artifact for interactive offline CLI, notebook, and web UI demonstrations."
-source_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
-source_url = "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct"
-license = "Apache-2.0"
-parameter_count = "7.61B"
-context_length = 32768
-artifact_format = "GGUF"
-quantization = "Q4_K_M"
-quantized_repository = "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF"
-quantized_revision = "0ecf11859560b2bf42e703207f9371186d02245f"
-artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
-artifact_size_bytes = 4683073504
-artifact_sha256 = "9a961bb225cb2b9fd84b2297df0d53089895c049d7d9dc5f5f8aebbcd3247872"
-image_flavors = ["runtime", "coder-7b", "terra-runtime", "terra-coder-7b"]
+purpose = "Optional reviewed local coding-model download for synthetic demonstrations."
 runtime_profile = "llama-cpp-cpu"
+artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
 quality_claim = false
 quality_claim_scope = "Demo-quality local coding output only; no biomedical, production, or benchmark claim."
 production_use = false
-minimum_resource_envelope = "4 vCPU, 16 GB RAM, and 25 GB free Docker disk for one active local-model demo session."
-recommended_resource_envelope = "8 vCPU, 32 GB RAM, and 50 GB free Docker disk for local Docker; 75 GB persistent disk is recommended for Terra because the platform base, image layers, model artifact, extraction overhead, and workspace share the environment."
-gpu_acceleration = "Not used by the current llama-cpp-cpu image; requires a future CUDA/vLLM/SGLang profile and GPU-capable tests."
-publication_policy = [
-  "Publish from main in the default runtime and Terra runtime tags so the shipped images are useful out of the box.",
-  "Publish model-explicit coder-7b aliases for demos that should name the bundled model family directly.",
-  "Keep out of required pull-request CI to avoid multi-gigabyte artifact downloads on every PR.",
-  "Validate with a live Terra workspace before claiming supported Terra launch behavior.",
-]
-
-[models.qwen3-4b-instruct-2507]
-status = "candidate"
-purpose = "Small newer general agentic model candidate when tool-calling quality matters more than code-only specialization."
-source_model = "Qwen/Qwen3-4B-Instruct-2507"
-source_url = "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507"
-license = "Apache-2.0"
-parameter_count = "4B"
-context_length = 262144
-expected_artifact_format = "GGUF"
-image_flavors = ["future-local-model"]
-implementation_requirements = [
-  "Verify quantized artifact availability and license posture.",
-  "Define CPU and optional GPU resource envelope.",
-  "Validate tool-calling behavior through the gateway approval and audit path.",
-]
-
-[models.qwen3-coder-30b-a3b-instruct]
-status = "deferred-high-memory"
-purpose = "Higher-capability local coding-agent profile for GPU or high-memory environments."
-source_model = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
-source_url = "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct"
-license = "Apache-2.0"
-parameter_count = "30.5B total, 3.3B active"
-context_length = 262144
-expected_artifact_format = "GGUF or vLLM/SGLang-compatible weights"
-reviewed_quantized_repository = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
-reviewed_quantized_revision = "b17cb02dd882d5b6ab62fc777ad2995f19668350"
-reviewed_q4_k_m_size = "18.6 GB"
-reviewed_q4_k_m_sha256 = "fadc3e5f8d42bf7e894a785b05082e47daee4df26680389817e2093056f088ad"
-image_flavors = ["future-gpu-local-model"]
-implementation_requirements = [
-  "Keep out of required pull-request CI.",
-  "Use a separate CUDA/vLLM/SGLang profile and GPU-capable runner.",
-  "Route model access through gateway policy rather than direct OpenHands egress.",
-  "Define Terra and local Docker VM memory, disk, and optional GPU requirements before publishing a user-facing tag.",
-]
-
-[models.qwen3-coder-next]
-status = "watch"
-purpose = "Promising future efficient coding-agent family; do not pin until public artifacts, license, quantization, and runtime support are reviewed."
-source_model = "Qwen3-Coder-Next"
-source_url = "https://arxiv.org/abs/2603.00729"
-license = "to be verified on selected artifact"
-parameter_count = "80B total, 3B active"
-image_flavors = ["future-gpu-local-model"]
-implementation_requirements = [
-  "Verify model-card availability and exact artifact license.",
-  "Verify inference runtime support before adding an image target.",
-]

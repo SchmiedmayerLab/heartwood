@@ -1,0 +1,292 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import hashlib
+import time
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+
+from heartwood.gateway import (
+    ModelArtifact,
+    ModelArtifactCatalog,
+    ModelArtifactError,
+    ModelArtifactManager,
+    download_model_artifact,
+    load_model_artifact_catalog,
+)
+
+
+def test_repository_catalog_contains_only_explicit_download_artifacts() -> None:
+    catalog = load_model_artifact_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "model-catalog.toml"
+    )
+
+    assert {artifact.artifact_id for artifact in catalog.artifacts} == {
+        "llama-cpp-stories260k-ci",
+        "qwen25-coder-7b-instruct-q4_k_m",
+    }
+    assert all(artifact.source_revision not in {"main", "latest"} for artifact in catalog.artifacts)
+
+
+def test_artifact_download_verifies_size_and_checksum(tmp_path: Path) -> None:
+    content = b"reviewed-model-artifact"
+    artifact = _artifact(content)
+
+    def downloader(**kwargs: object) -> str:
+        local_dir = Path(str(kwargs["local_dir"]))
+        path = local_dir / "model.gguf"
+        path.write_bytes(content)
+        return str(path)
+
+    path = download_model_artifact(
+        artifact,
+        cache_dir=tmp_path / "models",
+        downloader=downloader,
+    )
+
+    assert path.read_bytes() == content
+
+
+def test_artifact_download_rejects_integrity_mismatch(tmp_path: Path) -> None:
+    artifact = _artifact(b"expected")
+
+    def downloader(**kwargs: object) -> str:
+        path = Path(str(kwargs["local_dir"])) / "model.gguf"
+        path.write_bytes(b"tampered")
+        return str(path)
+
+    with pytest.raises(ModelArtifactError, match="does not match"):
+        download_model_artifact(
+            artifact,
+            cache_dir=tmp_path / "models",
+            downloader=downloader,
+        )
+
+
+def test_artifact_metadata_rejects_floating_revisions() -> None:
+    artifact = _artifact(b"content")
+
+    with pytest.raises(ModelArtifactError, match="immutable revision"):
+        replace(artifact, source_revision="main").validate()
+
+
+def test_background_manager_reports_ready_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _artifact(b"content")
+    catalog = ModelArtifactCatalog(
+        schema_version="heartwood.local-model-catalog.v1",
+        artifacts=(artifact,),
+    )
+    installed = tmp_path / "models" / artifact.artifact_id / "model.gguf"
+
+    def download(_artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+        assert cache_dir == tmp_path / "models"
+        installed.parent.mkdir(parents=True)
+        installed.write_bytes(b"content")
+        return installed
+
+    monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
+    manager = ModelArtifactManager(catalog=catalog, cache_dir=tmp_path / "models")
+
+    assert manager.start(artifact.artifact_id).status == "downloading"
+    deadline = time.monotonic() + 2
+    while manager.statuses()[0].status == "downloading" and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert manager.statuses()[0].status == "ready"
+    assert manager.statuses()[0].path == str(installed)
+    assert manager.start(artifact.artifact_id).status == "ready"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"artifact_id": "../model"}, "artifact_id"),
+        ({"source_repository": "repository"}, "source_repository"),
+        ({"source_path": "/model.gguf"}, "source_path"),
+        ({"source_path": "../model.gguf"}, "source_path"),
+        ({"source_revision": "latest"}, "immutable revision"),
+        ({"artifact_size_bytes": 0}, "positive"),
+        ({"artifact_sha256": "ABC"}, "lowercase SHA-256"),
+    ],
+)
+def test_artifact_metadata_rejects_unsafe_values(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    artifact = replace(_artifact(b"content"), **cast(Any, changes))
+
+    with pytest.raises(ModelArtifactError, match=message):
+        artifact.validate()
+
+
+def test_catalog_lookup_and_safe_serialization() -> None:
+    artifact = _artifact(b"content")
+    catalog = ModelArtifactCatalog(
+        schema_version="heartwood.local-model-catalog.v1",
+        artifacts=(artifact,),
+    )
+
+    assert catalog.artifact("test-model") == artifact
+    assert catalog.safe_dict()["artifacts"] == [artifact.safe_dict()]
+    with pytest.raises(ModelArtifactError, match="unknown model artifact"):
+        catalog.artifact("missing")
+
+
+def test_catalog_loader_rejects_malformed_catalogs_and_manifests(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "a" / "b" / "c" / "model-catalog.toml"
+    catalog_path.parent.mkdir(parents=True)
+
+    with pytest.raises(ModelArtifactError, match="unable to load"):
+        load_model_artifact_catalog(catalog_path)
+
+    catalog_path.write_text('schema_version = "unsupported"\n', encoding="utf-8")
+    with pytest.raises(ModelArtifactError, match="unsupported"):
+        load_model_artifact_catalog(catalog_path)
+
+    catalog_path.write_text(
+        'schema_version = "heartwood.local-model-catalog.v1"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ModelArtifactError, match="models table"):
+        load_model_artifact_catalog(catalog_path)
+
+    catalog_path.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.local-model-catalog.v1"',
+                "[models.invalid]",
+                'artifact_manifest = "manifest.toml"',
+            )
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifest.toml").write_text("not = [valid", encoding="utf-8")
+    with pytest.raises(ModelArtifactError, match="unable to load model artifact manifest"):
+        load_model_artifact_catalog(catalog_path)
+
+
+def test_catalog_loader_rejects_duplicate_artifact_ids(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "a" / "b" / "c" / "model-catalog.toml"
+    catalog_path.parent.mkdir(parents=True)
+    (tmp_path / "one.toml").write_text(_artifact_manifest("same"), encoding="utf-8")
+    (tmp_path / "two.toml").write_text(_artifact_manifest("same"), encoding="utf-8")
+    catalog_path.write_text(
+        "\n".join(
+            (
+                'schema_version = "heartwood.local-model-catalog.v1"',
+                "[models.one]",
+                'artifact_manifest = "one.toml"',
+                "[models.ignored]",
+                'status = "candidate"',
+                "[models.two]",
+                'artifact_manifest = "two.toml"',
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelArtifactError, match="must be unique"):
+        load_model_artifact_catalog(catalog_path)
+
+
+def test_download_rejects_missing_outside_and_wrong_size_paths(tmp_path: Path) -> None:
+    artifact = _artifact(b"expected")
+
+    def missing(**_kwargs: object) -> str:
+        return str(tmp_path / "models" / "test-model" / "missing.gguf")
+
+    with pytest.raises(ModelArtifactError, match="missing"):
+        download_model_artifact(artifact, cache_dir=tmp_path / "models", downloader=missing)
+
+    outside = tmp_path / "outside.gguf"
+    outside.write_bytes(b"expected")
+
+    def escaped(**_kwargs: object) -> str:
+        return str(outside)
+
+    with pytest.raises(ModelArtifactError, match="escapes"):
+        download_model_artifact(artifact, cache_dir=tmp_path / "models", downloader=escaped)
+
+    def wrong_size(**kwargs: object) -> str:
+        path = Path(str(kwargs["local_dir"])) / "model.gguf"
+        path.write_bytes(b"short")
+        return str(path)
+
+    with pytest.raises(ModelArtifactError, match="size does not match"):
+        download_model_artifact(
+            artifact,
+            cache_dir=tmp_path / "models",
+            downloader=wrong_size,
+        )
+
+
+def test_default_hugging_face_downloader_is_resolved_lazily(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"content"
+    artifact = _artifact(content)
+
+    def downloader(**kwargs: object) -> str:
+        path = Path(str(kwargs["local_dir"])) / "model.gguf"
+        path.write_bytes(content)
+        return str(path)
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_artifacts.import_module",
+        lambda _name: SimpleNamespace(hf_hub_download=downloader),
+    )
+
+    assert download_model_artifact(artifact, cache_dir=tmp_path / "models").is_file()
+
+
+def _artifact_manifest(artifact_id: str) -> str:
+    digest = hashlib.sha256(b"content").hexdigest()
+    return "\n".join(
+        (
+            'schema_version = "1"',
+            f'artifact_id = "{artifact_id}"',
+            'runtime_profile = "llama-cpp-cpu"',
+            'purpose = "Synthetic test"',
+            'source_repository = "example/model"',
+            'source_path = "model.gguf"',
+            'source_revision = "0123456789abcdef"',
+            'artifact_format = "GGUF"',
+            "artifact_size_bytes = 7",
+            f'artifact_sha256 = "{digest}"',
+            'license_posture = "Synthetic"',
+            'model_alias = "test"',
+        )
+    )
+
+
+def _artifact(content: bytes) -> ModelArtifact:
+    return ModelArtifact(
+        artifact_id="test-model",
+        runtime_profile="llama-cpp-cpu",
+        purpose="Synthetic unit-test artifact.",
+        source_repository="example/test-model",
+        source_path="model.gguf",
+        source_revision="0123456789abcdef",
+        artifact_format="GGUF",
+        artifact_size_bytes=len(content),
+        artifact_sha256=hashlib.sha256(content).hexdigest(),
+        license_posture="Synthetic test fixture.",
+        model_alias="test-model",
+    )
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]

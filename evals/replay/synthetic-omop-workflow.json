@@ -28,11 +28,12 @@
     {
       "decision_id": "decision-synthetic-model-call",
       "decision": "allow",
-      "reason": "endpoint and capability tier are allowed for synthetic core harness run"
+      "reason": "model route policy allows the configured profile for synthetic core harness run"
     }
   ],
   "expected_audit_events": [
     "command.received",
+    "user_message.recorded",
     "detection.proposed",
     "approval.recorded",
     "model_call.decision.recorded",

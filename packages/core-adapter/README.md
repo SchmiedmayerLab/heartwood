@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-core-adapter
+# Heartwood Core Adapter
 
 Core harness orchestration for Heartwood sessions.
 

@@ -8,8 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# heartwood-cli
+# Heartwood CLI
 
-The `heartwood` command-line interface — the primary interaction surface and the stable target for CI. Interfaces are thin presentations over shared core logic, so the CLI and the notebook adapter drive the same session without a second execution path.
+The `heartwood` command-line interface is the primary scripting and CI surface. Running `heartwood` or `heartwood chat` opens the coding-agent conversation; one-shot prompts, action allow or reject, the deployment-allowed OpenHands confirmation mode, pause, resume, replay, audit export, model profile management, reviewed artifact downloads, and web serving use the same gateway and session contract as the notebook and web interfaces.
 
-Today it exposes environment detection (`heartwood detect`, propose-not-commit). The agentic session commands (`chat`, `run`, `replay`, `audit export`) arrive with the session contract in later phases — see [`design/09-implementation-plan.md`](../../design/09-implementation-plan.md).
+Model commands persist only provider identifiers, endpoints, capability tiers, and credential references. Secret values remain in environment variables, mounted files, or managed identity.

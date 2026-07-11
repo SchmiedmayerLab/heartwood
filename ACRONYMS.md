@@ -8,15 +8,11 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Acronyms & glossary
+# Acronyms And Glossary
 
-A running reference for the acronyms and named tools used across this project (medical data, genomics, cloud platforms, and agent tooling).
+This glossary defines acronyms and specialized terms used in Heartwood documentation. Add an entry when introducing a term and remove entries that are no longer used.
 
-**Maintenance:** this file is kept up to date per the rule in [AGENTS.md](./AGENTS.md) — whenever a new acronym is introduced anywhere in the project, add it here with its expansion and a one-line description.
-
----
-
-## Workflow languages & engines (the "batch lane")
+## Workflow Languages And Engines
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -24,12 +20,10 @@ A running reference for the acronyms and named tools used across this project (m
 | CWL | Common Workflow Language | Vendor-neutral open standard for pipelines/tools |
 | Cromwell | *(name, not an acronym)* | Broad's engine that executes WDL/CWL |
 | Nextflow | *(name)* | Popular workflow framework/DSL |
-| Snakemake | *(name)* | Python-flavored workflow system |
-| Galaxy | *(name)* | Web-based workflow platform |
 | Hail | *(name)* | Genomics analysis framework that runs on Spark |
 | Spark | *(name)* | Distributed compute engine for large datasets |
 
-## GA4GH interoperability standards (the portability layer)
+## GA4GH Interoperability Standards
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -38,9 +32,8 @@ A running reference for the acronyms and named tools used across this project (m
 | WES | Workflow Execution Service | Standard API to submit a workflow to any platform |
 | TES | Task Execution Service | Standard API to run one containerized task anywhere |
 | TRS | Tool Registry Service | Standard API for sharing tools/workflows (used by Dockstore) |
-| AAI | Authentication & Authorization Infrastructure | GA4GH "Passport/Visa" identity standard |
 
-## Health-data & genomics standards / formats
+## Health Data And Genomics Standards And Formats
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -54,30 +47,25 @@ A running reference for the acronyms and named tools used across this project (m
 | DICOM | Digital Imaging and Communications in Medicine | Medical imaging file/exchange standard |
 | VCF | Variant Call Format | Text format listing genomic variants |
 | BAM | Binary Alignment Map | Compressed file of sequencing reads aligned to a genome |
-| GATK | Genome Analysis Toolkit | Broad's variant-calling toolkit |
 
-## Compliance & security
+## Compliance And Security
 
 | Term | Expansion | What it is |
 |---|---|---|
 | PHI | Protected Health Information | Identifiable health data (must not leak) |
 | HIPAA | Health Insurance Portability and Accountability Act | US law governing PHI handling |
 | BAA | Business Associate Agreement | Contract letting a vendor process PHI compliantly |
-| FedRAMP | Federal Risk and Authorization Management Program | US government cloud-security authorization |
 | VPC | Virtual Private Cloud | An isolated private network in a cloud |
 | VPC-SC | VPC Service Controls | Google's "perimeter" that blocks data egress |
 | IRB | Institutional Review Board | Ethics board that approves human-subjects research |
 | DAC | Data Access Committee | Body that approves access to a controlled dataset |
 | TRE | Trusted Research Environment | Secure enclave for sensitive data (e.g. UKB-RAP) |
-| SLSA | Supply-chain Levels for Software Artifacts | Build/provenance integrity framework ("salsa") |
 | SBOM | Software Bill of Materials | Inventory of components/dependencies in a build |
-| CMEK | Customer-Managed Encryption Keys | Cloud encryption with customer-controlled keys |
-| OIDC | OpenID Connect | Identity layer; used for CI "trusted publishing" of signed artifacts |
 | SHA | Secure Hash Algorithm | Family of cryptographic hashes; SHA-256 is used for content pinning |
 | SPDX | Software Package Data Exchange | Standard for per-file license/copyright metadata (used by REUSE) |
 | TLS | Transport Layer Security | Encryption protocol used to secure network connections |
 
-## Cloud & infrastructure
+## Cloud And Infrastructure
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -85,9 +73,6 @@ A running reference for the acronyms and named tools used across this project (m
 | ARM64 | 64-bit Arm architecture | CPU architecture identifier used by Apple Silicon, AWS Graviton, and Arm Linux runners |
 | GCP | Google Cloud Platform | Google's cloud |
 | AWS | Amazon Web Services | Amazon's cloud |
-| GCE | Google Compute Engine | GCP's virtual machines |
-| GKE | Google Kubernetes Engine | GCP's managed Kubernetes |
-| EBS | Elastic Block Store | AWS's attachable disk storage |
 | VM | Virtual Machine | A virtualized computer instance |
 | CPU | Central Processing Unit | General-purpose processor used for local inference when no accelerator is available |
 | CUDA | Compute Unified Device Architecture | NVIDIA GPU runtime and programming stack used by optional accelerated inference profiles |
@@ -99,6 +84,7 @@ A running reference for the acronyms and named tools used across this project (m
 | CDN | Content Delivery Network | External static-asset hosting, forbidden for the runtime web UI |
 | DNS | Domain Name System | Resolves hostnames to network addresses |
 | HTTP(S) | HyperText Transfer Protocol (Secure) | The web request protocol |
+| IPv6 | Internet Protocol version 6 | Network address format used by bracketed loopback and service endpoints |
 | PR | Pull Request | Proposed code or documentation change reviewed before merge |
 | RAM | Random Access Memory | Volatile memory required to load local model weights, runtime buffers, and active sessions |
 | REST | Representational State Transfer | HTTP API style used by the session gateway |
@@ -108,7 +94,7 @@ A running reference for the acronyms and named tools used across this project (m
 | PE | Private Endpoint | Azure private network entry to a service (no public ingress) |
 | QEMU | Quick Emulator | CPU emulation layer used by container CI to run non-native architecture smoke tests |
 
-## Container registries (where Docker images live)
+## Container Registries
 
 | Term | Expansion |
 |---|---|
@@ -116,33 +102,23 @@ A running reference for the acronyms and named tools used across this project (m
 | GAR | Google Artifact Registry |
 | GHCR | GitHub Container Registry |
 | OCI | Open Container Initiative (open standard for images & artifacts) |
-| ORAS | OCI Registry As Storage (push/pull arbitrary artifacts via an OCI registry) |
 
-## AI / agent stack
+## AI And Agent Stack
 
 | Term | Expansion | What it is |
 |---|---|---|
 | AI | Artificial Intelligence | Broad term for systems that perform tasks associated with human intelligence |
-| LLM | Large Language Model | The model (e.g. Claude) |
+| LLM | Large Language Model | Model used by the OpenHands conversation runtime |
 | GGUF | GPT-Generated Unified Format | llama.cpp model artifact format used for local inference profiles |
-| MCP | Model Context Protocol | Open standard for giving agents tools/data |
 | ML | Machine Learning | Statistical/modeling techniques that learn patterns from data |
-| RAG | Retrieval-Augmented Generation | Feeding retrieved docs into the model to ground answers |
 | NLP | Natural Language Processing | Computing over human-language text |
 | NL | Natural Language | Plain human language (e.g. "NL query") |
 | SQL | Structured Query Language | Language for querying databases ("sequel") |
 | vLLM | *(project name)* | High-throughput engine for serving LLMs on GPUs |
-| TGI | Text Generation Inference | Hugging Face's LLM serving engine |
-| MLX | *(Apple framework; not a formal acronym)* | Apple-Silicon ML / array framework |
 | LiteLLM / Ollama / llama.cpp | *(project names)* | Model-routing proxy / local model runners |
-| ACP | Agent Client Protocol | Standard letting editors (Zed, JetBrains, VS Code) drive external agents, or one agent use another as a sub-agent/provider |
-| SKILL.md | *(file name; open standard)* | Cross-vendor open standard (published Dec 2025) for packaging agent instructions/scripts as a discoverable folder |
-| AAIF | Agentic AI Foundation | Linux Foundation body formed Dec 2025 to neutrally govern agent-ecosystem projects (MCP, Goose, AGENTS.md) |
-| HITL | Human-in-the-Loop | Human approval/inspection points inside the agent loop |
-| ADK | Agent Development Kit | Google's agent framework (evaluated, not chosen) |
-| ODA | Omics Data Agent | DNAnexus's built-in GenAI cohort/query assistant (an in-boundary reference point) |
+| SKILL.md | *(file name)* | Portable directory format for agent instructions, scripts, references, and assets |
 
-## Programming & interop
+## Programming And Interoperability
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -150,26 +126,19 @@ A running reference for the acronyms and named tools used across this project (m
 | ASGI | Asynchronous Server Gateway Interface | Python interface used for async web servers and applications |
 | CLI | Command-Line Interface | Terminal-driven tool |
 | SDK | Software Development Kit | Libraries/tools for building on a platform |
-| PyPI | Python Package Index | Public Python package registry; blocked at runtime in the air-gapped image |
-| IDE | Integrated Development Environment | Code editor + tooling (VS Code, JetBrains) |
+| PyPI | Python Package Index | Public Python package registry; unavailable when a deployment disables runtime network access |
 | JSON | JavaScript Object Notation | Lightweight structured-data format used for schemas and events |
 | JSONL | JSON Lines | One JSON object per line, used for scrubbed audit exports |
 | TOML | Tom's Obvious Minimal Language | Configuration format used for Python project metadata and the skill bundle catalog |
 | YAML | YAML Ain't Markup Language | Human-readable configuration format used for workflows and metadata |
 | NDJSON | Newline-Delimited JSON | One JSON record per line; the FHIR bulk-export format |
-| FFI | Foreign Function Interface | Calling one language's code from another |
-| ABI | Application Binary Interface | Binary calling convention (e.g. "C-ABI") |
-| GIL | Global Interpreter Lock | Python's single-thread-at-a-time lock |
-| ToS | Terms of Service | Legal usage terms (e.g. Anthropic's Commercial ToS governs the Claude Agent SDK, unlike MIT/Apache-licensed alternatives) |
-| ADR | Architecture Decision Record | Short doc capturing one design decision + rationale |
 | CI/CD | Continuous Integration / Continuous Delivery | Automated build/test/release pipeline |
-| BYOD | Bring Your Own Data | A user's own dataset brought into a platform |
 | SPI | Service Provider Interface | A stable interface a platform/model/data adapter implements |
 | SPA | Single-Page Application | A web app that loads once and updates in place (the researcher web UI) |
 | UI | User Interface | The screens and controls a person uses to operate software |
 | UX | User Experience | The overall user workflow and interaction quality |
 
-## Platforms & organizations
+## Platforms And Organizations
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -179,15 +148,3 @@ A running reference for the acronyms and named tools used across this project (m
 | NIH | National Institutes of Health | US biomedical research agency (runs All of Us) |
 | NHLBI | National Heart, Lung, and Blood Institute | NIH institute behind BioData Catalyst |
 | NHGRI | National Human Genome Research Institute | NIH institute behind AnVIL |
-
----
-
-## Named tools & platforms that are *not* acronyms
-
-Terra · Leonardo (Terra's environment service) · Dataproc (GCP managed Spark) · Seven Bridges · Velsera (its parent) · Cavatica · Dockstore · OpenHands / Goose / Aider (agent frameworks) — all product names.
-
-Also evaluated as candidate agent-harness foundations: OpenCode (sst/Anomaly), Cline, Continue (Continue.dev), Codex CLI (OpenAI), SWE-agent / mini-SWE-agent and SWE-ReX (Princeton NLP), Claude Agent SDK (Anthropic) — all product names.
-
-Orchestration/agent frameworks and durability engines evaluated: LangGraph, LlamaIndex Workflows, Pydantic AI, Google ADK, smolagents, AutoGen / AG2, CrewAI, DBOS, Temporal. Evaluation & skills-testing tooling: Inspect AI, promptfoo, DeepEval, SkillsBench, skillgrade; coding-ability benchmarks SWE-bench (Verified), Terminal-Bench, and LiveCodeBench. Supply-chain & runtime: Sigstore, bubblewrap. Data & registries: Synthea (synthetic health data), nb-cli (headless notebook driver), BioContextAI and GoekeLab awesome-genomic-skills (community skill/MCP registries) — all product/project names.
-
-Development-practice tooling: Docker, Docker Compose, GitHub Actions, Dependabot, Codecov, Linkspector, Jupyter, JupyterLab, jupyter-server-proxy, RStudio, ipywidgets, Node.js, Vite, Vitest, ESLint, Prettier, React, Radix UI, Tailwind CSS, Stanford Spezi (spezi-web-design-system, spezi-web-configurations, spezi-web-template-application), actionlint, yamllint, REUSE (reuse.software — per-file SPDX licensing), ruff, and uv (Python) — all product/project names.

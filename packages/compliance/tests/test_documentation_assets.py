@@ -12,106 +12,235 @@ import json
 from pathlib import Path
 
 
-def test_terra_jupyter_demo_notebook_covers_runtime_surfaces() -> None:
-    notebook = json.loads(
-        (_repo_root() / "docs" / "terra-jupyter-demo.ipynb").read_text(encoding="utf-8")
+def test_documentation_index_separates_current_design_and_delivery_work() -> None:
+    index = _read("docs/README.md")
+    readme = _read("README.md")
+    development = _read("design/08-development.md")
+
+    for heading in (
+        "## Current Operational Documentation",
+        "## Design And Rationale",
+        "## Delivery Roadmap",
+        "## Status Terms",
+    ):
+        assert heading in index
+    for term in (
+        "Implemented",
+        "CI-validated",
+        "Live-validated",
+        "Institution-approved",
+        "Release-ready",
+        "Planned",
+    ):
+        assert term in index
+    assert "[Documentation](docs/README.md)" in readme
+    assert "[Platform Support](docs/platform-support.md)" in readme
+    assert "[documentation index](../docs/README.md)" in development
+
+
+def test_platform_support_distinguishes_ci_from_live_validation() -> None:
+    support = _read("docs/platform-support.md")
+
+    assert "## Support Matrix" in support
+    assert "Generic Linux or Jupyter environment | Implemented" in support
+    assert "Terra Jupyter | Implemented platform-derived image" in support
+    assert "All of Us or AnVIL through Terra | Design target only" in support
+    assert "Seven Bridges or Velsera | Design target only" in support
+    assert "DNAnexus or UK Biobank Research Analysis Platform | Design target only" in support
+    assert "Real Terra workspace validation remains required" in support
+    assert "does not establish a business associate agreement" in support
+    assert "synthetic OMOP data-source fixture" in support
+    assert "not a complete Terra runtime adapter" in support
+    assert "concurrent independent processes writing the same session" in support
+
+
+def test_delivery_roadmap_is_ordered_actionable_and_unambiguous() -> None:
+    roadmap = _read("design/09-implementation-plan.md")
+    ordered_headings = (
+        "## Non-Negotiable Requirements",
+        "## Current Baseline",
+        "## Material Readiness Gaps",
+        "## Priority 1 — Release-Candidate Runtime Contract",
+        "## Priority 2 — Researcher Web Experience",
+        "## Priority 3 — Live Terra Acceptance",
+        "## Priority 4 — Terra And OMOP Reference Workflow",
+        "## Priority 5 — Assurance And Stable Release Governance",
+        "## Priority 6 — Conditional Expansion",
+        "## Start Conditions For Deferred Capabilities",
+        "## Cross-Cutting Acceptance Rules",
     )
+
+    assert roadmap.startswith("<!--")
+    assert "# 09 — Delivery Roadmap" in roadmap
+    assert [roadmap.index(heading) for heading in ordered_headings] == sorted(
+        roadmap.index(heading) for heading in ordered_headings
+    )
+    assert roadmap.count("**Objective:**") == 6
+    assert roadmap.count("### Deliverables") == 6
+    assert roadmap.count("### Exit Criteria") == 6
+    assert "- [ ]" in roadmap
+    assert "- [x]" not in roadmap
+    assert "LocalFilesystemDataSourceAdapter.synthetic_omop()" in roadmap
+    assert "OpenHands dependency-upgrade gate" in roadmap
+    assert "## Phase" not in roadmap
+    assert "This pass" not in roadmap
+
+
+def test_architecture_requires_upstream_reuse() -> None:
+    architecture = _read("design/03-architecture.md")
+    skills = _read("design/04-skills.md")
+
+    assert "## Upstream Reuse Rule" in architecture
+    assert "must not fork or independently reproduce" in architecture
+    assert "Provider-specific request construction" in architecture
+    assert (
+        "Terminal and file actions execute only through the OpenHands conversation" in architecture
+    )
+    assert "Stronger isolation must use a supported OpenHands remote workspace" in architecture
+    assert (
+        "Automatic user, public-marketplace, and project-workspace Skill loading is disabled"
+        in skills
+    )
+    assert "audited deployment assertion rather than a network interceptor" in architecture
+
+
+def test_web_experience_remains_a_gateway_projection() -> None:
+    architecture = _read("design/03-architecture.md")
+    roadmap = _read("design/09-implementation-plan.md")
+    readme = _read("README.md")
+
+    assert "browser storage is never the source of truth" in architecture
+    assert "the shell does not encode a fixed cohort" in architecture
+    assert "The browser does not synthesize action outcomes" in architecture
+    assert "Compliance evidence packages remain maintainer or reviewer tooling" in architecture
+    assert "target presentation contract for the planned web work" in architecture
+    assert "current web UI is a functional conversation and configuration surface" in architecture
+    assert "## Priority 2 — Researcher Web Experience" in roadmap
+    assert "Represent absent evidence as unknown or unconfigured" in roadmap
+    assert "no model capability claim without benchmark evidence" in roadmap
+    assert "Do not place compliance evidence packages" in roadmap
+    assert "session-oriented researcher experience" in readme
+    assert "planned work and is not part of the current implementation" in readme
+
+
+def test_project_markdown_contains_no_process_artifacts() -> None:
+    forbidden_parts = (
+        ("evaluated,", "not", "chosen"),
+        ("this", "pass", "replaces"),
+        ("historical", "command"),
+        ("carried", "over"),
+        ("co", "dex"),
+        ("phase", "0"),
+    )
+
+    for path in _project_markdown_paths():
+        content = path.read_text(encoding="utf-8").lower()
+        for parts in forbidden_parts:
+            phrase = " ".join(parts) if parts != ("co", "dex") else "".join(parts)
+            assert phrase not in content, f"{phrase!r} found in {path.relative_to(_repo_root())}"
+
+
+def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
+    notebook = json.loads(_read("docs/terra-jupyter-demo.ipynb"))
     cells = notebook["cells"]
     sources = ["".join(cell["source"]) for cell in cells]
     combined = "\n".join(sources)
 
     assert notebook["nbformat"] == 4
     assert "Terra-Style Jupyter Demo" in sources[0]
+    assert "edge-terra`" in combined
+    assert "contains no model weights" in combined
+    assert "edge-terra-coder" not in combined
+    assert "edge-terra-smoke" not in combined
     assert "NotebookSession" in combined
     assert "jupyter_proxy_url(port=8767)" in combined
-    assert "offline_stack_smoke.sh" in combined
     assert "start_web_ui.sh" in combined
-    assert "heartwood --workspace /home/jupyter/heartwood-workspace/sessions" in combined
     assert "session.detect()" in combined
     assert 'session.run("run the synthetic workflow")' in combined
     assert "session.audit_export()" in combined
-    assert "build_widget_spec" in combined
-    assert "synthetic" in combined
-    assert "live Terra validation pass still needs to confirm" in combined
+    assert "allow or reject" in combined
     for cell in cells:
         if cell["cell_type"] == "code":
             assert cell["execution_count"] is None
             assert cell["outputs"] == []
 
 
-def test_terra_runbook_tracks_platform_image_contract() -> None:
-    runbook = (_repo_root() / "docs" / "terra-jupyter-demo.md").read_text(encoding="utf-8")
+def test_readme_and_model_guides_define_both_runtime_paths() -> None:
+    readme = _read("README.md")
+    container = _read("docs/container-images.md")
+    local = _read("docs/getting-started-offline.md")
 
+    for document in (readme, container, local):
+        assert "model weights" in document.lower()
+        assert "OpenHands" in document
+        assert "policy" in document.lower()
+    assert "heartwood models add" in readme
+    assert "heartwood models download" in readme
+    assert "environment variables, mounted files, or managed identity" in readme
+    assert "business associate agreement" in readme
+    assert "pushes each result by digest" in container
+    assert "persistent `-amd64` and `-arm64` helper tags" in container
+    assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
+    assert "deterministic loopback model fixture" in local
+    assert "`AlwaysConfirm`" in local
+    for stale in ("edge-smoke", "edge-providers", "edge-coder-7b", "edge-terra-smoke"):
+        assert stale not in readme
+        assert stale not in container
+        assert stale not in local
+
+
+def test_terra_runbook_tracks_platform_and_model_setup() -> None:
+    runbook = _read("docs/terra-jupyter-demo.md")
+
+    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra" in runbook
+    assert "contains no model weights" in runbook
     assert "Terra Jupyter Notebook base image" in runbook
-    assert "DataBiosphere/terra-docker" in runbook
-    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-coder-7b" in runbook
-    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra-smoke" in runbook
-    assert "edge-terra" in runbook
-    assert "edge-terra-smoke-ci" in runbook
-    assert "Terra-compatible notebook base" in runbook
-    assert "publish automatically from `main`" in runbook
-    assert "unauthenticated Leonardo-compatible Docker schema-2 manifest request" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
-    assert "docker manifest inspect` alone is insufficient" in runbook
-    assert "bash images/generic/scripts/offline_stack_smoke.sh" in runbook
-    assert "run.approval_controls" in runbook
-    assert "approval.decision" in runbook
-    assert "run.approvals" not in runbook
-    assert "approval.status" not in runbook
-    assert "web UI conversation interaction" in runbook
-    assert "user prompt, model preview, agent message, and trace summary" in runbook
-    assert "custom image digest" in runbook
-    assert "4 vCPU, 16 GB RAM" in runbook
-    assert "8 vCPU, 32 GB RAM" in runbook
-    assert "will not speed up the bundled Qwen2.5-Coder-7B inference" in runbook
-    assert "real Terra workspace is still required" in runbook
-    assert "configure the Cloud Environment to use the selected image directly" not in runbook
+    assert "Leonardo rejects an Open Container Initiative index" in runbook
+    assert "heartwood-workspace/models" in runbook
+    assert "models add institutional" in runbook
+    assert "models add local" in runbook
+    assert "business associate agreement" in runbook
+    assert "Allow once or Reject" in runbook
+    assert "custom image and base image digests" in runbook
+    assert "real Terra workspace validation remains required" in runbook
+    assert "edge-terra-coder" not in runbook
+    assert "edge-terra-smoke" not in runbook
 
 
-def test_platform_image_extension_guide_defines_mechanism() -> None:
-    guide = (_repo_root() / "docs" / "platform-images.md").read_text(encoding="utf-8")
-    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
-    container_docs = (_repo_root() / "docs" / "container-images.md").read_text(encoding="utf-8")
+def test_platform_extension_guide_defines_one_shared_mechanism() -> None:
+    guide = _read("docs/platform-images.md")
 
-    assert "Platform Image Extension Guide" in guide
-    assert "images/platforms.toml" in guide
-    assert "images/platform/Dockerfile" in guide
-    assert "images/platform/scripts/verify_registry_manifest.py" in guide
-    assert "docker-bake.hcl" in guide
-    assert ".github/workflows/container-smoke.yml" in guide
-    assert ".github/workflows/container-image.yml" in guide
+    for path in (
+        "images/platforms.toml",
+        "images/platform/Dockerfile",
+        "images/platform/scripts/verify_registry_manifest.py",
+        "docker-bake.hcl",
+        ".github/workflows/container-smoke.yml",
+        ".github/workflows/container-image.yml",
+    ):
+        assert path in guide
     assert "Add Or Adapt A Platform Image" in guide
+    assert "same Heartwood payload" in guide
+    assert "Keep model weights and credentials out of every layer" in guide
     assert "Keep `--set <target>.platform=<architecture>`" in guide
-    assert "use the Docker driver when the build depends on a locally tagged base image" in guide
-    assert "empty Docker config" in guide
-    assert "anonymous registry access" in guide
+    assert "use the Docker driver" in guide
     assert "manifest media type" in guide
-    assert "config media type" in guide
     assert "non-platform manifest policy" in guide
-    assert "Terra tags must return `application/vnd.docker.distribution.manifest.v2+json`" in guide
-    assert "local-only CI load targets without attestations" in guide
-    assert (
-        "Docker's local image exporter does not load manifest lists or attested image indexes"
-        in guide
+    assert "Terra tags must return" in guide
+    assert "synthetic data only" in guide.lower()
+    assert "Do not promote a platform to supported based only on local CI" in guide
+
+
+def _read(path: str) -> str:
+    return (_repo_root() / path).read_text(encoding="utf-8")
+
+
+def _project_markdown_paths() -> tuple[Path, ...]:
+    excluded = {".git", ".venv", ".uv-cache", "coverage", "node_modules"}
+    return tuple(
+        path for path in _repo_root().rglob("*.md") if not excluded.intersection(path.parts)
     )
-    assert "Required Live Evidence" in guide
-    assert "custom image digest" in guide
-    assert "Synthetic data only" in guide
-    assert "Platform Image Extension Guide](docs/platform-images.md)" in readme
-    assert "Platform Image Extension Guide](platform-images.md)" in container_docs
-    assert "start_demo_stack.sh" in readme
-    assert "Run Local Model" in readme
-    assert "bounded synthetic response preview" in container_docs
-    assert "gateway-managed localhost OpenHands child server" in container_docs
-    assert "Resource Requirements" in container_docs
-    assert "4 vCPU, 16 GB RAM" in container_docs
-    assert "Attaching a GPU to the current image does not accelerate" in container_docs
-    assert "images/platform/scripts/verify_registry_manifest.py" in container_docs
-    assert (
-        "Terra-derived images publish as `linux/amd64` Docker schema-2 image manifests"
-        in container_docs
-    )
-    assert "Leonardo rejects" in container_docs
 
 
 def _repo_root() -> Path:
