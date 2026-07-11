@@ -66,7 +66,7 @@ description = "Build the no-weight Terra CI image through the production platfor
 
 [[platforms.terra.required_evidence]]
 name = "main-publish-real-terra"
-description = "Build the no-weight runtime from the real Terra base, verify its Docker schema-2 manifest and image configuration, then run the Jupyter contract and launch smokes against the published tag."
+description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run Jupyter, Leonardo, OpenHands, and mounted local-inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."
 
 [[platforms.terra.required_evidence]]
 name = "live-terra-smoke"

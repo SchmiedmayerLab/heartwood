@@ -180,6 +180,13 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     assert "business associate agreement" in readme
     assert "pushes each result by digest" in container
     assert "persistent `-amd64` and `-arm64` helper tags" in container
+    assert "Public commit and moving tags are promotion outputs" in container
+    assert "publication jobs run only for the `main` ref" in container
+    assert "pull requests continue to run CI validation" in container
+    assert "checks the current `main` commit immediately before" in container
+    assert "candidate-validation failure leaves the candidate untagged" in container
+    assert "promotion failure may leave the validated immutable commit tag" in container
+    assert "reachability graph" in container
     assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
     assert "deterministic loopback model fixture" in local
     assert "`AlwaysConfirm`" in local

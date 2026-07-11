@@ -48,6 +48,7 @@ Unchecked items are planned work and are not current capability or support claim
 
 - Generic images build natively for `linux/amd64` and `linux/arm64` and publish one multi-platform manifest. Terra publishes a separate AMD64 Docker schema-2 manifest compatible with Leonardo image detection.
 - CI verifies no-weight image contents, OpenHands loopback orchestration, both confirmation modes, native Skill loading, a separately mounted llama.cpp fixture, web and CLI contracts, Jupyter startup, proxy routing, Terra image contracts, and registry media types.
+- Main publication stages untagged images by digest, validates the exact candidates, creates and verifies immutable commit tags, and moves the generic and Terra channel tags only after every required candidate check passes.
 - Python, TypeScript, documentation, licensing, secret scanning, dependency review, CodeQL, container checks, and synthetic replay are repository gates.
 
 ## Material Readiness Gaps
@@ -173,7 +174,7 @@ Unchecked items are planned work and are not current capability or support claim
 - [ ] Replace full-log verification on every append with a locked incremental append and explicit full-verification operation while preserving deterministic tamper detection and crash recovery.
 - [ ] Implement immutable-source and digest verification for external Skills, real signature verification, review provenance, release channels, and installation policy before enabling remote Skill acquisition.
 - [ ] Publish semantic-version image tags, release notes, compatibility policy, software bill of materials, provenance, cryptographic signatures, generated third-party notices, and a support window.
-- [ ] Implement GHCR retention automation in report-only mode first. Preserve moving release tags, immutable release tags, attestations, multi-platform child manifests, and referenced digests.
+- [ ] Implement graph-aware GHCR retention automation in report-only mode first. Starting from moving release tags, retained immutable tags, and attestation referrers, traverse the complete manifest reachability graph; report only untagged and unreferenced versions older than the retention threshold before enabling narrowly scoped deletion.
 - [ ] Publish the README, operational tutorials, design set, API reference, image reference, security model, status matrix, and limitations as a versioned static documentation site with build, internal-link, external-link, accessibility, and tutorial-command checks.
 - [ ] Document maintainer roles, security response, Skill review ownership, release authority, deprecation policy, and succession.
 
