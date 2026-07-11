@@ -1,10 +1,10 @@
 {
   "schema_version": "heartwood.skill-metadata.v1",
   "heartwood.dataset-types": "omop-cdm",
-  "heartwood.platforms": "generic",
+  "heartwood.platforms": "generic,terra",
   "heartwood.phi-risk": "none",
   "heartwood.trust-tier": "verified",
   "heartwood.requires-network": "false",
-  "heartwood.version": "0.1.0",
+  "heartwood.version": "0.2.0",
   "heartwood.sig": "sigstore:synthetic-fixture"
 }

@@ -13,6 +13,7 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
+    "anthropic==0.116.0",
     "heartwood-adapters",
     "heartwood-core-adapter",
     "heartwood-model-policy",
@@ -20,6 +21,7 @@ dependencies = [
     "heartwood-session",
     "heartwood-skills",
     "huggingface-hub==1.22.0",
+    "openai==2.44.0",
 ]
 
 [project.optional-dependencies]

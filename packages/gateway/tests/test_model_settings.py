@@ -21,6 +21,7 @@ from heartwood.gateway import (
     ModelSettingsError,
     ModelSettingsStore,
     model_profile_from_mapping,
+    model_profile_from_preset,
     model_settings_from_mapping,
     model_settings_path,
 )
@@ -169,6 +170,36 @@ def test_presets_are_non_secret_openhands_configuration_hints() -> None:
         "vertex-ai",
     }
     assert all("api_key" not in preset.safe_dict() for preset in MODEL_PRESETS)
+
+
+def test_provider_preset_builds_a_selected_profile_without_secret_values() -> None:
+    local = model_profile_from_preset("local-openai-compatible", "local-model")
+    openai = model_profile_from_preset("openai", "openai/configured-model")
+
+    assert local.model == "openai/local-model"
+    assert local.base_url == "http://127.0.0.1:8765/v1"
+    assert local.credential_kind == "none"
+    assert openai.model == "openai/configured-model"
+    assert openai.api_key_env == "OPENAI_API_KEY"
+    assert openai.credential_status({}) == "missing"
+
+
+@pytest.mark.parametrize(
+    ("preset_id", "model_name", "message"),
+    [
+        ("missing", "model", "unknown model provider"),
+        ("azure-openai", "model", "advanced endpoint configuration"),
+        ("openai", "  ", "model name"),
+        ("openai", "invalid model", "whitespace"),
+    ],
+)
+def test_provider_preset_rejects_incomplete_simple_configuration(
+    preset_id: str,
+    model_name: str,
+    message: str,
+) -> None:
+    with pytest.raises(ModelSettingsError, match=message):
+        model_profile_from_preset(preset_id, model_name)
 
 
 def test_managed_identity_has_one_stable_policy_reference() -> None:

@@ -68,6 +68,14 @@ class _SdkModule(Protocol):
 
 ConversationFactory = Callable[[Callable[[object], None]], _Conversation]
 
+_AGENT_LLM_NUM_RETRIES = 2
+_AGENT_LLM_LOCAL_NUM_RETRIES = 1
+_AGENT_LLM_RETRY_MAX_WAIT_SECONDS = 8
+_AGENT_LLM_RETRY_MIN_WAIT_SECONDS = 1
+_AGENT_LLM_RETRY_MULTIPLIER = 2.0
+_AGENT_LLM_LOCAL_TIMEOUT_SECONDS = 600
+_AGENT_LLM_TIMEOUT_SECONDS = 180
+
 
 class OpenHandsSdkBackend:
     """Run a real OpenHands conversation behind the Heartwood event facade."""
@@ -165,9 +173,9 @@ class OpenHandsSdkBackend:
             return (_backend_error(error),)
         return self._translate_capture(session_id=session_id)
 
-    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:
+    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
         """Restore pending action identity from Heartwood's event log."""
-        self._pending = {} if tool_call is None else {tool_call.tool_call_id: tool_call}
+        self._pending = {tool_call.tool_call_id: tool_call for tool_call in tool_calls}
 
     def resolve_confirmation(
         self,
@@ -186,14 +194,26 @@ class OpenHandsSdkBackend:
                 ),
             )
         if len(self._pending) != 1:
+            pending_actions = tuple(self._pending.values())
             self._get_conversation().reject_pending_actions(
                 "Heartwood requires one-at-a-time action confirmation"
             )
             self._pending.clear()
             return (
+                *(
+                    BackendEvent(
+                        kind=BackendEventKind.CONFIRMATION_RESOLVED,
+                        tool_call=action,
+                        approved=False,
+                    )
+                    for action in pending_actions
+                ),
                 BackendEvent(
                     kind=BackendEventKind.ERROR,
-                    message="parallel pending actions were rejected; submit the task again",
+                    message=(
+                        "OpenHands proposed multiple actions in one confirmation step; "
+                        "all were rejected before execution"
+                    ),
                 ),
             )
         self._captured.clear()
@@ -276,6 +296,7 @@ class OpenHandsSdkBackend:
             "aws_region_name": self.profile.aws_region_name,
             "aws_profile_name": self.profile.aws_profile_name,
             "log_completions": False,
+            **_llm_resilience_options(self.profile),
         }
         if self.profile.is_local:
             llm_options.update(input_cost_per_token=0.0, output_cost_per_token=0.0)
@@ -411,15 +432,32 @@ def _tool_observation(event: object) -> BackendEvent:
         metadata = getattr(observation, "metadata", None)
         exit_code = getattr(metadata, "exit_code", None)
     is_error = bool(getattr(observation, "is_error", False))
+    resolved_exit_code = exit_code if isinstance(exit_code, int) else (1 if is_error else 0)
+    failed = is_error or resolved_exit_code != 0
     tool_name = str(getattr(event, "tool_name", "unknown-tool"))
     return BackendEvent(
         kind=BackendEventKind.TOOL_EXECUTION,
         tool_execution=ToolExecution(
             tool_name=tool_name,
-            exit_code=exit_code if isinstance(exit_code, int) else (1 if is_error else 0),
-            summary=f"{tool_name} {'failed' if is_error else 'completed'}",
+            exit_code=resolved_exit_code,
+            summary=f"{tool_name} {'failed' if failed else 'completed'}",
         ),
     )
+
+
+def _llm_resilience_options(profile: ModelProfile) -> dict[str, int | float]:
+    """Bound interactive model retries while allowing transient recovery."""
+    return {
+        "num_retries": (
+            _AGENT_LLM_LOCAL_NUM_RETRIES if profile.is_local else _AGENT_LLM_NUM_RETRIES
+        ),
+        "retry_max_wait": _AGENT_LLM_RETRY_MAX_WAIT_SECONDS,
+        "retry_min_wait": _AGENT_LLM_RETRY_MIN_WAIT_SECONDS,
+        "retry_multiplier": _AGENT_LLM_RETRY_MULTIPLIER,
+        "timeout": (
+            _AGENT_LLM_LOCAL_TIMEOUT_SECONDS if profile.is_local else _AGENT_LLM_TIMEOUT_SECONDS
+        ),
+    }
 
 
 def _backend_error(error: Exception) -> BackendEvent:

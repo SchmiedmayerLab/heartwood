@@ -23,6 +23,7 @@ from heartwood.gateway import (
     ActionSettingsError,
     GatewayAsgiApp,
     ModelArtifactError,
+    ModelCatalogError,
     ModelProfile,
     ModelSettingsError,
     SessionGateway,
@@ -81,7 +82,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "run",
         help="Compatibility alias for one coding-agent task.",
     )
-    run.add_argument("prompt", nargs="?", default="run the synthetic workflow")
+    run.add_argument(
+        "prompt",
+        nargs="?",
+        default="build the synthetic target-condition cohort and report aggregate quality checks",
+    )
     subparsers.add_parser("detect", help="Detect the platform and dataset without running code.")
 
     allow = subparsers.add_parser(
@@ -107,11 +112,31 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     action_set.add_argument("mode", choices=tuple(_ACTION_MODE_ARGUMENTS))
 
-    models = subparsers.add_parser("models", help="Configure OpenHands model profiles.")
+    models = subparsers.add_parser(
+        "models", help="Choose a model connection or manage advanced profiles."
+    )
     model_subparsers = models.add_subparsers(dest="models_command", metavar="<models-command>")
-    model_subparsers.add_parser("list", help="List profiles and common provider presets.")
+    model_subparsers.add_parser("list", help="List connections and the active model profile.")
+    refresh_models = model_subparsers.add_parser(
+        "refresh", help="List every model currently exposed by a connection."
+    )
+    refresh_models.add_argument("connection_id")
+    refresh_models.add_argument("--base-url", help="Server URL for a Custom API connection.")
+    connect_model = model_subparsers.add_parser(
+        "connect", help="Discover, select, and activate one model."
+    )
+    connect_model.add_argument("connection_id")
+    connect_model.add_argument("model_id")
+    connect_model.add_argument("--base-url", help="Server URL for a Custom API connection.")
+    connect_model.add_argument(
+        "--manual",
+        action="store_true",
+        help="Use a Custom API model identifier when its server cannot list models.",
+    )
     model_subparsers.add_parser("artifacts", help="List reviewed local-model artifacts.")
-    add = model_subparsers.add_parser("add", help="Add or update a non-secret model profile.")
+    add = model_subparsers.add_parser(
+        "add", help="Advanced: add or update a non-secret model profile."
+    )
     add.add_argument("profile_id")
     add.add_argument(
         "--model", required=True, help="LiteLLM model id, including its provider prefix."
@@ -137,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add.add_argument("--description")
     add.add_argument("--select", action="store_true", help="Select this profile after saving it.")
-    select = model_subparsers.add_parser("select", help="Select the active profile.")
+    select = model_subparsers.add_parser("select", help="Advanced: select a saved profile.")
     select.add_argument("profile_id")
     validate = model_subparsers.add_parser(
         "validate", help="Check credentials and platform route authorization."
@@ -276,6 +301,31 @@ def _handle_models(
         if command == "artifacts":
             print(_format_model_artifacts(gateway.model_artifacts()))
             return 0
+        if command == "refresh":
+            catalog = gateway.discover_models(
+                args.connection_id,
+                base_url=args.base_url,
+                refresh=True,
+            )
+            print(_format_model_catalog(catalog))
+            return 0
+        if command == "connect":
+            if not args.manual:
+                gateway.discover_models(
+                    args.connection_id,
+                    base_url=args.base_url,
+                    refresh=True,
+                )
+            settings = gateway.connect_model(
+                args.connection_id,
+                args.model_id,
+                base_url=args.base_url,
+                manual=args.manual,
+            )
+            print(_format_model_settings(settings))
+            print()
+            print(_format_model_validation(gateway.validate_model_profile()))
+            return 0
         if command == "add":
             profile = ModelProfile(
                 profile_id=args.profile_id,
@@ -312,7 +362,7 @@ def _handle_models(
             )
             print(f"Model artifact: {path}")
             return 0
-    except (ModelArtifactError, ModelSettingsError) as error:
+    except (ModelArtifactError, ModelCatalogError, ModelSettingsError) as error:
         parser.error(str(error))
     parser.parse_args(["models", "--help"])
     return 0
@@ -350,7 +400,19 @@ def _format_action_settings(settings: dict[str, object]) -> str:
 
 
 def _format_model_settings(settings: dict[str, object]) -> str:
-    lines = ["Heartwood model profiles", ""]
+    lines = ["Heartwood models", "", "Connections:"]
+    connections = settings.get("connections", [])
+    if isinstance(connections, list):
+        for item in connections:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("source")
+            status = item.get("credential_status", "unknown")
+            lines.append(
+                f"  {item.get('connection_id')}  {item.get('label')}  "
+                f"source={source}  credentials={status}"
+            )
+    lines.extend(("", "Active and saved profiles:"))
     active = settings.get("active_profile")
     profiles = settings.get("profiles", [])
     if isinstance(profiles, list) and profiles:
@@ -365,12 +427,27 @@ def _format_model_settings(settings: dict[str, object]) -> str:
             lines.append(f"    policy endpoint: {item.get('policy_endpoint')}")
     else:
         lines.append("No model profiles configured.")
-    lines.extend(("", "Presets:"))
-    presets = settings.get("presets", [])
-    if isinstance(presets, list):
-        for item in presets:
-            if isinstance(item, dict):
-                lines.append(f"  {item.get('preset_id')}: {item.get('label')}")
+    return "\n".join(lines)
+
+
+def _format_model_catalog(catalog: dict[str, object]) -> str:
+    connection = catalog.get("connection", {})
+    if not isinstance(connection, dict):
+        return "Model catalog returned malformed connection metadata."
+    connection_id = connection.get("connection_id")
+    lines = [f"Models available from {connection.get('label')}", ""]
+    models = catalog.get("models", [])
+    if not isinstance(models, list) or not models:
+        return "\n".join((*lines, "No models available."))
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("model_id")
+        display_name = item.get("display_name")
+        label = model_id if display_name in {None, model_id} else f"{display_name} ({model_id})"
+        lines.append(f"  {label}  [{item.get('availability', 'unknown')}]")
+        lines.append(f"    {item.get('reason', '')}")
+    lines.extend(("", f"Select with: heartwood models connect {connection_id} <model-id>"))
     return "\n".join(lines)
 
 

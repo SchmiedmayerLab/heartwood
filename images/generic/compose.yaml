@@ -8,6 +8,7 @@
 
 services:
   heartwood:
+    image: heartwood-runtime-smoke:local
     build:
       context: ../..
       dockerfile: images/generic/Dockerfile
@@ -20,8 +21,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=1g
-      - /home/heartwood/.cache:rw,nosuid,nodev,size=512m
-      - /home/heartwood/.openhands:rw,nosuid,nodev,size=64m
+      - /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+      - /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
     cap_drop:
       - ALL
     security_opt:

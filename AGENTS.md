@@ -25,6 +25,7 @@ When project direction changes, update the relevant design document first, then 
 | Product summary and documentation index | [README.md](README.md) |
 | Documentation roles and status vocabulary | [docs/README.md](docs/README.md) |
 | Current platform implementation and validation status | [docs/platform-support.md](docs/platform-support.md) |
+| Researcher web workflow, model setup, actions, audit, CLI parity, and notebook layout | [docs/web-interface.md](docs/web-interface.md) |
 | Project scope, users, and reference workflow | [design/01-overview.md](design/01-overview.md) |
 | Target platforms and deployment assumptions | [design/02-platforms.md](design/02-platforms.md) |
 | Core architecture, session gateway, adapter SPI, interaction surfaces, and data flow | [design/03-architecture.md](design/03-architecture.md) |

@@ -15,7 +15,14 @@ from typing import cast
 
 import pytest
 
-from heartwood.gateway import RestGateway, RestRequest, RestResponse, SessionGateway
+from heartwood.gateway import (
+    ModelCatalogService,
+    ProviderModel,
+    RestGateway,
+    RestRequest,
+    RestResponse,
+    SessionGateway,
+)
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -114,6 +121,37 @@ def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
     audit_lines = (tmp_path / "session-1" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
     assert response.status_code == 200
     assert len(audit_lines) == 2
+
+
+def test_rest_delivers_generated_scrubbed_audit_export(tmp_path: Path) -> None:
+    rest = RestGateway(_gateway(tmp_path))
+
+    missing = rest.handle(RestRequest(method="GET", path="/sessions/missing/audit-export"))
+    rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.DETECT),
+        )
+    )
+    unavailable = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
+    rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.AUDIT_EXPORT),
+        )
+    )
+    exported = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
+
+    assert missing == RestResponse(status_code=404, body={"error": "unknown session: missing"})
+    assert unavailable == RestResponse(
+        status_code=404,
+        body={"error": "audit export is not available for session: session-1"},
+    )
+    assert exported.status_code == 200
+    assert exported.body["filename"] == "session-1-audit.jsonl"
+    assert "audit.export.recorded" in str(exported.body["content"])
 
 
 def test_pause_and_resume_are_streamed(tmp_path: Path) -> None:
@@ -330,7 +368,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "description": "Local fixture",
     }
 
-    assert rest.handle(RestRequest(method="GET", path="/settings/models")).status_code == 200
+    initial = rest.handle(RestRequest(method="GET", path="/settings/models"))
     saved = rest.handle(
         RestRequest(
             method="POST",
@@ -350,13 +388,90 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     )
     artifacts = rest.handle(RestRequest(method="GET", path="/settings/models/artifacts"))
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/local"))
+    connected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/connect",
+            body=json.dumps({"preset_id": "local-openai-compatible", "model_name": "local-model"}),
+        )
+    )
 
+    assert initial.status_code == 200
+    connections = cast(list[dict[str, JsonValue]], initial.body["connections"])
+    assert [connection["connection_id"] for connection in connections] == [
+        "local",
+        "openai",
+        "anthropic",
+        "custom-api",
+    ]
+    assert all(
+        "token" not in connection and "api_key" not in connection for connection in connections
+    )
     assert saved.status_code == 200
     assert selected.body["active_profile"] == "local"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
-    assert len(cast(list[object], artifacts.body["artifacts"])) == 2
     assert removed.body["active_profile"] is None
+    assert connected.body["active_profile"] == "local-openai-compatible"
+    artifact_ids = {
+        artifact["artifact_id"]
+        for artifact in cast(list[dict[str, JsonValue]], artifacts.body["artifacts"])
+    }
+    assert artifact_ids == {
+        "llama-cpp-stories260k-ci",
+        "qwen25-7b-instruct-q4_k_m",
+        "qwen25-coder-7b-instruct-q4_k_m",
+    }
+
+
+def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) -> None:
+    service = ModelCatalogService(
+        openai_lister=lambda _connection, _api_key: (ProviderModel("local-coder", "Local Coder"),),
+        compatibility=lambda _connection, _model: (
+            "available",
+            "Verified by the pinned OpenHands SDK",
+            32_768,
+            True,
+        ),
+    )
+    gateway = SessionGateway(
+        workspace=tmp_path / "sessions",
+        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        model_catalog_service=service,
+    )
+    rest = RestGateway(gateway)
+
+    catalog = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/catalog",
+            body=json.dumps({"connection_id": "local", "refresh": True}),
+        )
+    )
+    connected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/connect",
+            body=json.dumps({"connection_id": "local", "model_id": "local-coder"}),
+        )
+    )
+
+    assert catalog.status_code == 200
+    assert catalog.body["models"] == [
+        {
+            "model_id": "local-coder",
+            "display_name": "Local Coder",
+            "execution_model": "openai/local-coder",
+            "availability": "available",
+            "reason": "Verified by the pinned OpenHands SDK",
+            "context_window": 32_768,
+            "supports_tools": True,
+        }
+    ]
+    assert connected.status_code == 200
+    assert connected.body["active_profile"] == "local"
+    profiles = cast(list[dict[str, JsonValue]], connected.body["profiles"])
+    assert profiles[0]["model"] == "openai/local-coder"
 
 
 def test_rest_starts_artifact_download_and_validates_payloads(
@@ -368,7 +483,12 @@ def test_rest_starts_artifact_download_and_validates_payloads(
     monkeypatch.setattr(
         gateway,
         "download_model_artifact",
-        lambda artifact_id: {"artifact_id": artifact_id, "status": "downloading"},
+        lambda artifact_id: {
+            "artifact_id": artifact_id,
+            "status": "downloading",
+            "bytes_downloaded": 0,
+            "bytes_total": 1,
+        },
     )
 
     response = rest.handle(
@@ -411,10 +531,56 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
             )
         ),
         rest.handle(RestRequest(method="GET", path="/settings/models/validation")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/connect", body="{")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/connect", body="[]")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/connect", body="{}")),
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/connect",
+                body=json.dumps(
+                    {"preset_id": "openai", "model_name": "model", "api_key": "secret"}
+                ),
+            )
+        ),
+        rest.handle(RestRequest(method="POST", path="/settings/models/catalog", body="{")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/catalog", body="[]")),
+        rest.handle(RestRequest(method="POST", path="/settings/models/catalog", body="{}")),
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/catalog",
+                body=json.dumps({"connection_id": "local", "refresh": "yes"}),
+            )
+        ),
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/connect",
+                body=json.dumps({"connection_id": "local", "model_id": 7}),
+            )
+        ),
         rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/missing")),
     )
 
-    assert [response.status_code for response in responses] == [400, 422, 400, 422, 422, 422, 422]
+    assert [response.status_code for response in responses] == [
+        400,
+        422,
+        400,
+        422,
+        422,
+        422,
+        400,
+        422,
+        422,
+        422,
+        400,
+        422,
+        422,
+        422,
+        422,
+        422,
+    ]
 
 
 def test_gateway_rejects_unknown_backend_configuration(tmp_path: Path) -> None:

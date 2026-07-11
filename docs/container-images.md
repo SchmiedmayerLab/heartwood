@@ -49,7 +49,7 @@ Provider configuration is runtime state:
 
 Model profiles and the selected action-confirmation mode are stored in separate mode-`0600` JSON files outside session directories. Neither file contains credential values. Deployment policy must allow the selected capability tier, confirmation mode, and non-secret credential reference in addition to the endpoint. `credential_allowlist` uses environment-variable names, absolute mounted-file paths, or `managed-identity`. Valid settings cannot bypass a policy denial.
 
-For an environment-referenced provider key, Heartwood passes only the active value to the in-process OpenHands model client and blanks every configured model-key environment reference in OpenHands terminal subprocesses. A mounted credential file or platform managed identity available to the container user is not isolated from agent-executed code by this interactive-container architecture. Use least-privilege identities and a deployment-owned process, remote-workspace, or platform boundary when a model credential must be inaccessible to coding tools.
+For an environment-referenced provider key, Heartwood passes only the active value to the in-process OpenHands model client and blanks every configured model-key environment reference in OpenHands terminal subprocesses. A mounted credential file or platform-managed identity available to the container user is not isolated from agent-executed code by this interactive-container architecture. Use least-privilege identities and a deployment-owned process, remote-workspace, or platform boundary when a model credential must be inaccessible to coding tools.
 
 For local models, use one of three equivalent deployment patterns:
 
@@ -73,6 +73,8 @@ docker run --rm -p 127.0.0.1:8767:8767 \
 
 The service starts without a secret or model. Configure a profile from the web settings panel or the CLI. Action confirmation defaults to **Ask Every Time**; generic synthetic development can select **Auto-Approve Low Risk** through the same panel or `heartwood actions`. To use a runtime credential, pass an environment variable or mount a secret file at container start. Never use Docker `ARG` or Dockerfile `ENV` for a secret value.
 
+The state volume contains sessions, non-secret model and action settings, installed Skills, OpenHands state, workspaces, and audit data. The separate model volume allows large weights to use a different quota and retention policy and also owns Hugging Face transfer metadata through `HF_HOME`. Override `HEARTWOOD_MODEL_CACHE` and `HF_HOME` together when mounting a different model path. [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) tracks a canonical versioned root and one-volume default while preserving the split cache as an advanced option; the current two-volume layout remains the supported contract until that migration is implemented and restart-tested.
+
 Run an explicitly mounted local model in the same container:
 
 ```bash
@@ -85,7 +87,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
-The local server binds to loopback by default. Configure an OpenAI-compatible profile with base URL `http://127.0.0.1:8765/v1`, policy endpoint `http://127.0.0.1:8765/v1/chat/completions`, and credential kind `none`.
+The local server binds to loopback by default. Use `heartwood models refresh local` and `heartwood models connect local <model-id>` to select the identifier reported by its OpenAI-compatible model-list route.
 
 CPU and memory requirements are determined by the selected model and runtime, not the Heartwood image. The catalog records a reviewed envelope for each optional artifact. GPU acceleration requires a separately installed and tested GPU-capable runtime; attaching a GPU does not make the baseline CPU `llama-server` use it.
 
@@ -111,8 +113,9 @@ Pull requests run:
 - Docker Buildx checks for both Dockerfiles;
 - the generic runtime on native AMD64 and ARM64 runners;
 - a no-network Compose smoke that uses the deterministic OpenAI-compatible fixture through a real OpenHands `Conversation`;
+- fresh named-volume creation and cross-container recovery for state and model storage;
 - OpenHands native loading of every repository-verified Skill;
-- model profile and artifact integrity tests;
+- model connection, catalog, profile, and artifact integrity tests;
 - a no-weight Terra CI image built through the production platform Dockerfile;
 - Terra Jupyter contract, platform payload, inherited entrypoint, Leonardo route, and OpenHands loopback smokes.
 

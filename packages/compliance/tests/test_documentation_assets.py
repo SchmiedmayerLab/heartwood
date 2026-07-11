@@ -113,14 +113,31 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "the shell does not encode a fixed cohort" in architecture
     assert "The browser does not synthesize action outcomes" in architecture
     assert "Compliance evidence packages remain maintainer or reviewer tooling" in architecture
-    assert "target presentation contract for the planned web work" in architecture
-    assert "current web UI is a functional conversation and configuration surface" in architecture
+    assert "defines the presentation contract" in architecture
+    assert "gateway-owned session metadata" in architecture
     assert "## Priority 2 — Researcher Web Experience" in roadmap
     assert "Represent absent evidence as unknown or unconfigured" in roadmap
     assert "no model capability claim without benchmark evidence" in roadmap
     assert "Do not place compliance evidence packages" in roadmap
-    assert "session-oriented researcher experience" in readme
-    assert "planned work and is not part of the current implementation" in readme
+    assert "gateway-owned session lifecycle" in readme
+    assert "Boundary and workflow labels require typed gateway evidence" in readme
+
+
+def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None:
+    web_interface = _read("docs/web-interface.md")
+    terra = _read("docs/terra-jupyter-demo.md")
+    package = json.loads(_read("packages/webui/package.json"))
+    assets = _repo_root() / "docs" / "assets"
+
+    assert "production web build, gateway, OpenHands SDK adapter" in web_interface
+    assert "not model quality or live Terra behavior" in web_interface
+    assert "npm run screenshots:docs" in web_interface
+    assert "responsive layout, not live Leonardo proxy" in terra
+    assert package["scripts"]["screenshots:docs"].endswith("../../docs/assets")
+    for filename in ("web-reference-analysis.png", "web-notebook-viewport.png"):
+        screenshot = assets / filename
+        assert screenshot.stat().st_size > 1_000
+        assert (assets / f"{filename}.license").is_file()
 
 
 def test_project_markdown_contains_no_process_artifacts() -> None:
@@ -156,9 +173,13 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert "jupyter_proxy_url(port=8767)" in combined
     assert "start_web_ui.sh" in combined
     assert "session.detect()" in combined
-    assert 'session.run("run the synthetic workflow")' in combined
+    assert "target-condition cohort" in combined
+    assert "session.run(prompt)" in combined
+    assert "session.approve" in combined
+    assert 'source_participant_count"] == 24' in combined
+    assert '"name": "heartwood"' in _read("docs/terra-jupyter-demo.ipynb")
     assert "session.audit_export()" in combined
-    assert "allow or reject" in combined
+    assert "Review the printed pending action" in combined
     for cell in cells:
         if cell["cell_type"] == "code":
             assert cell["execution_count"] is None
@@ -174,9 +195,10 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
         assert "model weights" in document.lower()
         assert "OpenHands" in document
         assert "policy" in document.lower()
-    assert "heartwood models add" in readme
+    assert "heartwood models refresh local" in readme
+    assert "heartwood models connect local <model-id>" in readme
     assert "heartwood models download" in readme
-    assert "environment variables, mounted files, or managed identity" in readme
+    assert "environment variables, mounted files, managed identity" in readme
     assert "business associate agreement" in readme
     assert "pushes each result by digest" in container
     assert "persistent `-amd64` and `-arm64` helper tags" in container
@@ -189,11 +211,31 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     assert "reachability graph" in container
     assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
     assert "deterministic loopback model fixture" in local
+    assert "allowed_model_catalog_endpoints" in local
+    assert "mounted capable-model test" in local
+    assert "capable_model_e2e.sh" in local
     assert "`AlwaysConfirm`" in local
     for stale in ("edge-smoke", "edge-providers", "edge-coder-7b", "edge-terra-smoke"):
         assert stale not in readme
         assert stale not in container
         assert stale not in local
+
+
+def test_model_connection_guide_defines_shared_provider_and_platform_contracts() -> None:
+    guide = _read("docs/model-connections.md")
+
+    assert "heartwood.model-connections.v1" in guide
+    assert "heartwood models refresh <connection-id>" in guide
+    assert "heartwood models connect <connection-id> <model-id>" in guide
+    assert "Official OpenAI model-list operation" in guide
+    assert "Official Anthropic model-list operation" in guide
+    assert "HEARTWOOD_MODEL_CONNECTIONS" in guide
+    assert "allowed_model_catalog_endpoints" in guide
+    assert "allowed_model_endpoints" in guide
+    assert "api_version" in guide
+    assert "aws_region_name" in guide
+    assert "aws_profile_name" in guide
+    assert "The CLI has no token argument" in guide
 
 
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
@@ -205,10 +247,16 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
     assert "Leonardo rejects an Open Container Initiative index" in runbook
     assert "heartwood-workspace/models" in runbook
-    assert "models add institutional" in runbook
-    assert "models add local" in runbook
+    assert "models refresh <connection-id>" in runbook
+    assert "models connect" in runbook
+    assert "models refresh local" in runbook
+    assert "HEARTWOOD_MODEL_CONNECTIONS" in runbook
     assert "business associate agreement" in runbook
-    assert "Allow once or Reject" in runbook
+    assert "Allow once" in runbook
+    assert "Reject" in runbook
+    assert "WORKSPACE_BUCKET" in runbook
+    assert "24 synthetic people" in runbook
+    assert "target-condition cohort" in runbook
     assert "custom image and base image digests" in runbook
     assert "real Terra workspace validation remains required" in runbook
     assert "edge-terra-coder" not in runbook

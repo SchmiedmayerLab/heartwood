@@ -41,7 +41,7 @@ export const syntheticEvents = (): SessionEvent[] => [
   event(2, "user_message.recorded", {
     actor_id: "human",
     command_id: "session-test-chat-000002",
-    content: "Inspect the synthetic workspace",
+    content: "Build the synthetic target-condition cohort",
   }),
   event(3, "model_call.decision.recorded", {
     decision: {
@@ -60,21 +60,21 @@ export const syntheticEvents = (): SessionEvent[] => [
     },
   }),
   event(4, "agent_message.emitted", {
-    content: "I will inspect the synthetic workspace.",
+    content: "I will run the repository-verified cohort Skill.",
   }),
   event(5, "tool_call.proposed", {
     risk: "low",
-    summary: "write a synthetic workspace summary artifact",
+    summary: "build the aggregate synthetic target-condition cohort",
     tool_call_id: "session-test-toolcall-0",
-    tool_name: "heartwood.local.write_summary",
+    tool_name: "terminal",
   }),
   event(6, "confirmation.requested", {
     request: {
       request_id: "session-test-toolcall-0-confirm",
       risk: "low",
-      summary: "write a synthetic workspace summary artifact",
+      summary: "build the aggregate synthetic target-condition cohort",
       tool_call_id: "session-test-toolcall-0",
-      tool_name: "heartwood.local.write_summary",
+      tool_name: "terminal",
     },
   }),
 ];

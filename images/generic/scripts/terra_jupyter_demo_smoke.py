@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -29,13 +30,31 @@ from typing import ClassVar
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
 GATEWAY_HOST = "127.0.0.1"
-GATEWAY_PORT = int(os.environ.get("HEARTWOOD_TERRA_DEMO_GATEWAY_PORT", "8767"))
-PROXY_PORT = int(os.environ.get("HEARTWOOD_TERRA_DEMO_PROXY_PORT", "8768"))
+
+
+def _loopback_port(env_name: str, *, excluded: frozenset[int] = frozenset()) -> int:
+    configured = os.environ.get(env_name)
+    if configured is not None:
+        port = int(configured)
+        if port in excluded:
+            raise ValueError(f"{env_name} duplicates another Terra demo port")
+        return port
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind((GATEWAY_HOST, 0))
+            port = int(listener.getsockname()[1])
+        if port not in excluded:
+            return port
+
+
+GATEWAY_PORT = _loopback_port("HEARTWOOD_TERRA_DEMO_GATEWAY_PORT")
+PROXY_PORT = _loopback_port("HEARTWOOD_TERRA_DEMO_PROXY_PORT", excluded=frozenset({GATEWAY_PORT}))
 SERVICE_PREFIX = os.environ.get("HEARTWOOD_TERRA_DEMO_SERVICE_PREFIX", "/user/synthetic/")
 SESSION_ID = os.environ.get("HEARTWOOD_TERRA_DEMO_SESSION_ID", "terra-demo-smoke")
 STATE_ROOT = Path(os.environ.get("HEARTWOOD_TERRA_DEMO_STATE_ROOT", "/tmp/heartwood-terra-demo"))
 WORKSPACE = STATE_ROOT / "sessions"
 WEB_ROOT = Path(os.environ.get("HEARTWOOD_WEB_ROOT", "/opt/heartwood/packages/webui/dist"))
+RUNTIME_ROOT = Path(os.environ.get("HEARTWOOD_RUNTIME_ROOT", "/opt/heartwood"))
 VERBOSE = os.environ.get("HEARTWOOD_TERRA_DEMO_VERBOSE") == "1"
 REQUEST_TIMEOUT = float(os.environ.get("HEARTWOOD_TERRA_DEMO_REQUEST_TIMEOUT", "30"))
 STARTUP_TIMEOUT = float(os.environ.get("HEARTWOOD_TERRA_DEMO_STARTUP_TIMEOUT", "60"))
@@ -48,12 +67,18 @@ def main() -> int:
 
     shutil.rmtree(STATE_ROOT, ignore_errors=True)
     WORKSPACE.mkdir(parents=True, exist_ok=True)
+    input_root = STATE_ROOT / "workspaces" / SESSION_ID / "input"
+    input_root.mkdir(parents=True, exist_ok=True)
+    fixture_root = RUNTIME_ROOT / "fixtures" / "synthetic" / "omop-like"
+    for filename in ("person.csv", "condition_occurrence.csv"):
+        source = fixture_root / filename
+        shutil.copy2(source, input_root / source.name)
 
     gateway = _start_gateway()
     proxy: ThreadingHTTPServer | None = None
     try:
         _trace("waiting for gateway")
-        _wait_for_url(_gateway_url("/"))
+        _wait_for_url(_gateway_url("/"), process=gateway)
         _trace("starting proxy")
         proxy = _start_proxy()
         external_base = _external_base_url()
@@ -242,7 +267,13 @@ def _verify_gateway_session(external_base: str) -> None:
         data=_gateway_command(
             "chat",
             "terra-demo-smoke-chat",
-            {"prompt": "Propose the bounded synthetic gateway action."},
+            {
+                "prompt": (
+                    "Build the synthetic target-condition cohort for concept 201826 with the "
+                    "repository-verified cohort Skill. Use the localized OMOP reference tables, "
+                    "minimum age 18, aggregate count floor 20, and write cohort-summary.json."
+                )
+            },
         ),
     )
     task_kinds = {event["kind"] for event in task["events"]}
@@ -256,7 +287,7 @@ def _verify_gateway_session(external_base: str) -> None:
             "approve",
             "terra-demo-smoke-allow",
             {
-                "target_id": "call-heartwood-offline-smoke",
+                "target_id": "call-heartwood-reference-analysis",
                 "target_type": "tool-call",
             },
         ),
@@ -266,6 +297,15 @@ def _verify_gateway_session(external_base: str) -> None:
         raise AssertionError(
             f"gateway allow did not execute the pending OpenHands action: {sorted(allowed_kinds)}"
         )
+    artifact = STATE_ROOT / "workspaces" / SESSION_ID / "cohort-summary.json"
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    summary = payload["summary"]
+    if (
+        summary.get("source_condition_occurrence_count") != 39
+        or summary.get("participant_count") != 20
+        or summary.get("condition_occurrence_count") != 35
+    ):
+        raise AssertionError(f"gateway produced an unexpected reference cohort: {summary}")
 
 
 def _verify_notebook_api() -> None:
@@ -280,10 +320,12 @@ def _verify_notebook_api() -> None:
         raise AssertionError("notebook API did not project detection events")
 
 
-def _wait_for_url(url: str) -> None:
+def _wait_for_url(url: str, *, process: subprocess.Popen[str] | None = None) -> None:
     deadline = time.time() + STARTUP_TIMEOUT
     last_error: BaseException | None = None
     while time.time() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(f"gateway exited before becoming ready: {process.returncode}")
         try:
             _request_text(url, timeout=1)
             return

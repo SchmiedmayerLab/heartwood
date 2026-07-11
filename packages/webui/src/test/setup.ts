@@ -7,3 +7,15 @@
  */
 
 import "@testing-library/jest-dom/vitest";
+import { vi } from "vitest";
+
+class ResizeObserverStub implements ResizeObserver {
+  disconnect = vi.fn();
+
+  observe = vi.fn();
+
+  unobserve = vi.fn();
+}
+
+globalThis.ResizeObserver = ResizeObserverStub;
+Element.prototype.scrollIntoView = vi.fn();

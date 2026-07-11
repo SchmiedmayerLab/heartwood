@@ -51,13 +51,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
     && useradd --system --uid "${HEARTWOOD_UID}" --gid heartwood --create-home --home-dir /home/heartwood --shell /bin/bash heartwood \
-    && mkdir -p /opt/heartwood \
-    && chown heartwood:heartwood /opt/heartwood \
+    && mkdir -p \
+      /opt/heartwood \
+      /home/heartwood/.cache/heartwood/models \
+      /home/heartwood/.local/share/heartwood \
+      /home/heartwood/.openhands \
+    && chown -R heartwood:heartwood /opt/heartwood /home/heartwood \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates \
       curl \
       git \
+      jq \
       libgomp1 \
       tmux \
     && rm -rf /var/lib/apt/lists/*
@@ -76,6 +81,8 @@ RUN set -eux; \
     tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
     rm /tmp/llama.cpp.tar.gz; \
     chown -R heartwood:heartwood /opt/llama.cpp
+
+ENV HF_HOME=/home/heartwood/.cache/heartwood/models/.huggingface
 
 WORKDIR /opt/heartwood
 
