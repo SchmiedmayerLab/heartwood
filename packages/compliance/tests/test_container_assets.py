@@ -238,6 +238,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "verify_registry_manifest.py" in publish
     assert "--prefer-index=false" in publish
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
+    assert publish.count("^sha256:[0-9a-f]{64}$") == 2
     assert publish.count("if: github.ref == 'refs/heads/main'") == 3
     assert "immutable generic commit tag already exists with a different manifest" in publish
     assert "immutable Terra commit tag already exists with a different digest" in publish
@@ -370,6 +371,31 @@ JUPYTER_PATH = ["/opt/conda/share/jupyter"]
             capture_output=True,
             text=True,
         )
+        invalid_manifest = tmp_path / "invalid-platforms.toml"
+        invalid_manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                'runtime_tag = "edge-terra"',
+                'runtime_tag = "invalid:tag"',
+            ),
+            encoding="utf-8",
+        )
+        invalid_declared_tag = subprocess.run(
+            [
+                sys.executable,
+                str(_repo_root() / "images/platform/scripts/verify_registry_manifest.py"),
+                "--manifest",
+                str(invalid_manifest),
+                "--platform",
+                "terra",
+                "--git-sha",
+                "abc123",
+                "--registry-scheme",
+                "http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -379,6 +405,8 @@ JUPYTER_PATH = ["/opt/conda/share/jupyter"]
     assert candidate.returncode == 0, candidate.stdout + candidate.stderr
     assert invalid.returncode != 0
     assert "invalid registry tag or sha256 digest" in invalid.stderr
+    assert invalid_declared_tag.returncode != 0
+    assert "invalid registry tag or sha256 digest" in invalid_declared_tag.stderr
     assert completed.stdout.count("Verifying") == 2
     assert f"test/heartwood@{candidate_digest}" in candidate.stdout
     assert _RegistryHandler.requested_accept_headers == [

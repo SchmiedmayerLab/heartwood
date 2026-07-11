@@ -375,7 +375,12 @@ def expected_references(
         if not isinstance(value, str):
             continue
         rendered = value.replace("<git-sha>", git_sha).replace("<image-channel>", image_channel)
-        references.append(ExpectedReference(label=label, value=rendered))
+        references.append(
+            ExpectedReference(
+                label=label,
+                value=validate_registry_reference(rendered),
+            )
+        )
     if not references:
         raise SystemExit("platform manifest does not define any runtime or smoke tags")
     return references

@@ -65,7 +65,10 @@ jobs:
             --metadata-file /tmp/metadata.json \
             runtime
           digest="$(jq -r '.runtime["containerimage.digest"]' /tmp/metadata.json)"
-          test "${digest}" != "null"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "generic build returned an invalid image digest: ${digest}" >&2
+            exit 1
+          fi
           mkdir -p /tmp/digests
           touch "/tmp/digests/${digest#sha256:}"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
@@ -262,7 +265,10 @@ jobs:
             --metadata-file /tmp/terra-metadata.json \
             terra-runtime
           digest="$(jq -r '.terra-runtime["containerimage.digest"]' /tmp/terra-metadata.json)"
-          test "${digest}" != "null"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Terra build returned an invalid image digest: ${digest}" >&2
+            exit 1
+          fi
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
       - name: Verify staged Terra registry contract
