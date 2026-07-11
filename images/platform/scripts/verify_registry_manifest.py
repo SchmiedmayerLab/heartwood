@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Verify published platform image tags against their registry manifest contract."""
+"""Verify platform image registry references against their manifest contract."""
 
 # ruff: noqa: D101,D102,D103,D107
 
@@ -35,12 +35,14 @@ DEFAULT_CONFIG_MEDIA_TYPES = {
     DOCKER_IMAGE_MANIFEST: DOCKER_CONFIG,
     OCI_IMAGE_MANIFEST: OCI_CONFIG,
 }
+TAG_REFERENCE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+DIGEST_REFERENCE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
-class ExpectedTag:
+class ExpectedReference:
     label: str
-    tag: str
+    value: str
 
 
 @dataclass(frozen=True)
@@ -85,10 +87,10 @@ class RegistryClient:
             except urllib.error.HTTPError as retry_error:
                 raise registry_error(request.full_url, retry_error) from retry_error
 
-    def manifest_path(self, tag: str) -> str:
+    def manifest_path(self, reference: str) -> str:
         repository = urllib.parse.quote(self.repository, safe="/")
-        encoded_tag = urllib.parse.quote(tag, safe="")
-        return f"/v2/{repository}/manifests/{encoded_tag}"
+        encoded_reference = urllib.parse.quote(reference, safe=":")
+        return f"/v2/{repository}/manifests/{encoded_reference}"
 
     def blob_path(self, digest: str) -> str:
         repository = urllib.parse.quote(self.repository, safe="/")
@@ -137,6 +139,12 @@ def parse_bearer_challenge(challenge: str) -> dict[str, str]:
     return dict(re.findall(r'([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"', challenge[len("Bearer ") :]))
 
 
+def validate_registry_reference(reference: str) -> str:
+    if TAG_REFERENCE_PATTERN.fullmatch(reference) or DIGEST_REFERENCE_PATTERN.fullmatch(reference):
+        return reference
+    raise SystemExit(f"invalid registry tag or sha256 digest: {reference}")
+
+
 def registry_error(url: str, error: urllib.error.HTTPError) -> SystemExit:
     details = error.read().decode("utf-8", "replace")
     return SystemExit(f"{url} returned HTTP {error.code}: {details}")
@@ -151,18 +159,19 @@ def _read_json_response(request: urllib.request.Request) -> RegistryResponse:
     return RegistryResponse(content_type=content_type, payload=payload)
 
 
-def verify_tag(
+def verify_reference(
     client: RegistryClient,
-    tag: ExpectedTag,
+    reference: ExpectedReference,
     platform: dict[str, Any],
     expected_media_type: str,
     expected_platforms: set[str],
     expected_config_media_type: str | None,
     allow_non_platform_manifests: bool,
 ) -> None:
-    image_ref = f"{client.registry}/{client.repository}:{tag.tag}"
-    print(f"Verifying {tag.label} platform manifest for {image_ref}")
-    response = client.fetch_json(client.manifest_path(tag.tag), accept=expected_media_type)
+    separator = "@" if reference.value.startswith("sha256:") else ":"
+    image_ref = f"{client.registry}/{client.repository}{separator}{reference.value}"
+    print(f"Verifying {reference.label} platform manifest for {image_ref}")
+    response = client.fetch_json(client.manifest_path(reference.value), accept=expected_media_type)
     manifest = response.payload
 
     if response.content_type != expected_media_type:
@@ -350,8 +359,10 @@ def verify_image_index(
         )
 
 
-def expected_tags(platform: dict[str, Any], image_channel: str, git_sha: str) -> list[ExpectedTag]:
-    tags: list[ExpectedTag] = []
+def expected_references(
+    platform: dict[str, Any], image_channel: str, git_sha: str
+) -> list[ExpectedReference]:
+    references: list[ExpectedReference] = []
     for key, label in (
         ("runtime_tag", "runtime moving tag"),
         ("commit_runtime_tag", "runtime commit tag"),
@@ -364,10 +375,10 @@ def expected_tags(platform: dict[str, Any], image_channel: str, git_sha: str) ->
         if not isinstance(value, str):
             continue
         rendered = value.replace("<git-sha>", git_sha).replace("<image-channel>", image_channel)
-        tags.append(ExpectedTag(label=label, tag=rendered))
-    if not tags:
+        references.append(ExpectedReference(label=label, value=rendered))
+    if not references:
         raise SystemExit("platform manifest does not define any runtime or smoke tags")
-    return tags
+    return references
 
 
 def load_platform(manifest_path: Path, platform_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -399,7 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--platform", required=True)
     parser.add_argument("--image-name")
     parser.add_argument("--image-channel")
-    parser.add_argument("--git-sha", required=True)
+    parser.add_argument("--git-sha")
+    parser.add_argument(
+        "--reference",
+        action="append",
+        help="Explicit tag or sha256 digest to verify instead of the platform's published tags.",
+    )
     parser.add_argument("--registry-scheme", choices=["https", "http"], default="https")
     return parser
 
@@ -423,13 +439,28 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("platform manifest config_media_type must be a string")
 
     supported_platforms = parse_platforms(platform)
-    tags = expected_tags(platform, image_channel=image_channel, git_sha=args.git_sha)
+    if args.reference:
+        references = [
+            ExpectedReference(
+                label="explicit reference",
+                value=validate_registry_reference(reference),
+            )
+            for reference in args.reference
+        ]
+    else:
+        if args.git_sha is None:
+            raise SystemExit("--git-sha is required when --reference is not supplied")
+        references = expected_references(
+            platform,
+            image_channel=image_channel,
+            git_sha=args.git_sha,
+        )
     allow_non_platform_manifests = bool(platform.get("allow_non_platform_manifests", False))
     client = RegistryClient(image_name=image_name, scheme=args.registry_scheme)
-    for tag in tags:
-        verify_tag(
+    for reference in references:
+        verify_reference(
             client=client,
-            tag=tag,
+            reference=reference,
             platform=platform,
             expected_media_type=expected_media_type,
             expected_platforms=supported_platforms,

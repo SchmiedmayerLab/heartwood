@@ -30,7 +30,7 @@ Dependencies are admitted only when they provide a maintained capability that is
 - **Web UI:** locked npm install, Prettier, ESLint, strict TypeScript, Vitest coverage, asset build, npm license inventory, npm audit, Playwright, packaged-gateway smoke, and Jupyter-proxy smoke.
 - **Security:** CodeQL, Gitleaks, Dependabot, and public-repository dependency review.
 - **Containers:** native AMD64 and ARM64 no-weight builds, BuildKit checks, offline OpenHands allow/reject integration, a separately mounted llama.cpp fixture, Terra Jupyter contracts, and publication manifest validation.
-- **Publication:** generic architecture digests are merged into `edge` and immutable commit tags with software bill of materials and provenance attestations. Terra publishes a separate Docker schema-2 AMD64 manifest without attestations because Leonardo rejects the generic Open Container Initiative index shape.
+- **Publication:** generic and Terra builds stage untagged content-addressed manifests, validate the exact staged digests, create and verify immutable commit tags, refuse to overwrite a commit tag with different descriptors, and move `edge` or `edge-terra` only as the final promotion step. Generic architecture digests are merged with software bill of materials and provenance attestations; Terra preserves a Docker schema-2 AMD64 manifest without attestations because Leonardo rejects the generic Open Container Initiative index shape.
 
 The workflows use least-privilege permissions and do not expose repository secrets to pull-request jobs. Package publication uses `GITHUB_TOKEN` only in the main publication workflow.
 
@@ -44,4 +44,4 @@ Pure-code safety paths have enforced coverage, while CLI, notebook, REST, transp
 
 ## Supply Chain
 
-Application dependencies are hash-locked, image base versions and downloaded runtime archives are pinned, and optional model artifacts require immutable revisions, byte sizes, SHA-256 digests, and license metadata. Published images contain no credentials or model weights. BuildKit attestations are implemented for the generic image; cryptographic image signing, real Skill signature verification, generated notices, formal release channels, and signature-policy enforcement remain future release controls.
+Application dependencies are hash-locked, image base versions and downloaded runtime archives are pinned, and optional model artifacts require immutable revisions, byte sizes, SHA-256 digests, and license metadata. Published images contain no credentials or model weights. BuildKit attestations are implemented for the generic image. Failed staging digests remain untagged and cannot move a public channel; graph-aware GHCR retention, cryptographic image signing, real Skill signature verification, generated notices, formal release channels, and signature-policy enforcement remain future release controls.
