@@ -644,9 +644,11 @@ def _validate_base_url(value: str) -> None:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ModelCatalogError("base_url cannot contain credentials, a query, or a fragment")
     try:
-        _ = parsed.port
+        port = parsed.port
     except ValueError as error:
         raise ModelCatalogError("base_url contains an invalid port") from error
+    if port == 0:
+        raise ModelCatalogError("base_url contains an invalid port")
     if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
         raise ModelCatalogError("remote model connections require HTTPS")
 

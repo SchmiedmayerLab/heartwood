@@ -295,6 +295,8 @@ def test_custom_api_requires_https_or_loopback_and_manual_is_scoped() -> None:
         custom_model_connection("http://models.example/v1", has_token=True)
     with pytest.raises(ModelCatalogError, match="invalid port"):
         custom_model_connection("https://models.example:invalid/v1", has_token=True)
+    with pytest.raises(ModelCatalogError, match="invalid port"):
+        custom_model_connection("https://models.example:0/v1", has_token=True)
     with pytest.raises(ModelCatalogError, match="only for Custom API"):
         service.manual(_openai_connection(), "model")
 
