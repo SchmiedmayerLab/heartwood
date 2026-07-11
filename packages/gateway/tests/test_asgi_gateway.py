@@ -77,6 +77,63 @@ def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> 
     ]
 
 
+def test_asgi_session_lifecycle_does_not_fall_through_to_static_assets(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        static_dir = tmp_path / "dist"
+        static_dir.mkdir()
+        (static_dir / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+        app = GatewayAsgiApp(
+            _gateway(tmp_path / "sessions"),
+            static_dir=static_dir,
+            static_base_path="/proxy/8767",
+        )
+        created = await _http_call(
+            app,
+            method="POST",
+            path="/proxy/8767/sessions",
+            body=json.dumps({"title": "Proxy session"}).encode(),
+        )
+        listed = await _http_call(
+            app,
+            method="GET",
+            path="/proxy/8767/sessions",
+        )
+        return created, listed
+
+    created, listed = asyncio.run(scenario())
+    created_body = json.loads(cast(bytes, created[1]["body"]).decode("utf-8"))
+    listed_body = json.loads(cast(bytes, listed[1]["body"]).decode("utf-8"))
+
+    assert created[0]["status"] == 201
+    assert listed[0]["status"] == 200
+    assert listed_body["sessions"] == [created_body]
+
+
+def test_asgi_delivers_generated_audit_export(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        app = GatewayAsgiApp(_gateway(tmp_path))
+        await _http_call(
+            app,
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.AUDIT_EXPORT),
+        )
+        return await _http_call(
+            app,
+            method="GET",
+            path="/sessions/session-1/audit-export",
+        )
+
+    sent = asyncio.run(scenario())
+    body = json.loads(cast(bytes, sent[1]["body"]).decode("utf-8"))
+
+    assert sent[0]["status"] == 200
+    assert body["filename"] == "session-1-audit.jsonl"
+    assert "audit.export.recorded" in body["content"]
+
+
 def test_asgi_http_replays_session_events(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
         gateway = _gateway(tmp_path)

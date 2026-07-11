@@ -11,15 +11,49 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import shlex
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import ClassVar
+
+
+def _tool_result_failed(messages: list[object]) -> bool:
+    serialized = json.dumps(messages).lower()
+    exit_codes = {
+        int(code)
+        for pattern in (r"exit code\s+(-?\d+)", r'"exit_code"\s*:\s*(-?\d+)')
+        for code in re.findall(pattern, serialized)
+    }
+    return '"is_error": true' in serialized or any(code != 0 for code in exit_codes)
 
 
 class LocalModelHandler(BaseHTTPRequestHandler):
     """Handle one content-free chat-completion request for the stub profile."""
 
     request_log: ClassVar[Path]
+
+    def do_GET(self) -> None:
+        """Return the model catalog used by every Heartwood client."""
+        if self.path != "/v1/models":
+            self.send_response(404)
+            self.end_headers()
+            return
+        self._send_json(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "heartwood-local-runtime",
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "heartwood",
+                    }
+                ],
+            }
+        )
 
     def do_POST(self) -> None:
         """Return a deterministic stub response."""
@@ -44,25 +78,129 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 )
                 + "\n"
             )
-        has_tool_result = any(
-            isinstance(message, dict) and message.get("role") == "tool" for message in messages
+        researcher_messages = [
+            message
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "user"
+        ]
+        latest_researcher_message = researcher_messages[-1] if researcher_messages else {}
+        serialized_researcher_message = json.dumps(latest_researcher_message).lower()
+        latest_researcher_index = max(
+            (
+                index
+                for index, candidate in enumerate(messages)
+                if isinstance(candidate, dict) and candidate.get("role") == "user"
+            ),
+            default=-1,
         )
-        medium_risk = "medium-risk network check" in json.dumps(messages).lower()
+        tool_results = [
+            message
+            for index, message in enumerate(messages)
+            if index > latest_researcher_index
+            and isinstance(message, dict)
+            and message.get("role") == "tool"
+        ]
+        has_tool_result = bool(tool_results)
+        medium_risk = "medium-risk network check" in serialized_researcher_message
+        task_kind = (
+            "cohort"
+            if "target-condition cohort" in serialized_researcher_message
+            else "baseline"
+            if "age-only baseline" in serialized_researcher_message
+            else "export"
+            if "aggregate export" in serialized_researcher_message
+            else "failure"
+            if "failing-action" in serialized_researcher_message
+            else "generic"
+        )
         message: dict[str, object]
         finish_reason: str
         if has_tool_result:
+            final_messages = {
+                "cohort": "The synthetic target-condition cohort summary is ready for review.",
+                "baseline": "The training-only age baseline is ready for review.",
+                "export": "The count-floor-controlled aggregate export is ready for review.",
+                "failure": "The synthetic failure check unexpectedly succeeded.",
+                "generic": "Synthetic local model response.",
+            }
             message = {
                 "role": "assistant",
-                "content": "Synthetic local model response.",
+                "content": (
+                    "The requested tool action failed; review the terminal outcome before retrying."
+                    if _tool_result_failed(tool_results)
+                    else final_messages[task_kind]
+                ),
             }
             finish_reason = "stop"
         else:
+            runtime_root = Path(os.environ.get("HEARTWOOD_RUNTIME_ROOT", Path.cwd())).resolve()
+            cohort_command = " ".join(
+                (
+                    shlex.quote(sys.executable),
+                    shlex.quote(
+                        str(runtime_root / "skills/verified/omop-cohort-summary/scripts/run.py")
+                    ),
+                    "--data-root",
+                    "input",
+                    "--target-condition-concept-id 201826",
+                    "--minimum-age 18",
+                    "--aggregate-count-floor 20",
+                    "--output cohort-summary.json",
+                )
+            )
+            baseline_command = " ".join(
+                (
+                    shlex.quote(sys.executable),
+                    shlex.quote(
+                        str(runtime_root / "skills/verified/baseline-model/scripts/run.py")
+                    ),
+                    "--data-root",
+                    "input",
+                    "--target-condition-concept-id 201826",
+                    "--output baseline-model.json",
+                )
+            )
+            export_command = " ".join(
+                (
+                    shlex.quote(sys.executable),
+                    shlex.quote(
+                        str(runtime_root / "skills/verified/aggregate-export/scripts/run.py")
+                    ),
+                    "--summary cohort-summary.json",
+                    "--aggregate-count-floor 20",
+                    "--output aggregate-export.json",
+                )
+            )
+            commands = {
+                "cohort": cohort_command,
+                "baseline": baseline_command,
+                "export": export_command,
+                "failure": "false",
+                "generic": (
+                    'test -z "${HEARTWOOD_UNUSED_MODEL_API_KEY:-}" '
+                    "&& printf heartwood-openhands-action"
+                ),
+            }
+            call_ids = {
+                "cohort": "call-heartwood-reference-analysis",
+                "baseline": "call-heartwood-baseline-analysis",
+                "export": "call-heartwood-aggregate-export",
+                "failure": "call-heartwood-failing-action",
+                "generic": "call-heartwood-offline-smoke",
+            }
+            summaries = {
+                "cohort": "build the aggregate synthetic target-condition cohort",
+                "baseline": "fit the training-only synthetic age baseline",
+                "export": "apply the aggregate count floor and prepare the export",
+                "failure": "run the failing synthetic command",
+                "generic": "run a bounded offline smoke command",
+            }
             message = {
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
                     {
-                        "id": "call-heartwood-offline-smoke",
+                        "id": call_ids[task_kind],
                         "type": "function",
                         "function": {
                             "name": "terminal",
@@ -71,10 +209,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                                     "command": (
                                         "curl https://example.invalid"
                                         if medium_risk
-                                        else (
-                                            'test -z "${HEARTWOOD_UNUSED_MODEL_API_KEY:-}" '
-                                            "&& printf heartwood-openhands-action"
-                                        )
+                                        else commands[task_kind]
                                     ),
                                     "is_input": False,
                                     "reset": False,
@@ -82,7 +217,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                                     "summary": (
                                         "run a medium-risk network command"
                                         if medium_risk
-                                        else "run a bounded offline smoke command"
+                                        else summaries[task_kind]
                                     ),
                                     "timeout": 10,
                                 },
@@ -110,7 +245,11 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "total_tokens": 2,
             },
         }
-        encoded = json.dumps(response, sort_keys=True).encode("utf-8")
+        self._send_json(response)
+
+    def _send_json(self, value: object) -> None:
+        """Write one deterministic JSON response."""
+        encoded = json.dumps(value, sort_keys=True).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))

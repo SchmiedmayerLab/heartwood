@@ -1,0 +1,31 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "1"
+artifact_id = "qwen25-7b-instruct-q4_k_m"
+runtime_profile = "llama-cpp-cpu"
+purpose = "Optional reviewed local model for synthetic OpenHands tool-use demonstrations; not a biomedical or production-quality model claim."
+source_repository = "bartowski/Qwen2.5-7B-Instruct-GGUF"
+source_path = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+source_revision = "8911e8a47f92bac19d6f5c64a2e2095bd2f7d031"
+source_url = "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/8911e8a47f92bac19d6f5c64a2e2095bd2f7d031/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+artifact_format = "GGUF"
+artifact_size_bytes = 4683074240
+artifact_sha256 = "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423"
+base_model = "Qwen/Qwen2.5-7B-Instruct"
+base_model_url = "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct"
+base_model_license = "Apache-2.0"
+quantized_artifact_license = "Apache-2.0"
+parameter_count = "7.61B"
+context_length = 32768
+quantization = "Q4_K_M"
+license_posture = "Apache-2.0 base model and quantized artifact; retain model-card and artifact provenance in documentation."
+redistribution = "Not bundled or redistributed in Heartwood images; downloaded from the pinned source only after an explicit user request."
+minimum_resource_envelope = "4 vCPU, 16 GB RAM, and 25 GB free Docker disk for one active local-model demo session."
+recommended_resource_envelope = "8 vCPU, 32 GB RAM, and 50 GB free Docker disk for local Docker; 75 GB persistent disk is recommended for Terra because the platform base, image layers, model artifact, extraction overhead, and workspace share the environment."
+gpu_acceleration = "The baseline llama-cpp-cpu profile does not use attached GPUs; GPU runtimes require a separately tested profile."
+model_alias = "Qwen2.5-7B-Instruct Q4_K_M"
+agent_acceptance = "Selected for the mounted-model acceptance path because llama.cpp documents native Qwen2.5 function calling; Heartwood still validates actual OpenHands tool events and workspace effects before claiming a successful run."

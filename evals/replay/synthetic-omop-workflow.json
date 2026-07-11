@@ -1,7 +1,7 @@
 {
   "schema_version": "heartwood.replay-fixture.v1",
-  "fixture_id": "synthetic-omop-phase-0d",
-  "session_id": "session-synthetic-0d",
+  "fixture_id": "synthetic-terra-reference-analysis",
+  "session_id": "session-terra-reference-analysis",
   "skills": [
     "heartwood.synthetic.omop-cohort-summary",
     "heartwood.synthetic.aggregate-export",
@@ -14,14 +14,14 @@
       "output_ref": "outputs/cohort-summary.json"
     },
     {
-      "skill_id": "heartwood.synthetic.aggregate-export",
-      "tool_name": "aggregate-export",
-      "output_ref": "outputs/aggregate-export.json"
-    },
-    {
       "skill_id": "heartwood.synthetic.baseline-model",
       "tool_name": "baseline-model",
       "output_ref": "outputs/baseline-model.json"
+    },
+    {
+      "skill_id": "heartwood.synthetic.aggregate-export",
+      "tool_name": "aggregate-export",
+      "output_ref": "outputs/aggregate-export.json"
     }
   ],
   "expected_policy_decisions": [
@@ -45,18 +45,24 @@
   ],
   "expected_outputs": {
     "cohort_summary": {
-      "participant_count": 3,
-      "condition_occurrence_count": 3,
-      "exportable": false
+      "source_participant_count": 24,
+      "source_condition_occurrence_count": 39,
+      "participant_count": 20,
+      "condition_occurrence_count": 35,
+      "target_condition_occurrence_count": 20,
+      "exportable": true
     },
     "aggregate_export": {
-      "exported": false,
-      "suppressed": true,
+      "exported": true,
+      "suppressed": false,
       "aggregate_count_floor": 20,
-      "suppressed_count_exported": false
+      "participant_count": 20
     },
     "baseline_model": {
-      "model_type": "synthetic-condition-baseline",
+      "model_type": "synthetic-logistic-condition-history",
+      "participant_count": 24,
+      "positive_count": 20,
+      "holdout_evaluation_performed": false,
       "row_values_exported": false
     }
   },

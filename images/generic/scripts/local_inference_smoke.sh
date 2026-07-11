@@ -26,20 +26,25 @@ trap cleanup EXIT
 HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" python - <<'PY'
 import json
 import os
-import socket
 import time
+import urllib.error
 import urllib.request
 
 port = int(os.environ["HEARTWOOD_LOCAL_RUNTIME_PORT"])
-deadline = time.time() + 90
+deadline = time.time() + 180
+last_error = None
 while time.time() < deadline:
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-            break
-    except OSError:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=2
+        ) as response:
+            if response.status == 200:
+                break
+    except (OSError, urllib.error.URLError) as error:
+        last_error = error
         time.sleep(0.2)
 else:
-    raise SystemExit("llama-server did not become ready")
+    raise SystemExit(f"llama-server did not become ready: {last_error}")
 
 payload = json.dumps(
     {

@@ -104,12 +104,16 @@ def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -
     artifacts = session.model_artifacts()
     policy_decision = cast(dict[str, object], validation["policy_decision"])
     artifact_items = cast(list[object], artifacts["artifacts"])
+    artifact_ids = {cast(dict[str, object], item)["artifact_id"] for item in artifact_items}
 
     assert settings["active_profile"] == "local"
     assert session.model_settings()["active_profile"] == "local"
     assert validation["credential_status"] == "configured"
     assert policy_decision["decision"] == "allow"
-    assert len(artifact_items) == 2
+    assert {
+        "llama-cpp-stories260k-ci",
+        "qwen25-7b-instruct-q4_k_m",
+    }.issubset(artifact_ids)
 
 
 def test_jupyter_proxy_url_uses_service_prefix() -> None:

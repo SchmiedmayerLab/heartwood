@@ -78,6 +78,7 @@ RUN apt-get update \
       ca-certificates \
       curl \
       git \
+      jq \
       libgomp1 \
       tmux \
     && rm -rf /var/lib/apt/lists/*
@@ -95,6 +96,8 @@ RUN set -eux; \
     mkdir -p /opt/llama.cpp; \
     tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
     rm /tmp/llama.cpp.tar.gz
+
+ENV HF_HOME=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models/.huggingface
 
 WORKDIR /opt/heartwood
 
@@ -123,7 +126,9 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
         --display-name "Python 3 (Heartwood)"; \
     fi
 
-RUN mkdir -p "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace" \
+RUN mkdir -p \
+      "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models" \
+      "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions" \
     && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace"
 
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}

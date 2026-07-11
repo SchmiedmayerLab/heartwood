@@ -349,6 +349,40 @@ MODEL_PRESETS: tuple[ModelPreset, ...] = (
 )
 
 
+def model_profile_from_preset(preset_id: str, model_name: str) -> ModelProfile:
+    """Build a selected provider profile from a safe preset and model name."""
+    preset = next((item for item in MODEL_PRESETS if item.preset_id == preset_id), None)
+    if preset is None:
+        msg = f"unknown model provider preset: {preset_id}"
+        raise ModelSettingsError(msg)
+    if preset.policy_endpoint is None:
+        msg = f"{preset.label} requires advanced endpoint configuration"
+        raise ModelSettingsError(msg)
+    normalized_name = model_name.strip()
+    if not normalized_name:
+        msg = "model name must be a non-empty string"
+        raise ModelSettingsError(msg)
+    if any(character.isspace() for character in normalized_name):
+        msg = "model name cannot contain whitespace"
+        raise ModelSettingsError(msg)
+    model = (
+        normalized_name
+        if normalized_name.startswith(preset.model_prefix)
+        else f"{preset.model_prefix}{normalized_name}"
+    )
+    profile = ModelProfile(
+        profile_id=preset.preset_id,
+        model=model,
+        policy_endpoint=preset.policy_endpoint,
+        base_url=preset.base_url,
+        credential_kind=preset.credential_kind,
+        api_key_env=preset.api_key_env,
+        description=preset.description,
+    )
+    profile.validate()
+    return profile
+
+
 def model_settings_path(workspace: Path, env: Mapping[str, str] | None = None) -> Path:
     """Resolve the shared settings path for a session workspace."""
     active_env = os.environ if env is None else env

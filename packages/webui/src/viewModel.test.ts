@@ -18,30 +18,39 @@ describe("buildViewModel", () => {
     expect(viewModel.conversation).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          content: "Inspect the synthetic workspace",
+          content: "Build the synthetic target-condition cohort",
           label: "You",
           role: "user",
         }),
         expect.objectContaining({
-          content: "I will inspect the synthetic workspace.",
+          content: "I will run the repository-verified cohort Skill.",
           label: "Agent",
           role: "agent",
         }),
         expect.objectContaining({
-          content: "Proposed tool: heartwood.local.write_summary",
+          content: "Proposed tool: terminal",
           label: "Trace",
           role: "trace",
         }),
-        expect.objectContaining({ content: "allow model route" }),
       ]),
     );
     expect(viewModel.approvalControls).toEqual([
       expect.objectContaining({
         decision: null,
+        risk: "low",
+        summary: "build the aggregate synthetic target-condition cohort",
         targetId: "session-test-toolcall-0",
         targetType: "tool-call",
+        toolName: "terminal",
       }),
     ]);
+    expect(viewModel.context).toEqual({
+      platform: "generic",
+      dataset: "omop-cdm",
+      modelEndpoint: "http://127.0.0.1:8765/v1/chat/completions",
+      modelDecision: "allow",
+      modelReason: "model route policy allows the configured profile",
+    });
   });
 
   it("projects lifecycle, exports, errors, and confirmation results", () => {
@@ -50,8 +59,15 @@ describe("buildViewModel", () => {
         decision: "approved",
         tool_call_id: "toolcall-1",
       }),
-      event(1, "tool.execution.recorded", { exit_code: 0 }),
-      event(2, "audit.export.recorded", { path: "/audit.jsonl" }),
+      event(1, "tool.execution.recorded", {
+        exit_code: 0,
+        summary: "Wrote summary",
+        tool_name: "terminal",
+      }),
+      event(2, "audit.export.recorded", {
+        event_count: 3,
+        path: "/audit.jsonl",
+      }),
       event(3, "session.paused", {}),
       event(4, "session.resumed", {}),
       event(5, "error.recorded", { reason: "synthetic error" }),
@@ -62,8 +78,36 @@ describe("buildViewModel", () => {
     ]);
     expect(viewModel.paused).toBe(false);
     expect(viewModel.activity[1]?.detail).toBe("exit=0");
-    expect(viewModel.activity[2]?.detail).toBe("/audit.jsonl");
+    expect(viewModel.conversation[0]).toMatchObject({
+      content: "Ran terminal",
+      detail: "Wrote summary",
+    });
+    expect(viewModel.activity[2]?.detail).toBe("3 events, scrubbed JSONL");
     expect(viewModel.activity.at(-1)?.detail).toBe("synthetic error");
+    expect(viewModel.conversation.at(-1)).toMatchObject({
+      content: "The task could not be completed",
+      detail: "synthetic error",
+      label: "System",
+    });
+  });
+
+  it("keeps provider implementation errors out of the researcher conversation", () => {
+    const viewModel = buildViewModel([
+      event(0, "error.recorded", {
+        reason: "OpenHands conversation failed: ConversationRunError",
+      }),
+    ]);
+
+    expect(viewModel.conversation).toEqual([
+      expect.objectContaining({
+        content: "The task could not be completed",
+        detail: "Check Model setup and Activity & audit, then try again.",
+        label: "System",
+      }),
+    ]);
+    expect(viewModel.activity[0]?.detail).toBe(
+      "OpenHands conversation failed: ConversationRunError",
+    );
   });
 
   it("does not invent an approval before OpenHands requests confirmation", () => {
@@ -107,10 +151,8 @@ describe("buildViewModel", () => {
       event(3, "command.received", { command_id: 7 }),
     ]);
 
-    expect(viewModel.conversation[0]).toMatchObject({
-      content: "true model route",
-      detail: null,
-    });
+    expect(viewModel.context.modelDecision).toBe("true");
+    expect(viewModel.conversation).toEqual([]);
     expect(viewModel.approvalControls).toEqual([]);
     expect(viewModel.activity.at(-1)?.detail).toBe("7");
   });

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from heartwood.cli import main
+from heartwood.gateway import ProviderModel
 
 
 def test_no_command_prints_help_when_stdin_is_not_interactive(
@@ -229,6 +230,98 @@ def test_models_add_select_list_and_validate_local_profile(
     assert "Policy: allow" in output
     settings = json.loads((tmp_path / "models.json").read_text(encoding="utf-8"))
     assert settings["active_profile"] == "local"
+
+
+def test_models_refresh_and_connect_platform_catalog(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connections = tmp_path / "model-connections.json"
+    connections.write_text(
+        json.dumps(
+            {
+                "schema_version": "heartwood.model-connections.v1",
+                "connections": [
+                    {
+                        "connection_id": "research-ai",
+                        "label": "Research AI Service",
+                        "protocol": "static",
+                        "model_prefix": "litellm_proxy/",
+                        "source": "platform",
+                        "credential_kind": "managed-identity",
+                        "policy_endpoint": "https://models.example/v1/chat/completions",
+                        "catalog_endpoint": None,
+                        "description": "Models authorized for this research workspace.",
+                        "static_models": ["coding-large", "coding-small"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HEARTWOOD_MODEL_CONNECTIONS", str(connections))
+    workspace = tmp_path / "sessions"
+    base = ["--workspace", str(workspace), "models"]
+
+    assert main([*base, "refresh", "research-ai"]) == 0
+    assert main([*base, "connect", "research-ai", "coding-small"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Models available from Research AI Service" in output
+    assert "coding-large" in output
+    assert "coding-small" in output
+    assert "* research-ai  litellm_proxy/coding-small" in output
+    settings = json.loads((tmp_path / "models.json").read_text(encoding="utf-8"))
+    assert settings["active_profile"] == "research-ai"
+    assert settings["profiles"][0]["model"] == "litellm_proxy/coding-small"
+
+
+def test_models_use_environment_credential_without_persisting_or_printing_it(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "runtime-only-secret"
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "heartwood.policy-profile.v1",
+                "policy_id": "provider-test",
+                "platform_id": "test",
+                "allowed_model_endpoints": ["https://api.openai.com/v1/chat/completions"],
+                "allowed_model_catalog_endpoints": ["https://api.openai.com/v1/models"],
+                "allowed_capability_tiers": ["supervised", "experimental"],
+                "allowed_action_confirmation_modes": ["always-confirm"],
+                "credential_allowlist": ["OPENAI_API_KEY"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HEARTWOOD_POLICY_PROFILE", str(policy))
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+
+    def list_models(_connection: object, api_key: str | None) -> tuple[ProviderModel, ...]:
+        assert api_key == secret
+        return (ProviderModel("provider-coder"),)
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_catalog._list_openai_models",
+        list_models,
+    )
+    workspace = tmp_path / "sessions"
+    base = ["--workspace", str(workspace), "models"]
+
+    assert main([*base, "refresh", "openai"]) == 0
+    assert main([*base, "connect", "openai", "provider-coder"]) == 0
+
+    output = capsys.readouterr().out
+    persisted = (tmp_path / "models.json").read_text(encoding="utf-8")
+    assert "provider-coder" in output
+    assert secret not in output
+    assert secret not in persisted
+    assert "OPENAI_API_KEY" in persisted
 
 
 def test_external_model_profile_is_denied_until_policy_allows_it(

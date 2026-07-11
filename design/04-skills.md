@@ -42,6 +42,7 @@ Detection uses no model call. OpenHands receives repository-verified Skill metad
 ## Current Packaging And Trust
 
 - **Current bundle.** `skills/bundle.toml` selects checked-in `SKILL.md` directories. The repository gate validates metadata consistency, declared tools, network posture, entrypoint confinement, deterministic tests, and provenance-field shape before the image includes them. OpenHands loads the resulting read-only bundle without runtime network access.
+- **Reference analysis.** `omop-cohort-summary` defines an adult target-condition cohort and aggregate quality checks, `baseline-model` fits an age-only logistic baseline for recorded condition history and reports training diagnostics without holdout claims, and `aggregate-export` suppresses results below the configured count floor. These Skills are deterministic synthetic integration implementations; their outputs are not clinical, statistical, export, or institutional approval.
 - **Current trust meaning.** `verified` means repository-verified: the Skill is checked in, selected by the bundle, and accepted by local validation and tests. Existing `heartwood.sig` values are provenance placeholders; the repository does not perform cryptographic Sigstore verification. Repository verification is not clinical, statistical, security, or institutional approval.
 - **Extensions.** `community` and `experimental` Skills can be installed only from a mounted local directory after explicit review. Heartwood does not fetch external Skills or maintain a parallel registry at runtime.
 

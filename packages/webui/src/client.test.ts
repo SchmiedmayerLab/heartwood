@@ -93,6 +93,70 @@ describe("createCommand", () => {
 });
 
 describe("GatewayClient", () => {
+  it("manages persisted session lifecycle routes", async () => {
+    const session = {
+      session_id: "session-test",
+      title: "Synthetic analysis",
+      status: "empty",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      event_count: 0,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ sessions: [session] })),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(session)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(session)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...session, title: "Renamed" })),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            filename: "session test-audit.jsonl",
+            content: '{"kind":"audit.export.recorded"}\n',
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.listSessions();
+    await client.createSession("Synthetic analysis");
+    await client.getSession("session test");
+    await client.renameSession("session test", "Renamed");
+    const exported = await client.getAuditExport("session test");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/sessions");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/sessions",
+      expect.objectContaining({
+        body: JSON.stringify({ title: "Synthetic analysis" }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/proxy/8767/sessions/session%20test",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/proxy/8767/sessions/session%20test",
+      expect.objectContaining({
+        body: JSON.stringify({ title: "Renamed" }),
+        method: "PATCH",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      "/proxy/8767/sessions/session%20test/audit-export",
+    );
+    expect(exported.filename).toBe("session test-audit.jsonl");
+  });
+
   it("posts commands through the configured base path", async () => {
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ events: syntheticEvents().slice(0, 1) }), {
@@ -174,6 +238,159 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       5,
       "/proxy/8767/settings/models/validation?profile_id=local%20profile",
+    );
+  });
+
+  it("configures a provider through the simplified settings route", async () => {
+    const settings = {
+      schema_version: "heartwood.model-settings.v1",
+      active_profile: "openai",
+      profiles: [],
+      presets: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.connectModelProvider("openai", "configured-model");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/settings/models/connect",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model_name: "configured-model",
+          preset_id: "openai",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("discovers and selects a model through the shared connection routes", async () => {
+    const connection = {
+      connection_id: "openai",
+      label: "OpenAI",
+      protocol: "openai",
+      model_prefix: "openai/",
+      source: "built-in",
+      credential_kind: "environment",
+      policy_endpoint: "https://api.openai.com/v1/chat/completions",
+      catalog_endpoint: "https://api.openai.com/v1/models",
+      base_url: null,
+      api_key_env: "OPENAI_API_KEY",
+      api_key_file: null,
+      api_version: null,
+      aws_region_name: null,
+      aws_profile_name: null,
+      description: "OpenAI models",
+      static_models: [],
+      accepts_token: true,
+      credential_status: "missing",
+    };
+    const catalog = {
+      schema_version: "heartwood.model-catalog.v1",
+      connection,
+      models: [
+        {
+          model_id: "provider-coder",
+          display_name: "provider-coder",
+          execution_model: "openai/provider-coder",
+          availability: "available",
+          reason: "Verified by the pinned OpenHands SDK",
+          context_window: 128_000,
+          supports_tools: true,
+        },
+      ],
+      refreshed_at: 1_783_683_200,
+    };
+    const settings = {
+      schema_version: "heartwood.model-settings.v1",
+      active_profile: "openai",
+      profiles: [],
+      connections: [connection],
+      presets: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(catalog)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.discoverModels({
+      connection_id: "openai",
+      token: "runtime-only-token",
+      refresh: true,
+    });
+    await client.connectModel({
+      connection_id: "openai",
+      model_id: "provider-coder",
+      token: "runtime-only-token",
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/catalog",
+      expect.objectContaining({
+        body: JSON.stringify({
+          connection_id: "openai",
+          token: "runtime-only-token",
+          refresh: true,
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/connect",
+      expect.objectContaining({
+        body: JSON.stringify({
+          connection_id: "openai",
+          model_id: "provider-coder",
+          token: "runtime-only-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("lists and starts reviewed model downloads", async () => {
+    const artifacts = {
+      schema_version: "heartwood.local-model-catalog.v1",
+      artifacts: [],
+      downloads: [],
+    };
+    const download = {
+      artifact_id: "reviewed-model",
+      status: "downloading",
+      bytes_downloaded: 0,
+      bytes_total: 1024,
+      path: null,
+      error: null,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(artifacts)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(download)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.getModelArtifacts();
+    await client.downloadModelArtifact("reviewed-model");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/artifacts",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/downloads",
+      expect.objectContaining({
+        body: JSON.stringify({ artifact_id: "reviewed-model" }),
+        method: "POST",
+      }),
     );
   });
 

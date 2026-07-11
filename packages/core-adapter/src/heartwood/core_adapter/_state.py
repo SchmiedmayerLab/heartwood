@@ -31,7 +31,11 @@ class FileSessionStore:
             raise SessionStoreBoundaryError(str(error)) from error
         self.root = root.resolve()
         self.session_id = session_id
-        self.session_dir = (self.root / session_id).resolve()
+        session_path = self.root / session_id
+        if session_path.is_symlink():
+            msg = f"session path must not be a symbolic link: {session_id}"
+            raise SessionStoreBoundaryError(msg)
+        self.session_dir = session_path.resolve()
         if self.session_dir != self.root and self.root not in self.session_dir.parents:
             msg = f"session path escapes workspace root: {session_id}"
             raise SessionStoreBoundaryError(msg)
@@ -59,13 +63,12 @@ class FileSessionStore:
 
     def read_events(self) -> tuple[SessionEvent, ...]:
         """Read persisted session events."""
-        if not self.events_path.exists():
+        try:
+            with _open_private_read(self.events_path) as file:
+                lines = file.read().splitlines()
+        except FileNotFoundError:
             return ()
-        return tuple(
-            SessionEvent.model_validate_json(line)
-            for line in self.events_path.read_text(encoding="utf-8").splitlines()
-            if line
-        )
+        return tuple(SessionEvent.model_validate_json(line) for line in lines if line)
 
     def next_sequence(self) -> int:
         """Return the next session-event sequence number."""
@@ -81,6 +84,11 @@ class FileSessionStore:
         with _open_private_text(self.audit_export_path, append=False) as file:
             file.write(content)
 
+    def read_audit_export(self) -> str:
+        """Read the generated audit export without following symbolic links."""
+        with _open_private_read(self.audit_export_path) as file:
+            return file.read()
+
     def _prepare_session_dir(self) -> None:
         self.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.session_dir.chmod(0o700)
@@ -92,3 +100,9 @@ def _open_private_text(path: Path, *, append: bool) -> TextIO:
     descriptor = os.open(path, flags, 0o600)
     os.fchmod(descriptor, 0o600)
     return os.fdopen(descriptor, "a" if append else "w", encoding="utf-8")
+
+
+def _open_private_read(path: Path) -> TextIO:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    return os.fdopen(descriptor, encoding="utf-8")

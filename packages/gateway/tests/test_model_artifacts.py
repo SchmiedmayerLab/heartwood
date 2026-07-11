@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -32,6 +34,7 @@ def test_repository_catalog_contains_only_explicit_download_artifacts() -> None:
 
     assert {artifact.artifact_id for artifact in catalog.artifacts} == {
         "llama-cpp-stories260k-ci",
+        "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
     assert all(artifact.source_revision not in {"main", "latest"} for artifact in catalog.artifacts)
@@ -54,6 +57,31 @@ def test_artifact_download_verifies_size_and_checksum(tmp_path: Path) -> None:
     )
 
     assert path.read_bytes() == content
+
+
+def test_artifact_download_reports_transferred_bytes(tmp_path: Path) -> None:
+    content = b"reviewed-model-artifact"
+    artifact = _artifact(content)
+    progress: list[tuple[int, int]] = []
+
+    def downloader(**kwargs: object) -> str:
+        progress_class = cast(type[Any], kwargs["tqdm_class"])
+        with progress_class(total=len(content), initial=0) as transfer:
+            transfer.update(8)
+            transfer.update(len(content) - 8)
+        path = Path(str(kwargs["local_dir"])) / "model.gguf"
+        path.write_bytes(content)
+        return str(path)
+
+    download_model_artifact(
+        artifact,
+        cache_dir=tmp_path / "models",
+        downloader=downloader,
+        progress_callback=lambda downloaded, total: progress.append((downloaded, total)),
+    )
+
+    assert (8, len(content)) in progress
+    assert progress[-1] == (len(content), len(content))
 
 
 def test_artifact_download_rejects_integrity_mismatch(tmp_path: Path) -> None:
@@ -90,8 +118,14 @@ def test_background_manager_reports_ready_download(
     )
     installed = tmp_path / "models" / artifact.artifact_id / "model.gguf"
 
-    def download(_artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+    def download(
+        _artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
         assert cache_dir == tmp_path / "models"
+        progress_callback(len(b"content"), len(b"content"))
         installed.parent.mkdir(parents=True)
         installed.write_bytes(b"content")
         return installed
@@ -105,8 +139,52 @@ def test_background_manager_reports_ready_download(
         time.sleep(0.01)
 
     assert manager.statuses()[0].status == "ready"
+    assert manager.statuses()[0].bytes_downloaded == len(b"content")
+    assert manager.statuses()[0].bytes_total == len(b"content")
     assert manager.statuses()[0].path == str(installed)
     assert manager.start(artifact.artifact_id).status == "ready"
+
+
+def test_background_manager_exposes_in_progress_byte_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _artifact(b"content")
+    catalog = ModelArtifactCatalog(
+        schema_version="heartwood.local-model-catalog.v1",
+        artifacts=(artifact,),
+    )
+    started = Event()
+    release = Event()
+
+    def download(
+        _artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
+        progress_callback(3, len(b"content"))
+        started.set()
+        assert release.wait(timeout=2)
+        path = cache_dir / artifact.artifact_id / "model.gguf"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"content")
+        return path
+
+    monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
+    manager = ModelArtifactManager(catalog=catalog, cache_dir=tmp_path / "models")
+
+    manager.start(artifact.artifact_id)
+    assert started.wait(timeout=2)
+    status = manager.statuses()[0]
+    assert status.status == "downloading"
+    assert status.bytes_downloaded == 3
+    assert status.bytes_total == len(b"content")
+    release.set()
+    deadline = time.monotonic() + 2
+    while manager.statuses()[0].status == "downloading" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert manager.statuses()[0].status == "ready"
 
 
 @pytest.mark.parametrize(

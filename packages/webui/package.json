@@ -15,10 +15,12 @@
     "license:check": "node scripts/check-licenses.mjs",
     "lint": "eslint .",
     "preview": "vite preview --host 127.0.0.1",
+    "screenshots:docs": "node scripts/smoke-reference-analysis.cjs --screenshot-dir ../../docs/assets",
     "test": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:gateway": "node scripts/smoke-gateway.cjs",
     "test:jupyter-proxy": "node scripts/smoke-jupyter-proxy.cjs",
+    "test:reference-analysis": "node scripts/smoke-reference-analysis.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

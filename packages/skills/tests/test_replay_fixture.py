@@ -23,16 +23,16 @@ def test_synthetic_omop_replay_fixture_matches_verified_skills() -> None:
     assert set(fixture.skills) == verified_skill_ids
     assert [call.tool_name for call in fixture.expected_tool_calls] == [
         "omop-cohort-summary",
-        "aggregate-export",
         "baseline-model",
+        "aggregate-export",
     ]
     assert "agent_message.emitted" in fixture.expected_audit_events
     assert "user_message.recorded" in fixture.expected_audit_events
     assert "tool_call.proposed" in fixture.expected_audit_events
     assert "confirmation.resolved" in fixture.expected_audit_events
     assert fixture.expected_outputs["aggregate_export"] == {
-        "exported": False,
-        "suppressed": True,
+        "exported": True,
+        "suppressed": False,
         "aggregate_count_floor": 20,
-        "suppressed_count_exported": False,
+        "participant_count": 20,
     }

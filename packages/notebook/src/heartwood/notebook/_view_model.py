@@ -123,7 +123,9 @@ class NotebookSession:
 
     def run(
         self,
-        prompt: str = "run the synthetic workflow",
+        prompt: str = (
+            "build the synthetic target-condition cohort and report aggregate quality checks"
+        ),
     ) -> NotebookViewModel:
         """Submit one task through the compatibility ``run`` command."""
         return self._handle(CommandKind.RUN, {"prompt": prompt})

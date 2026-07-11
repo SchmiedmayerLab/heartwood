@@ -73,8 +73,12 @@ jobs:
       - name: Install the pinned Python toolchain
         run: uv python install
       - name: Install the Python workspace
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
       - name: Run gateway-served proxy smoke test
         run: npm run test:gateway --prefix packages/webui
       - name: Run Jupyter proxy smoke test
         run: npm run test:jupyter-proxy --prefix packages/webui
+      - name: Run real browser and CLI reference analysis
+        env:
+          HEARTWOOD_REFERENCE_SCREENSHOT_DIR: ${{ runner.temp }}/heartwood-reference-screenshots
+        run: npm run test:reference-analysis --prefix packages/webui

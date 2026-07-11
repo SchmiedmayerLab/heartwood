@@ -365,7 +365,10 @@ def _gateway_path(path: str, *, static_base_path: str) -> str | None:
 
 
 def _is_gateway_api_path(path: str) -> bool:
-    return path.startswith(("/sessions/", "/settings/")) or path == "/settings"
+    return path.startswith(("/sessions/", "/settings/")) or path in {
+        "/sessions",
+        "/settings",
+    }
 
 
 def _normalize_base_path(value: str) -> str:
