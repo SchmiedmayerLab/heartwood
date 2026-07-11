@@ -173,9 +173,9 @@ class OpenHandsSdkBackend:
             return (_backend_error(error),)
         return self._translate_capture(session_id=session_id)
 
-    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:
+    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
         """Restore pending action identity from Heartwood's event log."""
-        self._pending = {} if tool_call is None else {tool_call.tool_call_id: tool_call}
+        self._pending = {tool_call.tool_call_id: tool_call for tool_call in tool_calls}
 
     def resolve_confirmation(
         self,
@@ -194,14 +194,26 @@ class OpenHandsSdkBackend:
                 ),
             )
         if len(self._pending) != 1:
+            pending_actions = tuple(self._pending.values())
             self._get_conversation().reject_pending_actions(
                 "Heartwood requires one-at-a-time action confirmation"
             )
             self._pending.clear()
             return (
+                *(
+                    BackendEvent(
+                        kind=BackendEventKind.CONFIRMATION_RESOLVED,
+                        tool_call=action,
+                        approved=False,
+                    )
+                    for action in pending_actions
+                ),
                 BackendEvent(
                     kind=BackendEventKind.ERROR,
-                    message="parallel pending actions were rejected; submit the task again",
+                    message=(
+                        "OpenHands proposed multiple actions in one confirmation step; "
+                        "all were rejected before execution"
+                    ),
                 ),
             )
         self._captured.clear()

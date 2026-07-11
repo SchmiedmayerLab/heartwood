@@ -184,7 +184,7 @@ Heartwood exposes two OpenHands-native modes through `heartwood actions` and the
 
 Both modes use the OpenHands ensemble of deterministic policy-rail and pattern analyzers plus its model risk analyzer. In the automatic mode, only low-risk actions execute without a prompt; medium-, high-, and unknown-risk actions show the pending action identifier and offer two decisions:
 
-- Allow once: execute the current action and continue until the next confirmation or completion.
+- Allow once: execute the current action and continue until the next confirmation or completion. If OpenHands proposes multiple confirmation-required actions in one step, Heartwood rejects that complete batch before execution and records every action as denied so one approval cannot release unreviewed work.
 - Reject: return the rejection to OpenHands and stop without another model call; resume explicitly when further model work is wanted.
 
 Generic synthetic development permits both modes:

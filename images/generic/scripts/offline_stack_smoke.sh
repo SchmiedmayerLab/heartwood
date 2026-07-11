@@ -7,6 +7,11 @@
 
 set -euo pipefail
 
+if ! command -v jq >/dev/null; then
+  echo "Heartwood runtime requires jq for agent JSON inspection" >&2
+  exit 69
+fi
+
 workspace="${HEARTWOOD_WORKSPACE:-/tmp/heartwood-sessions}"
 state_root="$(dirname "${workspace}")"
 session_id="${HEARTWOOD_SESSION_ID:-session-offline-stack}"

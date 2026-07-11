@@ -289,6 +289,62 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
     assert decision["decision"] == "deny"
 
 
+def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: Path) -> None:
+    first = ProposedToolCall(
+        tool_call_id="session-local-action-1",
+        tool_name="terminal",
+        risk="medium",
+        summary="run the first bounded command",
+    )
+    second = ProposedToolCall(
+        tool_call_id="session-local-action-2",
+        tool_name="terminal",
+        risk="unknown",
+        summary="run the second bounded command",
+    )
+    initial_backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=first),
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=second),
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=first),
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=second),
+        ),
+    )
+    initial_service = SessionService.local_default(
+        tmp_path,
+        backend=initial_backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    initial_service.handle(
+        _command(CommandKind.CHAT, prompt="propose two actions").model_copy(
+            update={"session_id": "session-local"}
+        )
+    )
+
+    restored_backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    restored_service = SessionService.local_default(
+        tmp_path,
+        backend=restored_backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    restored_ids = [action.tool_call_id for action in restored_backend.restored_pending]
+
+    result = restored_service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="tool-call",
+            target_id=first.tool_call_id,
+        ).model_copy(update={"session_id": "session-local"})
+    )
+
+    assert restored_ids == [first.tool_call_id, second.tool_call_id]
+    assert restored_backend.resolutions == [(first.tool_call_id, True)]
+    assert not any(
+        event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value for event in result.events
+    )
+
+
 def test_resume_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:
     backend = _RecordingBackend(endpoint="https://public.example.invalid/v1/chat/completions")
     service = SessionService.local_default(
@@ -441,6 +497,7 @@ class _RecordingBackend:
         self._configuration_error = configuration_error
         self.prompts: list[str] = []
         self.resolutions: list[tuple[str, bool]] = []
+        self.restored_pending: tuple[ProposedToolCall, ...] = ()
         self.resume_calls = 0
 
     @property
@@ -484,8 +541,8 @@ class _RecordingBackend:
         self.prompts.append(prompt)
         return self.response
 
-    def restore_pending(self, tool_call: object | None) -> None:  # noqa: ARG002
-        return None
+    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
+        self.restored_pending = tool_calls
 
     def resolve_confirmation(
         self,

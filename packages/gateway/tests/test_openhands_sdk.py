@@ -339,13 +339,15 @@ def test_openhands_backend_reports_unknown_confirmation_and_restores_pending(
         tool_call_id="missing",
         approved=True,
     )
-    backend.restore_pending(None)
+    backend.restore_pending(())
 
     assert missing[0].kind == BackendEventKind.ERROR
     assert "no matching pending action" in str(missing[0].message)
 
 
-def test_openhands_backend_rejects_parallel_pending_actions(tmp_path: Path) -> None:
+def test_openhands_backend_rejects_parallel_pending_actions_before_execution(
+    tmp_path: Path,
+) -> None:
     conversation = _ParallelConversation()
     backend = _backend(tmp_path, conversation)
     events = backend.submit_turn(session_id="session-1", prompt="parallel")
@@ -362,8 +364,16 @@ def test_openhands_backend_rejects_parallel_pending_actions(tmp_path: Path) -> N
     )
 
     assert len(pending_ids) == 2
-    assert resolved[0].kind == BackendEventKind.ERROR
-    assert "parallel pending actions" in str(resolved[0].message)
+    assert [event.kind for event in resolved] == [
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.ERROR,
+    ]
+    assert [
+        event.tool_call.tool_call_id for event in resolved[:2] if event.tool_call
+    ] == pending_ids
+    assert all(event.approved is False for event in resolved[:2])
+    assert "multiple actions" in str(resolved[-1].message)
     assert conversation.rejection_reasons == [
         "Heartwood requires one-at-a-time action confirmation"
     ]

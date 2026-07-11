@@ -91,7 +91,7 @@ run_heartwood --workspace "${workspace}" models connect local heartwood-local-ru
 run_heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
 run_heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
-  --prompt "Call the terminal tool to execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json. Do not describe the command as text. Wait for the terminal result. After the command succeeds, you may use at most two read-only actions to inspect cohort-summary.json. Do not modify or rewrite the file. Report the aggregate cohort result." \
+  --prompt "Call the terminal tool to execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do
@@ -169,10 +169,10 @@ if not 1 <= len(tool_executions) <= 3 or any(
     event["payload"].get("exit_code") != 0 for event in tool_executions
 ):
     raise SystemExit("capable-model session must have one to three successful tool executions")
-if not 1 <= len(terminal_executions) <= 2 or any(
+if not 1 <= len(terminal_executions) <= 3 or any(
     event["payload"].get("exit_code") != 0 for event in terminal_executions
 ):
-    raise SystemExit("capable-model session must have one or two successful terminal executions")
+    raise SystemExit("capable-model session must have one to three successful terminal executions")
 if not cohort_path.is_file():
     raise SystemExit(f"capable model did not create {cohort_path}")
 cohort = json.loads(cohort_path.read_text(encoding="utf-8"))

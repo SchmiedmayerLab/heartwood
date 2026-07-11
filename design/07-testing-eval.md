@@ -29,7 +29,7 @@ No model has a repository-backed production capability claim yet. Assigning a ti
 
 ## Required Evaluation Evidence
 
-- **OpenHands compatibility.** Every SDK or tools upgrade must pass real event translation, action confirmation, rejection, automatic low-risk execution, persistence and resume, native Skill loading, terminal and file execution, and offline container integration.
+- **OpenHands compatibility.** Every SDK or tools upgrade must pass real event translation, action confirmation, rejection, automatic low-risk execution, restoration of every unresolved action, rejection of multi-action confirmation batches before execution, persistence and resume, native Skill loading, terminal and file execution, and offline container integration.
 - **Model capability.** A capability tier requires a pinned model and quantization, runtime and hardware identity, coding and biomedical benchmark results, policy-adherence results, and documented failure analysis. Endpoint validation or artifact integrity is not capability evidence.
 - **Action-risk behavior.** Managed use of `confirm-risky` requires representative benign, ambiguous, destructive, encoded, prompt-injected, and network-capable action cases with a documented acceptance threshold. The evaluation exercises OpenHands analyzers; it does not introduce a second runtime classifier.
 - **Credential exposure.** Every configured environment-referenced model key, including inactive-profile references, must be absent from OpenHands terminal subprocess values. Mounted credential files and managed identities require deployment tests proving the intended least-privilege and tool-access boundary; a shared interactive user is not evidence of isolation.

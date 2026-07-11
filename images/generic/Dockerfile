@@ -62,6 +62,7 @@ RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
       ca-certificates \
       curl \
       git \
+      jq \
       libgomp1 \
       tmux \
     && rm -rf /var/lib/apt/lists/*

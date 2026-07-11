@@ -122,7 +122,10 @@ class _UnconfiguredAgentBackend:
             ),
         )
 
-    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:  # noqa: ARG002
+    def restore_pending(
+        self,
+        tool_calls: tuple[ProposedToolCall, ...],  # noqa: ARG002
+    ) -> None:
         return None
 
     def resolve_confirmation(

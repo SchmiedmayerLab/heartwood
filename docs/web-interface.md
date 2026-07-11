@@ -47,7 +47,7 @@ This screenshot is produced by the real reference-analysis system test using the
 
 ## Review Actions And Evidence
 
-**Ask Every Time** requires an explicit decision for every OpenHands action. **Auto-Approve Low Risk** delegates risk analysis and confirmation to OpenHands: low-risk actions continue automatically, while medium-, high-, and unknown-risk actions still require **Allow once** or **Reject**. The web interface never exposes an unconditional automatic mode.
+**Ask Every Time** requires an explicit decision for every OpenHands action. **Auto-Approve Low Risk** delegates risk analysis and confirmation to OpenHands: low-risk actions continue automatically, while medium-, high-, and unknown-risk actions still require **Allow once** or **Reject**. Pending decisions survive a gateway or CLI restart. If OpenHands proposes multiple confirmation-required actions in one step, Heartwood rejects that complete batch before execution so allowing one visible action cannot release another action implicitly. The web interface never exposes an unconditional automatic mode.
 
 Open **Activity & audit** to inspect ordered route decisions, action proposals, confirmations, tool outcomes, and errors. **Export audit** downloads a content-minimized JSON Lines record that excludes prompts, model responses, action summaries, paths, row values, and secrets. Successful tool execution does not authorize data export outside the workspace.
 

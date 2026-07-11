@@ -78,6 +78,7 @@ RUN apt-get update \
       ca-certificates \
       curl \
       git \
+      jq \
       libgomp1 \
       tmux \
     && rm -rf /var/lib/apt/lists/*

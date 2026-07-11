@@ -64,7 +64,7 @@ class SessionService:
         self.policy = ModelPolicyEngine(self.policy_profile)
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
-        self.backend.restore_pending(_pending_tool_call(self.store.read_events()))
+        self.backend.restore_pending(_pending_tool_calls(self.store.read_events()))
 
     @classmethod
     def synthetic_default(
@@ -331,8 +331,12 @@ class SessionService:
                 ),
             )
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
-        pending = _pending_tool_call(self.store.read_events())
-        if pending is None or pending.tool_call_id != tool_call_id:
+        pending_by_id = {
+            pending.tool_call_id: pending
+            for pending in _pending_tool_calls(self.store.read_events())
+        }
+        pending = pending_by_id.get(tool_call_id)
+        if pending is None:
             return (
                 self._record_event(
                     EventKind.ERROR_RECORDED,
@@ -343,7 +347,11 @@ class SessionService:
                 ),
             )
         events: list[SessionEvent] = []
-        if approved and self.backend.continuation_requires_model_authorization:
+        if (
+            approved
+            and len(pending_by_id) == 1
+            and self.backend.continuation_requires_model_authorization
+        ):
             authorized, authorization_events = self._authorize_backend(
                 command,
                 purpose=f"approved action continuation through {self.backend.backend_id}",
@@ -497,8 +505,8 @@ def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> Age
     raise ValueError(msg)
 
 
-def _pending_tool_call(events: tuple[SessionEvent, ...]) -> ProposedToolCall | None:
-    pending: ProposedToolCall | None = None
+def _pending_tool_calls(events: tuple[SessionEvent, ...]) -> tuple[ProposedToolCall, ...]:
+    pending: dict[str, ProposedToolCall] = {}
     for event in events:
         kind = str(event.kind)
         if kind == EventKind.CONFIRMATION_REQUESTED.value:
@@ -506,14 +514,19 @@ def _pending_tool_call(events: tuple[SessionEvent, ...]) -> ProposedToolCall | N
             if isinstance(request, dict):
                 risk_value = str(request.get("risk", "unknown"))
                 risk = risk_value if risk_value in {"low", "medium", "high"} else "unknown"
-                pending = ProposedToolCall(
+                tool_call = ProposedToolCall(
                     tool_call_id=str(request.get("tool_call_id", "")),
                     tool_name=str(request.get("tool_name", "unknown-tool")),
                     risk=cast(Literal["low", "medium", "high", "unknown"], risk),
                     summary=str(request.get("summary", "pending action")),
                 )
+                pending[tool_call.tool_call_id] = tool_call
         elif kind == EventKind.CONFIRMATION_RESOLVED.value:
             tool_call_id = str(event.payload.get("tool_call_id", ""))
-            if pending is not None and pending.tool_call_id == tool_call_id:
-                pending = None
-    return pending
+            pending.pop(tool_call_id, None)
+    return tuple(pending.values())
+
+
+def _pending_tool_call(events: tuple[SessionEvent, ...]) -> ProposedToolCall | None:
+    pending = _pending_tool_calls(events)
+    return pending[-1] if pending else None

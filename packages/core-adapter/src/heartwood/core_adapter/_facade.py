@@ -93,7 +93,7 @@ class AgentBackend(Protocol):
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and run until completion or confirmation."""
 
-    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:
+    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
         """Restore pending confirmation state from the Heartwood event log."""
 
     def resolve_confirmation(
@@ -208,9 +208,9 @@ class DeterministicAgentBackend:
             BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=self._pending),
         )
 
-    def restore_pending(self, tool_call: ProposedToolCall | None) -> None:
+    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
         """Restore pending deterministic confirmation state."""
-        self._pending = tool_call
+        self._pending = tool_calls[0] if len(tool_calls) == 1 else None
 
     def resolve_confirmation(
         self,

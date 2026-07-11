@@ -37,6 +37,7 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.tar.gz" in dockerfile
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz" in dockerfile
+    assert "      jq \\" in dockerfile
     assert "sha256sum --check" in dockerfile
     assert "/home/heartwood/.local/share/heartwood" in dockerfile
     assert "/home/heartwood/.cache/heartwood/models" in dockerfile
@@ -95,6 +96,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         in platform
     )
     assert 'PATH="/opt/llama.cpp:${PATH}"' in platform
+    assert "      jq \\" in platform
     assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
     assert "ipykernel install" in platform
     assert '"${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models"' in platform
@@ -195,6 +197,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "start_agent_server" not in smoke
     assert "--local-model" not in smoke
     assert "model-call" not in smoke
+    assert "command -v jq" in smoke
 
 
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
@@ -320,8 +323,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert offline_guide.count("uid=10001,gid=10001,mode=0700") == 2
-    assert "not 1 <= len(terminal_executions) <= 2" in capable_model
+    assert "not 1 <= len(terminal_executions) <= 3" in capable_model
     assert "not 1 <= len(tool_executions) <= 3" in capable_model
+    assert "&& cat cohort-summary.json" in capable_model
     assert 'f"http://127.0.0.1:{port}/health"' in capable_model
     assert "llama.cpp runtime log (last 200 lines)" in capable_model
     assert "cohort_path.is_file()" in capable_model
