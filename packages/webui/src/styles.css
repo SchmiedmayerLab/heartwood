@@ -339,10 +339,14 @@ summary:focus-visible {
   align-items: center;
   gap: 5px;
   margin: 0;
-  overflow: hidden;
   color: #2d3a33;
   font-size: 0.76rem;
   font-weight: 600;
+}
+
+.context-fact dd span {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

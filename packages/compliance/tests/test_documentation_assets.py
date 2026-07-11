@@ -123,6 +123,23 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "Boundary and workflow labels require typed gateway evidence" in readme
 
 
+def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None:
+    web_interface = _read("docs/web-interface.md")
+    terra = _read("docs/terra-jupyter-demo.md")
+    package = json.loads(_read("packages/webui/package.json"))
+    assets = _repo_root() / "docs" / "assets"
+
+    assert "production web build, gateway, OpenHands SDK adapter" in web_interface
+    assert "not model quality or live Terra behavior" in web_interface
+    assert "npm run screenshots:docs" in web_interface
+    assert "responsive layout, not live Leonardo proxy" in terra
+    assert package["scripts"]["screenshots:docs"].endswith("../../docs/assets")
+    for filename in ("web-reference-analysis.png", "web-notebook-viewport.png"):
+        screenshot = assets / filename
+        assert screenshot.stat().st_size > 1_000
+        assert (assets / f"{filename}.license").is_file()
+
+
 def test_project_markdown_contains_no_process_artifacts() -> None:
     forbidden_parts = (
         ("evaluated,", "not", "chosen"),

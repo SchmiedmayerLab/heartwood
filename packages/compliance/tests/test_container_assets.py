@@ -97,6 +97,8 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert 'PATH="/opt/llama.cpp:${PATH}"' in platform
     assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
     assert "ipykernel install" in platform
+    assert '"${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models"' in platform
+    assert '"${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions"' in platform
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
     assert "WORKDIR ${HEARTWOOD_PLATFORM_HOME}" in platform
     _assert_no_embedded_model_contract(platform)
@@ -303,7 +305,12 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "heartwood models download llama-cpp-stories260k-ci" in smoke
     assert "--volume heartwood-ci-model:/home/heartwood/.cache/heartwood/models" in smoke
     assert "--volume heartwood-ci-model:/models:ro" in smoke
-    assert "local_inference_smoke.sh" in smoke
+    assert "--volume heartwood-terra-ci-model:/home/jupyter/heartwood-workspace/models" in smoke
+    assert "--volume heartwood-terra-ci-model:/models:ro" in smoke
+    assert smoke.count("local_inference_smoke.sh") == 2
+    assert 'f"http://127.0.0.1:{port}/health"' in _read(
+        "images/generic/scripts/local_inference_smoke.sh"
+    )
     assert "run_capable_model" in smoke
     assert "github.event_name == 'workflow_dispatch'" in smoke
     assert "qwen25-7b-instruct-q4_k_m" in smoke

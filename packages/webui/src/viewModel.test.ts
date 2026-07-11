@@ -32,7 +32,6 @@ describe("buildViewModel", () => {
           label: "Trace",
           role: "trace",
         }),
-        expect.objectContaining({ content: "allow model route" }),
       ]),
     );
     expect(viewModel.approvalControls).toEqual([
@@ -152,10 +151,8 @@ describe("buildViewModel", () => {
       event(3, "command.received", { command_id: 7 }),
     ]);
 
-    expect(viewModel.conversation[0]).toMatchObject({
-      content: "true model route",
-      detail: null,
-    });
+    expect(viewModel.context.modelDecision).toBe("true");
+    expect(viewModel.conversation).toEqual([]);
     expect(viewModel.approvalControls).toEqual([]);
     expect(viewModel.activity.at(-1)?.detail).toBe("7");
   });

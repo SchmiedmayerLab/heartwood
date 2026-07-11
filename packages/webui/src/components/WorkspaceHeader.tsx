@@ -158,7 +158,7 @@ const ContextFact = ({
     <dt>{label}</dt>
     <dd title={detail}>
       {icon}
-      {value}
+      <span title={value}>{value}</span>
     </dd>
   </div>
 );

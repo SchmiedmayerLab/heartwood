@@ -136,6 +136,10 @@ HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions \
 
 Open the Jupyter proxy route for port `8767`. The browser path normally ends in `/proxy/8767/`; Heartwood infers that prefix while the internal gateway remains root-relative.
 
+![Heartwood synthetic reference analysis at a narrow notebook viewport](assets/web-notebook-viewport.png)
+
+The screenshot is generated from the synthetic reference-analysis system test at the automated notebook viewport. It demonstrates responsive layout, not live Leonardo proxy or Terra control-plane behavior; those require the validation steps below.
+
 Open the existing `terra-demo` session and confirm in Settings that the selected model appears under the platform, local, or cloud connection used above. Submit these tasks in order:
 
 1. `Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Read the localized tables in input, require age 18 or older, apply an aggregate count floor of 20, write cohort-summary.json, and report the cohort definition and quality checks without row-level values.`

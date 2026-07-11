@@ -85,12 +85,6 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
         viewModel.context.modelDecision =
           stringValue(decision.decision) || null;
         viewModel.context.modelReason = stringValue(decision.reason) || null;
-        addConversationMessage(viewModel, event, {
-          content: `${stringValue(decision.decision) || "reviewed"} model route`,
-          detail: stringValue(decision.reason) || null,
-          label: "Trace",
-          role: "trace",
-        });
         break;
       }
       case "detection.proposed": {

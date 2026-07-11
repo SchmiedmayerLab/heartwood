@@ -125,7 +125,9 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
         --display-name "Python 3 (Heartwood)"; \
     fi
 
-RUN mkdir -p "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace" \
+RUN mkdir -p \
+      "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models" \
+      "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions" \
     && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace"
 
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}

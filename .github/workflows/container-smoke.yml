@@ -164,6 +164,21 @@ jobs:
           --workdir /opt/heartwood --entrypoint bash
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           images/generic/scripts/offline_stack_smoke.sh
+      - name: Download and verify Terra CI-only model fixture
+        run: >-
+          docker run --rm --platform linux/amd64
+          --entrypoint heartwood
+          --volume heartwood-terra-ci-model:/home/jupyter/heartwood-workspace/models
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
+          models download llama-cpp-stories260k-ci
+      - name: Run Terra mounted local inference without network
+        run: >-
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /opt/heartwood --entrypoint bash
+          --volume heartwood-terra-ci-model:/models:ro
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
+          images/generic/scripts/local_inference_smoke.sh
       - name: Run Terra Jupyter launch smoke
         run: >-
           bash images/platform/scripts/terra_jupyter_launch_smoke.sh

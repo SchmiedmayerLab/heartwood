@@ -23,6 +23,14 @@ const stateRoot = fs.mkdtempSync(
 const workspace = path.join(stateRoot, "sessions");
 const gatewayPort = process.env.HEARTWOOD_REFERENCE_GATEWAY_PORT || "4187";
 const origin = `http://127.0.0.1:${gatewayPort}`;
+const screenshotOption =
+  process.env.HEARTWOOD_REFERENCE_SCREENSHOT_DIR ||
+  optionValue("--screenshot-dir");
+const screenshotDirectory =
+  screenshotOption === null ? null : (
+    path.resolve(process.cwd(), screenshotOption)
+  );
+const desktopViewport = { height: 960, width: 1440 };
 const cohortPrompt =
   "Build the synthetic target-condition cohort for concept 201826 with the " +
   "repository-verified cohort Skill. Use the localized OMOP reference tables, " +
@@ -99,7 +107,10 @@ async function main() {
     await waitForUrl(origin);
 
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ acceptDownloads: true });
+    const page = await browser.newPage({
+      acceptDownloads: true,
+      viewport: desktopViewport,
+    });
     await page.goto(origin);
 
     const task = page.getByRole("textbox", { name: "Task", exact: true });
@@ -112,6 +123,17 @@ async function main() {
       );
     }
     const sessionId = session.session_id;
+    await page.getByLabel("Rename session").click();
+    await page.getByLabel("Session title").fill("Synthetic Cohort Analysis");
+    await page.getByLabel("Session title").press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Synthetic Cohort Analysis" }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Detect environment", exact: true })
+      .click();
+    await expect(page.getByText("omop-cdm", { exact: true })).toBeVisible();
+
     const inputRoot = path.join(stateRoot, "workspaces", sessionId, "input");
     fs.mkdirSync(inputRoot, { recursive: true });
     for (const filename of ["person.csv", "condition_occurrence.csv"]) {
@@ -153,6 +175,7 @@ async function main() {
       prompt: exportPrompt,
       summary: "apply the aggregate count floor and prepare the export",
     });
+    await captureReferenceScreenshots(page);
     await runApprovedTask(page, task, {
       callId: "call-heartwood-failing-action",
       finalMessage:
@@ -312,6 +335,48 @@ async function runApprovedTask(page, task, taskSpec) {
   ).toBeVisible({ timeout: 60_000 });
 }
 
+async function captureReferenceScreenshots(page) {
+  if (screenshotDirectory === null) return;
+  fs.mkdirSync(screenshotDirectory, { recursive: true });
+  const desktopPath = path.join(
+    screenshotDirectory,
+    "web-reference-analysis.png",
+  );
+  const notebookPath = path.join(
+    screenshotDirectory,
+    "web-notebook-viewport.png",
+  );
+  await assertNoHorizontalOverflow(page, "desktop");
+  await page.screenshot({ path: desktopPath });
+  await page.setViewportSize({ height: 844, width: 390 });
+  await expect(page.getByLabel("Open sessions")).toBeVisible();
+  await assertNoHorizontalOverflow(page, "notebook");
+  await page.screenshot({ path: notebookPath });
+  await page.setViewportSize(desktopViewport);
+  for (const screenshotPath of [desktopPath, notebookPath]) {
+    if (fs.statSync(screenshotPath).size < 1_000) {
+      throw new Error(
+        `reference screenshot is unexpectedly small: ${screenshotPath}`,
+      );
+    }
+  }
+}
+
+async function assertNoHorizontalOverflow(page, viewportName) {
+  const dimensions = await page.evaluate(() => {
+    const root = globalThis.document.documentElement;
+    return {
+      clientWidth: root.clientWidth,
+      scrollWidth: root.scrollWidth,
+    };
+  });
+  if (dimensions.scrollWidth > dimensions.clientWidth) {
+    throw new Error(
+      `${viewportName} viewport overflows horizontally: ${JSON.stringify(dimensions)}`,
+    );
+  }
+}
+
 function readJsonArtifact(root, sessionId, filename) {
   const artifact = path.join(root, "workspaces", sessionId, filename);
   if (!fs.existsSync(artifact)) {
@@ -400,4 +465,14 @@ function listFiles(root) {
     }
   }
   return files.sort();
+}
+
+function optionValue(name) {
+  const index = process.argv.indexOf(name);
+  if (index === -1) return null;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${name} requires a directory`);
+  }
+  return value;
 }
