@@ -12,17 +12,14 @@ import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
 import { Database, Menu, Pencil, ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import type {
-  ActionSettings,
-  ModelProfile,
-  SessionContext,
-  SessionSummary,
-} from "../types";
+import type { ActionSettings, SessionContext, SessionSummary } from "../types";
 
 interface WorkspaceHeaderProps {
   actionSettings: ActionSettings | null;
-  activeProfile: ModelProfile | null;
   context: SessionContext;
+  modelDetail: string | null;
+  modelLabel: string;
+  modelStatus: "checking" | "denied" | "ready" | "setup";
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
   onDetect: () => void;
@@ -32,8 +29,10 @@ interface WorkspaceHeaderProps {
 
 export const WorkspaceHeader = ({
   actionSettings,
-  activeProfile,
   context,
+  modelDetail,
+  modelLabel,
+  modelStatus,
   requestStatus,
   session,
   onDetect,
@@ -101,7 +100,11 @@ export const WorkspaceHeader = ({
           }
         </div>
         <div className="workspace-actions">
-          <StatusBadge requestStatus={requestStatus} session={session} />
+          <StatusBadge
+            modelStatus={modelStatus}
+            requestStatus={requestStatus}
+            session={session}
+          />
           <Tooltip tooltip="Detect platform and dataset">
             <Button
               aria-label="Detect environment"
@@ -127,16 +130,14 @@ export const WorkspaceHeader = ({
         />
         <ContextFact
           label="Model"
-          value={activeProfile?.profile_id ?? "Not configured"}
-          detail={activeProfile?.model}
+          value={modelLabel}
+          detail={modelDetail ?? undefined}
         />
         <ContextFact
           label="Approvals"
           value={approvalLabel(actionSettings)}
           icon={<ShieldCheck size={14} />}
         />
-        <ContextFact label="Boundary evidence" value="Planned" />
-        <ContextFact label="Workflow progress" value="Planned" />
       </dl>
     </header>
   );
@@ -163,19 +164,28 @@ const ContextFact = ({
 );
 
 const StatusBadge = ({
+  modelStatus,
   requestStatus,
   session,
 }: {
+  modelStatus: "checking" | "denied" | "ready" | "setup";
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
 }) => {
-  const status =
-    requestStatus === "idle" ? (session?.status ?? "idle") : requestStatus;
-  return (
-    <Badge variant={status === "error" ? "destructiveLight" : "secondary"}>
-      {status === "busy" ? "Working" : statusLabel(status)}
-    </Badge>
-  );
+  if (requestStatus === "error" || modelStatus === "denied") {
+    return <Badge variant="destructiveLight">Needs attention</Badge>;
+  }
+  if (requestStatus === "busy") {
+    return <Badge variant="secondary">Working</Badge>;
+  }
+  if (modelStatus === "checking") {
+    return <Badge variant="secondary">Checking model</Badge>;
+  }
+  if (modelStatus === "setup") {
+    return <Badge variant="secondary">Setup needed</Badge>;
+  }
+  const status = session?.status ?? "idle";
+  return <Badge variant="secondary">{statusLabel(status)}</Badge>;
 };
 
 const statusLabel = (status: string): string =>

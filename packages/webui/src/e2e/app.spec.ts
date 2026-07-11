@@ -28,6 +28,16 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(
     page.getByRole("log", { name: "Conversation transcript" }),
   ).toBeVisible();
+  const task = page.getByRole("textbox", { name: "Task", exact: true });
+  await expect(task).toBeDisabled();
+  await expect(page.getByLabel("Pause agent")).toBeDisabled();
+  await expect(page.getByText("Setup needed", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Boundary evidence", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Workflow progress", { exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByText("I will inspect the synthetic workspace."),
   ).toBeVisible();
@@ -54,7 +64,8 @@ test("supports the researcher conversation and session workflow", async ({
   await page.getByRole("button", { name: "Close" }).click();
 
   const modelPolicyButton = page.getByRole("button", {
-    name: "Model setup",
+    name: "Settings",
+    exact: true,
   });
   await modelPolicyButton.click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
@@ -62,29 +73,40 @@ test("supports the researcher conversation and session workflow", async ({
     has: page.getByText("Local", { exact: true }),
   });
   await localConnection.getByRole("button", { name: "Choose" }).click();
+  await expect(
+    page.locator(".connection-row.selected + .connection-form"),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Load models" }).click();
-  await expect(page.getByLabel("Models available from Local")).toHaveValue(
-    "local-model",
-  );
+  const modelPicker = page.getByLabel("Models available from Local");
+  await expect(modelPicker).toContainText("Local Model");
+  await modelPicker.click();
+  await page.getByPlaceholder("Search models").fill("Local");
+  await expect(
+    page.getByRole("option", { name: "Local Model - local-model" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Use model" }).click();
   await expect(
     page.getByLabel("Active model profile", { exact: true }),
-  ).toHaveValue("local");
+  ).toContainText("Local · local-model");
   await expect(page.getByText("Authorized", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Approvals" }).click();
+  const approvalsTab = page.getByRole("tab", { name: "Approvals" });
+  const modelsTab = page.getByRole("tab", { name: "Models" });
+  await approvalsTab.click();
   await expect(
     page.getByRole("button", { name: "Ask Every Time" }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByRole("button", { name: "Auto-Approve Low Risk" }),
   ).toBeVisible();
-  await page.getByRole("tab", { name: "Models" }).click();
+  await approvalsTab.press("ArrowLeft");
+  await expect(modelsTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("No reviewed models available")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeHidden();
   await expect(modelPolicyButton).toBeFocused();
+  await expect(task).toBeEnabled();
 
-  const task = page.getByRole("textbox", { name: "Task", exact: true });
   await task.fill("Summarize the synthetic workspace");
   await task.press("Enter");
   await expect(
@@ -115,8 +137,11 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await page.getByLabel("Open sessions").click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Synthetic analysis/u }),
+    page.getByRole("button", {
+      name: /Synthetic analysis, Approval needed/u,
+    }),
   ).toBeVisible();
+  await expect(page.getByText("Ask Every Time", { exact: true })).toBeVisible();
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
 });
 

@@ -10,6 +10,7 @@ import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetTitle,
 } from "@stanfordspezi/spezi-web-design-system/components/Sheet";
 import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
@@ -24,6 +25,7 @@ import {
 } from "./components/SessionRail";
 import { UtilitySheet } from "./components/UtilitySheet";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
+import { modelProfileLabel } from "./modelPresentation";
 import type {
   ActionConfirmationMode,
   ActionSettings,
@@ -99,6 +101,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   );
   const [profileDraft, setProfileDraft] = useState<ModelProfile>(emptyProfile);
   const [validation, setValidation] = useState<ModelValidation | null>(null);
+  const [validationFailureKey, setValidationFailureKey] = useState<
+    string | null
+  >(null);
   const [skillSettings, setSkillSettings] = useState<SkillSettings | null>(
     null,
   );
@@ -236,14 +241,69 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     [modelSettings],
   );
   const activeValidation =
-    validation?.profile.profile_id === activeProfile?.profile_id ?
+    (
+      validation !== null &&
+      activeProfile !== null &&
+      validation.profile.profile_id === activeProfile.profile_id &&
+      validation.profile.model === activeProfile.model &&
+      validation.action_confirmation_mode === actionSettings?.confirmation_mode
+    ) ?
       validation
     : null;
-  const modelReady =
-    activeProfile !== null &&
-    activeProfile.credential_status !== "missing" &&
-    (activeValidation === null ||
-      activeValidation.policy_decision.decision === "allow");
+  const activeValidationKey =
+    activeProfile === null ? null : (
+      modelValidationKey(activeProfile, actionSettings?.confirmation_mode)
+    );
+  const modelStatus = useMemo(() => {
+    if (modelSettings === null) {
+      return {
+        kind: "checking" as const,
+        message: "Loading model settings.",
+      };
+    }
+    if (activeProfile === null) {
+      return {
+        kind: "setup" as const,
+        message: "Choose a model to begin.",
+      };
+    }
+    if (activeProfile.credential_status === "missing") {
+      return {
+        kind: "setup" as const,
+        message: "Add the credential required by the selected model.",
+      };
+    }
+    if (activeValidation === null) {
+      if (validationFailureKey === activeValidationKey) {
+        return {
+          kind: "denied" as const,
+          message: "Access to the selected model could not be verified.",
+        };
+      }
+      return {
+        kind: "checking" as const,
+        message: "Checking access to the selected model.",
+      };
+    }
+    if (activeValidation.policy_decision.decision !== "allow") {
+      return {
+        kind: "denied" as const,
+        message: "The selected model is not authorized in this environment.",
+      };
+    }
+    return { kind: "ready" as const, message: "" };
+  }, [
+    activeProfile,
+    activeValidation,
+    activeValidationKey,
+    modelSettings,
+    validationFailureKey,
+  ]);
+  const modelReady = modelStatus.kind === "ready";
+  const activeModelLabel =
+    modelSettings === null ? "Loading"
+    : activeProfile === null ? "Not configured"
+    : modelProfileLabel(activeProfile, modelSettings);
   const conversation = useMemo(
     () =>
       mergeConversationMessages(
@@ -260,6 +320,38 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   useEffect(() => {
     scrollConversationEnd(conversationEndRef.current);
   }, [conversation.length]);
+
+  useEffect(() => {
+    if (
+      activeProfile === null ||
+      activeProfile.credential_status === "missing"
+    ) {
+      return;
+    }
+    let active = true;
+    const requestKey = modelValidationKey(
+      activeProfile,
+      actionSettings?.confirmation_mode,
+    );
+    void resolvedClient
+      .validateModelProfile(activeProfile.profile_id)
+      .then((result) => {
+        if (!active) return;
+        setValidation(result);
+        setValidationFailureKey((current) =>
+          current === requestKey ? null : current,
+        );
+      })
+      .catch((caught: unknown) => {
+        if (!active) return;
+        setValidation(null);
+        setValidationFailureKey(requestKey);
+        setError(errorMessage(caught));
+      });
+    return () => {
+      active = false;
+    };
+  }, [actionSettings?.confirmation_mode, activeProfile, resolvedClient]);
 
   const send = async (
     kind: Parameters<typeof createCommand>[1],
@@ -310,7 +402,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   const submitPrompt = () => {
     const value = prompt.trim();
-    if (!value || requestStatus === "busy" || sessionId === null) return;
+    if (!value || !modelReady || requestStatus === "busy" || sessionId === null)
+      return;
     setPrompt("");
     void send("chat", { prompt: value });
   };
@@ -406,11 +499,6 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     try {
       const settings = await resolvedClient.connectModel(request);
       setModelSettings(settings);
-      setValidation(
-        await resolvedClient.validateModelProfile(
-          settings.active_profile ?? undefined,
-        ),
-      );
     } catch (caught) {
       setError(errorMessage(caught));
       throw caught;
@@ -423,8 +511,33 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const selectProfile = async (profileId: string) => {
     try {
       setModelSettings(await resolvedClient.selectModelProfile(profileId));
-      setValidation(await resolvedClient.validateModelProfile(profileId));
     } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
+  const validateProfile = async (profileId: string | undefined) => {
+    const resolvedProfileId = profileId ?? activeProfile?.profile_id;
+    if (resolvedProfileId === undefined) return;
+    const profile = modelSettings?.profiles.find(
+      (candidate) => candidate.profile_id === resolvedProfileId,
+    );
+    const requestKey =
+      profile === undefined ? null : (
+        modelValidationKey(profile, actionSettings?.confirmation_mode)
+      );
+    try {
+      setValidation(
+        await resolvedClient.validateModelProfile(resolvedProfileId),
+      );
+      if (requestKey !== null) {
+        setValidationFailureKey((current) =>
+          current === requestKey ? null : current,
+        );
+      }
+    } catch (caught) {
+      setValidation(null);
+      if (requestKey !== null) setValidationFailureKey(requestKey);
       setError(errorMessage(caught));
     }
   };
@@ -450,8 +563,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         <section className="workbench">
           <WorkspaceHeader
             actionSettings={actionSettings}
-            activeProfile={activeProfile}
             context={viewModel.context}
+            modelDetail={activeProfile?.model ?? null}
+            modelLabel={activeModelLabel}
+            modelStatus={modelStatus.kind}
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
@@ -478,6 +593,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             conversation={conversation}
             conversationEndRef={conversationEndRef}
             modelConfigured={modelReady}
+            modelMessage={modelStatus.message}
             paused={viewModel.paused}
             pendingActions={pendingActions}
             prompt={prompt}
@@ -499,6 +615,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             <SheetTitle className="visually-hidden">
               Heartwood sessions
             </SheetTitle>
+            <SheetDescription className="visually-hidden">
+              Create and switch between analysis sessions.
+            </SheetDescription>
             <SessionRailContent {...railProps} />
           </SheetContent>
         </Sheet>
@@ -514,7 +633,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           skillCandidate={skillCandidate}
           skillSettings={skillSettings}
           skillSource={skillSource}
-          validation={validation}
+          validation={activeValidation}
           onClose={() => setPanel(null)}
           onConnectModel={connectModel}
           onDiscoverModels={discoverModels}
@@ -587,12 +706,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           onSelectProfile={(profileId) => void selectProfile(profileId)}
           onSetSkillApproved={setSkillApproved}
           onSetSkillSource={setSkillSource}
-          onValidateProfile={(profileId) =>
-            void resolvedClient
-              .validateModelProfile(profileId)
-              .then(setValidation)
-              .catch((caught: unknown) => setError(errorMessage(caught)))
-          }
+          onValidateProfile={(profileId) => void validateProfile(profileId)}
         />
       </main>
     </SpeziProvider>
@@ -676,6 +790,12 @@ const mergeEvents = (
     (left, right) => left.sequence - right.sequence,
   );
 };
+
+const modelValidationKey = (
+  profile: ModelProfile,
+  confirmationMode: ActionConfirmationMode | undefined,
+): string =>
+  JSON.stringify([profile.profile_id, profile.model, confirmationMode ?? null]);
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);

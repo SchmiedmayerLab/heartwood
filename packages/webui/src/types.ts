@@ -125,6 +125,7 @@ export interface SessionViewModel {
 
 export type CredentialKind =
   "environment" | "file" | "managed-identity" | "none";
+export type CredentialStatus = "available" | "configured" | "missing";
 export type ActionConfirmationMode = "always-confirm" | "confirm-risky";
 
 export interface ActionModeOption {
@@ -152,7 +153,7 @@ export interface ModelProfile {
   aws_region_name: string | null;
   aws_profile_name: string | null;
   description: string | null;
-  credential_status?: string;
+  credential_status?: CredentialStatus;
 }
 
 export type ModelConnectionProtocol =
@@ -178,7 +179,7 @@ export interface ModelConnection {
   description: string;
   static_models: string[];
   accepts_token: boolean;
-  credential_status: string;
+  credential_status: CredentialStatus;
 }
 
 export interface ModelCatalogEntry {
@@ -234,7 +235,7 @@ export interface ModelSettings {
 
 export interface ModelValidation {
   profile: ModelProfile;
-  credential_status: string;
+  credential_status: CredentialStatus;
   action_confirmation_mode: ActionConfirmationMode;
   policy_decision: {
     decision: string;

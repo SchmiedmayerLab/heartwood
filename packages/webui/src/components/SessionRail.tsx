@@ -7,6 +7,7 @@
  */
 
 import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
+import { StatusDot } from "@stanfordspezi/spezi-web-design-system/components/StatusDot";
 import {
   Activity,
   BookOpen,
@@ -68,6 +69,7 @@ export const SessionRailContent = ({
           <p className="session-list-empty">No saved sessions</p>
         : sessions.map((session) => (
             <button
+              aria-label={`${session.title}, ${sessionStatusLabel(session.status)}, ${sessionMeta(session)}`}
               aria-current={
                 session.session_id === selectedSessionId ? "page" : undefined
               }
@@ -76,9 +78,11 @@ export const SessionRailContent = ({
               type="button"
               onClick={() => onSelectSession(session.session_id)}
             >
-              <span
-                className={`session-status-dot ${session.status}`}
-                aria-hidden="true"
+              <StatusDot
+                aria-hidden={true}
+                className="session-status-dot"
+                size="sm"
+                status={sessionStatus(session.status)}
               />
               <span className="session-list-copy">
                 <strong>{session.title}</strong>
@@ -113,7 +117,7 @@ export const SessionRailContent = ({
         onClick={() => onOpenPanel("settings")}
       >
         <Settings size={17} />
-        Model setup
+        Settings
       </Button>
       <Button variant="ghost" onClick={onExportAudit}>
         <Download size={17} />
@@ -143,4 +147,21 @@ const formatRelativeDate = (date: Date): string => {
     day: "numeric",
     month: "short",
   }).format(date);
+};
+
+const sessionStatus = (
+  status: SessionSummary["status"],
+): "default" | "destructive" | "primary" | "success" | "warning" => {
+  if (status === "error") return "destructive";
+  if (status === "idle") return "success";
+  if (status === "paused") return "primary";
+  if (status === "waiting") return "warning";
+  return "default";
+};
+
+const sessionStatusLabel = (status: SessionSummary["status"]): string => {
+  if (status === "error") return "Needs attention";
+  if (status === "paused") return "Paused";
+  if (status === "waiting") return "Approval needed";
+  return "Ready";
 };

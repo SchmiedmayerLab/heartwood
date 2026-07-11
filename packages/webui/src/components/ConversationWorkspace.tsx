@@ -27,6 +27,7 @@ interface ConversationWorkspaceProps {
   conversation: ConversationMessage[];
   conversationEndRef: RefObject<HTMLDivElement | null>;
   modelConfigured: boolean;
+  modelMessage: string;
   paused: boolean;
   pendingActions: ApprovalControl[];
   prompt: string;
@@ -42,6 +43,7 @@ export const ConversationWorkspace = ({
   conversation,
   conversationEndRef,
   modelConfigured,
+  modelMessage,
   paused,
   pendingActions,
   prompt,
@@ -55,10 +57,10 @@ export const ConversationWorkspace = ({
   <section className="conversation-workspace" aria-label="Agent conversation">
     {!modelConfigured ?
       <div className="configuration-banner" role="status">
-        <span>Model setup is incomplete.</span>
+        <span>{modelMessage}</span>
         <Button size="sm" variant="outline" onClick={onOpenSettings}>
           <Settings size={15} />
-          Configure model
+          Open settings
         </Button>
       </div>
     : null}
@@ -69,7 +71,7 @@ export const ConversationWorkspace = ({
       role="log"
     >
       {conversation.length === 0 ?
-        <EmptyConversation onPrompt={onPrompt} />
+        <EmptyConversation disabled={!modelConfigured} onPrompt={onPrompt} />
       : conversation.map((message) => (
           <ConversationItem key={message.id} message={message} />
         ))
@@ -88,10 +90,11 @@ export const ConversationWorkspace = ({
       <div className="composer">
         <Textarea
           aria-label="Task"
-          disabled={paused}
+          disabled={paused || !modelConfigured}
           placeholder={
-            paused ?
-              "Resume the session to continue"
+            paused ? "Resume the session to continue"
+            : !modelConfigured ?
+              "Choose an authorized model to start"
             : "Ask Heartwood to work in this workspace"
           }
           value={prompt}
@@ -107,6 +110,7 @@ export const ConversationWorkspace = ({
           <Tooltip tooltip={paused ? "Resume agent" : "Pause agent"}>
             <Button
               aria-label={paused ? "Resume agent" : "Pause agent"}
+              disabled={!modelConfigured}
               size="sm"
               variant="ghost"
               onClick={onPauseToggle}
@@ -119,7 +123,7 @@ export const ConversationWorkspace = ({
           <Tooltip tooltip="Send task">
             <Button
               aria-label="Send task"
-              disabled={!prompt.trim() || paused}
+              disabled={!prompt.trim() || paused || !modelConfigured}
               isPending={requestStatus === "busy"}
               size="sm"
               onClick={onSubmit}
@@ -134,8 +138,10 @@ export const ConversationWorkspace = ({
 );
 
 const EmptyConversation = ({
+  disabled,
   onPrompt,
 }: {
+  disabled: boolean;
   onPrompt: (prompt: string) => void;
 }) => (
   <div className="conversation-empty">
@@ -146,6 +152,7 @@ const EmptyConversation = ({
     <div className="starter-actions" aria-label="Task starters">
       {TASK_STARTERS.map((starter) => (
         <Button
+          disabled={disabled}
           key={starter}
           size="sm"
           variant="outline"

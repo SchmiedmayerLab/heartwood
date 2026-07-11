@@ -119,7 +119,7 @@ Heartwood verifies checked-in and installed `SKILL.md` packages, then loads the 
 
 The implemented CLI and web UI expose the same core conversation actions: address a persisted session id, submit a task, inspect messages and tool activity, allow or reject a pending action, select an allowed action-confirmation mode, pause or resume execution, and export the audit record. The CLI also exposes model-profile and artifact-management commands for administrators and technical users.
 
-The session-oriented researcher experience below is the implemented presentation contract. The web UI uses gateway-owned session metadata, progressive disclosure, typed event projections, responsive overlays, and the same command vocabulary as the CLI. Boundary evidence, workflow progress, and other states that do not yet have typed gateway records are shown as planned or omitted; target-user validation remains an acceptance requirement in [Priority 2](09-implementation-plan.md).
+The session-oriented researcher experience below is the implemented presentation contract. The web UI uses gateway-owned session metadata, progressive disclosure, typed event projections, responsive overlays, and the same command vocabulary as the CLI. Boundary evidence, workflow progress, and other states that do not yet have typed gateway records are omitted rather than inferred; target-user validation remains an acceptance requirement in [Priority 2](09-implementation-plan.md).
 
 The web UI opens on the conversation and follows one information architecture:
 

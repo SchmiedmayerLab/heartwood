@@ -93,6 +93,7 @@ class FakeClient implements HeartwoodClient {
   connectedProvider: { presetId: string; modelName: string } | null = null;
   catalogRequest: ModelCatalogRequest | null = null;
   catalogError: Error | null = null;
+  validationError: Error | null = null;
   modelConnectionRequest: ModelConnectRequest | null = null;
   currentSettings = settings();
   currentActions = actions();
@@ -395,6 +396,7 @@ class FakeClient implements HeartwoodClient {
   }
 
   validateModelProfile(): Promise<ModelValidation> {
+    if (this.validationError) return Promise.reject(this.validationError);
     return Promise.resolve({
       profile: this.currentSettings.profiles[0] ?? localProfile(),
       credential_status: "configured",
@@ -474,8 +476,14 @@ describe("App", () => {
 
   it("submits a coding-agent task from the conversation composer", async () => {
     const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      profiles: [localProfile()],
+    };
     render(<App client={client} initialSessionId="session-test" />);
     await waitFor(() => expect(client.replayCalls).toBe(1));
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
 
     fireEvent.change(screen.getByLabelText("Task"), {
       target: { value: "Inspect the synthetic cohort" },
@@ -528,7 +536,7 @@ describe("App", () => {
   it("configures and validates model profiles in the settings panel", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
-    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     await screen.findByRole("heading", { name: "Settings" });
     const researchConnection = screen
@@ -544,7 +552,7 @@ describe("App", () => {
     const modelSelect = await screen.findByLabelText(
       "Models available from Research AI Service",
     );
-    expect(modelSelect).toHaveValue("provider-coder");
+    expect(modelSelect).toHaveTextContent("Provider Coder");
     fireEvent.click(screen.getByRole("button", { name: "Use model" }));
     await waitFor(() =>
       expect(client.modelConnectionRequest).toEqual({
@@ -556,19 +564,21 @@ describe("App", () => {
       connection_id: "research-ai",
       refresh: true,
     });
-    expect(
-      screen.getByRole("option", {
-        name: "Research AI Service · provider-coder",
-      }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Approvals" }));
+    expect(screen.getByLabelText("Active model profile")).toHaveTextContent(
+      "Research AI Service · provider-coder",
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Approvals" }), {
+      button: 0,
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Auto-Approve Low Risk" }),
     );
     await waitFor(() =>
       expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Models" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Models" }), {
+      button: 0,
+    });
     fireEvent.click(screen.getByText("More options"));
     fireEvent.click(
       screen.getByRole("button", {
@@ -594,7 +604,7 @@ describe("App", () => {
     const progress = await screen.findByRole("progressbar", {
       name: "Download progress for Stories 260K",
     });
-    expect(progress).toHaveAttribute("value", String(64 * 1024 * 1024));
+    expect(progress).toHaveAttribute("aria-valuenow", String(64 * 1024 * 1024));
     expect(
       await screen.findByText("Ready in model storage"),
     ).toBeInTheDocument();
@@ -603,7 +613,7 @@ describe("App", () => {
   it("uses a transient cloud token to discover and select a model", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
-    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     const openAiConnection = (await screen.findByText("OpenAI")).closest(
       ".connection-row",
@@ -642,7 +652,7 @@ describe("App", () => {
     const client = new FakeClient();
     client.catalogError = new Error("model provider catalog is unavailable");
     render(<App client={client} initialSessionId="session-test" />);
-    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     const customConnection = (await screen.findByText("Custom API")).closest(
       ".connection-row",
@@ -690,8 +700,10 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
-    fireEvent.click(await screen.findByRole("tab", { name: "Approvals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Approvals" }), {
+      button: 0,
+    });
 
     expect(
       await screen.findByRole("button", { name: "Auto-Approve Low Risk" }),
@@ -709,8 +721,33 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
 
     expect(
-      await screen.findByText("Model setup is incomplete."),
+      await screen.findByText(
+        "Add the credential required by the selected model.",
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("Task")).toBeDisabled();
+    expect(screen.getByLabelText("Pause agent")).toBeDisabled();
+    expect(screen.getByText("Setup needed")).toBeInTheDocument();
+  });
+
+  it("keeps the composer unavailable when route validation fails", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      profiles: [localProfile()],
+    };
+    client.validationError = new Error("validation unavailable");
+
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(
+      await screen.findByText(
+        "Access to the selected model could not be verified.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Task")).toBeDisabled();
+    expect(screen.getByText("Needs attention")).toBeInTheDocument();
   });
 
   it("supports secondary activity, settings, rejection, and pause controls", async () => {
@@ -737,7 +774,7 @@ describe("App", () => {
     await waitFor(() => expect(client.replayCalls).toBeGreaterThan(1));
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Model setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     await screen.findByRole("heading", { name: "Settings" });
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     fireEvent.click(screen.getByText("More options"));
@@ -862,7 +899,7 @@ const modelConnection = (
   connectionId: string,
   label: string,
   source: ModelConnection["source"],
-  credentialStatus: string,
+  credentialStatus: ModelConnection["credential_status"],
   acceptsToken: boolean,
 ): ModelConnection => ({
   connection_id: connectionId,

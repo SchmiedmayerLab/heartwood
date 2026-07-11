@@ -10,6 +10,15 @@ import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
 import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
 import { Checkbox } from "@stanfordspezi/spezi-web-design-system/components/Checkbox";
 import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
+import { Progress } from "@stanfordspezi/spezi-web-design-system/components/Progress";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@stanfordspezi/spezi-web-design-system/components/Select";
 import {
   Sheet,
   SheetContent,
@@ -17,6 +26,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@stanfordspezi/spezi-web-design-system/components/Sheet";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@stanfordspezi/spezi-web-design-system/components/Tabs";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
 import {
   Building2,
@@ -29,11 +44,13 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
   ActionSettings,
   CredentialKind,
+  CredentialStatus,
   ModelArtifacts,
   ModelCatalog,
   ModelCatalogRequest,
@@ -291,27 +308,18 @@ const SettingsContent = (props: UtilitySheetProps) => {
         <SheetTitle>Settings</SheetTitle>
         <SheetDescription>Models and action approvals</SheetDescription>
       </SheetHeader>
-      <div aria-label="Settings view" className="settings-tabs" role="tablist">
-        <button
-          aria-selected={settingsView === "models"}
-          role="tab"
-          type="button"
-          onClick={() => setSettingsView("models")}
-        >
-          Models
-        </button>
-        <button
-          aria-selected={settingsView === "approvals"}
-          role="tab"
-          type="button"
-          onClick={() => setSettingsView("approvals")}
-        >
-          Approvals
-        </button>
-      </div>
+      <Tabs
+        value={settingsView}
+        onValueChange={(value) =>
+          setSettingsView(value === "approvals" ? "approvals" : "models")
+        }
+      >
+        <TabsList aria-label="Settings view" className="settings-tabs" grow>
+          <TabsTrigger value="models">Models</TabsTrigger>
+          <TabsTrigger value="approvals">Approvals</TabsTrigger>
+        </TabsList>
 
-      {settingsView === "models" ?
-        <>
+        <TabsContent className="settings-tab-content" value="models">
           <div className="sheet-toolbar">
             <Button size="sm" variant="outline" onClick={onRefreshSettings}>
               <RotateCcw size={15} />
@@ -321,20 +329,27 @@ const SettingsContent = (props: UtilitySheetProps) => {
           <section className="panel-section">
             <h3>Active model</h3>
             <div className="inline-control">
-              <select
-                aria-label="Active model profile"
-                value={settings?.active_profile ?? ""}
-                onChange={(event) => onSelectProfile(event.target.value)}
+              <Select
+                disabled={!settings?.profiles.length}
+                value={settings?.active_profile ?? undefined}
+                onValueChange={onSelectProfile}
               >
-                <option disabled value="">
-                  Not configured
-                </option>
-                {settings?.profiles.map((profile) => (
-                  <option key={profile.profile_id} value={profile.profile_id}>
-                    {profileLabel(profile, settings)}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="Active model profile">
+                  <SelectValue placeholder="Not configured" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {settings?.profiles.map((profile) => (
+                      <SelectItem
+                        key={profile.profile_id}
+                        value={profile.profile_id}
+                      >
+                        {modelProfileLabel(profile, settings)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
               <Tooltip tooltip="Validate active profile">
                 <Button
                   aria-label="Validate active model profile"
@@ -461,33 +476,35 @@ const SettingsContent = (props: UtilitySheetProps) => {
               />
             </div>
           </details>
-        </>
-      : <section className="panel-section">
-          <h3>Action approvals</h3>
-          <div
-            aria-label="Action approval mode"
-            className="mode-control"
-            role="group"
-          >
-            {actions?.modes.map((option) => (
-              <button
-                aria-pressed={actions.confirmation_mode === option.mode}
-                disabled={!option.allowed}
-                key={option.mode}
-                title={
-                  option.allowed ?
-                    option.label
-                  : `${option.label} is not allowed by platform policy`
-                }
-                type="button"
-                onClick={() => onSelectActionMode(option.mode)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </section>
-      }
+        </TabsContent>
+        <TabsContent className="settings-tab-content" value="approvals">
+          <section className="panel-section">
+            <h3>Action approvals</h3>
+            <div
+              aria-label="Action approval mode"
+              className="mode-control"
+              role="group"
+            >
+              {actions?.modes.map((option) => (
+                <button
+                  aria-pressed={actions.confirmation_mode === option.mode}
+                  disabled={!option.allowed}
+                  key={option.mode}
+                  title={
+                    option.allowed ?
+                      option.label
+                    : `${option.label} is not allowed by platform policy`
+                  }
+                  type="button"
+                  onClick={() => onSelectActionMode(option.mode)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </section>
+        </TabsContent>
+      </Tabs>
     </>
   );
 };
@@ -513,7 +530,6 @@ const ModelConnectionSetup = ({
   const connection = connections.find(
     (candidate) => candidate.connection_id === connectionId,
   );
-  const effectiveConnection = catalog?.connection ?? connection;
   const groups = connectionGroups(connections);
 
   const choose = (next: ModelConnection) => {
@@ -584,153 +600,229 @@ const ModelConnectionSetup = ({
             <h3>{group.label}</h3>
             <div className="connection-list">
               {group.connections.map((item) => (
-                <div className="connection-row" key={item.connection_id}>
-                  <span className="connection-icon">
-                    <ConnectionIcon connection={item} />
-                  </span>
-                  <div>
-                    <strong>{item.label}</strong>
-                    <span>{connectionStatus(item)}</span>
-                  </div>
-                  <Button
-                    aria-pressed={item.connection_id === connectionId}
-                    size="sm"
-                    variant="outline"
-                    onClick={() => choose(item)}
+                <Fragment key={item.connection_id}>
+                  <div
+                    className={
+                      item.connection_id === connectionId ?
+                        "connection-row selected"
+                      : "connection-row"
+                    }
                   >
-                    {(
-                      item.credential_status === "missing" && item.accepts_token
-                    ) ?
-                      "Connect"
-                    : "Choose"}
-                  </Button>
-                </div>
+                    <span className="connection-icon">
+                      <ConnectionIcon connection={item} />
+                    </span>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <span>{connectionStatus(item)}</span>
+                    </div>
+                    <Button
+                      aria-expanded={item.connection_id === connectionId}
+                      aria-pressed={item.connection_id === connectionId}
+                      size="sm"
+                      variant="outline"
+                      onClick={() => choose(item)}
+                    >
+                      {(
+                        item.credential_status === "missing" &&
+                        item.accepts_token
+                      ) ?
+                        "Connect"
+                      : "Choose"}
+                    </Button>
+                  </div>
+                  {item.connection_id === connectionId && connection ?
+                    <ModelConnectionForm
+                      baseUrl={baseUrl}
+                      catalog={catalog}
+                      connection={connection}
+                      error={error}
+                      manualModel={manualModel}
+                      pending={pending}
+                      selectedModel={selectedModel}
+                      token={token}
+                      onActivate={activateModel}
+                      onBaseUrl={setBaseUrl}
+                      onDiscover={discover}
+                      onManualModel={setManualModel}
+                      onSelectedModel={setSelectedModel}
+                      onToken={setToken}
+                    />
+                  : null}
+                </Fragment>
               ))}
             </div>
           </div>
         : null,
       )}
-
-      {connection && effectiveConnection ?
-        <div className="connection-form">
-          <div>
-            <strong>{connection.label}</strong>
-            <span>{connection.description}</span>
-          </div>
-          {connection.connection_id === "custom-api" ?
-            <label>
-              Server URL
-              <Input
-                placeholder="https://provider.example/v1"
-                type="url"
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
-              />
-            </label>
-          : null}
-          {(
-            connection.accepts_token &&
-            (connection.credential_status === "missing" ||
-              connection.connection_id === "custom-api")
-          ) ?
-            <label>
-              {connection.connection_id === "custom-api" ?
-                "Token (optional for local)"
-              : "API token"}
-              <Input
-                autoComplete="off"
-                type="password"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-              />
-            </label>
-          : null}
-          <Button
-            disabled={
-              pending ||
-              (connection.connection_id === "custom-api" && !baseUrl.trim()) ||
-              (connection.accepts_token &&
-                connection.credential_status === "missing" &&
-                connection.connection_id !== "custom-api" &&
-                !token.trim())
-            }
-            isPending={pending}
-            variant="outline"
-            onClick={() => void discover()}
-          >
-            Load models
-          </Button>
-
-          {catalog ?
-            <>
-              <label>
-                Model
-                <select
-                  aria-label={`Models available from ${connection.label}`}
-                  value={selectedModel}
-                  onChange={(event) => setSelectedModel(event.target.value)}
-                >
-                  <option disabled value="">
-                    Select a model
-                  </option>
-                  {catalog.models.map((model) => (
-                    <option
-                      disabled={model.availability === "unsupported"}
-                      key={model.model_id}
-                      value={model.model_id}
-                    >
-                      {model.display_name === model.model_id ?
-                        model.model_id
-                      : `${model.display_name} - ${model.model_id}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {catalog.models.length ?
-                <ModelChoiceStatus
-                  catalog={catalog}
-                  selectedModel={selectedModel}
-                />
-              : <p className="panel-empty">No models available</p>}
-              <Button
-                disabled={pending || !selectedModel}
-                isPending={pending}
-                onClick={() => void activateModel(false)}
-              >
-                Use model
-              </Button>
-            </>
-          : null}
-
-          {error ?
-            <div className="connection-error" role="alert">
-              <span>{error}</span>
-              {(
-                connection.connection_id === "custom-api" &&
-                supportsManualModelFallback(error)
-              ) ?
-                <>
-                  <label>
-                    Model identifier
-                    <Input
-                      value={manualModel}
-                      onChange={(event) => setManualModel(event.target.value)}
-                    />
-                  </label>
-                  <Button
-                    disabled={pending || !manualModel.trim()}
-                    onClick={() => void activateModel(true)}
-                  >
-                    Use model
-                  </Button>
-                </>
-              : null}
-            </div>
-          : null}
-        </div>
-      : null}
     </section>
   );
+};
+
+interface ModelConnectionFormProps {
+  baseUrl: string;
+  catalog: ModelCatalog | null;
+  connection: ModelConnection;
+  error: string | null;
+  manualModel: string;
+  pending: boolean;
+  selectedModel: string;
+  token: string;
+  onActivate: (manual: boolean) => Promise<void>;
+  onBaseUrl: (value: string) => void;
+  onDiscover: () => Promise<void>;
+  onManualModel: (value: string) => void;
+  onSelectedModel: (value: string) => void;
+  onToken: (value: string) => void;
+}
+
+const ModelConnectionForm = ({
+  baseUrl,
+  catalog,
+  connection,
+  error,
+  manualModel,
+  pending,
+  selectedModel,
+  token,
+  onActivate,
+  onBaseUrl,
+  onDiscover,
+  onManualModel,
+  onSelectedModel,
+  onToken,
+}: ModelConnectionFormProps) => (
+  <div className="connection-form">
+    <div>
+      <strong>{connection.label}</strong>
+      <span>{connection.description}</span>
+    </div>
+    {connection.connection_id === "custom-api" ?
+      <label>
+        Server URL
+        <Input
+          placeholder="https://provider.example/v1"
+          type="url"
+          value={baseUrl}
+          onChange={(event) => onBaseUrl(event.target.value)}
+        />
+      </label>
+    : null}
+    {(
+      connection.accepts_token &&
+      (connection.credential_status === "missing" ||
+        connection.connection_id === "custom-api")
+    ) ?
+      <label>
+        {connection.connection_id === "custom-api" ?
+          "Token (optional for local)"
+        : "API token"}
+        <Input
+          autoComplete="off"
+          type="password"
+          value={token}
+          onChange={(event) => onToken(event.target.value)}
+        />
+      </label>
+    : null}
+    <Button
+      disabled={
+        pending ||
+        (connection.connection_id === "custom-api" && !baseUrl.trim()) ||
+        (connection.accepts_token &&
+          connection.credential_status === "missing" &&
+          connection.connection_id !== "custom-api" &&
+          !token.trim())
+      }
+      isPending={pending}
+      variant="outline"
+      onClick={() => void onDiscover()}
+    >
+      Load models
+    </Button>
+
+    {catalog ?
+      <>
+        <label>
+          Model
+          <Select
+            search={{
+              placeholder: "Search models",
+              emptyMessage: "No matching models",
+            }}
+            value={selectedModel || undefined}
+            onValueChange={onSelectedModel}
+          >
+            <SelectTrigger
+              aria-label={`Models available from ${connection.label}`}
+            >
+              <SelectValue placeholder="Select a model" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {catalog.models.map((model) => (
+                  <SelectItem
+                    disabled={model.availability === "unsupported"}
+                    itemText={modelOptionLabel(model)}
+                    key={model.model_id}
+                    value={model.model_id}
+                  >
+                    {modelOptionLabel(model)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </label>
+        {catalog.models.length ?
+          <ModelChoiceStatus catalog={catalog} selectedModel={selectedModel} />
+        : <p className="panel-empty">No models available</p>}
+        <Button
+          disabled={pending || !selectedModel}
+          isPending={pending}
+          onClick={() => void onActivate(false)}
+        >
+          Use model
+        </Button>
+      </>
+    : null}
+
+    {error ?
+      <div className="connection-error" role="alert">
+        <span>{error}</span>
+        {(
+          connection.connection_id === "custom-api" &&
+          supportsManualModelFallback(error)
+        ) ?
+          <>
+            <label>
+              Model identifier
+              <Input
+                value={manualModel}
+                onChange={(event) => onManualModel(event.target.value)}
+              />
+            </label>
+            <Button
+              disabled={pending || !manualModel.trim()}
+              onClick={() => void onActivate(true)}
+            >
+              Use model
+            </Button>
+          </>
+        : null}
+      </div>
+    : null}
+  </div>
+);
+
+const modelOptionLabel = (model: ModelCatalog["models"][number]): string => {
+  const identity =
+    model.display_name === model.model_id ?
+      model.model_id
+    : `${model.display_name} - ${model.model_id}`;
+  if (model.availability === "experimental")
+    return `${identity} · Experimental`;
+  if (model.availability === "unsupported") return `${identity} · Unavailable`;
+  return identity;
 };
 
 const ModelChoiceStatus = ({
@@ -818,7 +910,7 @@ const ArtifactDownloadStatus = ({
   const percentage = Math.round((downloaded / total) * 100);
   return (
     <div className="download-progress" role="status">
-      <progress
+      <Progress
         aria-label={`Download progress for ${alias}`}
         max={total}
         value={downloaded}
@@ -828,31 +920,6 @@ const ArtifactDownloadStatus = ({
       </small>
     </div>
   );
-};
-
-const profileLabel = (
-  profile: ModelProfile,
-  settings: ModelSettings,
-): string => {
-  const connection = settings.connections.find(
-    (item) => item.connection_id === profile.profile_id,
-  );
-  if (connection) {
-    const modelName =
-      profile.model.startsWith(connection.model_prefix) ?
-        profile.model.slice(connection.model_prefix.length)
-      : profile.model;
-    return `${connection.label} · ${modelName}`;
-  }
-  const preset = settings.presets.find(
-    (item) => item.preset_id === profile.profile_id,
-  );
-  if (!preset) return `${profile.profile_id} · ${profile.model}`;
-  const modelName =
-    profile.model.startsWith(preset.model_prefix) ?
-      profile.model.slice(preset.model_prefix.length)
-    : profile.model;
-  return `${preset.label} · ${modelName}`;
 };
 
 const ProfileEditor = ({
@@ -1009,12 +1076,12 @@ const formatBytes = (value: number): string => {
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const credentialStatusLabel = (status: string): string => {
-  if (status === "missing") return "Credential required";
-  if (status === "available") return "Credential available";
-  if (status === "configured") return "Ready";
-  return "Credential status unknown";
-};
+const credentialStatusLabel = (status: CredentialStatus): string =>
+  ({
+    available: "Credential available",
+    configured: "Ready",
+    missing: "Credential required",
+  })[status];
 
 const modelAvailabilityStatus = (
   availability: ModelCatalog["models"][number]["availability"],
