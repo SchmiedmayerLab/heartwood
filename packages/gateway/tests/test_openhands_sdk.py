@@ -23,6 +23,7 @@ from heartwood.gateway._openhands_sdk import (
     _agent_context,
     _analyzed_risk,
     _configure_upstream_defaults,
+    _llm_resilience_options,
     _security_configuration,
     _terminal_tool_params,
     _tool_call,
@@ -92,6 +93,32 @@ def test_openhands_defaults_are_quiet_offline_and_allow_deployment_override(
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
     assert os.environ["LOG_LEVEL"] == "ERROR"
     assert os.environ["OPENHANDS_SUPPRESS_BANNER"] == "1"
+
+
+def test_openhands_bounds_interactive_model_retries() -> None:
+    local = ModelProfile(
+        profile_id="local",
+        model="openai/local",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
+    )
+    remote = ModelProfile(
+        profile_id="remote",
+        model="openai/remote",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    assert _llm_resilience_options(local) == {
+        "num_retries": 1,
+        "retry_max_wait": 8,
+        "retry_min_wait": 1,
+        "retry_multiplier": 2.0,
+        "timeout": 180,
+    }
+    assert _llm_resilience_options(remote)["num_retries"] == 2
 
 
 def test_openhands_security_configuration_uses_upstream_defense_in_depth() -> None:

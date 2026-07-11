@@ -100,14 +100,19 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
         viewModel.context.dataset = stringValue(dataset.dataset_type) || null;
         break;
       }
-      case "error.recorded":
+      case "error.recorded": {
+        const reason = stringValue(event.payload.reason);
         addConversationMessage(viewModel, event, {
-          content: "Error recorded",
-          detail: stringValue(event.payload.reason) || null,
-          label: "Trace",
+          content: "The task could not be completed",
+          detail:
+            reason.startsWith("OpenHands conversation failed:") ?
+              "Check Model setup and Activity & audit, then try again."
+            : reason || "Review Activity & audit, then try again.",
+          label: "System",
           role: "trace",
         });
         break;
+      }
       case "session.paused":
         viewModel.paused = true;
         break;

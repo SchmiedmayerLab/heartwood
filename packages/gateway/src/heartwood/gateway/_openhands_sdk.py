@@ -68,6 +68,13 @@ class _SdkModule(Protocol):
 
 ConversationFactory = Callable[[Callable[[object], None]], _Conversation]
 
+_AGENT_LLM_NUM_RETRIES = 2
+_AGENT_LLM_LOCAL_NUM_RETRIES = 1
+_AGENT_LLM_RETRY_MAX_WAIT_SECONDS = 8
+_AGENT_LLM_RETRY_MIN_WAIT_SECONDS = 1
+_AGENT_LLM_RETRY_MULTIPLIER = 2.0
+_AGENT_LLM_TIMEOUT_SECONDS = 180
+
 
 class OpenHandsSdkBackend:
     """Run a real OpenHands conversation behind the Heartwood event facade."""
@@ -276,6 +283,7 @@ class OpenHandsSdkBackend:
             "aws_region_name": self.profile.aws_region_name,
             "aws_profile_name": self.profile.aws_profile_name,
             "log_completions": False,
+            **_llm_resilience_options(self.profile),
         }
         if self.profile.is_local:
             llm_options.update(input_cost_per_token=0.0, output_cost_per_token=0.0)
@@ -422,6 +430,19 @@ def _tool_observation(event: object) -> BackendEvent:
             summary=f"{tool_name} {'failed' if failed else 'completed'}",
         ),
     )
+
+
+def _llm_resilience_options(profile: ModelProfile) -> dict[str, int | float]:
+    """Bound interactive model retries while allowing transient recovery."""
+    return {
+        "num_retries": (
+            _AGENT_LLM_LOCAL_NUM_RETRIES if profile.is_local else _AGENT_LLM_NUM_RETRIES
+        ),
+        "retry_max_wait": _AGENT_LLM_RETRY_MAX_WAIT_SECONDS,
+        "retry_min_wait": _AGENT_LLM_RETRY_MIN_WAIT_SECONDS,
+        "retry_multiplier": _AGENT_LLM_RETRY_MULTIPLIER,
+        "timeout": _AGENT_LLM_TIMEOUT_SECONDS,
+    }
 
 
 def _backend_error(error: Exception) -> BackendEvent:

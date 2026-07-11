@@ -113,7 +113,7 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "the shell does not encode a fixed cohort" in architecture
     assert "The browser does not synthesize action outcomes" in architecture
     assert "Compliance evidence packages remain maintainer or reviewer tooling" in architecture
-    assert "implemented presentation contract" in architecture
+    assert "defines the presentation contract" in architecture
     assert "gateway-owned session metadata" in architecture
     assert "## Priority 2 — Researcher Web Experience" in roadmap
     assert "Represent absent evidence as unknown or unconfigured" in roadmap

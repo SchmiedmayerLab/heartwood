@@ -85,6 +85,30 @@ describe("buildViewModel", () => {
     });
     expect(viewModel.activity[2]?.detail).toBe("3 events, scrubbed JSONL");
     expect(viewModel.activity.at(-1)?.detail).toBe("synthetic error");
+    expect(viewModel.conversation.at(-1)).toMatchObject({
+      content: "The task could not be completed",
+      detail: "synthetic error",
+      label: "System",
+    });
+  });
+
+  it("keeps provider implementation errors out of the researcher conversation", () => {
+    const viewModel = buildViewModel([
+      event(0, "error.recorded", {
+        reason: "OpenHands conversation failed: ConversationRunError",
+      }),
+    ]);
+
+    expect(viewModel.conversation).toEqual([
+      expect.objectContaining({
+        content: "The task could not be completed",
+        detail: "Check Model setup and Activity & audit, then try again.",
+        label: "System",
+      }),
+    ]);
+    expect(viewModel.activity[0]?.detail).toBe(
+      "OpenHands conversation failed: ConversationRunError",
+    );
   });
 
   it("does not invent an approval before OpenHands requests confirmation", () => {
