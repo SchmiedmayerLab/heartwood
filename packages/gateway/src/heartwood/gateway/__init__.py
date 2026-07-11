@@ -45,6 +45,7 @@ from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
 from heartwood.gateway._session_catalog import (
     SessionCatalog,
     SessionCatalogError,
+    SessionNotFoundError,
     SessionSummary,
 )
 from heartwood.gateway._skill_settings import (
@@ -81,6 +82,7 @@ __all__ = [
     "SessionCatalog",
     "SessionCatalogError",
     "SessionGateway",
+    "SessionNotFoundError",
     "SessionSummary",
     "SkillManager",
     "SkillSettingsError",

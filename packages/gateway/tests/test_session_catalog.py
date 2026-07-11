@@ -22,6 +22,7 @@ from heartwood.gateway import (
     SessionCatalog,
     SessionCatalogError,
     SessionGateway,
+    SessionNotFoundError,
 )
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
@@ -132,9 +133,9 @@ def test_catalog_rejects_invalid_titles_and_unknown_renames(tmp_path: Path) -> N
 
     with pytest.raises(SessionCatalogError, match="must not be empty"):
         catalog.create("   ")
-    with pytest.raises(SessionCatalogError, match="unknown session"):
+    with pytest.raises(SessionNotFoundError, match="unknown session"):
         catalog.get("missing")
-    with pytest.raises(SessionCatalogError, match="unknown session"):
+    with pytest.raises(SessionNotFoundError, match="unknown session"):
         catalog.rename("missing", "New title")
     with pytest.raises(SessionCatalogError, match="at most"):
         catalog.create("x" * 121)
@@ -181,8 +182,9 @@ def test_rest_exposes_session_creation_listing_and_rename(tmp_path: Path) -> Non
         ("POST", "/sessions", "{", 400),
         ("POST", "/sessions", "[]", 422),
         ("POST", "/sessions", '{"title": 2}', 422),
-        ("GET", "/sessions/missing", "", 422),
+        ("GET", "/sessions/missing", "", 404),
         ("PATCH", "/sessions/missing", "{}", 422),
+        ("PATCH", "/sessions/missing", '{"title": "Valid"}', 404),
         ("GET", "/sessions/invalid!session", "", 422),
         ("PATCH", "/sessions/invalid!session", '{"title": "Valid"}', 422),
     ],

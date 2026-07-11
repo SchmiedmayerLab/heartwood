@@ -23,7 +23,7 @@ from heartwood.gateway._model_settings import (
     ModelSettingsError,
     model_profile_from_mapping,
 )
-from heartwood.gateway._session_catalog import SessionCatalogError
+from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.schemas import JsonValue
 from heartwood.session import SessionCommand, validate_session_id
@@ -64,7 +64,11 @@ class RestGateway:
             try:
                 session_id = validate_session_id(parts[1])
                 session = self.gateway.session(session_id)
-            except (SessionCatalogError, ValueError) as error:
+            except SessionNotFoundError as error:
+                return _error(404, error)
+            except SessionCatalogError as error:
+                return _error(422, error)
+            except ValueError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(session))
         if len(parts) == 2 and parts[0] == "sessions" and request.method == "PATCH":
@@ -193,6 +197,8 @@ class RestGateway:
             return _error(422, "title must be a string")
         try:
             session = self.gateway.rename_session(session_id, payload["title"])
+        except SessionNotFoundError as error:
+            return _error(404, error)
         except SessionCatalogError as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(session))

@@ -29,6 +29,10 @@ class SessionCatalogError(ValueError):
     """Raised when persisted session metadata is invalid."""
 
 
+class SessionNotFoundError(SessionCatalogError):
+    """Raised when a valid session identifier has no persisted session."""
+
+
 @dataclass(frozen=True, slots=True)
 class SessionSummary:
     """Researcher-facing summary of one persisted session."""
@@ -100,7 +104,7 @@ class SessionCatalog:
         store = _session_store(self.workspace, session_id)
         if not store.session_dir.is_dir() or store.session_dir.is_symlink():
             msg = f"unknown session: {session_id}"
-            raise SessionCatalogError(msg)
+            raise SessionNotFoundError(msg)
         return self.ensure(session_id)
 
     def list(self) -> tuple[SessionSummary, ...]:
@@ -128,7 +132,7 @@ class SessionCatalog:
         store = _session_store(self.workspace, session_id)
         if not store.session_dir.is_dir() or store.session_dir.is_symlink():
             msg = f"unknown session: {session_id}"
-            raise SessionCatalogError(msg)
+            raise SessionNotFoundError(msg)
         self.ensure(session_id)
         current = _read_metadata(store.session_dir / "metadata.json")
         metadata = _SessionMetadata(

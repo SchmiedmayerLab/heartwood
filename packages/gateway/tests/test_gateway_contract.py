@@ -119,6 +119,14 @@ def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
 def test_rest_delivers_generated_scrubbed_audit_export(tmp_path: Path) -> None:
     rest = RestGateway(_gateway(tmp_path))
 
+    missing = rest.handle(RestRequest(method="GET", path="/sessions/missing/audit-export"))
+    rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.DETECT),
+        )
+    )
     unavailable = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
     rest.handle(
         RestRequest(
@@ -129,7 +137,11 @@ def test_rest_delivers_generated_scrubbed_audit_export(tmp_path: Path) -> None:
     )
     exported = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
 
-    assert unavailable.status_code == 404
+    assert missing == RestResponse(status_code=404, body={"error": "unknown session: missing"})
+    assert unavailable == RestResponse(
+        status_code=404,
+        body={"error": "audit export is not available for session: session-1"},
+    )
     assert exported.status_code == 200
     assert exported.body["filename"] == "session-1-audit.jsonl"
     assert "audit.export.recorded" in str(exported.body["content"])
