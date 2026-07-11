@@ -21,6 +21,13 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
   activity: [],
   conversation: [],
   approvalControls: [],
+  context: {
+    platform: null,
+    dataset: null,
+    modelEndpoint: null,
+    modelDecision: null,
+    modelReason: null,
+  },
   paused: false,
 });
 
@@ -52,6 +59,16 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
           role: "trace",
         });
         break;
+      case "tool.execution.recorded":
+        addConversationMessage(viewModel, event, {
+          content: `Ran ${stringValue(event.payload.tool_name) || "tool"}`,
+          detail:
+            stringValue(event.payload.summary) ||
+            `Exit ${stringValue(event.payload.exit_code) || "unknown"}`,
+          label: "Tool",
+          role: "trace",
+        });
+        break;
       case "confirmation.requested":
         addApprovalControl(
           viewModel.approvalControls,
@@ -63,12 +80,24 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
         break;
       case "model_call.decision.recorded": {
         const decision = recordValue(event.payload.decision);
+        viewModel.context.modelEndpoint =
+          stringValue(decision.endpoint) || null;
+        viewModel.context.modelDecision =
+          stringValue(decision.decision) || null;
+        viewModel.context.modelReason = stringValue(decision.reason) || null;
         addConversationMessage(viewModel, event, {
           content: `${stringValue(decision.decision) || "reviewed"} model route`,
           detail: stringValue(decision.reason) || null,
           label: "Trace",
           role: "trace",
         });
+        break;
+      }
+      case "detection.proposed": {
+        const platform = recordValue(event.payload.platform);
+        const dataset = recordValue(event.payload.dataset);
+        viewModel.context.platform = stringValue(platform.adapter_id) || null;
+        viewModel.context.dataset = stringValue(dataset.dataset_type) || null;
         break;
       }
       case "error.recorded":
@@ -119,10 +148,14 @@ const confirmationApproval = (
   value: JsonValue | undefined,
 ): ApprovalControl => {
   const request = recordValue(value);
+  const toolName = stringValue(request.tool_name);
   return {
     targetType: "tool-call",
     targetId: stringValue(request.tool_call_id),
-    label: `Review ${stringValue(request.tool_name)}`,
+    label: `Review ${toolName || "tool action"}`,
+    toolName,
+    risk: stringValue(request.risk) || null,
+    summary: stringValue(request.summary) || null,
     decision: null,
   };
 };
@@ -146,6 +179,9 @@ const recordConfirmation = (
       targetType: "tool-call",
       targetId,
       label: `${decision} tool-call`,
+      toolName: "",
+      risk: null,
+      summary: null,
       decision,
     });
   }
@@ -198,8 +234,12 @@ const activityDetail = (event: SessionEvent): string => {
     return stringValue(event.payload.tool_name);
   if (event.kind === "tool.execution.recorded")
     return `exit=${stringValue(event.payload.exit_code)}`;
-  if (event.kind === "audit.export.recorded")
-    return stringValue(event.payload.path);
+  if (event.kind === "audit.export.recorded") {
+    const eventCount = event.payload.event_count;
+    return typeof eventCount === "number" ?
+        `${eventCount} events, scrubbed JSONL`
+      : "Scrubbed JSONL ready";
+  }
   if (event.kind === "error.recorded") return stringValue(event.payload.reason);
   return stringValue(event.payload.command_id);
 };

@@ -22,7 +22,7 @@ From a repository checkout:
 docker compose -f images/generic/compose.yaml run --rm --build heartwood
 ```
 
-Compose disables container networking and uses a read-only root filesystem, dropped capabilities, `no-new-privileges`, and temporary write points. Inside that boundary the smoke test starts the deterministic loopback model fixture, creates and validates a local model profile, runs an OpenHands SDK conversation, loads the repository-verified Skills through OpenHands, records the route decision and conversation events, and exports a scrubbed audit log. This proves the offline integration path without downloading or embedding a model.
+Compose disables container networking and uses a read-only root filesystem, dropped capabilities, `no-new-privileges`, and temporary write points. Inside that boundary the smoke test starts the deterministic loopback model fixture, creates and validates a local model profile, runs an OpenHands SDK conversation, exercises both action-confirmation modes, loads the repository-verified Skills through OpenHands, records route and action events, and exports a scrubbed audit log. This proves the no-network orchestration, policy, approval, Skill, audit, CLI, web-support, and notebook contracts without claiming real model inference. The mounted capable-model test below is the separate inference and tool-execution gate.
 
 ## Use An Existing Local Service
 
@@ -52,7 +52,7 @@ heartwood models artifacts
 Download one artifact to persistent storage:
 
 ```bash
-heartwood models download qwen25-coder-7b-instruct-q4_k_m --cache /path/to/persistent/models
+heartwood models download qwen25-7b-instruct-q4_k_m --cache /path/to/persistent/models
 ```
 
 Heartwood downloads from the pinned Hugging Face repository revision and verifies the path, exact byte size, and SHA-256 digest before returning the file. The command prints the final path. Review the model card, license, resource envelope, and deployment policy before use; catalog inclusion is not a production or biomedical-quality endorsement.
@@ -60,11 +60,42 @@ Heartwood downloads from the pinned Hugging Face repository revision and verifie
 Start the included CPU runtime:
 
 ```bash
-HEARTWOOD_LOCAL_MODEL_PATH=/path/to/persistent/models/qwen25-coder-7b-instruct-q4_k_m/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
+HEARTWOOD_LOCAL_MODEL_PATH=/path/to/persistent/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
   bash images/generic/scripts/start_local_runtime.sh
 ```
 
-In another shell, configure the loopback profile shown above. The local server binds to `127.0.0.1:8765` and does not require network access after the artifact is present.
+In another shell, configure the loopback profile shown above. The local server binds to `127.0.0.1:8765` and does not require network access after the artifact is present. The catalog also contains `qwen25-coder-7b-instruct-q4_k_m` for coding-output experiments, but it is not the default OpenHands tool-use acceptance artifact because coding text quality and reliable structured tool calling are separate capabilities.
+
+## Verify Mounted Model Tool Execution
+
+The capable-model acceptance script requires a real OpenAI-compatible completion from the mounted artifact, a native OpenHands tool proposal, a successful terminal execution, the exact expected workspace file, allowed model-route records, the selected confirmation mode, no error events, and a scrubbed audit export. It runs with container networking disabled and does not accept a textual description of a tool call as success.
+
+Download the artifact into a named volume while network access is available:
+
+```bash
+docker run --rm \
+  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
+  ghcr.io/schmiedmayerlab/heartwood:edge \
+  heartwood models download qwen25-7b-instruct-q4_k_m
+```
+
+Then run the complete model and agent path without network access:
+
+```bash
+docker run --rm --network none --read-only \
+  -v heartwood-models:/models:ro \
+  --tmpfs /tmp:rw,nosuid,nodev,size=4g \
+  --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g \
+  --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --pids-limit 512 \
+  -e HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
+  ghcr.io/schmiedmayerlab/heartwood:edge \
+  bash images/generic/scripts/capable_model_e2e.sh
+```
+
+The reviewed 7B Q4 artifact requires at least 16 GB RAM; 32 GB is recommended. This resource-intensive acceptance run is suitable for local release validation or the opt-in `run_capable_model` workflow-dispatch job, not the default pull-request gate. Pull-request CI keeps the deterministic no-network OpenHands test and a separately mounted tiny llama.cpp inference test so it remains reproducible and does not download multi-gigabyte weights.
 
 ## Run The Container UI
 
@@ -87,7 +118,7 @@ docker run --rm -p 127.0.0.1:8767:8767 \
   -v heartwood-state:/home/heartwood/.local/share/heartwood \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
   -e HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1 \
-  -e HEARTWOOD_LOCAL_MODEL_PATH=/home/heartwood/.cache/heartwood/models/qwen25-coder-7b-instruct-q4_k_m/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
+  -e HEARTWOOD_LOCAL_MODEL_PATH=/home/heartwood/.cache/heartwood/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
   ghcr.io/schmiedmayerlab/heartwood:edge \
   bash images/generic/scripts/start_demo_stack.sh
 ```

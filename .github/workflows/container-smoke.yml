@@ -13,6 +13,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_capable_model:
+        description: Run the resource-intensive 7B mounted-model acceptance job
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -64,6 +70,50 @@ jobs:
           --volume /tmp/heartwood-model:/models:ro
           --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
           heartwood bash images/generic/scripts/local_inference_smoke.sh
+
+  capable-model:
+    name: Capable Model OpenHands Acceptance (linux/amd64)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_capable_model
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
+      - name: Build no-weight runtime image
+        run: >-
+          docker buildx build --load --platform linux/amd64
+          --tag heartwood-capable:local
+          --file images/generic/Dockerfile .
+      - name: Prepare external model storage
+        run: |
+          sudo mkdir -p /tmp/heartwood-models
+          sudo chown 10001:10001 /tmp/heartwood-models
+      - name: Download and verify reviewed agent model
+        run: >-
+          docker run --rm --platform linux/amd64
+          --volume /tmp/heartwood-models:/models
+          --env HEARTWOOD_MODEL_CACHE=/models
+          heartwood-capable:local
+          heartwood models download qwen25-7b-instruct-q4_k_m --cache /models
+      - name: Run mounted capable model without network
+        run: >-
+          docker run --rm --platform linux/amd64 --network none --read-only
+          --volume /tmp/heartwood-models:/models:ro
+          --tmpfs /tmp:rw,nosuid,nodev,size=4g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m
+          --cap-drop ALL
+          --security-opt no-new-privileges:true
+          --pids-limit 512
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+          heartwood-capable:local
+          bash images/generic/scripts/capable_model_e2e.sh
 
   terra-smoke:
     name: Terra image smoke test (linux/amd64)

@@ -124,6 +124,7 @@ def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
     assert "explicit CLI or web request" in catalog["storage_policy"]
     assert set(catalog["models"]) == {
         "llama-cpp-stories260k-ci",
+        "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
     for model in catalog["models"].values():
@@ -248,6 +249,11 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "Download and verify CI-only model fixture" in smoke
     assert "--volume /tmp/heartwood-model:/models:ro" in smoke
     assert "local_inference_smoke.sh" in smoke
+    assert "run_capable_model" in smoke
+    assert "github.event_name == 'workflow_dispatch'" in smoke
+    assert "qwen25-7b-instruct-q4_k_m" in smoke
+    assert "capable_model_e2e.sh" in smoke
+    assert "--network none --read-only" in smoke
 
 
 def test_platform_registry_verifier_checks_only_public_terra_tags(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ import { event, syntheticEvents } from "./test/fixtures";
 import type {
   ActionConfirmationMode,
   ActionSettings,
+  AuditExport,
   ModelArtifacts,
   ModelDownload,
   ModelProfile,
@@ -27,6 +28,8 @@ import type {
   ModelValidation,
   SessionCommand,
   SessionEvent,
+  SessionList,
+  SessionSummary,
   SkillSettings,
   SkillSummary,
 } from "./types";
@@ -64,12 +67,58 @@ const actions = (): ActionSettings => ({
 
 class FakeClient implements HeartwoodClient {
   commands: SessionCommand[] = [];
+  auditExportCalls = 0;
   replayCalls = 0;
   savedProfile: ModelProfile | null = null;
   currentSettings = settings();
   currentActions = actions();
   downloadedArtifact: string | null = null;
   installedSkill: string | null = null;
+  currentSessions: SessionSummary[] = [sessionSummary("session-test")];
+
+  listSessions(): Promise<SessionList> {
+    return Promise.resolve({ sessions: this.currentSessions });
+  }
+
+  createSession(): Promise<SessionSummary> {
+    const created = sessionSummary(
+      `session-${this.currentSessions.length + 1}`,
+      "Untitled session",
+    );
+    this.currentSessions = [created, ...this.currentSessions];
+    return Promise.resolve(created);
+  }
+
+  getSession(sessionId: string): Promise<SessionSummary> {
+    const existing = this.currentSessions.find(
+      (session) => session.session_id === sessionId,
+    );
+    if (existing) return Promise.resolve(existing);
+    const created = sessionSummary(sessionId);
+    this.currentSessions = [created, ...this.currentSessions];
+    return Promise.resolve(created);
+  }
+
+  renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+    const updated = {
+      ...(this.currentSessions.find(
+        (session) => session.session_id === sessionId,
+      ) ?? sessionSummary(sessionId)),
+      title,
+    };
+    this.currentSessions = this.currentSessions.map((session) =>
+      session.session_id === sessionId ? updated : session,
+    );
+    return Promise.resolve(updated);
+  }
+
+  getAuditExport(sessionId: string): Promise<AuditExport> {
+    this.auditExportCalls += 1;
+    return Promise.resolve({
+      filename: `${sessionId}-audit.jsonl`,
+      content: '{"kind":"audit.export.recorded"}\n',
+    });
+  }
 
   postCommand(command: SessionCommand): Promise<SessionEventResponse> {
     this.commands.push(command);
@@ -227,17 +276,50 @@ class FakeClient implements HeartwoodClient {
 }
 
 describe("App", () => {
+  it("creates, renames, and switches persisted sessions", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+
+    fireEvent.click(screen.getByRole("button", { name: "New analysis" }));
+    await screen.findByRole("heading", { name: "Untitled session" });
+    fireEvent.click(screen.getByLabelText("Rename session"));
+    fireEvent.change(screen.getByLabelText("Session title"), {
+      target: { value: "Renamed analysis" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Session title"), { key: "Enter" });
+
+    expect(
+      await screen.findByRole("heading", { name: "Renamed analysis" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic analysis/u }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Synthetic analysis" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders session state and sends detection commands", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
 
-    await waitFor(() =>
-      expect(screen.getByLabelText("Session ID")).toHaveValue("session-test"),
-    );
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
     fireEvent.click(screen.getByLabelText("Detect environment"));
 
     await waitFor(() => expect(client.commands).toHaveLength(1));
     expect(client.commands[0]?.kind).toBe("detect");
+  });
+
+  it("generates and retrieves a scrubbed audit export", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
+
+    await waitFor(() => expect(client.auditExportCalls).toBe(1));
+    expect(client.commands.at(-1)?.kind).toBe("audit.export");
   });
 
   it("submits a coding-agent task from the conversation composer", async () => {
@@ -278,15 +360,16 @@ describe("App", () => {
   it("configures and validates model profiles in the settings panel", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
-    fireEvent.click(screen.getByLabelText("Settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Model & policy" }));
 
-    await screen.findByRole("heading", { name: "Settings" });
+    await screen.findByRole("heading", { name: "Model & policy" });
     fireEvent.click(
       screen.getByRole("button", { name: "Auto-Approve Low Risk" }),
     );
     await waitFor(() =>
       expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
     );
+    fireEvent.click(screen.getByText("Provider profiles"));
     fireEvent.change(screen.getByLabelText("Provider preset"), {
       target: { value: "local-openai-compatible" },
     });
@@ -323,7 +406,7 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(screen.getByLabelText("Settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Model & policy" }));
 
     expect(
       await screen.findByRole("button", { name: "Auto-Approve Low Risk" }),
@@ -346,17 +429,18 @@ describe("App", () => {
     fireEvent.click(screen.getByLabelText("Pause agent"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("pause"));
 
-    fireEvent.click(screen.getByLabelText("Show activity"));
+    fireEvent.click(screen.getByRole("button", { name: "Activity & audit" }));
     expect(
-      await screen.findByRole("heading", { name: "Activity" }),
+      await screen.findByRole("heading", { name: "Activity & audit" }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Replay events"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(client.replayCalls).toBeGreaterThan(1));
-    fireEvent.click(screen.getByLabelText("Close activity"));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
-    fireEvent.click(screen.getByLabelText("Settings"));
-    await screen.findByRole("heading", { name: "Settings" });
-    fireEvent.click(screen.getByLabelText("Refresh settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Model & policy" }));
+    await screen.findByRole("heading", { name: "Model & policy" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByText("Provider profiles"));
     fireEvent.click(
       screen.getByRole("button", { name: /local.*openai\/local-model/u }),
     );
@@ -379,9 +463,9 @@ describe("App", () => {
     await waitFor(() =>
       expect(client.currentSettings.profiles).toHaveLength(0),
     );
-    fireEvent.click(screen.getByLabelText("Close settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(
-      screen.queryByRole("heading", { name: "Settings" }),
+      screen.queryByRole("heading", { name: "Model & policy" }),
     ).not.toBeInTheDocument();
   });
 
@@ -389,8 +473,9 @@ describe("App", () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(screen.getByLabelText("Skills"));
+    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
     expect(await screen.findByText("aggregate-export")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Install an extension"));
     fireEvent.change(screen.getByLabelText("Mounted source directory"), {
       target: { value: "/mnt/community-summary" },
     });
@@ -406,7 +491,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(client.installedSkill).toBe("removed:community-summary"),
     );
-    fireEvent.click(screen.getByLabelText("Close Skills"));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
   });
 });
 
@@ -429,10 +514,8 @@ describe("App error handling", () => {
       <App client={new RejectingClient()} initialSessionId="session-test" />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByLabelText("Session ID")).toHaveValue("session-test"),
-    );
-    fireEvent.click(screen.getByLabelText("Export audit"));
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
 
     expect(await screen.findByText("synthetic gateway failure")).toBeVisible();
   });
@@ -462,4 +545,16 @@ const bundledSkill = (): SkillSummary => ({
   approval_summary: "Writes reviewed aggregate output.",
   declared_tools: ["write-aggregate-json"],
   requires_network: false,
+});
+
+const sessionSummary = (
+  sessionId: string,
+  title = "Synthetic analysis",
+): SessionSummary => ({
+  session_id: sessionId,
+  title,
+  status: "idle",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  event_count: 0,
 });

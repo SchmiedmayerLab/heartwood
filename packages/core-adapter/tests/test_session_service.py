@@ -42,6 +42,16 @@ def test_file_store_rejects_session_ids_outside_the_workspace(tmp_path: Path) ->
         FileSessionStore(tmp_path, "../escape")
 
 
+def test_file_store_rejects_symbolic_link_session_alias(tmp_path: Path) -> None:
+    sessions = tmp_path / "sessions"
+    target = sessions / "target"
+    target.mkdir(parents=True)
+    (sessions / "linked-session").symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(SessionStoreBoundaryError, match="symbolic link"):
+        FileSessionStore(sessions, "linked-session")
+
+
 def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
@@ -374,6 +384,7 @@ def test_pause_resume_and_export_are_persisted(tmp_path: Path) -> None:
     assert path.is_file()
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert "audit.export.recorded" in path.read_text(encoding="utf-8")
+    assert service.store.read_audit_export() == path.read_text(encoding="utf-8")
 
 
 def test_service_rejects_command_for_another_session(tmp_path: Path) -> None:

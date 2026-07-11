@@ -93,6 +93,70 @@ describe("createCommand", () => {
 });
 
 describe("GatewayClient", () => {
+  it("manages persisted session lifecycle routes", async () => {
+    const session = {
+      session_id: "session-test",
+      title: "Synthetic analysis",
+      status: "empty",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      event_count: 0,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ sessions: [session] })),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(session)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(session)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...session, title: "Renamed" })),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            filename: "session test-audit.jsonl",
+            content: '{"kind":"audit.export.recorded"}\n',
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.listSessions();
+    await client.createSession("Synthetic analysis");
+    await client.getSession("session test");
+    await client.renameSession("session test", "Renamed");
+    const exported = await client.getAuditExport("session test");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/sessions");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/sessions",
+      expect.objectContaining({
+        body: JSON.stringify({ title: "Synthetic analysis" }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/proxy/8767/sessions/session%20test",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/proxy/8767/sessions/session%20test",
+      expect.objectContaining({
+        body: JSON.stringify({ title: "Renamed" }),
+        method: "PATCH",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      "/proxy/8767/sessions/session%20test/audit-export",
+    );
+    expect(exported.filename).toBe("session test-audit.jsonl");
+  });
+
   it("posts commands through the configured base path", async () => {
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ events: syntheticEvents().slice(0, 1) }), {

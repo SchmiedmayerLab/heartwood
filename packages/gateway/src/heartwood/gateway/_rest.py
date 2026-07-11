@@ -23,6 +23,7 @@ from heartwood.gateway._model_settings import (
     ModelSettingsError,
     model_profile_from_mapping,
 )
+from heartwood.gateway._session_catalog import SessionCatalogError
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.schemas import JsonValue
 from heartwood.session import SessionCommand, validate_session_id
@@ -55,6 +56,18 @@ class RestGateway:
         """Handle a REST-style request."""
         parsed = urlsplit(request.path)
         parts = tuple(part for part in parsed.path.split("/") if part)
+        if parts == ("sessions",) and request.method == "GET":
+            return RestResponse(status_code=200, body=_json_object(self.gateway.sessions()))
+        if parts == ("sessions",) and request.method == "POST":
+            return self._handle_session_creation(body=request.body)
+        if len(parts) == 2 and parts[0] == "sessions" and request.method == "GET":
+            try:
+                session = self.gateway.session(parts[1])
+            except SessionCatalogError as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(session))
+        if len(parts) == 2 and parts[0] == "sessions" and request.method == "PATCH":
+            return self._handle_session_rename(session_id=parts[1], body=request.body)
         if parts == ("settings", "actions") and request.method == "GET":
             try:
                 settings = self.gateway.action_settings()
@@ -127,6 +140,12 @@ class RestGateway:
         except ValueError as error:
             return _error(422, error)
         resource = parts[2]
+        if request.method == "GET" and resource == "audit-export":
+            try:
+                export = self.gateway.audit_export(session_id)
+            except SessionCatalogError as error:
+                return _error(404, error)
+            return RestResponse(status_code=200, body=_json_object(export))
         if request.method == "POST" and resource == "commands":
             return self._handle_command(session_id=session_id, body=request.body)
         if request.method == "GET" and resource == "events":
@@ -141,6 +160,35 @@ class RestGateway:
                 body={"events": [event.model_dump(mode="json") for event in events]},
             )
         return _error(405, "method is not allowed for gateway route")
+
+    def _handle_session_creation(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body or "{}")
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return _error(422, "request body must be an object")
+        title = payload.get("title")
+        if title is not None and not isinstance(title, str):
+            return _error(422, "title must be a string")
+        try:
+            session = self.gateway.create_session(title)
+        except SessionCatalogError as error:
+            return _error(422, error)
+        return RestResponse(status_code=201, body=_json_object(session))
+
+    def _handle_session_rename(self, *, session_id: str, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict) or not isinstance(payload.get("title"), str):
+            return _error(422, "title must be a string")
+        try:
+            session = self.gateway.rename_session(session_id, payload["title"])
+        except SessionCatalogError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(session))
 
     def _handle_command(self, *, session_id: str, body: str) -> RestResponse:
         try:

@@ -41,6 +41,11 @@ from heartwood.gateway._model_settings import (
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, OpenHandsSdkError
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
+from heartwood.gateway._session_catalog import (
+    SessionCatalog,
+    SessionCatalogError,
+    SessionSummary,
+)
 from heartwood.gateway._skill_settings import (
     SkillManager,
     SkillSettingsError,
@@ -72,7 +77,10 @@ __all__ = [
     "RestGateway",
     "RestRequest",
     "RestResponse",
+    "SessionCatalog",
+    "SessionCatalogError",
     "SessionGateway",
+    "SessionSummary",
     "SkillManager",
     "SkillSettingsError",
     "SkillSummary",

@@ -95,8 +95,36 @@ async function main() {
       throw new Error("proxied web UI asset was empty");
     }
 
+    const createdSession = await fetchJson(`${origin}${basePath}sessions`, {
+      body: JSON.stringify({ title: "Web smoke session" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+    if (typeof createdSession.session_id !== "string") {
+      throw new Error("proxied gateway did not create a session");
+    }
+    const sessionId = createdSession.session_id;
+    const renamedSession = await fetchJson(
+      `${origin}${basePath}sessions/${sessionId}`,
+      {
+        body: JSON.stringify({ title: "Renamed web smoke session" }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      },
+    );
+    if (renamedSession.title !== "Renamed web smoke session") {
+      throw new Error("proxied gateway did not rename the session");
+    }
+    const sessionList = await fetchJson(`${origin}${basePath}sessions`);
+    if (
+      !Array.isArray(sessionList.sessions) ||
+      !sessionList.sessions.some((session) => session.session_id === sessionId)
+    ) {
+      throw new Error("proxied gateway did not list the created session");
+    }
+
     const commandResponse = await fetchJson(
-      `${origin}${basePath}sessions/web-smoke/commands`,
+      `${origin}${basePath}sessions/${sessionId}/commands`,
       {
         body: JSON.stringify({
           actor_id: "synthetic-user",
@@ -105,7 +133,7 @@ async function main() {
           kind: "detect",
           payload: {},
           schema_version: "heartwood.session-command.v1",
-          session_id: "web-smoke",
+          session_id: sessionId,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -121,7 +149,7 @@ async function main() {
     }
 
     const replayResponse = await fetchJson(
-      `${origin}${basePath}sessions/web-smoke/events?after=0`,
+      `${origin}${basePath}sessions/${sessionId}/events?after=0`,
     );
     const replayEvents =
       Array.isArray(replayResponse.events) ? replayResponse.events : [];
@@ -129,6 +157,31 @@ async function main() {
     if (!replaySequences.includes(1)) {
       throw new Error(
         "proxied gateway replay route did not return persisted events",
+      );
+    }
+
+    await fetchJson(`${origin}${basePath}sessions/${sessionId}/commands`, {
+      body: JSON.stringify({
+        actor_id: "synthetic-user",
+        command_id: "web-smoke-audit-export",
+        created_at: "2026-01-01T00:00:01Z",
+        kind: "audit.export",
+        payload: {},
+        schema_version: "heartwood.session-command.v1",
+        session_id: sessionId,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
+    const auditExport = await fetchJson(
+      `${origin}${basePath}sessions/${sessionId}/audit-export`,
+    );
+    if (
+      auditExport.filename !== `${sessionId}-audit.jsonl` ||
+      !auditExport.content.includes("audit.export.recorded")
+    ) {
+      throw new Error(
+        "proxied gateway did not deliver the scrubbed audit export",
       );
     }
   } finally {

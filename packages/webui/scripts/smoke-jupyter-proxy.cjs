@@ -189,7 +189,18 @@ async function verifyWebAssets(baseUrl) {
 }
 
 async function verifySessionRoutes(baseUrl) {
-  const sessionId = "jupyter-proxy-smoke";
+  const createdSession = await fetchJson(
+    new URL("sessions", baseUrl).toString(),
+    withConnectionClose({
+      body: JSON.stringify({ title: "Jupyter proxy smoke" }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+  if (typeof createdSession.session_id !== "string") {
+    throw new Error("Jupyter proxy session route did not create a session");
+  }
+  const sessionId = createdSession.session_id;
   const commandResponse = await fetchJson(
     new URL(`sessions/${sessionId}/commands`, baseUrl).toString(),
     {
@@ -224,6 +235,32 @@ async function verifySessionRoutes(baseUrl) {
     throw new Error(
       "Jupyter proxy replay route did not return persisted events",
     );
+  }
+
+  await fetchJson(
+    new URL(`sessions/${sessionId}/commands`, baseUrl).toString(),
+    {
+      body: JSON.stringify({
+        actor_id: "synthetic-user",
+        command_id: "jupyter-proxy-smoke-audit-export",
+        created_at: "2026-01-01T00:00:01Z",
+        kind: "audit.export",
+        payload: {},
+        schema_version: "heartwood.session-command.v1",
+        session_id: sessionId,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+  const auditExport = await fetchJson(
+    new URL(`sessions/${sessionId}/audit-export`, baseUrl).toString(),
+  );
+  if (
+    auditExport.filename !== `${sessionId}-audit.jsonl` ||
+    !auditExport.content.includes("audit.export.recorded")
+  ) {
+    throw new Error("Jupyter proxy did not deliver the scrubbed audit export");
   }
 
   const stream = await fetchSseEvent(

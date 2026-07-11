@@ -69,7 +69,7 @@ For a local synthetic demo, list and download a reviewed artifact to Terra-persi
 ```bash
 heartwood --workspace /home/jupyter/heartwood-workspace/sessions models artifacts
 heartwood --workspace /home/jupyter/heartwood-workspace/sessions models download \
-  qwen25-coder-7b-instruct-q4_k_m \
+  qwen25-7b-instruct-q4_k_m \
   --cache /home/jupyter/heartwood-workspace/models
 ```
 
@@ -77,7 +77,7 @@ Start the included CPU server in a terminal using the exact path printed by the 
 
 ```bash
 cd /opt/heartwood
-HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/heartwood-workspace/models/qwen25-coder-7b-instruct-q4_k_m/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf \
+HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/heartwood-workspace/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
   bash images/generic/scripts/start_local_runtime.sh
 ```
 

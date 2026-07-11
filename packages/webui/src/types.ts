@@ -59,6 +59,26 @@ export interface SessionEvent {
   previous_event_hash: string | null;
 }
 
+export type SessionStatus = "empty" | "idle" | "waiting" | "paused" | "error";
+
+export interface SessionSummary {
+  session_id: string;
+  title: string;
+  status: SessionStatus;
+  created_at: string;
+  updated_at: string;
+  event_count: number;
+}
+
+export interface SessionList {
+  sessions: SessionSummary[];
+}
+
+export interface AuditExport {
+  filename: string;
+  content: string;
+}
+
 export interface ActivityItem {
   sequence: number;
   kind: EventKind;
@@ -79,7 +99,18 @@ export interface ApprovalControl {
   targetType: string;
   targetId: string;
   label: string;
+  toolName: string;
+  risk: string | null;
+  summary: string | null;
   decision: string | null;
+}
+
+export interface SessionContext {
+  platform: string | null;
+  dataset: string | null;
+  modelEndpoint: string | null;
+  modelDecision: string | null;
+  modelReason: string | null;
 }
 
 export interface SessionViewModel {
@@ -88,6 +119,7 @@ export interface SessionViewModel {
   activity: ActivityItem[];
   conversation: ConversationMessage[];
   approvalControls: ApprovalControl[];
+  context: SessionContext;
   paused: boolean;
 }
 

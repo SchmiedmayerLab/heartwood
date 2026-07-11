@@ -6,40 +6,36 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
 import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
-import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
-import { Textarea } from "@stanfordspezi/spezi-web-design-system/components/Textarea";
-import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
 import {
-  Activity,
-  Ban,
-  BookOpen,
-  Check,
-  Database,
-  Download,
-  Pause,
-  RotateCcw,
-  Send,
-  Settings,
-  ShieldCheck,
-  Trash2,
-  X,
-} from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+  Sheet,
+  SheetContent,
+  SheetTitle,
+} from "@stanfordspezi/spezi-web-design-system/components/Sheet";
+import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
+import { ConversationWorkspace } from "./components/ConversationWorkspace";
+import {
+  SessionRail,
+  SessionRailContent,
+  type UtilityPanel,
+} from "./components/SessionRail";
+import { UtilitySheet } from "./components/UtilitySheet";
+import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import type {
   ActionConfirmationMode,
   ActionSettings,
   ApprovalControl,
   ConversationMessage,
-  CredentialKind,
   JsonValue,
   ModelArtifacts,
   ModelProfile,
-  ModelSettings as ModelSettingsState,
+  ModelSettings,
   ModelValidation,
   SessionEvent,
+  SessionSummary,
   SkillSettings,
   SkillSummary,
 } from "./types";
@@ -54,7 +50,10 @@ interface LocalConversationMessage extends ConversationMessage {
   sessionId: string;
 }
 
-type SidePanel = "activity" | "settings" | "skills" | null;
+interface InitialState {
+  selectedSessionId: string;
+  sessions: SessionSummary[];
+}
 
 const emptyProfile = (): ModelProfile => ({
   profile_id: "local",
@@ -71,20 +70,23 @@ const emptyProfile = (): ModelProfile => ({
   description: null,
 });
 
-export const App = ({
-  client,
-  initialSessionId = "session-local",
-}: AppProps) => {
-  const [sessionId, setSessionId] = useState(initialSessionId);
+export const App = ({ client, initialSessionId }: AppProps) => {
+  const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
+  const initialization = useRef<Promise<InitialState> | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [prompt, setPrompt] = useState("");
   const [localConversation, setLocalConversation] = useState<
     LocalConversationMessage[]
   >([]);
-  const [status, setStatus] = useState<"idle" | "busy" | "error">("idle");
+  const [requestStatus, setRequestStatus] = useState<"idle" | "busy" | "error">(
+    "idle",
+  );
   const [error, setError] = useState<string | null>(null);
-  const [sidePanel, setSidePanel] = useState<SidePanel>(null);
-  const [modelSettings, setModelSettings] = useState<ModelSettingsState | null>(
+  const [panel, setPanel] = useState<UtilityPanel>(null);
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [modelSettings, setModelSettings] = useState<ModelSettings | null>(
     null,
   );
   const [actionSettings, setActionSettings] = useState<ActionSettings | null>(
@@ -104,13 +106,102 @@ export const App = ({
   const [skillSource, setSkillSource] = useState("");
   const [skillApproved, setSkillApproved] = useState(false);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
-  const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
+  const utilityTriggerRef = useRef<HTMLElement | null>(null);
+
+  const refreshSessions = useCallback(async () => {
+    const response = await resolvedClient.listSessions();
+    setSessions(response.sessions);
+    return response.sessions;
+  }, [resolvedClient]);
+
+  useEffect(() => {
+    let active = true;
+    initialization.current ??= initializeSessions(
+      resolvedClient,
+      initialSessionId,
+    );
+    void initialization.current
+      .then((state) => {
+        if (!active) return;
+        setSessions(state.sessions);
+        setSessionId(state.selectedSessionId);
+      })
+      .catch((caught: unknown) => {
+        if (!active) return;
+        setError(errorMessage(caught));
+        setRequestStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [initialSessionId, resolvedClient]);
+
+  useEffect(() => {
+    if (sessionId === null) return;
+    let active = true;
+    resolvedClient
+      .replayEvents(sessionId)
+      .then(({ events: replayed }) => {
+        if (active) {
+          setEvents(replayed);
+          setRequestStatus("idle");
+        }
+      })
+      .catch((caught: unknown) => {
+        if (active) {
+          setError(errorMessage(caught));
+          setRequestStatus("error");
+        }
+      });
+    const cleanup = resolvedClient.streamEvents(
+      sessionId,
+      undefined,
+      (streamed) => {
+        setEvents((current) => mergeEvents(current, streamed));
+        void refreshSessions().catch((caught: unknown) =>
+          setError(errorMessage(caught)),
+        );
+      },
+    );
+    return () => {
+      active = false;
+      cleanup();
+    };
+  }, [refreshSessions, resolvedClient, sessionId]);
+
+  useEffect(() => {
+    void Promise.all([
+      resolvedClient.getActionSettings(),
+      resolvedClient.getModelSettings(),
+      resolvedClient.getModelArtifacts(),
+      resolvedClient.getSkillSettings(),
+    ])
+      .then(([actions, models, artifacts, skills]) => {
+        setActionSettings(actions);
+        setModelSettings(models);
+        setModelArtifacts(artifacts);
+        setSkillSettings(skills);
+      })
+      .catch((caught: unknown) => setError(errorMessage(caught)));
+  }, [resolvedClient]);
+
   const viewModel = useMemo(() => buildViewModel(events), [events]);
+  const selectedSession = useMemo(
+    () => sessions.find((session) => session.session_id === sessionId) ?? null,
+    [sessionId, sessions],
+  );
+  const activeProfile = useMemo(
+    () =>
+      modelSettings?.profiles.find(
+        (profile) => profile.profile_id === modelSettings.active_profile,
+      ) ?? null,
+    [modelSettings],
+  );
   const conversation = useMemo(
     () =>
       mergeConversationMessages(
         localConversation.filter((message) => message.sessionId === sessionId),
-        viewModel.conversation.filter((message) => message.role !== "trace"),
+        viewModel.conversation,
       ),
     [localConversation, sessionId, viewModel.conversation],
   );
@@ -120,52 +211,6 @@ export const App = ({
   );
 
   useEffect(() => {
-    let active = true;
-    resolvedClient
-      .replayEvents(sessionId)
-      .then(({ events: replayed }) => {
-        if (active) {
-          setEvents(replayed);
-          setStatus("idle");
-        }
-      })
-      .catch((caught: unknown) => {
-        if (active) {
-          setError(errorMessage(caught));
-          setStatus("error");
-        }
-      });
-    const cleanup = resolvedClient.streamEvents(
-      sessionId,
-      undefined,
-      (streamed) => setEvents((current) => mergeEvents(current, streamed)),
-    );
-    return () => {
-      active = false;
-      cleanup();
-    };
-  }, [resolvedClient, sessionId]);
-
-  useEffect(() => {
-    void resolvedClient
-      .getActionSettings()
-      .then(setActionSettings)
-      .catch((caught: unknown) => setError(errorMessage(caught)));
-    void resolvedClient
-      .getModelSettings()
-      .then(setModelSettings)
-      .catch((caught: unknown) => setError(errorMessage(caught)));
-    void resolvedClient
-      .getModelArtifacts()
-      .then(setModelArtifacts)
-      .catch((caught: unknown) => setError(errorMessage(caught)));
-    void resolvedClient
-      .getSkillSettings()
-      .then(setSkillSettings)
-      .catch((caught: unknown) => setError(errorMessage(caught)));
-  }, [resolvedClient]);
-
-  useEffect(() => {
     scrollConversationEnd(conversationEndRef.current);
   }, [conversation.length]);
 
@@ -173,7 +218,8 @@ export const App = ({
     kind: Parameters<typeof createCommand>[1],
     payload: Record<string, JsonValue> = {},
   ) => {
-    setStatus("busy");
+    if (sessionId === null) return false;
+    setRequestStatus("busy");
     setError(null);
     try {
       const command = createCommand(sessionId, kind, events.length, payload);
@@ -194,41 +240,100 @@ export const App = ({
       }
       const response = await resolvedClient.postCommand(command);
       setEvents((current) => mergeEvents(current, response.events));
-      setStatus("idle");
+      await refreshSessions();
+      setRequestStatus("idle");
+      return true;
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("error");
+      setRequestStatus("error");
+      return false;
+    }
+  };
+
+  const exportAudit = async () => {
+    if (sessionId === null || !(await send("audit.export"))) return;
+    try {
+      const exported = await resolvedClient.getAuditExport(sessionId);
+      downloadTextFile(exported.filename, exported.content);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setRequestStatus("error");
     }
   };
 
   const submitPrompt = () => {
     const value = prompt.trim();
-    if (!value || status === "busy") {
-      return;
-    }
+    if (!value || requestStatus === "busy" || sessionId === null) return;
     setPrompt("");
     void send("chat", { prompt: value });
   };
 
-  const decideAction = (kind: "approve" | "deny", control: ApprovalControl) =>
-    send(kind, {
+  const createSession = async () => {
+    setError(null);
+    try {
+      const created = await resolvedClient.createSession();
+      setSessions((current) => mergeSessionSummaries(current, [created]));
+      setEvents([]);
+      setPrompt("");
+      setSessionId(created.session_id);
+      setMobileSessionsOpen(false);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
+  const renameSession = async (title: string) => {
+    if (sessionId === null) return;
+    try {
+      const updated = await resolvedClient.renameSession(sessionId, title);
+      setSessions((current) => mergeSessionSummaries(current, [updated]));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
+  const selectSession = (nextSessionId: string) => {
+    setEvents([]);
+    setPrompt("");
+    setSessionId(nextSessionId);
+    setMobileSessionsOpen(false);
+    setPanel(null);
+  };
+
+  const openPanel = (nextPanel: Exclude<UtilityPanel, null>) => {
+    utilityTriggerRef.current =
+      document.activeElement instanceof HTMLElement ?
+        document.activeElement
+      : null;
+    setPanel(nextPanel);
+    setMobileSessionsOpen(false);
+  };
+
+  const decideAction = (
+    decision: "approve" | "deny",
+    control: ApprovalControl,
+  ) =>
+    send(decision, {
       target_id: control.targetId,
       target_type: "tool-call",
     });
 
   const refreshSettings = async () => {
-    const [actions, settings, artifacts] = await Promise.all([
-      resolvedClient.getActionSettings(),
-      resolvedClient.getModelSettings(),
-      resolvedClient.getModelArtifacts(),
-    ]);
-    setActionSettings(actions);
-    setModelSettings(settings);
-    setModelArtifacts(artifacts);
+    try {
+      const [actions, settings, artifacts] = await Promise.all([
+        resolvedClient.getActionSettings(),
+        resolvedClient.getModelSettings(),
+        resolvedClient.getModelArtifacts(),
+      ]);
+      setActionSettings(actions);
+      setModelSettings(settings);
+      setModelArtifacts(artifacts);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
   };
 
   const selectActionMode = async (mode: ActionConfirmationMode) => {
-    setError(null);
     try {
       setActionSettings(
         await resolvedClient.selectActionConfirmationMode(mode),
@@ -240,23 +345,30 @@ export const App = ({
   };
 
   const saveProfile = async () => {
-    setError(null);
     try {
-      const settings = await resolvedClient.saveModelProfile(profileDraft);
-      setModelSettings(settings);
+      setModelSettings(await resolvedClient.saveModelProfile(profileDraft));
     } catch (caught) {
       setError(errorMessage(caught));
     }
   };
 
   const selectProfile = async (profileId: string) => {
-    setError(null);
     try {
       setModelSettings(await resolvedClient.selectModelProfile(profileId));
       setValidation(await resolvedClient.validateModelProfile(profileId));
     } catch (caught) {
       setError(errorMessage(caught));
     }
+  };
+
+  const railProps = {
+    activePanel: panel,
+    selectedSessionId: sessionId,
+    sessions,
+    onExportAudit: () => void exportAudit(),
+    onNewSession: () => void createSession(),
+    onOpenPanel: openPanel,
+    onSelectSession: selectSession,
   };
 
   return (
@@ -266,730 +378,177 @@ export const App = ({
       }}
     >
       <main className="app-shell">
-        <header className="topbar">
-          <div className="brand-block">
-            <h1>Heartwood</h1>
-            <div className="session-row">
-              <Input
-                aria-label="Session ID"
-                value={sessionId}
-                onChange={(event) => setSessionId(event.target.value)}
-              />
-              <Badge
-                variant={status === "error" ? "destructiveLight" : "secondary"}
+        <SessionRail {...railProps} />
+        <section className="workbench">
+          <WorkspaceHeader
+            actionSettings={actionSettings}
+            activeProfile={activeProfile}
+            context={viewModel.context}
+            key={sessionId ?? "loading"}
+            requestStatus={requestStatus}
+            session={selectedSession}
+            onDetect={() => void send("detect")}
+            onOpenMenu={() => setMobileSessionsOpen(true)}
+            onRename={(title) => void renameSession(title)}
+          />
+
+          {error ?
+            <div className="error-banner" role="alert">
+              <span>{error}</span>
+              <Button
+                aria-label="Dismiss error"
+                size="sm"
+                variant="ghost"
+                onClick={() => setError(null)}
               >
-                {status}
-              </Badge>
+                <X size={16} />
+              </Button>
             </div>
-          </div>
-          <nav aria-label="Session tools" className="topbar-actions">
-            <Button
-              aria-label="Detect environment"
-              size="sm"
-              title="Detect environment"
-              variant="outline"
-              onClick={() => void send("detect")}
-            >
-              <Database size={17} />
-            </Button>
-            <Button
-              aria-label="Skills"
-              size="sm"
-              title="Skills"
-              variant={sidePanel === "skills" ? "secondary" : "outline"}
-              onClick={() =>
-                setSidePanel(sidePanel === "skills" ? null : "skills")
-              }
-            >
-              <BookOpen size={17} />
-            </Button>
-            <Button
-              aria-label="Show activity"
-              size="sm"
-              title="Show activity"
-              variant={sidePanel === "activity" ? "secondary" : "outline"}
-              onClick={() =>
-                setSidePanel(sidePanel === "activity" ? null : "activity")
-              }
-            >
-              <Activity size={17} />
-            </Button>
-            <Button
-              aria-label="Settings"
-              size="sm"
-              title="Settings"
-              variant={sidePanel === "settings" ? "secondary" : "outline"}
-              onClick={() =>
-                setSidePanel(sidePanel === "settings" ? null : "settings")
-              }
-            >
-              <Settings size={17} />
-            </Button>
-            <Button
-              aria-label="Export audit"
-              size="sm"
-              title="Export audit"
-              variant="outline"
-              onClick={() => void send("audit.export")}
-            >
-              <Download size={17} />
-            </Button>
-          </nav>
-        </header>
+          : null}
 
-        {error ?
-          <div className="error-banner">{error}</div>
-        : null}
+          <ConversationWorkspace
+            conversation={conversation}
+            conversationEndRef={conversationEndRef}
+            modelConfigured={activeProfile !== null}
+            paused={viewModel.paused}
+            pendingActions={pendingActions}
+            prompt={prompt}
+            requestStatus={requestStatus}
+            onDecision={(decision, control) =>
+              void decideAction(decision, control)
+            }
+            onOpenSettings={() => openPanel("settings")}
+            onPauseToggle={() =>
+              void send(viewModel.paused ? "resume" : "pause")
+            }
+            onPrompt={setPrompt}
+            onSubmit={submitPrompt}
+          />
+        </section>
 
-        <div className={`agent-layout ${sidePanel === null ? "single" : ""}`}>
-          <section
-            className="conversation-workspace"
-            aria-label="Agent conversation"
-          >
-            <div
-              aria-label="Conversation transcript"
-              className="conversation-list"
-              role="log"
-            >
-              {conversation.length === 0 ?
-                <div className="conversation-empty">
-                  <ShieldCheck size={22} />
-                  <span>Start a research task</span>
-                </div>
-              : conversation.map((message) => (
-                  <article
-                    className={`conversation-message ${message.role}`}
-                    key={message.id}
-                  >
-                    <div className="conversation-meta">
-                      <small>{message.label}</small>
-                      {message.detail ?
-                        <span>{message.detail}</span>
-                      : null}
-                    </div>
-                    <p>{message.content}</p>
-                  </article>
-                ))
-              }
-              <div ref={conversationEndRef} aria-hidden="true" />
-            </div>
+        <Sheet open={mobileSessionsOpen} onOpenChange={setMobileSessionsOpen}>
+          <SheetContent className="mobile-session-sheet" side="left" size="sm">
+            <SheetTitle className="visually-hidden">
+              Heartwood sessions
+            </SheetTitle>
+            <SessionRailContent {...railProps} />
+          </SheetContent>
+        </Sheet>
 
-            <div className="composer-area">
-              {pendingActions.map((control) => (
-                <div className="pending-action" key={control.targetId}>
-                  <div>
-                    <small>Pending action</small>
-                    <strong>{control.label}</strong>
-                  </div>
-                  <div className="pending-actions">
-                    <Button
-                      aria-label={`Allow ${control.targetId}`}
-                      size="sm"
-                      onClick={() => void decideAction("approve", control)}
-                    >
-                      <Check size={16} />
-                      Allow once
-                    </Button>
-                    <Button
-                      aria-label={`Reject ${control.targetId}`}
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void decideAction("deny", control)}
-                    >
-                      <Ban size={16} />
-                      Reject
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              <div className="composer">
-                <Textarea
-                  aria-label="Task"
-                  placeholder="Ask Heartwood to inspect, analyze, or change the workspace"
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      submitPrompt();
+        <UtilitySheet
+          actions={actionSettings}
+          artifacts={modelArtifacts}
+          events={events}
+          panel={panel}
+          profileDraft={profileDraft}
+          settings={modelSettings}
+          skillApproved={skillApproved}
+          skillCandidate={skillCandidate}
+          skillSettings={skillSettings}
+          skillSource={skillSource}
+          validation={validation}
+          onClose={() => setPanel(null)}
+          onDownload={(artifactId) =>
+            void resolvedClient
+              .downloadModelArtifact(artifactId)
+              .then((download) =>
+                setModelArtifacts((current) =>
+                  current === null ? current : (
+                    {
+                      ...current,
+                      downloads: [
+                        ...current.downloads.filter(
+                          (item) => item.artifact_id !== artifactId,
+                        ),
+                        download,
+                      ],
                     }
-                  }}
-                />
-                <div className="composer-actions">
-                  <Button
-                    aria-label="Pause agent"
-                    size="sm"
-                    title="Pause agent"
-                    variant="outline"
-                    onClick={() => void send("pause")}
-                  >
-                    <Pause size={17} />
-                  </Button>
-                  <Button
-                    aria-label="Send task"
-                    disabled={!prompt.trim()}
-                    isPending={status === "busy"}
-                    size="sm"
-                    title="Send task"
-                    onClick={submitPrompt}
-                  >
-                    <Send size={17} />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {sidePanel === "activity" ?
-            <ActivityPanel
-              events={events}
-              onClose={() => setSidePanel(null)}
-              onReplay={() =>
-                void resolvedClient
-                  .replayEvents(sessionId)
-                  .then(({ events: replayed }) => setEvents(replayed))
-              }
-            />
-          : null}
-          {sidePanel === "skills" ?
-            <SkillsPanel
-              approved={skillApproved}
-              candidate={skillCandidate}
-              settings={skillSettings}
-              source={skillSource}
-              onApproved={setSkillApproved}
-              onClose={() => setSidePanel(null)}
-              onInspect={() =>
-                void resolvedClient
-                  .inspectSkill(skillSource.trim())
-                  .then((summary) => {
-                    setSkillCandidate(summary);
-                    setSkillApproved(false);
-                  })
-                  .catch((caught: unknown) => setError(errorMessage(caught)))
-              }
-              onInstall={() =>
-                void resolvedClient
-                  .installSkill(skillSource.trim())
-                  .then((settings) => {
-                    setSkillSettings(settings);
-                    setSkillCandidate(null);
-                    setSkillApproved(false);
-                    setSkillSource("");
-                  })
-                  .catch((caught: unknown) => setError(errorMessage(caught)))
-              }
-              onRemove={(name) =>
-                void resolvedClient
-                  .removeSkill(name)
-                  .then(setSkillSettings)
-                  .catch((caught: unknown) => setError(errorMessage(caught)))
-              }
-              onSource={setSkillSource}
-            />
-          : null}
-          {sidePanel === "settings" ?
-            <SettingsPanel
-              actions={actionSettings}
-              artifacts={modelArtifacts}
-              draft={profileDraft}
-              settings={modelSettings}
-              validation={validation}
-              onClose={() => setSidePanel(null)}
-              onDraft={setProfileDraft}
-              onDownload={(artifactId) =>
-                void resolvedClient
-                  .downloadModelArtifact(artifactId)
-                  .then((download) =>
-                    setModelArtifacts((current) =>
-                      current === null ? current : (
-                        {
-                          ...current,
-                          downloads: [
-                            ...current.downloads.filter(
-                              (item) => item.artifact_id !== artifactId,
-                            ),
-                            download,
-                          ],
-                        }
-                      ),
-                    ),
-                  )
-                  .catch((caught: unknown) => setError(errorMessage(caught)))
-              }
-              onRefresh={() => void refreshSettings()}
-              onRemove={(profileId) =>
-                void resolvedClient
-                  .removeModelProfile(profileId)
-                  .then(setModelSettings)
-                  .catch((caught: unknown) => setError(errorMessage(caught)))
-              }
-              onSave={() => void saveProfile()}
-              onSelectActionMode={(mode) => void selectActionMode(mode)}
-              onSelect={(profileId) => void selectProfile(profileId)}
-              onValidate={(profileId) =>
-                void resolvedClient
-                  .validateModelProfile(profileId)
-                  .then(setValidation)
-                  .catch((caught: unknown) => setError(errorMessage(caught)))
-              }
-            />
-          : null}
-        </div>
+                  ),
+                ),
+              )
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+          }
+          onExportAudit={() => void exportAudit()}
+          onInspectSkill={() =>
+            void resolvedClient
+              .inspectSkill(skillSource.trim())
+              .then((summary) => {
+                setSkillCandidate(summary);
+                setSkillApproved(false);
+              })
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+          }
+          onInstallSkill={() =>
+            void resolvedClient
+              .installSkill(skillSource.trim())
+              .then((settings) => {
+                setSkillSettings(settings);
+                setSkillCandidate(null);
+                setSkillApproved(false);
+                setSkillSource("");
+              })
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+          }
+          onProfileDraft={setProfileDraft}
+          onRefreshActivity={() =>
+            sessionId === null ? undefined : (
+              void resolvedClient
+                .replayEvents(sessionId)
+                .then(({ events: replayed }) => setEvents(replayed))
+                .catch((caught: unknown) => setError(errorMessage(caught)))
+            )
+          }
+          onRefreshSettings={() => void refreshSettings()}
+          onRestoreFocus={() => utilityTriggerRef.current?.focus()}
+          onRemoveProfile={(profileId) =>
+            void resolvedClient
+              .removeModelProfile(profileId)
+              .then(setModelSettings)
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+          }
+          onRemoveSkill={(name) =>
+            void resolvedClient
+              .removeSkill(name)
+              .then(setSkillSettings)
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+          }
+          onSaveProfile={() => void saveProfile()}
+          onSelectActionMode={(mode) => void selectActionMode(mode)}
+          onSelectProfile={(profileId) => void selectProfile(profileId)}
+          onSetSkillApproved={setSkillApproved}
+          onSetSkillSource={setSkillSource}
+          onValidateProfile={(profileId) =>
+            void resolvedClient
+              .validateModelProfile(profileId)
+              .then(setValidation)
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+          }
+        />
       </main>
     </SpeziProvider>
   );
 };
 
-interface SkillsPanelProps {
-  approved: boolean;
-  candidate: SkillSummary | null;
-  settings: SkillSettings | null;
-  source: string;
-  onApproved: (approved: boolean) => void;
-  onClose: () => void;
-  onInspect: () => void;
-  onInstall: () => void;
-  onRemove: (name: string) => void;
-  onSource: (source: string) => void;
-}
-
-const SkillsPanel = ({
-  approved,
-  candidate,
-  settings,
-  source,
-  onApproved,
-  onClose,
-  onInspect,
-  onInstall,
-  onRemove,
-  onSource,
-}: SkillsPanelProps) => (
-  <aside aria-label="Skills" className="side-panel settings-panel">
-    <div className="side-panel-header">
-      <h2>Skills</h2>
-      <Button
-        aria-label="Close Skills"
-        size="sm"
-        variant="outline"
-        onClick={onClose}
-      >
-        <X size={16} />
-      </Button>
-    </div>
-    <section className="settings-section skill-list">
-      <h3>Available</h3>
-      {settings?.skills.map((skill) => (
-        <div className="skill-row" key={`${skill.source}-${skill.name}`}>
-          <div>
-            <strong>{skill.name}</strong>
-            <span>
-              {skill.trust_tier} · {skill.source}
-            </span>
-          </div>
-          {skill.source === "installed" ?
-            <Button
-              aria-label={`Remove ${skill.name}`}
-              size="sm"
-              title={`Remove ${skill.name}`}
-              variant="outline"
-              onClick={() => onRemove(skill.name)}
-            >
-              <Trash2 size={15} />
-            </Button>
-          : null}
-        </div>
-      ))}
-    </section>
-    <section className="settings-section skill-installer">
-      <h3>Install extension</h3>
-      <label>
-        Mounted source directory
-        <Input
-          value={source}
-          onChange={(event) => onSource(event.target.value)}
-        />
-      </label>
-      <Button disabled={!source.trim()} variant="outline" onClick={onInspect}>
-        Inspect
-      </Button>
-      {candidate ?
-        <div className="skill-review">
-          <strong>{candidate.name}</strong>
-          <span>{candidate.approval_summary}</span>
-          <span>Tools: {candidate.declared_tools.join(", ")}</span>
-          <label className="checkbox-control">
-            <input
-              checked={approved}
-              type="checkbox"
-              onChange={(event) => onApproved(event.target.checked)}
-            />
-            Approve this installation
-          </label>
-          <Button disabled={!approved} onClick={onInstall}>
-            Install
-          </Button>
-        </div>
-      : null}
-    </section>
-  </aside>
-);
-
-interface ActivityPanelProps {
-  events: SessionEvent[];
-  onClose: () => void;
-  onReplay: () => void;
-}
-
-const ActivityPanel = ({ events, onClose, onReplay }: ActivityPanelProps) => {
-  const viewModel = buildViewModel(events);
-  return (
-    <aside aria-label="Activity" className="side-panel">
-      <div className="side-panel-header">
-        <h2>Activity</h2>
-        <div>
-          <Button
-            aria-label="Replay events"
-            size="sm"
-            variant="outline"
-            onClick={onReplay}
-          >
-            <RotateCcw size={16} />
-          </Button>
-          <Button
-            aria-label="Close activity"
-            size="sm"
-            variant="outline"
-            onClick={onClose}
-          >
-            <X size={16} />
-          </Button>
-        </div>
-      </div>
-      <div className="activity-list">
-        {viewModel.activity.map((item) => (
-          <div className="activity-row" key={`${item.sequence}-${item.kind}`}>
-            <small>{String(item.sequence).padStart(3, "0")}</small>
-            <div>
-              <strong>{item.label}</strong>
-              <span>{item.detail}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </aside>
-  );
-};
-
-interface SettingsPanelProps {
-  actions: ActionSettings | null;
-  artifacts: ModelArtifacts | null;
-  draft: ModelProfile;
-  settings: ModelSettingsState | null;
-  validation: ModelValidation | null;
-  onClose: () => void;
-  onDraft: (profile: ModelProfile) => void;
-  onDownload: (artifactId: string) => void;
-  onRefresh: () => void;
-  onRemove: (profileId: string) => void;
-  onSave: () => void;
-  onSelectActionMode: (mode: ActionConfirmationMode) => void;
-  onSelect: (profileId: string) => void;
-  onValidate: (profileId?: string) => void;
-}
-
-const SettingsPanel = ({
-  actions,
-  artifacts,
-  draft,
-  settings,
-  validation,
-  onClose,
-  onDraft,
-  onDownload,
-  onRefresh,
-  onRemove,
-  onSave,
-  onSelectActionMode,
-  onSelect,
-  onValidate,
-}: SettingsPanelProps) => {
-  const applyPreset = (presetId: string) => {
-    const preset = settings?.presets.find(
-      (item) => item.preset_id === presetId,
+const initializeSessions = async (
+  client: HeartwoodClient,
+  initialSessionId: string | undefined,
+): Promise<InitialState> => {
+  const listed = (await client.listSessions()).sessions;
+  if (initialSessionId !== undefined) {
+    const existing = listed.find(
+      (session) => session.session_id === initialSessionId,
     );
-    if (!preset) return;
-    onDraft({
-      ...draft,
-      model: preset.model_prefix,
-      base_url: preset.base_url,
-      policy_endpoint: preset.policy_endpoint ?? draft.policy_endpoint,
-      credential_kind: preset.credential_kind,
-      api_key_env: preset.api_key_env,
-      api_key_file: null,
-      description: preset.description,
-    });
-  };
-  return (
-    <aside aria-label="Settings" className="side-panel settings-panel">
-      <div className="side-panel-header">
-        <h2>Settings</h2>
-        <div>
-          <Button
-            aria-label="Refresh settings"
-            size="sm"
-            variant="outline"
-            onClick={onRefresh}
-          >
-            <RotateCcw size={16} />
-          </Button>
-          <Button
-            aria-label="Close settings"
-            size="sm"
-            variant="outline"
-            onClick={onClose}
-          >
-            <X size={16} />
-          </Button>
-        </div>
-      </div>
-
-      <section className="settings-section">
-        <h3>Action approvals</h3>
-        <div
-          aria-label="Action approval mode"
-          className="mode-control"
-          role="group"
-        >
-          {actions?.modes.map((option) => (
-            <button
-              aria-pressed={actions.confirmation_mode === option.mode}
-              disabled={!option.allowed}
-              key={option.mode}
-              title={
-                option.allowed ?
-                  option.label
-                : `${option.label} is not allowed by platform policy`
-              }
-              type="button"
-              onClick={() => onSelectActionMode(option.mode)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h3>Active profile</h3>
-        <div className="inline-control">
-          <select
-            aria-label="Active model profile"
-            value={settings?.active_profile ?? ""}
-            onChange={(event) => onSelect(event.target.value)}
-          >
-            <option disabled value="">
-              Not configured
-            </option>
-            {settings?.profiles.map((profile) => (
-              <option key={profile.profile_id} value={profile.profile_id}>
-                {profile.profile_id}
-              </option>
-            ))}
-          </select>
-          <Button
-            aria-label="Validate active model profile"
-            size="sm"
-            variant="outline"
-            onClick={() => onValidate(settings?.active_profile ?? undefined)}
-          >
-            <ShieldCheck size={16} />
-          </Button>
-        </div>
-        {validation ?
-          <div className="validation-status">
-            <Badge
-              variant={
-                validation.policy_decision.decision === "allow" ?
-                  "secondary"
-                : "destructiveLight"
-              }
-            >
-              {validation.policy_decision.decision}
-            </Badge>
-            <span>{validation.credential_status}</span>
-          </div>
-        : null}
-      </section>
-
-      <section className="settings-section profile-list">
-        <h3>Profiles</h3>
-        {settings?.profiles.map((profile) => (
-          <div className="profile-row" key={profile.profile_id}>
-            <button type="button" onClick={() => onDraft(profile)}>
-              <strong>{profile.profile_id}</strong>
-              <span>{profile.model}</span>
-            </button>
-            <Button
-              aria-label={`Remove ${profile.profile_id}`}
-              size="sm"
-              title={`Remove ${profile.profile_id}`}
-              variant="outline"
-              onClick={() => onRemove(profile.profile_id)}
-            >
-              <Trash2 size={15} />
-            </Button>
-          </div>
-        ))}
-      </section>
-
-      <section className="settings-section artifact-list">
-        <h3>Local artifacts</h3>
-        {artifacts?.artifacts.map((artifact) => {
-          const download = artifacts.downloads.find(
-            (item) => item.artifact_id === artifact.artifact_id,
-          );
-          return (
-            <div className="artifact-row" key={artifact.artifact_id}>
-              <div>
-                <strong>{artifact.model_alias}</strong>
-                <span>{formatBytes(artifact.artifact_size_bytes)}</span>
-                {download ?
-                  <small>
-                    {download.path ?? download.error ?? download.status}
-                  </small>
-                : null}
-              </div>
-              <Button
-                aria-label={`Download ${artifact.model_alias}`}
-                disabled={download?.status === "downloading"}
-                isPending={download?.status === "downloading"}
-                size="sm"
-                title={`Download ${artifact.model_alias}`}
-                variant="outline"
-                onClick={() => onDownload(artifact.artifact_id)}
-              >
-                <Download size={15} />
-              </Button>
-            </div>
-          );
-        })}
-      </section>
-
-      <section className="settings-section profile-editor">
-        <h3>Profile</h3>
-        <label>
-          Preset
-          <select
-            aria-label="Provider preset"
-            defaultValue=""
-            onChange={(event) => applyPreset(event.target.value)}
-          >
-            <option value="">Custom</option>
-            {settings?.presets.map((preset) => (
-              <option key={preset.preset_id} value={preset.preset_id}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Profile ID
-          <Input
-            value={draft.profile_id}
-            onChange={(event) =>
-              onDraft({ ...draft, profile_id: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Model
-          <Input
-            value={draft.model}
-            onChange={(event) =>
-              onDraft({ ...draft, model: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Base URL
-          <Input
-            value={draft.base_url ?? ""}
-            onChange={(event) =>
-              onDraft({ ...draft, base_url: nullIfEmpty(event.target.value) })
-            }
-          />
-        </label>
-        <label>
-          Policy endpoint
-          <Input
-            value={draft.policy_endpoint}
-            onChange={(event) =>
-              onDraft({ ...draft, policy_endpoint: event.target.value })
-            }
-          />
-        </label>
-        <label>
-          Credentials
-          <select
-            aria-label="Credential kind"
-            value={draft.credential_kind}
-            onChange={(event) =>
-              onDraft({
-                ...draft,
-                credential_kind: event.target.value as CredentialKind,
-                api_key_env: null,
-                api_key_file: null,
-              })
-            }
-          >
-            <option value="none">None (loopback only)</option>
-            <option value="environment">Environment variable</option>
-            <option value="file">Mounted file</option>
-            <option value="managed-identity">Managed identity</option>
-          </select>
-        </label>
-        {draft.credential_kind === "environment" ?
-          <label>
-            API key environment variable
-            <Input
-              value={draft.api_key_env ?? ""}
-              onChange={(event) =>
-                onDraft({
-                  ...draft,
-                  api_key_env: nullIfEmpty(event.target.value),
-                })
-              }
-            />
-          </label>
-        : null}
-        {draft.credential_kind === "file" ?
-          <label>
-            API key file
-            <Input
-              value={draft.api_key_file ?? ""}
-              onChange={(event) =>
-                onDraft({
-                  ...draft,
-                  api_key_file: nullIfEmpty(event.target.value),
-                })
-              }
-            />
-          </label>
-        : null}
-        <Button onClick={onSave}>Save profile</Button>
-      </section>
-    </aside>
-  );
-};
-
-const nullIfEmpty = (value: string): string | null => value.trim() || null;
-
-const formatBytes = (value: number): string => {
-  const gibibytes = value / 1024 ** 3;
-  if (gibibytes >= 1) return `${gibibytes.toFixed(1)} GiB`;
-  return `${(value / 1024 ** 2).toFixed(0)} MiB`;
+    const selected = existing ?? (await client.getSession(initialSessionId));
+    return {
+      selectedSessionId: selected.session_id,
+      sessions: mergeSessionSummaries(listed, [selected]),
+    };
+  }
+  if (listed[0]) {
+    return { selectedSessionId: listed[0].session_id, sessions: listed };
+  }
+  const created = await client.createSession();
+  return { selectedSessionId: created.session_id, sessions: [created] };
 };
 
 const promptContent = (payload: Record<string, JsonValue>): string => {
@@ -1002,12 +561,26 @@ const mergeConversationMessages = (
   eventMessages: ConversationMessage[],
 ): ConversationMessage[] => {
   const messages = new Map<string, ConversationMessage>();
-  for (const message of [...localMessages, ...eventMessages]) {
+  for (const message of [...localMessages, ...eventMessages])
     messages.set(message.id, message);
-  }
   return [...messages.values()].sort(
     (left, right) =>
       left.sequence - right.sequence || left.id.localeCompare(right.id),
+  );
+};
+
+const mergeSessionSummaries = (
+  current: SessionSummary[],
+  next: SessionSummary[],
+): SessionSummary[] => {
+  const summaries = new Map(
+    current.map((session) => [session.session_id, session]),
+  );
+  for (const session of next) summaries.set(session.session_id, session);
+  return [...summaries.values()].sort(
+    (left, right) =>
+      right.updated_at.localeCompare(left.updated_at) ||
+      right.session_id.localeCompare(left.session_id),
   );
 };
 
@@ -1036,3 +609,15 @@ const mergeEvents = (
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const downloadTextFile = (filename: string, content: string): void => {
+  if (typeof URL.createObjectURL !== "function") return;
+  const url = URL.createObjectURL(
+    new Blob([content], { type: "application/x-ndjson" }),
+  );
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};

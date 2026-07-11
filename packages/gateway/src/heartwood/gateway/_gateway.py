@@ -18,6 +18,7 @@ from heartwood.core_adapter import (
     BackendEvent,
     BackendEventKind,
     DeterministicAgentBackend,
+    FileSessionStore,
     ProposedToolCall,
     SessionResult,
     SessionService,
@@ -46,6 +47,7 @@ from heartwood.gateway._model_settings import (
     model_settings_path,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+from heartwood.gateway._session_catalog import SessionCatalog, SessionCatalogError
 from heartwood.gateway._skill_settings import SkillManager
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
 from heartwood.model_policy import ModelPolicyEngine
@@ -192,6 +194,7 @@ class SessionGateway:
             audit_path=workspace.parent / "skill-installations.jsonl",
         )
         self._service_factory = service_factory
+        self.session_catalog = SessionCatalog(workspace)
         self._services: dict[str, SessionService] = {}
         self._streams = EventStreamHub()
 
@@ -210,6 +213,36 @@ class SessionGateway:
         result = service.handle(command)
         self._streams.publish(session_id=command.session_id, events=result.events)
         return result
+
+    def sessions(self) -> dict[str, object]:
+        """Return persisted sessions ordered by recent activity."""
+        return {"sessions": [summary.safe_dict() for summary in self.session_catalog.list()]}
+
+    def create_session(self, title: str | None = None) -> dict[str, object]:
+        """Create and return one empty session."""
+        return self.session_catalog.create(title).safe_dict()
+
+    def session(self, session_id: str) -> dict[str, object]:
+        """Return one persisted session summary."""
+        return self.session_catalog.get(session_id).safe_dict()
+
+    def rename_session(self, session_id: str, title: str) -> dict[str, object]:
+        """Rename one persisted session."""
+        return self.session_catalog.rename(session_id, title).safe_dict()
+
+    def audit_export(self, session_id: str) -> dict[str, object]:
+        """Return a generated scrubbed audit export for browser delivery."""
+        self.session_catalog.get(session_id)
+        store = FileSessionStore(self.workspace, session_id)
+        try:
+            content = store.read_audit_export()
+        except OSError as error:
+            msg = f"audit export is not available for session: {session_id}"
+            raise SessionCatalogError(msg) from error
+        return {
+            "filename": f"{session_id}-audit.jsonl",
+            "content": content,
+        }
 
     def replay_events(
         self,
@@ -356,6 +389,7 @@ class SessionGateway:
         return self.skill_settings()
 
     def _service(self, session_id: str) -> SessionService:
+        self.session_catalog.ensure(session_id)
         service = self._services.get(session_id)
         if service is None:
             if self._service_factory is not None:

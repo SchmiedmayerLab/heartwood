@@ -9,6 +9,7 @@
 import type {
   ActionConfirmationMode,
   ActionSettings,
+  AuditExport,
   CommandKind,
   JsonValue,
   ModelArtifacts,
@@ -18,6 +19,8 @@ import type {
   ModelValidation,
   SessionCommand,
   SessionEvent,
+  SessionList,
+  SessionSummary,
   SkillSettings,
   SkillSummary,
 } from "./types";
@@ -29,6 +32,11 @@ export interface SessionEventResponse {
 }
 
 export interface HeartwoodClient {
+  listSessions(): Promise<SessionList>;
+  createSession(title?: string): Promise<SessionSummary>;
+  getSession(sessionId: string): Promise<SessionSummary>;
+  renameSession(sessionId: string, title: string): Promise<SessionSummary>;
+  getAuditExport(sessionId: string): Promise<AuditExport>;
   postCommand(command: SessionCommand): Promise<SessionEventResponse>;
   replayEvents(
     sessionId: string,
@@ -73,6 +81,47 @@ export const createCommand = (
 
 export class GatewayClient implements HeartwoodClient {
   constructor(private readonly basePath = gatewayBasePath()) {}
+
+  async listSessions(): Promise<SessionList> {
+    return parseJsonResponse<SessionList>(await fetch(this.url("/sessions")));
+  }
+
+  async createSession(title?: string): Promise<SessionSummary> {
+    return parseJsonResponse<SessionSummary>(
+      await fetch(this.url("/sessions"), {
+        body: JSON.stringify(title === undefined ? {} : { title }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async getSession(sessionId: string): Promise<SessionSummary> {
+    return parseJsonResponse<SessionSummary>(
+      await fetch(this.url(`/sessions/${encodeURIComponent(sessionId)}`)),
+    );
+  }
+
+  async renameSession(
+    sessionId: string,
+    title: string,
+  ): Promise<SessionSummary> {
+    return parseJsonResponse<SessionSummary>(
+      await fetch(this.url(`/sessions/${encodeURIComponent(sessionId)}`), {
+        body: JSON.stringify({ title }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      }),
+    );
+  }
+
+  async getAuditExport(sessionId: string): Promise<AuditExport> {
+    return parseJsonResponse<AuditExport>(
+      await fetch(
+        this.url(`/sessions/${encodeURIComponent(sessionId)}/audit-export`),
+      ),
+    );
+  }
 
   async postCommand(command: SessionCommand): Promise<SessionEventResponse> {
     const response = await fetch(

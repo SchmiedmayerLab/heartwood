@@ -113,14 +113,14 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "the shell does not encode a fixed cohort" in architecture
     assert "The browser does not synthesize action outcomes" in architecture
     assert "Compliance evidence packages remain maintainer or reviewer tooling" in architecture
-    assert "target presentation contract for the planned web work" in architecture
-    assert "current web UI is a functional conversation and configuration surface" in architecture
+    assert "implemented presentation contract" in architecture
+    assert "gateway-owned session metadata" in architecture
     assert "## Priority 2 — Researcher Web Experience" in roadmap
     assert "Represent absent evidence as unknown or unconfigured" in roadmap
     assert "no model capability claim without benchmark evidence" in roadmap
     assert "Do not place compliance evidence packages" in roadmap
-    assert "session-oriented researcher experience" in readme
-    assert "planned work and is not part of the current implementation" in readme
+    assert "gateway-owned session lifecycle" in readme
+    assert "Boundary evidence and workflow progress remain planned" in readme
 
 
 def test_project_markdown_contains_no_process_artifacts() -> None:
@@ -182,6 +182,8 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     assert "persistent `-amd64` and `-arm64` helper tags" in container
     assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
     assert "deterministic loopback model fixture" in local
+    assert "mounted capable-model test" in local
+    assert "capable_model_e2e.sh" in local
     assert "`AlwaysConfirm`" in local
     for stale in ("edge-smoke", "edge-providers", "edge-coder-7b", "edge-terra-smoke"):
         assert stale not in readme

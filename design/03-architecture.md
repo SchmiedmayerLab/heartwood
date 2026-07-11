@@ -110,9 +110,9 @@ Heartwood verifies checked-in and installed `SKILL.md` packages, then loads the 
 
 The implemented CLI and web UI expose the same core conversation actions: address a persisted session id, submit a task, inspect messages and tool activity, allow or reject a pending action, select an allowed action-confirmation mode, pause or resume execution, and export the audit record. The CLI also exposes model-profile and artifact-management commands for administrators and technical users.
 
-The session-oriented researcher experience below is the target presentation contract for the planned web work in [Priority 2](09-implementation-plan.md). The current web UI is a functional conversation and configuration surface, but it does not yet implement the session rail, progressive-disclosure structure, responsive and accessibility acceptance gate, or target-user validation described here.
+The session-oriented researcher experience below is the implemented presentation contract. The web UI uses gateway-owned session metadata, progressive disclosure, typed event projections, responsive overlays, and the same command vocabulary as the CLI. Boundary evidence, workflow progress, and other states that do not yet have typed gateway records are shown as planned or omitted; target-user validation remains an acceptance requirement in [Priority 2](09-implementation-plan.md).
 
-The target web UI opens on the conversation and follows one information architecture:
+The web UI opens on the conversation and follows one information architecture:
 
 - A collapsible session rail creates, lists, and resumes gateway-owned sessions using persisted session metadata; browser storage is never the source of truth.
 - A compact session header shows the session title and only the platform, dataset, model route, confirmation mode, and boundary status supplied by detector, settings, policy, and session events. Unknown or unconfigured state is explicit. The UI never infers that an endpoint is compliant, data stayed in perimeter, egress was blocked, or an artifact is exportable.
@@ -124,7 +124,7 @@ The target web UI opens on the conversation and follows one information architec
 
 Every interactive state is projected from the gateway contract. The browser does not synthesize action outcomes, workflow completion, policy decisions, Skill verification, model capability, or audit integrity. Provider presets and artifact entries are gateway-supplied data rather than vendor-specific interface code.
 
-The desktop layout may retain a compact session rail and an optional side panel, but smaller viewports collapse both into overlays while preserving the conversation and composer. Keyboard operation, focus management, accessible names, live transcript and status announcements, reduced-motion support, and text reflow are release requirements rather than follow-up polish.
+The desktop layout uses a compact session rail and modal secondary sheets; smaller viewports collapse the session rail into a left sheet while preserving the conversation and composer. Semantic landmarks, accessible names, focus trapping, transcript and status announcements, text reflow, and narrow Jupyter-proxy layout are automated interface requirements. A keyboard and assistive-technology acceptance pass with representative users remains required before release.
 
 Notebook support reuses the gateway and web UI through the platform's authenticated proxy. Notebook widgets remain a compact status and launch bridge rather than a third full interaction design.
 

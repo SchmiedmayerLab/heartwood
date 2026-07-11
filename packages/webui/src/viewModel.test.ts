@@ -38,10 +38,20 @@ describe("buildViewModel", () => {
     expect(viewModel.approvalControls).toEqual([
       expect.objectContaining({
         decision: null,
+        risk: "low",
+        summary: "write a synthetic workspace summary artifact",
         targetId: "session-test-toolcall-0",
         targetType: "tool-call",
+        toolName: "heartwood.local.write_summary",
       }),
     ]);
+    expect(viewModel.context).toEqual({
+      platform: "generic",
+      dataset: "omop-cdm",
+      modelEndpoint: "http://127.0.0.1:8765/v1/chat/completions",
+      modelDecision: "allow",
+      modelReason: "model route policy allows the configured profile",
+    });
   });
 
   it("projects lifecycle, exports, errors, and confirmation results", () => {
@@ -50,8 +60,15 @@ describe("buildViewModel", () => {
         decision: "approved",
         tool_call_id: "toolcall-1",
       }),
-      event(1, "tool.execution.recorded", { exit_code: 0 }),
-      event(2, "audit.export.recorded", { path: "/audit.jsonl" }),
+      event(1, "tool.execution.recorded", {
+        exit_code: 0,
+        summary: "Wrote summary",
+        tool_name: "terminal",
+      }),
+      event(2, "audit.export.recorded", {
+        event_count: 3,
+        path: "/audit.jsonl",
+      }),
       event(3, "session.paused", {}),
       event(4, "session.resumed", {}),
       event(5, "error.recorded", { reason: "synthetic error" }),
@@ -62,7 +79,11 @@ describe("buildViewModel", () => {
     ]);
     expect(viewModel.paused).toBe(false);
     expect(viewModel.activity[1]?.detail).toBe("exit=0");
-    expect(viewModel.activity[2]?.detail).toBe("/audit.jsonl");
+    expect(viewModel.conversation[0]).toMatchObject({
+      content: "Ran terminal",
+      detail: "Wrote summary",
+    });
+    expect(viewModel.activity[2]?.detail).toBe("3 events, scrubbed JSONL");
     expect(viewModel.activity.at(-1)?.detail).toBe("synthetic error");
   });
 

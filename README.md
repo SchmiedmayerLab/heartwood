@@ -34,9 +34,9 @@ See [Architecture](design/03-architecture.md), [Security And Compliance](design/
 
 ## Current Status
 
-The generic runtime, OpenHands SDK integration, two action-confirmation modes, model profiles, reviewed local-artifact workflow, repository-verified Skill loading, CLI, notebook bridge, web UI, audit path, multi-platform generic image, and Terra-derived image are implemented and CI-validated with synthetic data. The project is pre-release: the Terra image has not completed its live workspace evidence pass, normal runtime construction still uses the generic platform policy and synthetic OMOP data-source fixture, concurrent independent writers to one file-backed session are not supported, and no platform path is institution-approved by the repository.
+The generic runtime, OpenHands SDK integration, two action-confirmation modes, model profiles, reviewed local-artifact workflow, repository-verified Skill loading, CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, audit path, multi-platform generic image, and Terra-derived image are implemented and CI-validated with synthetic data. The project is pre-release: the Terra image has not completed its live workspace evidence pass, normal runtime construction still uses the generic platform policy and synthetic OMOP data-source fixture, concurrent independent writers to one file-backed session are not supported, and no platform path is institution-approved by the repository.
 
-The shipped web UI is the current functional conversation and configuration surface. The session-oriented researcher experience defined in the delivery roadmap is planned work and is not part of the current implementation.
+The web UI provides persisted session creation and selection, title editing, typed context, chronological model and tool activity, inline action decisions, a stable composer, responsive session and utility sheets, Skills, audit activity, and progressive model setup. Boundary evidence and workflow progress remain planned until typed gateway events exist, and representative-user acceptance has not been completed.
 
 See [Platform Support](docs/platform-support.md) for the current support matrix. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets until their separate adapters, images, policies, and live evidence are implemented.
 
@@ -134,16 +134,18 @@ docker run --rm \
 docker run --rm \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
   ghcr.io/schmiedmayerlab/heartwood:edge \
-  heartwood models download qwen25-coder-7b-instruct-q4_k_m
+  heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
-The download command prints the verified path. Set `HEARTWOOD_LOCAL_MODEL_PATH` to that path and `HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1` when starting the demo stack, then configure the loopback profile shown above. Existing Ollama, vLLM, SGLang, llama.cpp, or other OpenAI-compatible services can be selected without using Heartwood’s artifact catalog.
+The download command prints the verified path. `qwen25-7b-instruct-q4_k_m` is the reviewed local agent demonstration artifact because the pinned llama.cpp runtime supports its native tool-call format; `qwen25-coder-7b-instruct-q4_k_m` remains available for coding-output experiments but is not the default OpenHands tool-use acceptance model. Neither artifact has a biomedical, production, or benchmark-backed quality claim. Set `HEARTWOOD_LOCAL_MODEL_PATH` to the selected path and `HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1` when starting the demo stack, then configure the loopback profile shown above. Existing Ollama, vLLM, SGLang, llama.cpp, or other OpenAI-compatible services can be selected without using Heartwood’s artifact catalog.
 
 From a checkout, the isolated CI path builds the same no-weight image and uses a deterministic loopback model fixture with real OpenHands SDK orchestration:
 
 ```bash
 docker compose -f images/generic/compose.yaml run --rm --build heartwood
 ```
+
+That deterministic no-network gate exercises model routing, OpenHands orchestration, both approval modes, Skills, audit, CLI, web-support, and notebook contracts without claiming real model inference. The mounted capable-model acceptance command in [Getting Started With Local And Offline Models](docs/getting-started-offline.md) separately requires a native model tool call, successful terminal execution, the expected workspace file, and complete policy and audit events while container networking is disabled.
 
 See [Container Images](docs/container-images.md) and [Getting Started With Local And Offline Models](docs/getting-started-offline.md).
 

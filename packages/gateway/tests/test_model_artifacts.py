@@ -32,6 +32,7 @@ def test_repository_catalog_contains_only_explicit_download_artifacts() -> None:
 
     assert {artifact.artifact_id for artifact in catalog.artifacts} == {
         "llama-cpp-stories260k-ci",
+        "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
     assert all(artifact.source_revision not in {"main", "latest"} for artifact in catalog.artifacts)

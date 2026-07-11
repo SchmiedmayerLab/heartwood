@@ -116,6 +116,25 @@ def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
     assert len(audit_lines) == 2
 
 
+def test_rest_delivers_generated_scrubbed_audit_export(tmp_path: Path) -> None:
+    rest = RestGateway(_gateway(tmp_path))
+
+    unavailable = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
+    rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.AUDIT_EXPORT),
+        )
+    )
+    exported = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
+
+    assert unavailable.status_code == 404
+    assert exported.status_code == 200
+    assert exported.body["filename"] == "session-1-audit.jsonl"
+    assert "audit.export.recorded" in str(exported.body["content"])
+
+
 def test_pause_and_resume_are_streamed(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
     stream = gateway.websocket(session_id="session-1")
@@ -355,7 +374,15 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert selected.body["active_profile"] == "local"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
-    assert len(cast(list[object], artifacts.body["artifacts"])) == 2
+    artifact_ids = {
+        artifact["artifact_id"]
+        for artifact in cast(list[dict[str, JsonValue]], artifacts.body["artifacts"])
+    }
+    assert artifact_ids == {
+        "llama-cpp-stories260k-ci",
+        "qwen25-7b-instruct-q4_k_m",
+        "qwen25-coder-7b-instruct-q4_k_m",
+    }
     assert removed.body["active_profile"] is None
 
 
