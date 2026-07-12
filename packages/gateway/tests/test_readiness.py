@@ -173,9 +173,7 @@ def test_doctor_rejects_missing_environment_credential_reference(tmp_path: Path)
         json.dumps(
             {
                 "active_profile": "configured",
-                "profiles": [
-                    {"profile_id": "configured", "credential_kind": "environment"}
-                ],
+                "profiles": [{"profile_id": "configured", "credential_kind": "environment"}],
             }
         ),
         encoding="utf-8",

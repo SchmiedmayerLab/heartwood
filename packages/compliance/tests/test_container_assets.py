@@ -266,7 +266,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "-size +10M" in workflow
     assert "*.safetensors" in workflow
     assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v" in dependency_review
-    assert "no patched release" in dependency_review
+    assert "GHSA-rrmf-rvhw-rf47" in dependency_review
+    assert "patched release" in dependency_review
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
