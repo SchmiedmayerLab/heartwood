@@ -1,0 +1,13 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: heartwood-carina-bootstrap
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - uv=0.11.28
+  - git

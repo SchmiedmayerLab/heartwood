@@ -9,18 +9,23 @@
 from __future__ import annotations
 
 import argparse
-import shlex
+import json
+import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, cast
 
 import uvicorn
 
+from heartwood.cli._interactive import InteractiveSession, command_help
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
     ActionSettingsError,
+    DeploymentReadiness,
     GatewayAsgiApp,
     ModelArtifactError,
     ModelCatalogError,
@@ -28,6 +33,10 @@ from heartwood.gateway import (
     ModelSettingsError,
     SessionGateway,
     SkillSettingsError,
+    action_settings_path,
+    inspect_deployment,
+    model_settings_path,
+    persist_deployment_profile,
 )
 from heartwood.session import (
     CommandKind,
@@ -52,6 +61,14 @@ _ACTION_MODE_ARGUMENTS = {
 }
 
 
+def _default_workspace() -> Path:
+    configured = os.environ.get("HEARTWOOD_WORKSPACE")
+    if configured:
+        return Path(configured)
+    home = os.environ.get("HEARTWOOD_HOME")
+    return Path(home) / "sessions" if home else _DEFAULT_WORKSPACE
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=_PROG,
@@ -61,7 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=_DEFAULT_WORKSPACE,
+        default=_default_workspace(),
         help="Directory for local session state and model settings.",
     )
     parser.add_argument(
@@ -78,6 +95,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Open the coding-agent conversation or submit one task.",
     )
     chat.add_argument("--prompt", "-p", help="Submit one task instead of opening the prompt loop.")
+    chat.add_argument(
+        "--plain",
+        action="store_true",
+        help="Use the line-oriented interface for basic terminals and automation.",
+    )
     run = subparsers.add_parser(
         "run",
         help="Compatibility alias for one coding-agent task.",
@@ -88,6 +110,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default="build the synthetic target-condition cohort and report aggregate quality checks",
     )
     subparsers.add_parser("detect", help="Detect the platform and dataset without running code.")
+    doctor = subparsers.add_parser("doctor", help="Inspect environment and setup readiness.")
+    doctor.add_argument("--json", action="store_true", help="Print machine-readable diagnostics.")
+    setup = subparsers.add_parser("setup", help="Configure a model route and conservative policy.")
+    setup.add_argument(
+        "--model-source",
+        choices=("local", "stanford-ai-api-gateway"),
+        help="Model service to configure.",
+    )
+    setup.add_argument("--model-id", help="Exact model identifier reported by the service.")
+    setup.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Require explicit inputs and do not prompt.",
+    )
+    setup.add_argument("--yes", action="store_true", help="Confirm the displayed configuration.")
 
     allow = subparsers.add_parser(
         "allow",
@@ -240,6 +277,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             fixture_root=args.fixture_root,
             output=args.output,
         )
+    if args.command == "doctor":
+        return _handle_doctor(workspace=args.workspace, as_json=args.json)
+    if args.command == "setup":
+        return _handle_setup(parser, args)
+    if args.command is None and sys.stdin.isatty():
+        readiness = inspect_deployment(args.workspace)
+        if readiness.state == "setup-required":
+            print("Heartwood needs a model route before the first conversation.\n")
+            return _handle_setup(parser, args)
+        if readiness.state == "recovery-required":
+            print(_format_readiness(readiness))
+            print("\nResolve the failed checks, then run `heartwood doctor` again.")
+            return 1
 
     gateway = SessionGateway(workspace=args.workspace)
     gateway.start()
@@ -255,7 +305,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command in {None, "chat", "agent"}:
             if getattr(args, "prompt", None) is not None:
                 return _submit_task(gateway, session_id=args.session_id, prompt=args.prompt)
-            return _interactive_chat(gateway, session_id=args.session_id)
+            return _interactive_chat(
+                gateway,
+                session_id=args.session_id,
+                plain=getattr(args, "plain", False),
+            )
         if args.command == "run":
             return _submit_task(
                 gateway,
@@ -286,6 +340,146 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     finally:
         gateway.stop()
+
+
+def _handle_doctor(*, workspace: Path, as_json: bool) -> int:
+    readiness = inspect_deployment(workspace)
+    print(json.dumps(readiness.safe_dict(), indent=2) if as_json else _format_readiness(readiness))
+    return 1 if readiness.state == "recovery-required" else 0
+
+
+def _format_readiness(readiness: DeploymentReadiness) -> str:
+    lines = [
+        "Heartwood environment",
+        f"Platform: {readiness.platform_id}",
+        f"State: {readiness.state}",
+        "",
+    ]
+    markers = {"pass": "OK", "warning": "NOTE", "fail": "FAIL"}
+    for check in readiness.checks:
+        lines.append(f"[{markers[check.status]}] {check.summary}")
+    return "\n".join(lines)
+
+
+def _handle_setup(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    readiness = inspect_deployment(args.workspace)
+    if readiness.state == "recovery-required":
+        print(_format_readiness(readiness))
+        print("\nSetup cannot continue until failed environment checks are resolved.")
+        return 1
+    source = getattr(args, "model_source", None)
+    non_interactive = bool(getattr(args, "non_interactive", False))
+    confirmed = bool(getattr(args, "yes", False))
+    model_id = getattr(args, "model_id", None)
+    if source is None:
+        if non_interactive:
+            parser.error("--model-source is required with --non-interactive")
+        print(_format_readiness(readiness))
+        print("\nModel access:\n  1. Local model service\n  2. Stanford AI API Gateway")
+        try:
+            choice = input("Select [1-2]: ").strip()
+        except EOFError:
+            print("\nSetup cancelled because input closed.")
+            return 1
+        source = "stanford-ai-api-gateway" if choice == "2" else "local"
+    if non_interactive and model_id is None:
+        parser.error("--model-id is required with --non-interactive")
+    print("\nConfiguration")
+    print(f"  Platform: {readiness.platform_id}")
+    print(f"  Model source: {source}")
+    print("  Action confirmation: Ask Every Time")
+    if not confirmed:
+        if non_interactive:
+            parser.error("--yes is required with --non-interactive")
+        try:
+            confirmed = input("Apply this non-secret configuration? [y/N]: ").strip().lower() == "y"
+        except EOFError:
+            print("\nSetup cancelled because input closed.")
+            return 1
+    if not confirmed:
+        print("Setup cancelled.")
+        return 1
+    model_source = cast(Literal["local", "stanford-ai-api-gateway"], source)
+    snapshot = _snapshot_setup_files(args.workspace)
+    try:
+        persist_deployment_profile(args.workspace, model_source=model_source)
+        gateway = SessionGateway(workspace=args.workspace)
+        gateway.start()
+        try:
+            gateway.select_action_confirmation_mode("always-confirm")
+            connection_id = "local" if source == "local" else "stanford-ai-api-gateway"
+            catalog = gateway.discover_models(connection_id, refresh=True)
+            models = catalog.get("models", [])
+            if not isinstance(models, list):
+                raise ModelCatalogError("the selected model service returned an invalid catalog")
+            available = [
+                item.get("model_id")
+                for item in models
+                if isinstance(item, dict) and item.get("availability") != "unsupported"
+            ]
+            if model_id is None:
+                if not available:
+                    raise ModelCatalogError("the selected model service reported no usable models")
+                print("\nAvailable models:")
+                for index, item in enumerate(available, start=1):
+                    print(f"  {index}. {item}")
+                try:
+                    selected = input("Select a model by number or identifier: ").strip()
+                except EOFError as error:
+                    raise ModelCatalogError(
+                        "model selection was cancelled because input closed"
+                    ) from error
+                if selected.isdigit() and 1 <= int(selected) <= len(available):
+                    model_id = str(available[int(selected) - 1])
+                else:
+                    model_id = selected
+            gateway.connect_model(connection_id, model_id)
+        finally:
+            gateway.stop()
+    except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
+        _restore_setup_files(snapshot)
+        print(f"Setup could not validate the model route: {error}")
+        return 1
+    except BaseException:
+        _restore_setup_files(snapshot)
+        raise
+    print("Setup complete. Run `heartwood` to start the conversation.")
+    return 0
+
+
+def _snapshot_setup_files(workspace: Path) -> dict[Path, tuple[bytes, int] | None]:
+    state_root = workspace.parent
+    paths = {
+        state_root / "setup.json",
+        state_root / "policy.json",
+        state_root / "model-connections.json",
+        model_settings_path(workspace),
+        action_settings_path(workspace),
+    }
+    snapshot: dict[Path, tuple[bytes, int] | None] = {}
+    for path in paths:
+        snapshot[path] = (
+            (path.read_bytes(), path.stat().st_mode & 0o777) if path.is_file() else None
+        )
+    return snapshot
+
+
+def _restore_setup_files(snapshot: dict[Path, tuple[bytes, int] | None]) -> None:
+    for path, previous in snapshot.items():
+        if previous is None:
+            path.unlink(missing_ok=True)
+            continue
+        contents, mode = previous
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary_path = Path(temporary)
+        try:
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(contents)
+            temporary_path.chmod(mode)
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _handle_models(
@@ -568,11 +762,13 @@ def _event_exit_code(events: Sequence[SessionEvent]) -> int:
     return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
 
 
-def _interactive_chat(gateway: SessionGateway, *, session_id: str) -> int:
-    print(
-        "Heartwood agent. Commands: /allow <id>, /reject <id>, /pause, /resume, "
-        "/status, /replay, /audit-export, /exit."
-    )
+def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool = False) -> int:
+    session = InteractiveSession(gateway, session_id=session_id)
+    if not plain and _supports_full_screen_terminal():
+        from heartwood.cli._tui import run_terminal
+
+        return run_terminal(session, format_event=_format_event)
+    print(f"Heartwood agent. Commands: {command_help()}.")
     while True:
         try:
             line = input("heartwood> ").strip()
@@ -583,43 +779,21 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str) -> int:
             return 0
         if not line:
             continue
-        if line.startswith("/"):
-            _handle_chat_directive(gateway, session_id=session_id, line=line)
-            continue
-        _submit_task(gateway, session_id=session_id, prompt=line)
+        result = session.submit(line)
+        if result.exit_requested:
+            return 0
+        if result.message:
+            print(result.message)
+        if result.events:
+            print(_format_transcript(result.events))
 
 
-def _handle_chat_directive(gateway: SessionGateway, *, session_id: str, line: str) -> None:
-    try:
-        parts = shlex.split(line)
-    except ValueError:
-        print("Invalid command syntax.")
-        return
-    directive = parts[0]
-    if directive in {"/allow", "/reject"} and len(parts) == 2:
-        kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
-        command = _command(
-            gateway,
-            session_id=session_id,
-            kind=kind,
-            payload={"target_type": "tool-call", "target_id": parts[1]},
-        )
-        print(_format_transcript(gateway.handle(command).events))
-    elif directive == "/pause":
-        _submit_simple(gateway, session_id=session_id, kind=CommandKind.PAUSE)
-    elif directive == "/resume":
-        _submit_simple(gateway, session_id=session_id, kind=CommandKind.RESUME)
-    elif directive == "/status":
-        try:
-            print(_format_model_validation(gateway.validate_model_profile()))
-        except ModelSettingsError as error:
-            print(str(error))
-    elif directive == "/replay":
-        _handle_replay(gateway, session_id=session_id)
-    elif directive == "/audit-export":
-        _handle_audit_export(gateway, session_id=session_id, output=None)
-    else:
-        print(f"Unknown command: {directive}")
+def _supports_full_screen_terminal() -> bool:
+    return (
+        sys.stdin.isatty()
+        and sys.stdout.isatty()
+        and os.environ.get("TERM", "").lower() not in {"", "dumb"}
+    )
 
 
 def _format_transcript(events: Sequence[SessionEvent]) -> str:

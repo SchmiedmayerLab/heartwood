@@ -25,6 +25,17 @@ def test_generic_when_no_markers() -> None:
     assert detection.evidence
 
 
+def test_carina_from_explicit_platform_evidence() -> None:
+    detection = detect_platform({"HEARTWOOD_PLATFORM": "carina"})
+    assert detection.platform is Platform.CARINA
+    assert detection.evidence == ("found environment marker HEARTWOOD_PLATFORM=carina",)
+
+
+def test_carina_from_cluster_name() -> None:
+    detection = detect_platform({"SLURM_CLUSTER_NAME": "carina2"})
+    assert detection.platform is Platform.CARINA
+
+
 @pytest.mark.parametrize(
     ("env", "expected"),
     [

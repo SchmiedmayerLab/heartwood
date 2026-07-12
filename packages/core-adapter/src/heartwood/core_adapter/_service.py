@@ -17,7 +17,7 @@ from typing import Literal, cast
 
 from heartwood.adapters import DataSourceAdapter, PlatformAdapter
 from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
-from heartwood.adapters.platform import GenericPlatformAdapter
+from heartwood.adapters.platform import GenericPlatformAdapter, select_platform_adapter
 from heartwood.audit import AuditLog
 from heartwood.core_adapter._facade import (
     AgentBackend,
@@ -98,8 +98,8 @@ class SessionService:
         clock: Callable[[], str] | None = None,
     ) -> SessionService:
         """Build a local service using the caller environment."""
-        platform = GenericPlatformAdapter()
         active_env = os.environ if env is None else env
+        platform = select_platform_adapter(active_env)
         store = FileSessionStore(workspace, session_id)
         return cls(
             store=store,

@@ -29,6 +29,7 @@ class Platform(StrEnum):
     TERRA = "terra"
     DNANEXUS = "dnanexus"
     SEVEN_BRIDGES = "seven-bridges"
+    CARINA = "carina"
     GENERIC = "generic"
 
 
@@ -50,6 +51,7 @@ _MARKERS: dict[Platform, tuple[tuple[str, ...], tuple[str, ...]]] = {
     Platform.TERRA: (("GOOGLE_PROJECT",), ("WORKSPACE_",)),
     Platform.DNANEXUS: ((), ("DX_",)),
     Platform.SEVEN_BRIDGES: ((), ("SB_",)),
+    Platform.CARINA: (("HEARTWOOD_CARINA",), ()),
 }
 
 
@@ -82,6 +84,16 @@ def detect_platform(env: Mapping[str, str] | None = None) -> PlatformDetection:
         if found:
             matches[platform] = found
 
+    explicit_platform = env.get("HEARTWOOD_PLATFORM", "").strip().lower()
+    slurm_cluster = env.get("SLURM_CLUSTER_NAME", "").strip().lower()
+    if explicit_platform == Platform.CARINA.value or slurm_cluster in {"carina", "carina2"}:
+        carina_evidence: list[str] = []
+        if explicit_platform == Platform.CARINA.value:
+            carina_evidence.append("HEARTWOOD_PLATFORM=carina")
+        if slurm_cluster in {"carina", "carina2"}:
+            carina_evidence.append(f"SLURM_CLUSTER_NAME={slurm_cluster}")
+        matches[Platform.CARINA] = carina_evidence
+
     if not matches:
         return PlatformDetection(
             platform=Platform.GENERIC,
@@ -92,18 +104,18 @@ def detect_platform(env: Mapping[str, str] | None = None) -> PlatformDetection:
     if len(matches) == 1:
         platform, found = next(iter(matches.items()))
         confidence = min(0.99, 0.9 + 0.03 * (len(found) - 1))
-        evidence = tuple(f"found environment marker {marker}" for marker in found)
-        return PlatformDetection(platform=platform, confidence=confidence, evidence=evidence)
+        single_evidence = tuple(f"found environment marker {marker}" for marker in found)
+        return PlatformDetection(platform=platform, confidence=confidence, evidence=single_evidence)
 
     # Ambiguous: markers for more than one platform are present. Choose the
     # strongest (deterministic tie-break by id) and flag the low confidence.
     platform, found = max(matches.items(), key=lambda item: (len(item[1]), item[0].value))
     others = sorted(candidate.value for candidate in matches if candidate is not platform)
-    evidence = (
+    ambiguous_evidence = (
         *(f"found environment marker {marker}" for marker in found),
         f"ambiguous: markers for {', '.join(others)} also present",
     )
-    return PlatformDetection(platform=platform, confidence=0.5, evidence=evidence)
+    return PlatformDetection(platform=platform, confidence=0.5, evidence=ambiguous_evidence)
 
 
 def platform_detection_evidence(

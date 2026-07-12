@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -41,7 +44,10 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "sha256sum --check" in dockerfile
     assert "/home/heartwood/.local/share/heartwood" in dockerfile
     assert "/home/heartwood/.cache/heartwood/models" in dockerfile
-    assert "chown -R heartwood:heartwood /opt/heartwood /home/heartwood" in dockerfile
+    assert (
+        "chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /home/heartwood"
+        in dockerfile
+    )
     _assert_no_embedded_model_contract(dockerfile)
 
 
@@ -106,9 +112,12 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     _assert_no_embedded_model_contract(platform)
 
     assert terra["runtime_target"] == "terra-runtime"
+    assert terra["gpu_runtime_target"] == "terra-runtime-gpu-nvidia"
     assert terra["ci_target"] == "terra-ci"
     assert terra["runtime_tag"] == "edge-terra"
+    assert terra["gpu_runtime_tag"] == "edge-terra-gpu-nvidia"
     assert terra["commit_runtime_tag"] == "sha-<git-sha>-terra"
+    assert terra["commit_gpu_runtime_tag"] == "sha-<git-sha>-terra-gpu-nvidia"
     assert terra["bundles_model_artifact"] is False
     assert terra["supported_platforms"] == ["linux/amd64"]
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
@@ -144,16 +153,30 @@ def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
         assert "Not bundled" in artifact["redistribution"]
 
     assert flavors["flavors"]["runtime"]["bundles_model_artifact"] is False
+    assert flavors["flavors"]["runtime_gpu_nvidia"]["bundles_model_artifact"] is False
     assert flavors["platform_flavors"]["terra_runtime"]["bundles_model_artifact"] is False
+    assert (
+        flavors["platform_flavors"]["terra_runtime_gpu_nvidia"]["bundles_model_artifact"] is False
+    )
     assert "No Heartwood image contains model weights" in flavors["model_weight_policy"]
 
 
-def test_bake_file_has_one_runtime_and_one_platform_variant() -> None:
+def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     bake = _read("docker-bake.hcl")
 
-    assert _target_names(bake) == {"runtime", "_terra_common", "terra-runtime", "terra-ci"}
+    assert _target_names(bake) == {
+        "runtime",
+        "runtime-gpu-nvidia",
+        "_terra_common",
+        "terra-runtime",
+        "terra-runtime-gpu-nvidia",
+        "terra-ci",
+    }
     assert 'targets = ["runtime"]' in bake
     assert 'platforms = ["linux/amd64", "linux/arm64"]' in bake
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia"' in bake
+    assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia"' in bake
+    assert bake.count('HEARTWOOD_GPU_RUNTIME = "vllm"') == 2
     assert 'output = ["type=registry,oci-mediatypes=false"]' in bake
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in bake
     assert "coder-7b" not in bake
@@ -161,9 +184,167 @@ def test_bake_file_has_one_runtime_and_one_platform_variant() -> None:
     assert 'target "providers"' not in bake
 
 
+def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
+    generic = _read("images/generic/Dockerfile")
+    platform = _read("images/platform/Dockerfile")
+    launcher = _read("images/gpu/start_vllm.sh")
+    lock = _read("images/gpu/vllm-requirements.txt")
+
+    for dockerfile in (generic, platform):
+        assert "uv venv /opt/heartwood-vllm --python 3.12" in dockerfile
+        assert "uv pip sync --require-hashes" in dockerfile
+        assert "images/gpu/vllm-requirements.txt" in dockerfile
+        assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
+    assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
+    assert "vllm==0.25.0" in lock
+    assert "torch==2.11.0" in lock
+    assert "--hash=sha256:" in lock
+    assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
+    assert "--enable-auto-tool-choice" in launcher
+    assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
+    assert "huggingface.co" not in launcher
+
+
+def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
+    model = tmp_path / "model"
+    model.mkdir()
+    arguments = tmp_path / "arguments.txt"
+    executable = tmp_path / "vllm"
+    executable.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {arguments}\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    script = _repo_root() / "images/gpu/start_vllm.sh"
+    env = {
+        **os.environ,
+        "HEARTWOOD_LOCAL_MODEL_PATH": str(model),
+        "HEARTWOOD_VLLM_EXECUTABLE": str(executable),
+        "HEARTWOOD_LOCAL_MODEL_ALIAS": "test-model",
+    }
+
+    completed = subprocess.run(["bash", str(script)], env=env, check=False)
+
+    assert completed.returncode == 0
+    values = arguments.read_text(encoding="utf-8").splitlines()
+    assert values[:2] == ["serve", str(model)]
+    assert values[values.index("--host") + 1] == "127.0.0.1"
+    assert values[values.index("--served-model-name") + 1] == "test-model"
+    assert values[values.index("--tool-call-parser") + 1] == "hermes"
+
+    env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
+    denied = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert denied.returncode == 64
+
+
+def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
+    bootstrap = _read("deploy/carina/bootstrap.sh")
+    launcher = _read("deploy/carina/launch-interactive.sh")
+    batch = _read("deploy/carina/interactive.sbatch")
+    environment = _toml("images/generic/image-flavors.toml")
+
+    assert "micromamba create" in bootstrap
+    assert "micromamba install" in bootstrap
+    assert '"${root}/bootstrap/conda-meta"' in bootstrap
+    assert "images/gpu/vllm-requirements.txt" in bootstrap
+    assert '"${root}/vllm/bin/python"' in bootstrap
+    assert "SLURM_JOB_ID" in launcher
+    assert "LOCAL_SCRATCH_JOB" in launcher
+    assert "verify_model_snapshot.py" in launcher
+    assert 'repo_root="$(cd "${script_dir}/../.." && pwd)"' in launcher
+    assert 'kill -KILL "${runtime_pid}"' in launcher
+    assert 'mktemp -d "${LOCAL_SCRATCH_JOB%/}/heartwood-model.XXXXXX"' in launcher
+    assert 'rm -rf "${staged_model}"' in launcher
+    assert "unset GH_TOKEN GITHUB_TOKEN HF_TOKEN" in launcher
+    assert "unset OPENAI_API_KEY ANTHROPIC_API_KEY AZURE_API_KEY" in launcher
+    assert "--model-source local" in launcher
+    assert "127.0.0.1:8765/v1/models" in launcher
+    assert "#SBATCH --partition=gpu" in batch
+    assert "#SBATCH --gres=gpu:1" in batch
+    assert "${script_dir}/launch-interactive.sh" in batch
+    assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
+
+
+def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) -> None:
+    model = tmp_path / "model"
+    model.mkdir()
+    weights = model / "weights.safetensors"
+    weights.write_bytes(b"synthetic-weights")
+    digest = hashlib.sha256(weights.read_bytes()).hexdigest()
+    (model / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
+    verifier = _repo_root() / "deploy/carina/verify_model_snapshot.py"
+    verifier_source = verifier.read_text(encoding="utf-8")
+    assert "file.read(1024 * 1024)" in verifier_source
+    assert "os.O_NOFOLLOW" in verifier_source
+    assert ".read_bytes()" not in verifier_source
+
+    verified = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
+    assert verified.returncode == 0
+
+    (model / "unlisted.json").write_text("{}", encoding="utf-8")
+    unlisted = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
+    assert unlisted.returncode == 66
+    (model / "unlisted.json").unlink()
+
+    weights.unlink()
+    weights.symlink_to(model / "missing-weights")
+    linked = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
+    assert linked.returncode == 66
+
+
+def test_gpu_publication_builds_only_explicit_main_variants() -> None:
+    workflow = _read(".github/workflows/gpu-container-image.yml")
+    dependency_review = _read(".github/workflows/dependency-review.yml")
+
+    assert "runtime-gpu-nvidia" in workflow
+    assert "terra-runtime-gpu-nvidia" in workflow
+    assert "Build GPU candidate ${{ matrix.target }}" in workflow
+    assert "attest=type=sbom,disabled=true" in workflow
+    assert "attest=type=provenance,disabled=true" in workflow
+    assert "Promote GPU Channel Tags" in workflow
+    assert "if: github.ref == 'refs/heads/main'" in workflow
+    assert "push-by-digest=true" in workflow
+    assert "--prefer-index=false" in workflow
+    assert "/opt/heartwood-vllm/bin/python" in workflow
+    assert "find" in workflow
+    assert "-size +10M" in workflow
+    assert "*.safetensors" in workflow
+    assert "immutable GPU commit tag does not match" in workflow
+    assert "refusing to move GPU channel tags from a stale main workflow" in workflow
+    assert "promoted ${channel} digest does not match" in workflow
+    assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v" in dependency_review
+    assert "GHSA-rrmf-rvhw-rf47" in dependency_review
+    assert "patched release" in dependency_review
+
+
+def test_vllm_advisory_exceptions_remain_isolated_to_the_gpu_lock() -> None:
+    root = _repo_root()
+    lock = root / "images/gpu/vllm-requirements.txt"
+    dependency_files = {
+        root / "uv.lock",
+        *root.rglob("pyproject.toml"),
+        *root.rglob("*requirements*.txt"),
+        *root.rglob("*.in"),
+    }
+    declaration = re.compile(
+        r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(diskcache|torch)(?:["\'\s<>=!~\[])'
+    )
+    unexpected = [
+        path.relative_to(root).as_posix()
+        for path in sorted(dependency_files)
+        if path != lock and declaration.search(path.read_text(encoding="utf-8"))
+    ]
+
+    assert unexpected == []
+    text = lock.read_text(encoding="utf-8")
+    assert "diskcache==5.6.3" in text
+    assert "torch==2.11.0" in text
+
+
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     compose = _read("images/generic/compose.yaml")
     smoke = _read("images/generic/scripts/offline_stack_smoke.sh")
+    capable = _read("images/generic/scripts/capable_model_e2e.sh")
     model_stub = _read("images/generic/scripts/local_model_stub.py")
 
     assert "network_mode: none" in compose
@@ -175,6 +356,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_AGENT_BACKEND: openhands-sdk" in compose
     assert "image: heartwood-runtime-smoke:local" in compose
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
+    assert "HEARTWOOD_SMOKE_WORKSPACE:-/tmp/heartwood-sessions" in smoke
+    assert "HEARTWOOD_CAPABLE_WORKSPACE:-/tmp/heartwood-capable/sessions" in capable
     assert '"${state_root}/openhands"' in smoke
     assert '"${state_root}/workspaces"' in smoke
     assert "models refresh local" in smoke
@@ -305,8 +488,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "platform: linux/amd64" in smoke
     assert "platform: linux/arm64" in smoke
     assert "runner: ubuntu-24.04-arm" in smoke
-    assert "--print runtime" in smoke
-    assert "--print terra-runtime terra-ci" in smoke
+    assert "runtime runtime-gpu-nvidia" in smoke
+    assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
     assert "images/generic/scripts/offline_stack_smoke.sh" in smoke
     assert "container_persistence_smoke.sh" in smoke

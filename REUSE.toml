@@ -15,6 +15,7 @@ path = [
     "LICENSE",
     ".python-version",
     "uv.lock",
+    "images/gpu/vllm-requirements.txt",
     "**/py.typed",
     "**/__pycache__/**",
     "fixtures/**/*.csv",
