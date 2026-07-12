@@ -208,6 +208,7 @@ Do not add protected health information, credentials, live-platform identifiers,
 | [Container Images](docs/container-images.md) | Tags, model storage, providers, and CI |
 | [Platform Image Extension Guide](docs/platform-images.md) | Thin platform image mechanism |
 | [Terra Jupyter Demo](docs/terra-jupyter-demo.md) | Synthetic Terra workflow |
+| [Carina CLI Pilot](docs/carina-cli.md) | Synthetic native GPU and Stanford AI API Gateway workflow |
 
 ## Future Work
 

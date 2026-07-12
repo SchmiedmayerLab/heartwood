@@ -49,7 +49,9 @@ jobs:
       - name: Check Dockerfile
         run: docker buildx build --check --file images/generic/Dockerfile .
       - name: Check image target
-        run: docker buildx bake --file docker-bake.hcl --print runtime
+        run: >-
+          docker buildx bake --file docker-bake.hcl --print
+          runtime runtime-gpu-nvidia
       - name: Build the no-weight image and run the isolated OpenHands stack
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
@@ -134,7 +136,9 @@ jobs:
       - name: Check platform Dockerfile
         run: docker buildx build --check --platform linux/amd64 --file images/platform/Dockerfile .
       - name: Check Terra image targets
-        run: docker buildx bake --file docker-bake.hcl --print terra-runtime terra-ci
+        run: >-
+          docker buildx bake --file docker-bake.hcl --print
+          terra-runtime terra-runtime-gpu-nvidia terra-ci
       - name: Build Terra-compatible CI base
         run: >-
           docker buildx build --load --platform linux/amd64

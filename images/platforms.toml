@@ -46,11 +46,15 @@ supported_platforms = ["linux/amd64"]
 unsupported_platforms = ["linux/arm64"]
 unsupported_reason = "The selected Terra Jupyter base is amd64-only; publish ARM only after the base image and Leonardo path support it."
 runtime_target = "terra-runtime"
+gpu_runtime_target = "terra-runtime-gpu-nvidia"
 ci_target = "terra-ci"
 runtime_tag = "edge-terra"
+gpu_runtime_tag = "edge-terra-gpu-nvidia"
 ci_tag = "edge-terra-ci"
 commit_runtime_tag = "sha-<git-sha>-terra"
+commit_gpu_runtime_tag = "sha-<git-sha>-terra-gpu-nvidia"
 bundles_model_artifact = false
+gpu_runtime = "vllm==0.25.0"
 model_cache = "/home/jupyter/heartwood-workspace/models"
 ci_required = true
 live_workspace_validation_required = true

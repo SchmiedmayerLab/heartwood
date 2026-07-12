@@ -22,6 +22,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
 
 ARG TARGETARCH
 ARG HEARTWOOD_IMAGE_FLAVOR=runtime
+ARG HEARTWOOD_GPU_RUNTIME=none
 ARG LLAMA_CPP_VERSION=b9937
 ARG LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3
 ARG LLAMA_CPP_UBUNTU_ARM64_SHA256=c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4
@@ -44,6 +45,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HEARTWOOD_AGENT_BACKEND=auto \
     HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified \
     HEARTWOOD_MODEL_CATALOG=/opt/heartwood/images/generic/local-runtime/model-catalog.toml \
+    HEARTWOOD_HOME=/home/heartwood/.local/share/heartwood \
+    HEARTWOOD_WORKSPACE=/home/heartwood/.local/share/heartwood/sessions \
     HEARTWOOD_MODEL_CACHE=/home/heartwood/.cache/heartwood/models \
     HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     LD_LIBRARY_PATH=/opt/llama.cpp \
@@ -53,10 +56,11 @@ RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
     && useradd --system --uid "${HEARTWOOD_UID}" --gid heartwood --create-home --home-dir /home/heartwood --shell /bin/bash heartwood \
     && mkdir -p \
       /opt/heartwood \
+      /opt/heartwood-vllm \
       /home/heartwood/.cache/heartwood/models \
       /home/heartwood/.local/share/heartwood \
       /home/heartwood/.openhands \
-    && chown -R heartwood:heartwood /opt/heartwood /home/heartwood \
+    && chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /home/heartwood \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates \
@@ -98,6 +102,14 @@ USER heartwood
 
 RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
     uv sync --locked --no-dev --all-extras
+
+RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
+    if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      uv venv /opt/heartwood-vllm --python 3.12 \
+      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt; \
+    elif [ "${HEARTWOOD_GPU_RUNTIME}" != "none" ]; then \
+      echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
+    fi
 
 COPY --chown=heartwood:heartwood README.md ACRONYMS.md ./
 COPY --chown=heartwood:heartwood docs ./docs

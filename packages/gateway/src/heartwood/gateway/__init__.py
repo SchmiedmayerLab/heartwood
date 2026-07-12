@@ -53,6 +53,12 @@ from heartwood.gateway._model_settings import (
     model_settings_path,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, OpenHandsSdkError
+from heartwood.gateway._readiness import (
+    DeploymentReadiness,
+    ReadinessCheck,
+    inspect_deployment,
+    persist_deployment_profile,
+)
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
 from heartwood.gateway._session_catalog import (
     SessionCatalog,
@@ -75,6 +81,7 @@ __all__ = [
     "ActionSettings",
     "ActionSettingsError",
     "ActionSettingsStore",
+    "DeploymentReadiness",
     "GatewayAsgiApp",
     "GatewayEventStream",
     "ModelArtifact",
@@ -95,6 +102,7 @@ __all__ = [
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
     "ProviderModel",
+    "ReadinessCheck",
     "RestGateway",
     "RestRequest",
     "RestResponse",
@@ -110,6 +118,7 @@ __all__ = [
     "action_settings_path",
     "custom_model_connection",
     "download_model_artifact",
+    "inspect_deployment",
     "load_model_artifact_catalog",
     "load_model_connections",
     "model_connections_path",
@@ -117,4 +126,5 @@ __all__ = [
     "model_profile_from_preset",
     "model_settings_from_mapping",
     "model_settings_path",
+    "persist_deployment_profile",
 ]
