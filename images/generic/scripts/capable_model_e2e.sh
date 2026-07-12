@@ -8,7 +8,7 @@
 set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
-workspace="${HEARTWOOD_WORKSPACE:-/tmp/heartwood-capable/sessions}"
+workspace="${HEARTWOOD_CAPABLE_WORKSPACE:-/tmp/heartwood-capable/sessions}"
 state_root="$(dirname "${workspace}")"
 session_id="${HEARTWOOD_SESSION_ID:-session-capable-model}"
 settings="${HEARTWOOD_MODEL_SETTINGS:-${state_root}/models.json}"

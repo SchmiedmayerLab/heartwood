@@ -12,7 +12,7 @@ if ! command -v jq >/dev/null; then
   exit 69
 fi
 
-workspace="${HEARTWOOD_WORKSPACE:-/tmp/heartwood-sessions}"
+workspace="${HEARTWOOD_SMOKE_WORKSPACE:-/tmp/heartwood-sessions}"
 state_root="$(dirname "${workspace}")"
 session_id="${HEARTWOOD_SESSION_ID:-session-offline-stack}"
 rejected_session_id="${session_id}-rejected"

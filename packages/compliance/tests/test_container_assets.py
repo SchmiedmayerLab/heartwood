@@ -273,6 +273,7 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     compose = _read("images/generic/compose.yaml")
     smoke = _read("images/generic/scripts/offline_stack_smoke.sh")
+    capable = _read("images/generic/scripts/capable_model_e2e.sh")
     model_stub = _read("images/generic/scripts/local_model_stub.py")
 
     assert "network_mode: none" in compose
@@ -284,6 +285,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_AGENT_BACKEND: openhands-sdk" in compose
     assert "image: heartwood-runtime-smoke:local" in compose
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
+    assert "HEARTWOOD_SMOKE_WORKSPACE:-/tmp/heartwood-sessions" in smoke
+    assert "HEARTWOOD_CAPABLE_WORKSPACE:-/tmp/heartwood-capable/sessions" in capable
     assert '"${state_root}/openhands"' in smoke
     assert '"${state_root}/workspaces"' in smoke
     assert "models refresh local" in smoke
