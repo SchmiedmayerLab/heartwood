@@ -254,6 +254,7 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
 
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
+    dependency_review = _read(".github/workflows/dependency-review.yml")
 
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
@@ -264,6 +265,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "find" in workflow
     assert "-size +10M" in workflow
     assert "*.safetensors" in workflow
+    assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v" in dependency_review
+    assert "no patched release" in dependency_review
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
