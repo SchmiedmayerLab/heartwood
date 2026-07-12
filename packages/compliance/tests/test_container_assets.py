@@ -291,6 +291,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in workflow
+    assert "attest=type=sbom,disabled=true" in workflow
+    assert "attest=type=provenance,disabled=true" in workflow
     assert "Promote GPU Channel Tags" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow

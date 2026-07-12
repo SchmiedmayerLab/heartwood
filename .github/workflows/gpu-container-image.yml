@@ -75,6 +75,8 @@ jobs:
           docker buildx bake --file docker-bake.hcl \
             --set "${TARGET}.tags=heartwood-gpu-pr:${TARGET}" \
             --set "${TARGET}.output=type=docker" \
+            --set "${TARGET}.attest=type=sbom,disabled=true" \
+            --set "${TARGET}.attest=type=provenance,disabled=true" \
             "${TARGET}"
       - name: Verify candidate contents
         env:
