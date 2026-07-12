@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+
 environment_root=""
 model_root=""
 state_root=""
@@ -34,7 +37,7 @@ if [[ ! -x "${environment_root}/vllm/bin/vllm" ]]; then
   echo "vLLM environment is unavailable; run deploy/carina/bootstrap.sh first" >&2
   exit 69
 fi
-"${environment_root}/heartwood/bin/python" deploy/carina/verify_model_snapshot.py "${model_root}"
+"${environment_root}/heartwood/bin/python" "${script_dir}/verify_model_snapshot.py" "${model_root}"
 
 mkdir -p "${state_root}"
 staged_model="$(mktemp -d "${LOCAL_SCRATCH_JOB%/}/heartwood-model.XXXXXX")"
@@ -42,6 +45,15 @@ runtime_pid=""
 cleanup() {
   if [[ -n "${runtime_pid}" ]]; then
     kill "${runtime_pid}" >/dev/null 2>&1 || true
+    for _ in {1..10}; do
+      if ! kill -0 "${runtime_pid}" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "${runtime_pid}" >/dev/null 2>&1; then
+      kill -KILL "${runtime_pid}" >/dev/null 2>&1 || true
+    fi
     wait "${runtime_pid}" >/dev/null 2>&1 || true
   fi
   rm -rf "${staged_model}"
@@ -58,7 +70,7 @@ export HEARTWOOD_LOCAL_MODEL_ALIAS="${model_id}"
 export HEARTWOOD_VLLM_EXECUTABLE="${environment_root}/vllm/bin/vllm"
 export PATH="${environment_root}/heartwood/bin:${PATH}"
 
-bash images/gpu/start_vllm.sh >"${state_root}/vllm-${SLURM_JOB_ID}.log" 2>&1 &
+bash "${repo_root}/images/gpu/start_vllm.sh" >"${state_root}/vllm-${SLURM_JOB_ID}.log" 2>&1 &
 runtime_pid="$!"
 
 python - <<'PY'

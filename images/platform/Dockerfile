@@ -139,7 +139,8 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
 RUN mkdir -p \
       "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models" \
       "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions" \
-    && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace"
+    && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace" \
+    && if [ -d /opt/heartwood-vllm ]; then chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm; fi
 
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}
 

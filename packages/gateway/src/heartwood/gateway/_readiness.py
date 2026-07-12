@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, assert_never
 
 from pydantic import ValidationError
 
@@ -352,6 +352,7 @@ def _credential_readiness(
         )
     if kind == "managed-identity":
         return "warning", "Managed identity must be validated by the deployment"
+    assert_never(kind)
 
 
 def _load_policy(path: Path) -> PolicyProfile | None:

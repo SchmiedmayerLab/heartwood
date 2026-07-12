@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path, PurePosixPath
@@ -61,7 +62,8 @@ def verify_snapshot(root: Path) -> None:
 
     for relative_name, expected_digest in expected.items():
         hasher = hashlib.sha256()
-        with (root / relative_name).open("rb") as file:
+        descriptor = os.open(root / relative_name, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as file:
             while chunk := file.read(1024 * 1024):
                 hasher.update(chunk)
         digest = hasher.hexdigest()

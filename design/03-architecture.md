@@ -49,7 +49,7 @@ An OpenHands upgrade is accepted only when the adapter unit tests, native Skill 
 | Model/data policy | Heartwood | Deny unapproved routes, enforce platform data-use rules, and emit attestations. |
 | Audit and compliance export | Heartwood | Translate execution events into a content-minimized, hash-chained record and explicit export artifacts. |
 | User interfaces | Heartwood | Render the same session contract in a coding-agent-style CLI and conversation-first web UI. |
-| Terminal presentation | Textual | Provide maintained full-screen rendering, input, workers, and headless tests over Heartwood's framework-neutral interaction controller; own no agent or session state. |
+| Terminal presentation | Textual | Wire Textual into Heartwood's framework-neutral interaction controller for rendering, input, and workers while leaving conversation and agent state in the gateway. |
 
 The current runtime satisfies this ownership boundary for the agent loop and interfaces. Platform and data-source adaptation is not complete: runtime construction currently uses `GenericPlatformAdapter` and the synthetic OMOP data-source adapter unless a caller injects alternatives. A real platform adapter must replace those defaults before controlled workspace data is described as detected or supported.
 

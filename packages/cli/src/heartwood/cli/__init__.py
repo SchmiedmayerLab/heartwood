@@ -376,7 +376,11 @@ def _handle_setup(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             parser.error("--model-source is required with --non-interactive")
         print(_format_readiness(readiness))
         print("\nModel access:\n  1. Local model service\n  2. Stanford AI API Gateway")
-        choice = input("Select [1-2]: ").strip()
+        try:
+            choice = input("Select [1-2]: ").strip()
+        except EOFError:
+            print("\nSetup cancelled because input closed.")
+            return 1
         source = "stanford-ai-api-gateway" if choice == "2" else "local"
     if non_interactive and model_id is None:
         parser.error("--model-id is required with --non-interactive")
@@ -387,7 +391,11 @@ def _handle_setup(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if not confirmed:
         if non_interactive:
             parser.error("--yes is required with --non-interactive")
-        confirmed = input("Apply this non-secret configuration? [y/N]: ").strip().lower() == "y"
+        try:
+            confirmed = input("Apply this non-secret configuration? [y/N]: ").strip().lower() == "y"
+        except EOFError:
+            print("\nSetup cancelled because input closed.")
+            return 1
     if not confirmed:
         print("Setup cancelled.")
         return 1
@@ -415,7 +423,12 @@ def _handle_setup(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                 print("\nAvailable models:")
                 for index, item in enumerate(available, start=1):
                     print(f"  {index}. {item}")
-                selected = input("Select a model by number or identifier: ").strip()
+                try:
+                    selected = input("Select a model by number or identifier: ").strip()
+                except EOFError as error:
+                    raise ModelCatalogError(
+                        "model selection was cancelled because input closed"
+                    ) from error
                 if selected.isdigit() and 1 <= int(selected) <= len(available):
                     model_id = str(available[int(selected) - 1])
                 else:

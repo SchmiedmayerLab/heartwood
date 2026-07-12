@@ -195,6 +195,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "uv pip sync --require-hashes" in dockerfile
         assert "images/gpu/vllm-requirements.txt" in dockerfile
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
+    assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock
     assert "--hash=sha256:" in lock
@@ -243,11 +244,15 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     environment = _toml("images/generic/image-flavors.toml")
 
     assert "micromamba create" in bootstrap
+    assert "micromamba install" in bootstrap
+    assert '"${root}/bootstrap/conda-meta"' in bootstrap
     assert "images/gpu/vllm-requirements.txt" in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
     assert "SLURM_JOB_ID" in launcher
     assert "LOCAL_SCRATCH_JOB" in launcher
     assert "verify_model_snapshot.py" in launcher
+    assert 'repo_root="$(cd "${script_dir}/../.." && pwd)"' in launcher
+    assert 'kill -KILL "${runtime_pid}"' in launcher
     assert 'mktemp -d "${LOCAL_SCRATCH_JOB%/}/heartwood-model.XXXXXX"' in launcher
     assert 'rm -rf "${staged_model}"' in launcher
     assert "unset GH_TOKEN GITHUB_TOKEN HF_TOKEN" in launcher
@@ -255,6 +260,7 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert "--model-source local" in launcher
     assert "127.0.0.1:8765/v1/models" in launcher
     assert "#SBATCH --gres=gpu:1" in batch
+    assert "${script_dir}/launch-interactive.sh" in batch
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
 
 
@@ -268,6 +274,7 @@ def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) 
     verifier = _repo_root() / "deploy/carina/verify_model_snapshot.py"
     verifier_source = verifier.read_text(encoding="utf-8")
     assert "file.read(1024 * 1024)" in verifier_source
+    assert "os.O_NOFOLLOW" in verifier_source
     assert ".read_bytes()" not in verifier_source
 
     verified = subprocess.run([sys.executable, str(verifier), str(model)], check=False)

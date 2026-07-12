@@ -26,7 +26,12 @@ if [[ ! -f pyproject.toml || ! -f uv.lock ]]; then
 fi
 
 mkdir -p "${root}"
-micromamba create --yes --prefix "${root}/bootstrap" --file deploy/carina/environment.yml
+if [[ -x "${root}/bootstrap/bin/uv" && -d "${root}/bootstrap/conda-meta" ]]; then
+  micromamba install --yes --prefix "${root}/bootstrap" --file deploy/carina/environment.yml
+else
+  rm -rf "${root}/bootstrap"
+  micromamba create --yes --prefix "${root}/bootstrap" --file deploy/carina/environment.yml
+fi
 export UV_PROJECT_ENVIRONMENT="${root}/heartwood"
 "${root}/bootstrap/bin/uv" sync --locked --no-dev --all-extras --python 3.12
 "${root}/bootstrap/bin/uv" venv "${root}/vllm" --python 3.12

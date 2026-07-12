@@ -238,6 +238,80 @@ def test_interactive_setup_can_be_cancelled_without_writing_state(
     assert not (tmp_path / "state").exists()
 
 
+def test_interactive_setup_handles_closed_input_without_writing_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def closed_input(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", closed_input)
+    workspace = tmp_path / "state" / "sessions"
+
+    assert main(["--workspace", str(workspace), "setup"]) == 1
+
+    assert "Setup cancelled because input closed" in capsys.readouterr().out
+    assert not (tmp_path / "state").exists()
+
+
+def test_interactive_setup_handles_closed_confirmation_without_writing_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(["1"])
+
+    def closed_confirmation(_prompt: str) -> str:
+        try:
+            return next(responses)
+        except StopIteration as error:
+            raise EOFError from error
+
+    monkeypatch.setattr("builtins.input", closed_confirmation)
+    workspace = tmp_path / "state" / "sessions"
+
+    assert main(["--workspace", str(workspace), "setup"]) == 1
+
+    assert "Setup cancelled because input closed" in capsys.readouterr().out
+    assert not (tmp_path / "state").exists()
+
+
+def test_interactive_setup_rolls_back_when_model_selection_input_closes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeGateway:
+        def __init__(self, *, workspace: Path) -> None:
+            self.workspace = workspace
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def select_action_confirmation_mode(self, _mode: str) -> dict[str, object]:
+            return {}
+
+        def discover_models(self, _connection_id: str, *, refresh: bool) -> dict[str, object]:
+            assert refresh
+            return {"models": [{"model_id": "local-model", "availability": "available"}]}
+
+    def closed_input(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("heartwood.cli.SessionGateway", FakeGateway)
+    monkeypatch.setattr("builtins.input", closed_input)
+    workspace = tmp_path / "state" / "sessions"
+
+    assert main(["--workspace", str(workspace), "setup", "--model-source", "local", "--yes"]) == 1
+
+    assert "model selection was cancelled because input closed" in capsys.readouterr().out
+    assert not any(path.is_file() for path in (tmp_path / "state").rglob("*"))
+
+
 def test_non_interactive_setup_requires_explicit_inputs(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

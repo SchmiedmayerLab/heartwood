@@ -14,11 +14,13 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 : "${HEARTWOOD_ENVIRONMENT_ROOT:?set HEARTWOOD_ENVIRONMENT_ROOT}"
 : "${HEARTWOOD_MODEL_ROOT:?set HEARTWOOD_MODEL_ROOT}"
 : "${HEARTWOOD_STATE_ROOT:?set HEARTWOOD_STATE_ROOT}"
 
-exec deploy/carina/launch-interactive.sh \
+exec "${script_dir}/launch-interactive.sh" \
   --environment-root "${HEARTWOOD_ENVIRONMENT_ROOT}" \
   --model-root "${HEARTWOOD_MODEL_ROOT}" \
   --state-root "${HEARTWOOD_STATE_ROOT}"
