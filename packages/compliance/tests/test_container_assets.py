@@ -245,6 +245,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
 
     assert "packages: write" in publish
     assert "push-by-digest=true" in publish
+    assert publish.count("images/scripts/read_buildx_digest.py") == 2
+    assert ".containerimage.descriptor.digest" not in publish
+    assert ".terra-runtime" not in publish
     assert "actions/upload-artifact@v7" in publish
     assert "actions/download-artifact@v8" in publish
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}"' in publish
@@ -259,12 +262,14 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "verify_registry_manifest.py" in publish
     assert "--prefer-index=false" in publish
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
-    assert publish.count("^sha256:[0-9a-f]{64}$") == 4
+    assert publish.count("^sha256:[0-9a-f]{64}$") == 2
     assert publish.count("if: github.ref == 'refs/heads/main'") == 3
     assert "immutable generic commit tag already exists with a different manifest" in publish
     assert "newly created generic commit tag does not match validated candidate manifest" in publish
     assert "immutable Terra commit tag already exists with a different digest" in publish
     assert "newly created Terra commit tag does not match staged candidate digest" in publish
+    assert "promoted generic channel digest does not match the immutable commit tag" in publish
+    assert "promoted Terra channel digest does not match the immutable commit tag" in publish
     assert (
         'if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then'
         in publish
@@ -332,6 +337,53 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert 'summary["source_participant_count"] != 24' in capable_model
     assert 'summary["participant_count"] != 20' in capable_model
     assert 'checks["row_values_exported"] is not False' in capable_model
+
+
+def test_buildx_metadata_reader_handles_runtime_target_names(tmp_path: Path) -> None:
+    digest = "sha256:" + ("a" * 64)
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "runtime": {"containerimage.digest": digest},
+                "terra-runtime": {"containerimage.digest": digest},
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = _repo_root() / "images/scripts/read_buildx_digest.py"
+
+    for target in ("runtime", "terra-runtime"):
+        completed = subprocess.run(
+            [sys.executable, str(script), str(metadata), target],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == digest
+
+    missing = subprocess.run(
+        [sys.executable, str(script), str(metadata), "missing-target"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode != 0
+    assert "target 'missing-target' is missing" in missing.stderr
+
+    metadata.write_text(
+        json.dumps({"runtime": {"containerimage.digest": "invalid"}}),
+        encoding="utf-8",
+    )
+    invalid = subprocess.run(
+        [sys.executable, str(script), str(metadata), "runtime"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert invalid.returncode != 0
+    assert "has no valid container image digest" in invalid.stderr
 
 
 def test_platform_registry_verifier_checks_only_public_terra_tags(tmp_path: Path) -> None:
