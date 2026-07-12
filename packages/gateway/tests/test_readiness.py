@@ -166,6 +166,28 @@ def test_doctor_reports_non_environment_credential_readiness(
     assert credential.status == expected_status
 
 
+def test_doctor_rejects_missing_environment_credential_reference(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    persist_deployment_profile(state / "sessions", model_source="local", env={})
+    (state / "models.json").write_text(
+        json.dumps(
+            {
+                "active_profile": "configured",
+                "profiles": [
+                    {"profile_id": "configured", "credential_kind": "environment"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    readiness = inspect_deployment(state / "sessions", env={})
+
+    credential = next(check for check in readiness.checks if check.check_id == "model-credential")
+    assert credential.status == "fail"
+    assert credential.summary == "Selected model has an invalid environment credential reference"
+
+
 def test_local_setup_persists_conservative_restart_configuration(tmp_path: Path) -> None:
     workspace = tmp_path / "state" / "sessions"
     setup, policy, connections = persist_deployment_profile(

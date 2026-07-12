@@ -89,9 +89,9 @@ def detect_platform(env: Mapping[str, str] | None = None) -> PlatformDetection:
     if explicit_platform == Platform.CARINA.value or slurm_cluster in {"carina", "carina2"}:
         carina_evidence: list[str] = []
         if explicit_platform == Platform.CARINA.value:
-            carina_evidence.append("found explicit HEARTWOOD_PLATFORM=carina")
+            carina_evidence.append("HEARTWOOD_PLATFORM=carina")
         if slurm_cluster in {"carina", "carina2"}:
-            carina_evidence.append(f"found SLURM_CLUSTER_NAME={slurm_cluster}")
+            carina_evidence.append(f"SLURM_CLUSTER_NAME={slurm_cluster}")
         matches[Platform.CARINA] = carina_evidence
 
     if not matches:

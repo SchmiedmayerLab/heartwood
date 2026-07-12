@@ -28,7 +28,7 @@ def test_generic_when_no_markers() -> None:
 def test_carina_from_explicit_platform_evidence() -> None:
     detection = detect_platform({"HEARTWOOD_PLATFORM": "carina"})
     assert detection.platform is Platform.CARINA
-    assert "HEARTWOOD_PLATFORM=carina" in detection.evidence[0]
+    assert detection.evidence == ("found environment marker HEARTWOOD_PLATFORM=carina",)
 
 
 def test_carina_from_cluster_name() -> None:

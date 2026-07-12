@@ -277,7 +277,9 @@ def _credential_readiness(
         return "pass", "Selected model requires no credential"
     if kind == "environment":
         name = profile.get("api_key_env")
-        available = isinstance(name, str) and bool(env.get(name))
+        if not isinstance(name, str) or not name.strip():
+            return "fail", "Selected model has an invalid environment credential reference"
+        available = bool(env.get(name))
         summary = (
             f"Credential reference {name} is available"
             if available
