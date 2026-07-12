@@ -259,6 +259,7 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert "unset OPENAI_API_KEY ANTHROPIC_API_KEY AZURE_API_KEY" in launcher
     assert "--model-source local" in launcher
     assert "127.0.0.1:8765/v1/models" in launcher
+    assert "#SBATCH --partition=gpu" in batch
     assert "#SBATCH --gres=gpu:1" in batch
     assert "${script_dir}/launch-interactive.sh" in batch
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False

@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: MIT
 
 #SBATCH --job-name=heartwood-interactive
-#SBATCH --partition=dev
+#SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G

@@ -44,7 +44,7 @@ Place the approved Hugging Face snapshot under `${HEARTWOOD_ROOT}/models/<model>
 ## Start An Interactive Allocation
 
 ```bash
-srun --pty --partition=dev --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=02:00:00 bash
+srun --pty --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=02:00:00 bash
 ```
 
 Inside the allocation, confirm the detected state without changing it:
