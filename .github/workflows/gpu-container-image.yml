@@ -76,8 +76,6 @@ jobs:
             /usr/share/dotnet \
             /usr/share/swift
           df --human-readable /
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
       - name: Build candidate locally
         env:
           TARGET: ${{ matrix.target }}
