@@ -10,8 +10,52 @@ SPDX-License-Identifier: MIT
 
 # Heartwood CLI
 
-The `heartwood` command-line interface is the primary interactive, scripting, and CI surface. Running `heartwood` or `heartwood chat` in a capable terminal opens a full-screen conversation with persisted replay, keyboard navigation, background task execution, action review, and session status. Use `heartwood chat --plain` for a line-oriented SSH or basic-terminal session and `heartwood chat --prompt "..."` for one task. Action allow or reject, the deployment-allowed OpenHands confirmation mode, pause, resume, replay, audit export, model catalog selection, reviewed artifact downloads, and web serving use the same gateway and session contract as the notebook and web interfaces.
+The `heartwood` command opens an interactive coding-agent session for research work. You can describe a task in natural language, follow the agent's responses and proposed actions, allow or reject individual actions, pause or resume work, and return to the persisted conversation later.
 
-The terminal interface uses Textual for presentation only. OpenHands remains responsible for the agent loop, coding tools, conversation persistence, action analysis, and confirmation behavior through the gateway adapter. The current gateway returns each turn as a completed event batch, so the terminal stays responsive while work runs but does not claim token streaming or mid-turn cancellation.
+Start the full-screen terminal interface:
 
-`heartwood models list`, `models refresh <connection-id>`, and `models connect <connection-id> <model-id>` expose the same normalized local, platform, cloud, and custom catalogs as the web UI. Model commands persist only provider identifiers, endpoints, capability tiers, and credential references. Secret values remain in environment variables, mounted files, or managed identity; the CLI has no token argument. Raw profile commands remain available for advanced deployment compatibility.
+```bash
+heartwood
+```
+
+Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
+
+```text
+/allow <id>   Allow a proposed action once
+/reject <id>  Reject a proposed action
+/pause        Pause the session
+/resume       Resume the session
+/status       Show the active model and policy status
+/replay       Replay the persisted conversation
+/audit-export Export the scrubbed audit record
+/exit         Close the terminal interface
+```
+
+Heartwood automatically uses the line-oriented interface when a full-screen terminal is unavailable. You can also select it explicitly for SSH sessions and basic terminals:
+
+```bash
+heartwood chat --plain
+```
+
+For scripts or a single task, submit a prompt without opening an interactive session:
+
+```bash
+heartwood chat --prompt "Inspect the workspace and summarize the analysis."
+```
+
+Use `--session-id` to return to a named conversation, and `--workspace` to choose where Heartwood stores local session state:
+
+```bash
+heartwood --session-id cohort-review chat
+heartwood --workspace /path/to/state --session-id cohort-review chat
+```
+
+Before starting a model-backed conversation, inspect the available connections and select a model exposed by a local runtime, research environment, or configured provider:
+
+```bash
+heartwood models list
+heartwood models refresh local
+heartwood models connect local <model-id>
+```
+
+Additional commands manage action-confirmation settings, Skills, session replay, audit export, environment detection, and the web interface. Run `heartwood --help` or `heartwood <command> --help` for the complete command reference.
