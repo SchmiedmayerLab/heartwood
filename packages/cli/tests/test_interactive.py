@@ -36,6 +36,7 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         assert any("You: summarize" in _format_event(event) for event in task.events)
         assert invalid.message == "Unknown command: /allow"
         assert replay.events == session.replay()
+        assert replay.replace_transcript
     finally:
         gateway.stop()
 
@@ -61,8 +62,18 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
                     break
 
             assert not composer.disabled
-            assert len(app.query_one("#conversation", RichLog).lines) > 0
+            conversation = app.query_one("#conversation", RichLog)
+            line_count = len(conversation.lines)
+            assert line_count > 0
             assert session.replay()
+
+            composer.value = "/replay"
+            await pilot.press("enter")
+            for _ in range(50):
+                await pilot.pause(0.02)
+                if "ready" in str(app.query_one("#status", Static).render()):
+                    break
+            assert len(conversation.lines) == line_count
 
     try:
         asyncio.run(exercise())

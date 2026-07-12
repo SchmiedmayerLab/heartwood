@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -190,10 +192,12 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
 
     for dockerfile in (generic, platform):
         assert "uv venv /opt/heartwood-vllm --python 3.12" in dockerfile
+        assert "uv pip sync --require-hashes" in dockerfile
         assert "images/gpu/vllm-requirements.txt" in dockerfile
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock
+    assert "--hash=sha256:" in lock
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
@@ -235,7 +239,7 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
 def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     bootstrap = _read("deploy/carina/bootstrap.sh")
     launcher = _read("deploy/carina/launch-interactive.sh")
-    batch = _read("deploy/carina/synthetic-acceptance.sbatch")
+    batch = _read("deploy/carina/interactive.sbatch")
     environment = _toml("images/generic/image-flavors.toml")
 
     assert "micromamba create" in bootstrap
@@ -243,7 +247,9 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert '"${root}/vllm/bin/python"' in bootstrap
     assert "SLURM_JOB_ID" in launcher
     assert "LOCAL_SCRATCH_JOB" in launcher
-    assert "sha256sum --check SHA256SUMS" in launcher
+    assert "verify_model_snapshot.py" in launcher
+    assert 'mktemp -d "${LOCAL_SCRATCH_JOB%/}/heartwood-model.XXXXXX"' in launcher
+    assert 'rm -rf "${staged_model}"' in launcher
     assert "unset GH_TOKEN GITHUB_TOKEN HF_TOKEN" in launcher
     assert "unset OPENAI_API_KEY ANTHROPIC_API_KEY AZURE_API_KEY" in launcher
     assert "--model-source local" in launcher
@@ -252,12 +258,40 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
 
 
+def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) -> None:
+    model = tmp_path / "model"
+    model.mkdir()
+    weights = model / "weights.safetensors"
+    weights.write_bytes(b"synthetic-weights")
+    digest = hashlib.sha256(weights.read_bytes()).hexdigest()
+    (model / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
+    verifier = _repo_root() / "deploy/carina/verify_model_snapshot.py"
+    verifier_source = verifier.read_text(encoding="utf-8")
+    assert "file.read(1024 * 1024)" in verifier_source
+    assert ".read_bytes()" not in verifier_source
+
+    verified = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
+    assert verified.returncode == 0
+
+    (model / "unlisted.json").write_text("{}", encoding="utf-8")
+    unlisted = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
+    assert unlisted.returncode == 66
+    (model / "unlisted.json").unlink()
+
+    weights.unlink()
+    weights.symlink_to(model / "missing-weights")
+    linked = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
+    assert linked.returncode == 66
+
+
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
     dependency_review = _read(".github/workflows/dependency-review.yml")
 
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
+    assert "Build GPU candidate ${{ matrix.target }}" in workflow
+    assert "Promote GPU Channel Tags" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
     assert "--prefer-index=false" in workflow
@@ -265,9 +299,36 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "find" in workflow
     assert "-size +10M" in workflow
     assert "*.safetensors" in workflow
+    assert "immutable GPU commit tag does not match" in workflow
+    assert "refusing to move GPU channel tags from a stale main workflow" in workflow
+    assert "promoted ${channel} digest does not match" in workflow
     assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v" in dependency_review
     assert "GHSA-rrmf-rvhw-rf47" in dependency_review
     assert "patched release" in dependency_review
+
+
+def test_vllm_advisory_exceptions_remain_isolated_to_the_gpu_lock() -> None:
+    root = _repo_root()
+    lock = root / "images/gpu/vllm-requirements.txt"
+    dependency_files = {
+        root / "uv.lock",
+        *root.rglob("pyproject.toml"),
+        *root.rglob("*requirements*.txt"),
+        *root.rglob("*.in"),
+    }
+    declaration = re.compile(
+        r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(diskcache|torch)(?:["\'\s<>=!~\[])'
+    )
+    unexpected = [
+        path.relative_to(root).as_posix()
+        for path in sorted(dependency_files)
+        if path != lock and declaration.search(path.read_text(encoding="utf-8"))
+    ]
+
+    assert unexpected == []
+    text = lock.read_text(encoding="utf-8")
+    assert "diskcache==5.6.3" in text
+    assert "torch==2.11.0" in text
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:

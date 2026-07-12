@@ -19,6 +19,14 @@ from typing import Literal
 from pydantic import ValidationError
 
 from heartwood.adapters.platform import select_platform_adapter
+from heartwood.gateway._action_settings import ActionSettingsError, ActionSettingsStore
+from heartwood.gateway._model_catalog import ModelCatalogError, load_model_connections
+from heartwood.gateway._model_settings import (
+    ModelProfile,
+    ModelSettingsError,
+    ModelSettingsStore,
+)
+from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
 
 ReadinessState = Literal["ready", "setup-required", "recovery-required"]
@@ -76,12 +84,15 @@ def inspect_deployment(
     )
     setup_path = state_root / "setup.json"
     setup = _load_setup_marker(setup_path)
+    setup_matches_platform = setup is not None and setup["platform_id"] == adapter.adapter_id
     checks.append(
         ReadinessCheck(
             "setup",
-            "pass" if setup is not None else ("fail" if setup_path.exists() else "warning"),
+            ("pass" if setup_matches_platform else "fail" if setup_path.exists() else "warning"),
             (
                 "Setup is complete"
+                if setup_matches_platform
+                else "Setup platform does not match the detected platform"
                 if setup is not None
                 else "Setup state is invalid"
                 if setup_path.exists()
@@ -92,7 +103,7 @@ def inspect_deployment(
     model_path = state_root / "models.json"
     active_model = _active_model_profile(model_path)
     model_summary = (
-        f"Active model profile: {active_model['profile_id']}"
+        f"Active model profile: {active_model.profile_id}"
         if active_model
         else ("Model settings are invalid" if model_path.exists() else "No active model selected")
     )
@@ -106,14 +117,50 @@ def inspect_deployment(
     if active_model is not None:
         credential_status, credential_summary = _credential_readiness(active_model, active_env)
         checks.append(ReadinessCheck("model-credential", credential_status, credential_summary))
+    policy: PolicyProfile | None = None
     if setup is not None:
         policy_path = state_root / "policy.json"
-        policy_ready = _valid_policy(policy_path)
+        policy = _load_policy(policy_path)
+        policy_ready = policy is not None and policy.platform_id == adapter.adapter_id
         checks.append(
             ReadinessCheck(
                 "policy",
                 "pass" if policy_ready else "fail",
-                "Deployment policy is valid" if policy_ready else "Deployment policy is invalid",
+                (
+                    "Deployment policy is valid"
+                    if policy_ready
+                    else "Deployment policy is invalid or belongs to another platform"
+                ),
+            )
+        )
+        action_mode = _action_confirmation_mode(state_root / "actions.json")
+        checks.append(
+            ReadinessCheck(
+                "action-confirmation",
+                "pass" if action_mode is not None else "fail",
+                (
+                    f"Action confirmation mode: {action_mode}"
+                    if action_mode is not None
+                    else "Action confirmation settings are invalid or missing"
+                ),
+            )
+        )
+        configuration_ready = _configuration_is_coherent(
+            setup,
+            active_model,
+            policy,
+            action_mode,
+            state_root / "model-connections.json",
+        )
+        checks.append(
+            ReadinessCheck(
+                "configuration",
+                "pass" if configuration_ready else "fail",
+                (
+                    "Setup, model, policy, and connection agree"
+                    if configuration_ready
+                    else "Setup, model, policy, or connection do not agree"
+                ),
             )
         )
     if adapter.adapter_id == "carina":
@@ -242,41 +289,43 @@ def _existing_parent(path: Path) -> Path:
     return candidate
 
 
-def _load_setup_marker(path: Path) -> dict[str, object] | None:
+def _load_setup_marker(path: Path) -> dict[str, str] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(value, dict) or value.get("schema_version") != "heartwood.setup.v1":
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema_version", "platform_id", "model_source"}
+        or value.get("schema_version") != "heartwood.setup.v1"
+        or not isinstance(value.get("platform_id"), str)
+        or value.get("model_source") not in {"local", "stanford-ai-api-gateway"}
+    ):
         return None
-    return value
+    return {
+        "schema_version": "heartwood.setup.v1",
+        "platform_id": str(value["platform_id"]),
+        "model_source": str(value["model_source"]),
+    }
 
 
-def _active_model_profile(path: Path) -> dict[str, object] | None:
+def _active_model_profile(path: Path) -> ModelProfile | None:
+    if not path.is_file():
+        return None
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return ModelSettingsStore(path).load().profile()
+    except ModelSettingsError:
         return None
-    if not isinstance(value, dict):
-        return None
-    active = value.get("active_profile")
-    profiles = value.get("profiles")
-    if not isinstance(active, str) or not isinstance(profiles, list):
-        return None
-    for profile in profiles:
-        if isinstance(profile, dict) and profile.get("profile_id") == active:
-            return profile
-    return None
 
 
 def _credential_readiness(
-    profile: Mapping[str, object], env: Mapping[str, str]
+    profile: ModelProfile, env: Mapping[str, str]
 ) -> tuple[Literal["pass", "warning", "fail"], str]:
-    kind = profile.get("credential_kind")
+    kind = profile.credential_kind
     if kind == "none":
         return "pass", "Selected model requires no credential"
     if kind == "environment":
-        name = profile.get("api_key_env")
+        name = profile.api_key_env
         if not isinstance(name, str) or not name.strip():
             return "fail", "Selected model has an invalid environment credential reference"
         available = bool(env.get(name))
@@ -290,7 +339,7 @@ def _credential_readiness(
             summary,
         )
     if kind == "file":
-        configured = profile.get("api_key_file")
+        configured = profile.api_key_file
         available = isinstance(configured, str) and Path(configured).is_file()
         summary = (
             "Mounted credential file is available"
@@ -303,19 +352,63 @@ def _credential_readiness(
         )
     if kind == "managed-identity":
         return "warning", "Managed identity must be validated by the deployment"
-    return "fail", "Selected model has an invalid credential reference"
 
 
-def _valid_policy(path: Path) -> bool:
+def _load_policy(path: Path) -> PolicyProfile | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        return PolicyProfile.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _action_confirmation_mode(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    try:
+        return str(ActionSettingsStore(path).load().confirmation_mode)
+    except ActionSettingsError:
+        return None
+
+
+def _configuration_is_coherent(
+    setup: Mapping[str, str],
+    model: ModelProfile | None,
+    policy: PolicyProfile | None,
+    action_mode: str | None,
+    connections_path: Path,
+) -> bool:
+    if model is None or policy is None or action_mode is None:
         return False
     try:
-        PolicyProfile.model_validate(value)
-    except ValidationError:
+        connections = load_model_connections(connections_path)
+    except ModelCatalogError:
         return False
-    return True
+    source = setup["model_source"]
+    if source == "local":
+        source_matches = model.is_local and not any(
+            item.connection_id == "stanford-ai-api-gateway" for item in connections
+        )
+    else:
+        source_matches = (
+            model.policy_endpoint == f"{_STANFORD_ROOT}/chat/completions"
+            and model.api_key_env == "STANFORD_AI_API_KEY"
+            and any(item.connection_id == "stanford-ai-api-gateway" for item in connections)
+        )
+    if not source_matches:
+        return False
+    decision = ModelPolicyEngine(policy).evaluate(
+        endpoint=model.policy_endpoint,
+        capability_tier=model.capability_tier,
+        action_confirmation_mode=action_mode,
+        credential_reference=model.credential_reference,
+        decision_id="deployment-readiness",
+        purpose="deployment readiness",
+    )
+    return decision.decision == "allow"
 
 
 def _gpu_visible(env: Mapping[str, str]) -> bool:

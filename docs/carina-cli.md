@@ -39,7 +39,7 @@ The bootstrap creates separate locked Heartwood and vLLM environments. This prev
 
 ## Stage A Reviewed Model
 
-Place the approved Hugging Face snapshot under `${HEARTWOOD_ROOT}/models/<model>` using an approved transfer path. Add a `SHA256SUMS` file containing every model file that the launcher must verify. Model acquisition is deliberately separate from agent startup; the launcher never downloads weights.
+Place the approved Hugging Face snapshot under `${HEARTWOOD_ROOT}/models/<model>` using an approved transfer path. Add a `SHA256SUMS` file containing every regular model file. The launcher rejects missing, unlisted, linked, or modified files and stages the verified snapshot into a fresh job-scratch directory. Model acquisition is deliberately separate from agent startup; the launcher never downloads weights.
 
 ## Start An Interactive Allocation
 

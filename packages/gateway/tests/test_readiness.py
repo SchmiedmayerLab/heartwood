@@ -13,13 +13,37 @@ from typing import cast
 import pytest
 
 from heartwood.gateway import (
+    ActionSettings,
+    ActionSettingsStore,
     ModelCatalogService,
     ModelConnection,
+    ModelProfile,
+    ModelSettings,
+    ModelSettingsStore,
     ProviderModel,
     SessionGateway,
     inspect_deployment,
     persist_deployment_profile,
 )
+
+
+def _write_ready_local_state(workspace: Path) -> None:
+    persist_deployment_profile(workspace, model_source="local", env={})
+    ModelSettingsStore(workspace.parent / "models.json").save(
+        ModelSettings(
+            active_profile="local",
+            profiles=(
+                ModelProfile(
+                    profile_id="local",
+                    model="openai/test-model",
+                    policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+                    base_url="http://127.0.0.1:8765/v1",
+                    credential_kind="none",
+                ),
+            ),
+        )
+    )
+    ActionSettingsStore(workspace.parent / "actions.json").save(ActionSettings())
 
 
 def test_readiness_is_setup_required_without_mutating_state(tmp_path: Path) -> None:
@@ -72,34 +96,48 @@ def test_carina_reports_optional_gpu_and_scratch_as_warnings(tmp_path: Path) -> 
 
 
 def test_completed_setup_with_active_model_is_ready(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / "setup.json").write_text(
-        json.dumps({"schema_version": "heartwood.setup.v1"}), encoding="utf-8"
-    )
-    (state / "models.json").write_text(
-        json.dumps(
-            {
-                "active_profile": "local",
-                "profiles": [{"profile_id": "local", "credential_kind": "none"}],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (state / "policy.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "heartwood.policy-profile.v1",
-                "policy_id": "test",
-                "platform_id": "generic",
-            }
-        ),
-        encoding="utf-8",
-    )
+    workspace = tmp_path / "state" / "sessions"
+    _write_ready_local_state(workspace)
 
-    readiness = inspect_deployment(state / "sessions", env={})
+    readiness = inspect_deployment(workspace, env={})
 
     assert readiness.state == "ready"
+
+
+def test_readiness_rejects_state_created_for_another_platform(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    _write_ready_local_state(workspace)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    readiness = inspect_deployment(
+        workspace,
+        env={
+            "HEARTWOOD_PLATFORM": "carina",
+            "SLURM_JOB_ID": "123",
+            "LOCAL_SCRATCH_JOB": str(scratch),
+            "CUDA_VISIBLE_DEVICES": "0",
+        },
+    )
+
+    assert readiness.state == "recovery-required"
+    checks = {check.check_id: check for check in readiness.checks}
+    assert checks["setup"].status == "fail"
+    assert checks["policy"].status == "fail"
+
+
+def test_readiness_rejects_model_that_disagrees_with_setup_source(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    _write_ready_local_state(workspace)
+    setup = json.loads((workspace.parent / "setup.json").read_text(encoding="utf-8"))
+    setup["model_source"] = "stanford-ai-api-gateway"
+    (workspace.parent / "setup.json").write_text(json.dumps(setup), encoding="utf-8")
+
+    readiness = inspect_deployment(workspace, env={})
+
+    assert readiness.state == "recovery-required"
+    configuration = next(check for check in readiness.checks if check.check_id == "configuration")
+    assert configuration.status == "fail"
 
 
 def test_malformed_setup_and_model_files_are_not_ready(tmp_path: Path) -> None:
@@ -116,21 +154,22 @@ def test_malformed_setup_and_model_files_are_not_ready(tmp_path: Path) -> None:
 def test_ready_setup_fails_when_external_credential_is_missing(tmp_path: Path) -> None:
     state = tmp_path / "state"
     persist_deployment_profile(state / "sessions", model_source="stanford-ai-api-gateway", env={})
-    (state / "models.json").write_text(
-        json.dumps(
-            {
-                "active_profile": "stanford-ai-api-gateway",
-                "profiles": [
-                    {
-                        "profile_id": "stanford-ai-api-gateway",
-                        "credential_kind": "environment",
-                        "api_key_env": "STANFORD_AI_API_KEY",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    ModelSettingsStore(state / "models.json").save(
+        ModelSettings(
+            active_profile="stanford-ai-api-gateway",
+            profiles=(
+                ModelProfile(
+                    profile_id="stanford-ai-api-gateway",
+                    model="openai/test-model",
+                    policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
+                    base_url="https://aiapi-prod.stanford.edu/v1",
+                    credential_kind="environment",
+                    api_key_env="STANFORD_AI_API_KEY",
+                ),
+            ),
+        )
     )
+    ActionSettingsStore(state / "actions.json").save(ActionSettings())
 
     readiness = inspect_deployment(state / "sessions", env={})
 
@@ -145,7 +184,6 @@ def test_ready_setup_fails_when_external_credential_is_missing(tmp_path: Path) -
     [
         ({"credential_kind": "file", "api_key_file": "/missing/key"}, "fail"),
         ({"credential_kind": "managed-identity"}, "warning"),
-        ({"credential_kind": "unsupported"}, "fail"),
     ],
 )
 def test_doctor_reports_non_environment_credential_readiness(
@@ -155,9 +193,23 @@ def test_doctor_reports_non_environment_credential_readiness(
 ) -> None:
     state = tmp_path / "state"
     persist_deployment_profile(state / "sessions", model_source="local", env={})
-    profile["profile_id"] = "configured"
+    profile.update(
+        {
+            "profile_id": "configured",
+            "model": "openai/test-model",
+            "policy_endpoint": "http://127.0.0.1:8765/v1/chat/completions",
+            "base_url": "http://127.0.0.1:8765/v1",
+        }
+    )
     (state / "models.json").write_text(
-        json.dumps({"active_profile": "configured", "profiles": [profile]}), encoding="utf-8"
+        json.dumps(
+            {
+                "schema_version": "heartwood.model-settings.v1",
+                "active_profile": "configured",
+                "profiles": [profile],
+            }
+        ),
+        encoding="utf-8",
     )
 
     readiness = inspect_deployment(state / "sessions", env={})
@@ -181,9 +233,9 @@ def test_doctor_rejects_missing_environment_credential_reference(tmp_path: Path)
 
     readiness = inspect_deployment(state / "sessions", env={})
 
-    credential = next(check for check in readiness.checks if check.check_id == "model-credential")
-    assert credential.status == "fail"
-    assert credential.summary == "Selected model has an invalid environment credential reference"
+    model = next(check for check in readiness.checks if check.check_id == "model")
+    assert model.status == "fail"
+    assert model.summary == "Model settings are invalid"
 
 
 def test_local_setup_persists_conservative_restart_configuration(tmp_path: Path) -> None:

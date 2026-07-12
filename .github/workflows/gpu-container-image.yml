@@ -15,13 +15,10 @@ on:
       - "images/platform/Dockerfile"
       - "images/gpu/**"
       - "images/generic/image-flavors.toml"
+      - "images/platforms.toml"
   push:
     branches: [main]
   workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: write
 
 concurrency:
   group: gpu-container-image-${{ github.ref }}
@@ -31,6 +28,8 @@ jobs:
   contract:
     name: Validate GPU image contracts
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -47,25 +46,66 @@ jobs:
         run: |
           grep --fixed-strings 'vllm==0.25.0' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'torch==2.11.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt
           bash -n images/gpu/start_vllm.sh
           test -x images/gpu/start_vllm.sh
 
+  pull-request-build:
+    name: Build GPU candidate ${{ matrix.target }}
+    if: github.event_name == 'pull_request'
+    needs: contract
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [runtime-gpu-nvidia, terra-runtime-gpu-nvidia]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build candidate locally
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker buildx bake --file docker-bake.hcl \
+            --set "${TARGET}.tags=heartwood-gpu-pr:${TARGET}" \
+            --set "${TARGET}.output=type=docker" \
+            "${TARGET}"
+      - name: Verify candidate contents
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          image="heartwood-gpu-pr:${TARGET}"
+          docker run --rm --platform linux/amd64 --entrypoint /opt/heartwood-vllm/bin/python \
+            "${image}" -c 'from importlib.metadata import version; print(version("vllm"))'
+          test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${image}" \
+            /opt /home -type f -size +10M \
+            \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
+
   build:
-    name: Build and publish ${{ matrix.target }}
+    name: Build And Validate ${{ matrix.target }}
     if: github.ref == 'refs/heads/main'
     needs: contract
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: runtime-gpu-nvidia
-            channel: edge-gpu-nvidia
             commit_suffix: gpu-nvidia
+            flatten: "false"
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true
           - target: terra-runtime-gpu-nvidia
-            channel: edge-terra-gpu-nvidia
             commit_suffix: terra-gpu-nvidia
+            flatten: "true"
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
     steps:
       - name: Checkout repository
@@ -96,6 +136,7 @@ jobs:
             --metadata-file /tmp/gpu-metadata.json \
             "${TARGET}"
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/gpu-metadata.json "${TARGET}")"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
       - name: Verify candidate contents
         env:
@@ -107,16 +148,82 @@ jobs:
           test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${CANDIDATE}" \
             /opt /home -type f -size +10M \
             \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
-      - name: Publish immutable and moving tags
+      - name: Create and verify immutable commit tag
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}
-          CHANNEL: ${{ matrix.channel }}
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
           COMMIT_SUFFIX: ${{ matrix.commit_suffix }}
+          FLATTEN: ${{ matrix.flatten }}
           GIT_SHA: ${{ github.sha }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
           commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-${COMMIT_SUFFIX}"
-          docker buildx imagetools create --prefer-index=false --tag "${commit_ref}" "${CANDIDATE}"
-          docker buildx imagetools inspect "${commit_ref}"
-          docker buildx imagetools create --prefer-index=false \
-            --tag "${IMAGE_NAME}:${CHANNEL}" "${commit_ref}"
+          if inspect="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect}")"
+          else
+            create_args=()
+            if [ "${FLATTEN}" = "true" ]; then
+              create_args+=(--prefer-index=false)
+            fi
+            docker buildx imagetools create "${create_args[@]}" \
+              --tag "${commit_ref}" "${CANDIDATE}"
+            inspect="$(docker buildx imagetools inspect "${commit_ref}")"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect}")"
+          fi
+          if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
+            echo "immutable GPU commit tag does not match the validated candidate" >&2
+            exit 1
+          fi
+
+  promote:
+    name: Promote GPU Channel Tags
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote validated generic and Terra tags
+        env:
+          GIT_SHA: ${{ github.sha }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          current_main="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
+          if [ "${current_main}" != "${GIT_SHA}" ]; then
+            echo "refusing to move GPU channel tags from a stale main workflow" >&2
+            exit 1
+          fi
+          for tuple in \
+            "gpu-nvidia edge-gpu-nvidia false" \
+            "terra-gpu-nvidia edge-terra-gpu-nvidia true"; do
+            read -r suffix channel flatten <<<"${tuple}"
+            commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-${suffix}"
+            commit_digest="$(docker buildx imagetools inspect "${commit_ref}" | awk '$1 == "Digest:" {print $2; exit}')"
+            create_args=()
+            if [ "${flatten}" = "true" ]; then
+              create_args+=(--prefer-index=false)
+            fi
+            docker buildx imagetools create "${create_args[@]}" \
+              --tag "${IMAGE_NAME}:${channel}" "${commit_ref}"
+            channel_digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${channel}" | awk '$1 == "Digest:" {print $2; exit}')"
+            if [ "${channel_digest}" != "${commit_digest}" ]; then
+              echo "promoted ${channel} digest does not match ${commit_ref}" >&2
+              exit 1
+            fi
+          done

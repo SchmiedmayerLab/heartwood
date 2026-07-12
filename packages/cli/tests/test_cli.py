@@ -13,7 +13,16 @@ from pathlib import Path
 import pytest
 
 from heartwood.cli import main
-from heartwood.gateway import ProviderModel
+from heartwood.gateway import (
+    ActionSettings,
+    ActionSettingsStore,
+    ModelCatalogError,
+    ModelProfile,
+    ModelSettings,
+    ModelSettingsStore,
+    ProviderModel,
+    persist_deployment_profile,
+)
 
 
 def test_no_command_prints_help_when_stdin_is_not_interactive(
@@ -122,6 +131,69 @@ def test_non_interactive_setup_persists_and_selects_reported_model(
     assert selected == [("local", "local-model")]
     assert (tmp_path / "state" / "setup.json").is_file()
     assert "Setup complete" in capsys.readouterr().out
+
+
+def test_failed_reconfiguration_restores_the_complete_previous_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    persist_deployment_profile(workspace, model_source="local", env={})
+    ModelSettingsStore(workspace.parent / "models.json").save(
+        ModelSettings(
+            active_profile="local",
+            profiles=(
+                ModelProfile(
+                    profile_id="local",
+                    model="openai/local-model",
+                    policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+                    base_url="http://127.0.0.1:8765/v1",
+                    credential_kind="none",
+                ),
+            ),
+        )
+    )
+    ActionSettingsStore(workspace.parent / "actions.json").save(ActionSettings())
+    before = {path.name: path.read_bytes() for path in workspace.parent.iterdir() if path.is_file()}
+
+    class FailingGateway:
+        def __init__(self, *, workspace: Path) -> None:
+            self.workspace = workspace
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def select_action_confirmation_mode(self, _mode: str) -> dict[str, object]:
+            return {}
+
+        def discover_models(self, _connection_id: str, *, refresh: bool) -> dict[str, object]:
+            assert refresh
+            raise ModelCatalogError("catalog unavailable")
+
+    monkeypatch.setattr("heartwood.cli.SessionGateway", FailingGateway)
+
+    code = main(
+        [
+            "--workspace",
+            str(workspace),
+            "setup",
+            "--model-source",
+            "stanford-ai-api-gateway",
+            "--model-id",
+            "remote-model",
+            "--non-interactive",
+            "--yes",
+        ]
+    )
+
+    after = {path.name: path.read_bytes() for path in workspace.parent.iterdir() if path.is_file()}
+    assert code == 1
+    assert after == before
+    assert "catalog unavailable" in capsys.readouterr().out
 
 
 def test_carina_setup_refuses_login_node_without_mutating_state(

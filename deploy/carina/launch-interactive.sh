@@ -34,14 +34,19 @@ if [[ ! -x "${environment_root}/vllm/bin/vllm" ]]; then
   echo "vLLM environment is unavailable; run deploy/carina/bootstrap.sh first" >&2
   exit 69
 fi
-if [[ ! -f "${model_root}/SHA256SUMS" ]]; then
-  echo "model root must contain a reviewed SHA256SUMS manifest" >&2
-  exit 66
-fi
-(cd "${model_root}" && sha256sum --check SHA256SUMS)
+"${environment_root}/heartwood/bin/python" deploy/carina/verify_model_snapshot.py "${model_root}"
 
-staged_model="${LOCAL_SCRATCH_JOB}/heartwood-model"
-mkdir -p "${staged_model}" "${state_root}"
+mkdir -p "${state_root}"
+staged_model="$(mktemp -d "${LOCAL_SCRATCH_JOB%/}/heartwood-model.XXXXXX")"
+runtime_pid=""
+cleanup() {
+  if [[ -n "${runtime_pid}" ]]; then
+    kill "${runtime_pid}" >/dev/null 2>&1 || true
+    wait "${runtime_pid}" >/dev/null 2>&1 || true
+  fi
+  rm -rf "${staged_model}"
+}
+trap cleanup EXIT INT TERM
 cp -a "${model_root}/." "${staged_model}/"
 
 unset GH_TOKEN GITHUB_TOKEN HF_TOKEN HUGGING_FACE_HUB_TOKEN
@@ -55,11 +60,6 @@ export PATH="${environment_root}/heartwood/bin:${PATH}"
 
 bash images/gpu/start_vllm.sh >"${state_root}/vllm-${SLURM_JOB_ID}.log" 2>&1 &
 runtime_pid="$!"
-cleanup() {
-  kill "${runtime_pid}" >/dev/null 2>&1 || true
-  wait "${runtime_pid}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT INT TERM
 
 python - <<'PY'
 import json

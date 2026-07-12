@@ -31,7 +31,7 @@ export UV_PROJECT_ENVIRONMENT="${root}/heartwood"
 "${root}/bootstrap/bin/uv" sync --locked --no-dev --all-extras --python 3.12
 "${root}/bootstrap/bin/uv" venv "${root}/vllm" --python 3.12
 "${root}/bootstrap/bin/uv" pip sync \
-  --python "${root}/vllm/bin/python" images/gpu/vllm-requirements.txt
+  --require-hashes --python "${root}/vllm/bin/python" images/gpu/vllm-requirements.txt
 
 printf 'Heartwood: %s\n' "$("${root}/heartwood/bin/heartwood" --version)"
 printf 'vLLM: %s\n' "$("${root}/vllm/bin/python" -c 'from importlib.metadata import version; print(version("vllm"))')"

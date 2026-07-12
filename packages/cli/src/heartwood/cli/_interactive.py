@@ -24,6 +24,7 @@ class InteractionResult:
     message: str | None = None
     exit_requested: bool = False
     error: bool = False
+    replace_transcript: bool = False
 
     @property
     def failed(self) -> bool:
@@ -71,7 +72,7 @@ class InteractiveSession:
         if directive == "/resume" and len(parts) == 1:
             return InteractionResult(events=self._handle(CommandKind.RESUME))
         if directive == "/replay" and len(parts) == 1:
-            return InteractionResult(events=self.replay())
+            return InteractionResult(events=self.replay(), replace_transcript=True)
         if directive == "/audit-export" and len(parts) == 1:
             return InteractionResult(events=self._handle(CommandKind.AUDIT_EXPORT))
         if directive == "/status" and len(parts) == 1:

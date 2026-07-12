@@ -95,7 +95,7 @@ The local server binds to loopback by default. Use `heartwood models refresh loc
 
 CPU and memory requirements are determined by the selected model and runtime, not the Heartwood image. The catalog records a reviewed envelope for each optional artifact. GPU acceleration requires a separately installed and tested GPU-capable runtime; attaching a GPU does not make the baseline CPU `llama-server` use it.
 
-Use an explicit NVIDIA variant when the deployment needs an in-image GPU server. It installs vLLM in `/opt/heartwood-vllm`, separate from the Heartwood environment, and uses `images/gpu/start_vllm.sh` with an externally mounted Hugging Face snapshot. The launcher binds to loopback and enables automatic tool choice; no image downloads or contains a model. The portable images remain the public defaults because they support AMD64 and ARM64 without a vendor driver contract.
+Use an explicit NVIDIA variant when the deployment needs an in-image GPU server. It installs vLLM in `/opt/heartwood-vllm`, separate from the Heartwood environment, from a version- and artifact-hash-locked requirements set, and uses `images/gpu/start_vllm.sh` with an externally mounted Hugging Face snapshot. The launcher binds to loopback and enables automatic tool choice; no image downloads or contains a model. The portable images remain the public defaults because they support AMD64 and ARM64 without a vendor driver contract.
 
 ## Terra Runtime
 

@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,7 +33,9 @@ from heartwood.gateway import (
     ModelSettingsError,
     SessionGateway,
     SkillSettingsError,
+    action_settings_path,
     inspect_deployment,
+    model_settings_path,
     persist_deployment_profile,
 )
 from heartwood.session import (
@@ -389,40 +392,81 @@ def _handle_setup(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         print("Setup cancelled.")
         return 1
     model_source = cast(Literal["local", "stanford-ai-api-gateway"], source)
-    persist_deployment_profile(args.workspace, model_source=model_source)
-    gateway = SessionGateway(workspace=args.workspace)
-    gateway.start()
+    snapshot = _snapshot_setup_files(args.workspace)
     try:
-        gateway.select_action_confirmation_mode("always-confirm")
-        connection_id = "local" if source == "local" else "stanford-ai-api-gateway"
-        catalog = gateway.discover_models(connection_id, refresh=True)
-        models = catalog.get("models", [])
-        if not isinstance(models, list):
-            parser.error("the selected model service returned an invalid catalog")
-        available = [
-            item.get("model_id")
-            for item in models
-            if isinstance(item, dict) and item.get("availability") != "unsupported"
-        ]
-        if model_id is None:
-            if not available:
-                parser.error("the selected model service reported no usable models")
-            print("\nAvailable models:")
-            for index, item in enumerate(available, start=1):
-                print(f"  {index}. {item}")
-            selected = input("Select a model by number or identifier: ").strip()
-            if selected.isdigit() and 1 <= int(selected) <= len(available):
-                model_id = str(available[int(selected) - 1])
-            else:
-                model_id = selected
-        gateway.connect_model(connection_id, model_id)
+        persist_deployment_profile(args.workspace, model_source=model_source)
+        gateway = SessionGateway(workspace=args.workspace)
+        gateway.start()
+        try:
+            gateway.select_action_confirmation_mode("always-confirm")
+            connection_id = "local" if source == "local" else "stanford-ai-api-gateway"
+            catalog = gateway.discover_models(connection_id, refresh=True)
+            models = catalog.get("models", [])
+            if not isinstance(models, list):
+                raise ModelCatalogError("the selected model service returned an invalid catalog")
+            available = [
+                item.get("model_id")
+                for item in models
+                if isinstance(item, dict) and item.get("availability") != "unsupported"
+            ]
+            if model_id is None:
+                if not available:
+                    raise ModelCatalogError("the selected model service reported no usable models")
+                print("\nAvailable models:")
+                for index, item in enumerate(available, start=1):
+                    print(f"  {index}. {item}")
+                selected = input("Select a model by number or identifier: ").strip()
+                if selected.isdigit() and 1 <= int(selected) <= len(available):
+                    model_id = str(available[int(selected) - 1])
+                else:
+                    model_id = selected
+            gateway.connect_model(connection_id, model_id)
+        finally:
+            gateway.stop()
     except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
+        _restore_setup_files(snapshot)
         print(f"Setup could not validate the model route: {error}")
         return 1
-    finally:
-        gateway.stop()
+    except BaseException:
+        _restore_setup_files(snapshot)
+        raise
     print("Setup complete. Run `heartwood` to start the conversation.")
     return 0
+
+
+def _snapshot_setup_files(workspace: Path) -> dict[Path, tuple[bytes, int] | None]:
+    state_root = workspace.parent
+    paths = {
+        state_root / "setup.json",
+        state_root / "policy.json",
+        state_root / "model-connections.json",
+        model_settings_path(workspace),
+        action_settings_path(workspace),
+    }
+    snapshot: dict[Path, tuple[bytes, int] | None] = {}
+    for path in paths:
+        snapshot[path] = (
+            (path.read_bytes(), path.stat().st_mode & 0o777) if path.is_file() else None
+        )
+    return snapshot
+
+
+def _restore_setup_files(snapshot: dict[Path, tuple[bytes, int] | None]) -> None:
+    for path, previous in snapshot.items():
+        if previous is None:
+            path.unlink(missing_ok=True)
+            continue
+        contents, mode = previous
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temporary_path = Path(temporary)
+        try:
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(contents)
+            temporary_path.chmod(mode)
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _handle_models(

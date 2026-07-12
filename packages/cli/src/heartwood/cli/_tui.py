@@ -82,6 +82,8 @@ class HeartwoodTerminalApp(App[None]):
             return
         if result.message:
             self.query_one("#conversation", RichLog).write(result.message)
+        if result.replace_transcript:
+            self.query_one("#conversation", RichLog).clear()
         self._render_events(result.events)
         self._set_busy(False, failed=result.failed)
 

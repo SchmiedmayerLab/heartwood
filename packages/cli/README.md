@@ -18,7 +18,7 @@ Start the full-screen terminal interface:
 heartwood
 ```
 
-On first use, bare `heartwood` opens the setup flow instead. `heartwood doctor` reports environment, storage, accelerator, model-route, credential-reference, and policy readiness without changing state. `heartwood setup` configures a validated model route and **Ask Every Time** action confirmation, then later bare invocations open the conversation.
+On first use, bare `heartwood` opens the setup flow instead. `heartwood doctor` reports environment, storage, accelerator, model-route, credential-reference, and policy readiness without changing state. `heartwood setup` configures a validated model route and **Ask Every Time** action confirmation, then later bare invocations open the conversation. A failed reconfiguration restores the complete prior settings state; readiness requires the detected platform, setup source, model, connection, policy, and action mode to agree.
 
 Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
 
