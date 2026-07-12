@@ -64,11 +64,7 @@ jobs:
             --set "runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" \
             --metadata-file /tmp/metadata.json \
             runtime
-          digest="$(jq -r '.runtime["containerimage.digest"]' /tmp/metadata.json)"
-          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "generic build returned an invalid image digest: ${digest}" >&2
-            exit 1
-          fi
+          digest="$(python3 images/scripts/read_buildx_digest.py /tmp/metadata.json runtime)"
           mkdir -p /tmp/digests
           touch "/tmp/digests/${digest#sha256:}"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
@@ -199,9 +195,9 @@ jobs:
           else
             docker buildx imagetools create \
               --tag "${commit_ref}" \
-              --metadata-file /tmp/generic-commit-metadata.json \
               "${sources[@]}"
-            commit_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/generic-commit-metadata.json)"
+            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
             raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
             published_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
             if [ "${published_manifest}" != "${proposed_manifest}" ]; then
@@ -235,10 +231,13 @@ jobs:
           fi
           docker buildx imagetools create \
             --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
-            --metadata-file /tmp/generic-edge-metadata.json \
             "${IMAGE_NAME}:sha-${GIT_SHA}"
-          edge_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/generic-edge-metadata.json)"
-          test "${edge_digest}" = "${COMMIT_DIGEST}"
+          inspect_output="$(docker buildx imagetools inspect "${IMAGE_NAME}:${IMAGE_CHANNEL}")"
+          edge_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
+          if [ "${edge_digest}" != "${COMMIT_DIGEST}" ]; then
+            echo "promoted generic channel digest does not match the immutable commit tag" >&2
+            exit 1
+          fi
           docker pull --platform linux/amd64 "${IMAGE_NAME}:${IMAGE_CHANNEL}"
 
   build-terra:
@@ -272,11 +271,7 @@ jobs:
             --set "terra-runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false" \
             --metadata-file /tmp/terra-metadata.json \
             terra-runtime
-          digest="$(jq -r '.terra-runtime["containerimage.digest"]' /tmp/terra-metadata.json)"
-          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Terra build returned an invalid image digest: ${digest}" >&2
-            exit 1
-          fi
+          digest="$(python3 images/scripts/read_buildx_digest.py /tmp/terra-metadata.json terra-runtime)"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
       - name: Verify staged Terra registry contract
@@ -357,9 +352,9 @@ jobs:
           else
             docker buildx imagetools create --prefer-index=false \
               --tag "${commit_ref}" \
-              --metadata-file /tmp/terra-commit-metadata.json \
               "${CANDIDATE_REFERENCE}"
-            commit_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/terra-commit-metadata.json)"
+            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
+            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
           fi
           if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Terra commit tag returned an invalid image digest: ${commit_digest}" >&2
@@ -393,10 +388,13 @@ jobs:
           fi
           docker buildx imagetools create --prefer-index=false \
             --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra" \
-            --metadata-file /tmp/terra-edge-metadata.json \
             "${IMAGE_NAME}:sha-${GIT_SHA}-terra"
-          edge_digest="$(jq -r '.containerimage.descriptor.digest' /tmp/terra-edge-metadata.json)"
-          test "${edge_digest}" = "${COMMIT_DIGEST}"
+          inspect_output="$(docker buildx imagetools inspect "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra")"
+          edge_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
+          if [ "${edge_digest}" != "${COMMIT_DIGEST}" ]; then
+            echo "promoted Terra channel digest does not match the immutable commit tag" >&2
+            exit 1
+          fi
           python3 images/platform/scripts/verify_registry_manifest.py \
             --manifest images/platforms.toml \
             --platform terra \
