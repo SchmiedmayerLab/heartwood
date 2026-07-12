@@ -22,6 +22,10 @@ This document describes current image and publication behavior. [Platform Suppor
 | `sha-<git-sha>` | `linux/amd64`, `linux/arm64` | Immutable generic runtime for one commit. |
 | `edge-terra` | `linux/amd64` | Moving main-branch runtime derived from the pinned Terra Jupyter base. |
 | `sha-<git-sha>-terra` | `linux/amd64` | Immutable Terra-derived runtime for one commit. |
+| `edge-gpu-nvidia` | `linux/amd64` | Moving generic NVIDIA runtime with isolated vLLM and no weights. |
+| `sha-<git-sha>-gpu-nvidia` | `linux/amd64` | Immutable generic NVIDIA runtime. |
+| `edge-terra-gpu-nvidia` | `linux/amd64` | Moving Terra-derived NVIDIA runtime with isolated vLLM and no weights. |
+| `sha-<git-sha>-terra-gpu-nvidia` | `linux/amd64` | Immutable Terra-derived NVIDIA runtime. |
 
 Do not publish `latest` before the first stable release. Model names, provider names, branch names, and architecture-helper suffixes are not public flavor tags.
 
@@ -90,6 +94,8 @@ docker run --rm -p 127.0.0.1:8767:8767 \
 The local server binds to loopback by default. Use `heartwood models refresh local` and `heartwood models connect local <model-id>` to select the identifier reported by its OpenAI-compatible model-list route.
 
 CPU and memory requirements are determined by the selected model and runtime, not the Heartwood image. The catalog records a reviewed envelope for each optional artifact. GPU acceleration requires a separately installed and tested GPU-capable runtime; attaching a GPU does not make the baseline CPU `llama-server` use it.
+
+Use an explicit NVIDIA variant when the deployment needs an in-image GPU server. It installs vLLM in `/opt/heartwood-vllm`, separate from the Heartwood environment, and uses `images/gpu/start_vllm.sh` with an externally mounted Hugging Face snapshot. The launcher binds to loopback and enables automatic tool choice; no image downloads or contains a model. The portable images remain the public defaults because they support AMD64 and ARM64 without a vendor driver contract.
 
 ## Terra Runtime
 

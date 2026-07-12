@@ -12,7 +12,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from heartwood.adapters.platform import GenericPlatformAdapter
+from heartwood.adapters.platform import select_platform_adapter
 from heartwood.core_adapter import (
     AgentBackend,
     BackendEvent,
@@ -178,7 +178,10 @@ class SessionGateway:
         loaded_connections = (
             tuple(model_connections)
             if model_connections is not None
-            else load_model_connections(model_connections_path(self.env))
+            else load_model_connections(
+                model_connections_path(self.env)
+                or _persisted_configuration_path(workspace, "model-connections.json")
+            )
         )
         for connection in loaded_connections:
             connection.validate(configurable=connection.connection_id == "custom-api")
@@ -550,7 +553,7 @@ class SessionGateway:
             self.workspace,
             session_id=session_id,
             backend=backend,
-            policy_profile=_policy_profile(self.env),
+            policy_profile=self._policy_profile(),
             env=self.env,
         )
 
@@ -590,7 +593,13 @@ class SessionGateway:
         )
 
     def _policy_profile(self) -> PolicyProfile:
-        return _policy_profile(self.env) or GenericPlatformAdapter().default_policy_profile()
+        return (
+            _policy_profile(
+                self.env,
+                fallback=_persisted_configuration_path(self.workspace, "policy.json"),
+            )
+            or select_platform_adapter(self.env).default_policy_profile()
+        )
 
     def _resolve_model_connection(
         self,
@@ -659,16 +668,25 @@ class SessionGateway:
         self._services.clear()
 
 
-def _policy_profile(env: Mapping[str, str]) -> PolicyProfile | None:
+def _policy_profile(
+    env: Mapping[str, str],
+    *,
+    fallback: Path | None = None,
+) -> PolicyProfile | None:
     configured = env.get("HEARTWOOD_POLICY_PROFILE")
-    if not configured:
+    path = Path(configured) if configured else fallback
+    if path is None or not path.is_file():
         return None
-    path = Path(configured)
     try:
         return PolicyProfile.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         msg = f"unable to load policy profile {path}: {error}"
         raise ValueError(msg) from error
+
+
+def _persisted_configuration_path(workspace: Path, name: str) -> Path | None:
+    path = workspace.parent / name
+    return path if path.is_file() else None
 
 
 def _repository_root() -> Path:

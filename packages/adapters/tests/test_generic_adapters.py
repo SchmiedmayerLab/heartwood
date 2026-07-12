@@ -18,12 +18,25 @@ from heartwood.adapters import (
     assert_registry_adapter_conforms,
 )
 from heartwood.adapters.data import DataSourceBoundaryError, LocalFilesystemDataSourceAdapter
-from heartwood.adapters.platform import GenericPlatformAdapter
+from heartwood.adapters.platform import CarinaPlatformAdapter, GenericPlatformAdapter
 from heartwood.adapters.registry import LocalRegistryAdapter, RegistryBoundaryError
 
 
 def test_generic_platform_adapter_conforms() -> None:
     assert_platform_adapter_conforms(GenericPlatformAdapter())
+
+
+def test_carina_platform_adapter_conforms_and_defaults_to_local_only() -> None:
+    adapter = CarinaPlatformAdapter()
+    assert_platform_adapter_conforms(adapter)
+    detection = adapter.detect({"HEARTWOOD_PLATFORM": "carina"})
+    policy = adapter.default_policy_profile()
+    assert detection.adapter_id == "carina"
+    assert detection.confidence > 0.0
+    assert adapter.data_mounts() == ()
+    assert policy.platform_id == "carina"
+    assert policy.allowed_action_confirmation_modes == ("always-confirm",)
+    assert policy.credential_allowlist == ()
 
 
 def test_local_filesystem_data_adapter_conforms() -> None:

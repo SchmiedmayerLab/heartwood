@@ -33,6 +33,149 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
     assert "heartwood 0.0.0" in capsys.readouterr().out
 
 
+def test_doctor_reports_setup_without_mutating_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "state" / "sessions"
+
+    assert main(["--workspace", str(workspace), "doctor"]) == 0
+
+    output = capsys.readouterr().out
+    assert "State: setup-required" in output
+    assert "Setup is incomplete" in output
+    assert not (tmp_path / "state").exists()
+
+
+def test_doctor_supports_machine_readable_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--workspace", str(tmp_path / "state" / "sessions"), "doctor", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["state"] == "setup-required"
+    assert payload["platform_id"] == "generic"
+
+
+def test_doctor_resolves_workspace_from_heartwood_home(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HEARTWOOD_HOME", str(tmp_path / "heartwood-home"))
+
+    assert main(["doctor", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    storage = next(item for item in payload["checks"] if item["check_id"] == "state-storage")
+    assert str(tmp_path) in storage["summary"]
+
+
+def test_non_interactive_setup_persists_and_selects_reported_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[tuple[str, str]] = []
+
+    class FakeGateway:
+        def __init__(self, *, workspace: Path) -> None:
+            self.workspace = workspace
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
+            assert mode == "always-confirm"
+            return {}
+
+        def discover_models(self, connection_id: str, *, refresh: bool) -> dict[str, object]:
+            assert connection_id == "local"
+            assert refresh
+            return {"models": [{"model_id": "local-model", "availability": "available"}]}
+
+        def connect_model(self, connection_id: str, model_id: str) -> dict[str, object]:
+            selected.append((connection_id, model_id))
+            return {}
+
+    monkeypatch.setattr("heartwood.cli.SessionGateway", FakeGateway)
+    workspace = tmp_path / "state" / "sessions"
+
+    code = main(
+        [
+            "--workspace",
+            str(workspace),
+            "setup",
+            "--model-source",
+            "local",
+            "--model-id",
+            "local-model",
+            "--non-interactive",
+            "--yes",
+        ]
+    )
+
+    assert code == 0
+    assert selected == [("local", "local-model")]
+    assert (tmp_path / "state" / "setup.json").is_file()
+    assert "Setup complete" in capsys.readouterr().out
+
+
+def test_carina_setup_refuses_login_node_without_mutating_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "carina")
+    workspace = tmp_path / "state" / "sessions"
+
+    code = main(
+        [
+            "--workspace",
+            str(workspace),
+            "setup",
+            "--model-source",
+            "local",
+            "--model-id",
+            "local-model",
+            "--non-interactive",
+            "--yes",
+        ]
+    )
+
+    assert code == 1
+    assert "active Slurm compute allocation" in capsys.readouterr().out
+    assert not (tmp_path / "state").exists()
+
+
+def test_interactive_setup_can_be_cancelled_without_writing_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(["1", "n"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(responses))
+    workspace = tmp_path / "state" / "sessions"
+
+    assert main(["--workspace", str(workspace), "setup"]) == 1
+
+    assert "Setup cancelled" in capsys.readouterr().out
+    assert not (tmp_path / "state").exists()
+
+
+def test_non_interactive_setup_requires_explicit_inputs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["--workspace", str(tmp_path / "state" / "sessions"), "setup", "--non-interactive"])
+    assert error.value.code == 2
+    assert "--model-source is required" in capsys.readouterr().err
+
+
 def test_invalid_session_id_is_reported_as_argument_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

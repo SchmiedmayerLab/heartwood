@@ -32,6 +32,19 @@ group "default" {
   targets = ["runtime"]
 }
 
+target "runtime-gpu-nvidia" {
+  inherits = ["runtime"]
+  platforms = ["linux/amd64"]
+  args = {
+    HEARTWOOD_IMAGE_FLAVOR = "runtime-gpu-nvidia"
+    HEARTWOOD_GPU_RUNTIME = "vllm"
+  }
+  tags = [
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-gpu-nvidia",
+  ]
+}
+
 target "runtime" {
   context = "."
   dockerfile = "images/generic/Dockerfile"
@@ -76,6 +89,21 @@ target "terra-runtime" {
   tags = [
     "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra",
     "${IMAGE_NAME}:sha-${GIT_SHA}-terra",
+  ]
+}
+
+target "terra-runtime-gpu-nvidia" {
+  inherits = ["_terra_common"]
+  cache-from = ["type=gha"]
+  cache-to = ["type=gha,mode=min"]
+  output = ["type=registry,oci-mediatypes=false"]
+  args = {
+    HEARTWOOD_IMAGE_FLAVOR = "terra-runtime-gpu-nvidia"
+    HEARTWOOD_GPU_RUNTIME = "vllm"
+  }
+  tags = [
+    "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia",
+    "${IMAGE_NAME}:sha-${GIT_SHA}-terra-gpu-nvidia",
   ]
 }
 

@@ -1,0 +1,122 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: GPU Container Image
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/gpu-container-image.yml"
+      - "docker-bake.hcl"
+      - "images/generic/Dockerfile"
+      - "images/platform/Dockerfile"
+      - "images/gpu/**"
+      - "images/generic/image-flavors.toml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: gpu-container-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate GPU image contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Validate build graph
+        run: >-
+          docker buildx bake --file docker-bake.hcl --print
+          runtime-gpu-nvidia terra-runtime-gpu-nvidia
+          > /tmp/gpu-build-graph.json
+      - name: Validate runtime lock and launcher
+        run: |
+          grep --fixed-strings 'vllm==0.25.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torch==2.11.0' images/gpu/vllm-requirements.txt
+          bash -n images/gpu/start_vllm.sh
+          test -x images/gpu/start_vllm.sh
+
+  build:
+    name: Build and publish ${{ matrix.target }}
+    if: github.ref == 'refs/heads/main'
+    needs: contract
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: runtime-gpu-nvidia
+            channel: edge-gpu-nvidia
+            commit_suffix: gpu-nvidia
+            media_output: type=image,push-by-digest=true,name-canonical=true,push=true
+          - target: terra-runtime-gpu-nvidia
+            channel: edge-terra-gpu-nvidia
+            commit_suffix: terra-gpu-nvidia
+            media_output: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build candidate by digest
+        id: candidate
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          TARGET: ${{ matrix.target }}
+          MEDIA_OUTPUT: ${{ matrix.media_output }}
+        run: |
+          docker buildx bake --file docker-bake.hcl \
+            --set "${TARGET}.tags=${IMAGE_NAME}" \
+            --set "${TARGET}.output=${MEDIA_OUTPUT},name=${IMAGE_NAME}" \
+            --metadata-file /tmp/gpu-metadata.json \
+            "${TARGET}"
+          digest="$(python3 images/scripts/read_buildx_digest.py /tmp/gpu-metadata.json "${TARGET}")"
+          echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Verify candidate contents
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.reference }}
+        run: |
+          docker pull --platform linux/amd64 "${CANDIDATE}"
+          docker run --rm --platform linux/amd64 --entrypoint /opt/heartwood-vllm/bin/python \
+            "${CANDIDATE}" -c 'from importlib.metadata import version; print(version("vllm"))'
+          test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${CANDIDATE}" \
+            /opt /home -type f -size +10M \
+            \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
+      - name: Publish immutable and moving tags
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.reference }}
+          CHANNEL: ${{ matrix.channel }}
+          COMMIT_SUFFIX: ${{ matrix.commit_suffix }}
+          GIT_SHA: ${{ github.sha }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: |
+          commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-${COMMIT_SUFFIX}"
+          docker buildx imagetools create --prefer-index=false --tag "${commit_ref}" "${CANDIDATE}"
+          docker buildx imagetools inspect "${commit_ref}"
+          docker buildx imagetools create --prefer-index=false \
+            --tag "${IMAGE_NAME}:${CHANNEL}" "${commit_ref}"

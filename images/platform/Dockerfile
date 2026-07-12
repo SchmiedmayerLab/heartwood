@@ -29,6 +29,7 @@ ARG HEARTWOOD_PLATFORM_BASE_IMAGE
 ARG HEARTWOOD_PLATFORM_BASE_PLATFORM
 ARG HEARTWOOD_PLATFORM=terra
 ARG HEARTWOOD_IMAGE_FLAVOR=terra-runtime
+ARG HEARTWOOD_GPU_RUNTIME=none
 ARG HEARTWOOD_RUNTIME_ARCH=amd64
 ARG HEARTWOOD_PLATFORM_HOME=/home/jupyter
 ARG HEARTWOOD_PLATFORM_USER=jupyter
@@ -59,6 +60,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HEARTWOOD_AGENT_BACKEND=auto \
     HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified \
     HEARTWOOD_MODEL_CATALOG=/opt/heartwood/images/generic/local-runtime/model-catalog.toml \
+    HEARTWOOD_HOME=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace \
     HEARTWOOD_MODEL_CACHE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models \
     HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     HEARTWOOD_WORKSPACE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions \
@@ -114,6 +116,14 @@ COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-extras --python 3.12
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      uv venv /opt/heartwood-vllm --python 3.12 \
+      && uv pip sync --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt; \
+    elif [ "${HEARTWOOD_GPU_RUNTIME}" != "none" ]; then \
+      echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
+    fi
 
 RUN ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood \
     && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python
