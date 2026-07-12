@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import argparse
-import shlex
+import os
 import shutil
 import sys
 from collections.abc import Sequence
@@ -18,6 +18,7 @@ from pathlib import Path
 
 import uvicorn
 
+from heartwood.cli._interactive import InteractiveSession, command_help
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
     ActionSettingsError,
@@ -78,6 +79,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Open the coding-agent conversation or submit one task.",
     )
     chat.add_argument("--prompt", "-p", help="Submit one task instead of opening the prompt loop.")
+    chat.add_argument(
+        "--plain",
+        action="store_true",
+        help="Use the line-oriented interface for basic terminals and automation.",
+    )
     run = subparsers.add_parser(
         "run",
         help="Compatibility alias for one coding-agent task.",
@@ -255,7 +261,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command in {None, "chat", "agent"}:
             if getattr(args, "prompt", None) is not None:
                 return _submit_task(gateway, session_id=args.session_id, prompt=args.prompt)
-            return _interactive_chat(gateway, session_id=args.session_id)
+            return _interactive_chat(
+                gateway,
+                session_id=args.session_id,
+                plain=getattr(args, "plain", False),
+            )
         if args.command == "run":
             return _submit_task(
                 gateway,
@@ -568,11 +578,13 @@ def _event_exit_code(events: Sequence[SessionEvent]) -> int:
     return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
 
 
-def _interactive_chat(gateway: SessionGateway, *, session_id: str) -> int:
-    print(
-        "Heartwood agent. Commands: /allow <id>, /reject <id>, /pause, /resume, "
-        "/status, /replay, /audit-export, /exit."
-    )
+def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool = False) -> int:
+    session = InteractiveSession(gateway, session_id=session_id)
+    if not plain and _supports_full_screen_terminal():
+        from heartwood.cli._tui import run_terminal
+
+        return run_terminal(session, format_event=_format_event)
+    print(f"Heartwood agent. Commands: {command_help()}.")
     while True:
         try:
             line = input("heartwood> ").strip()
@@ -583,43 +595,21 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str) -> int:
             return 0
         if not line:
             continue
-        if line.startswith("/"):
-            _handle_chat_directive(gateway, session_id=session_id, line=line)
-            continue
-        _submit_task(gateway, session_id=session_id, prompt=line)
+        result = session.submit(line)
+        if result.exit_requested:
+            return 0
+        if result.message:
+            print(result.message)
+        if result.events:
+            print(_format_transcript(result.events))
 
 
-def _handle_chat_directive(gateway: SessionGateway, *, session_id: str, line: str) -> None:
-    try:
-        parts = shlex.split(line)
-    except ValueError:
-        print("Invalid command syntax.")
-        return
-    directive = parts[0]
-    if directive in {"/allow", "/reject"} and len(parts) == 2:
-        kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
-        command = _command(
-            gateway,
-            session_id=session_id,
-            kind=kind,
-            payload={"target_type": "tool-call", "target_id": parts[1]},
-        )
-        print(_format_transcript(gateway.handle(command).events))
-    elif directive == "/pause":
-        _submit_simple(gateway, session_id=session_id, kind=CommandKind.PAUSE)
-    elif directive == "/resume":
-        _submit_simple(gateway, session_id=session_id, kind=CommandKind.RESUME)
-    elif directive == "/status":
-        try:
-            print(_format_model_validation(gateway.validate_model_profile()))
-        except ModelSettingsError as error:
-            print(str(error))
-    elif directive == "/replay":
-        _handle_replay(gateway, session_id=session_id)
-    elif directive == "/audit-export":
-        _handle_audit_export(gateway, session_id=session_id, output=None)
-    else:
-        print(f"Unknown command: {directive}")
+def _supports_full_screen_terminal() -> bool:
+    return (
+        sys.stdin.isatty()
+        and sys.stdout.isatty()
+        and os.environ.get("TERM", "").lower() not in {"", "dumb"}
+    )
 
 
 def _format_transcript(events: Sequence[SessionEvent]) -> str:

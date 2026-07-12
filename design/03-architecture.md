@@ -49,6 +49,7 @@ An OpenHands upgrade is accepted only when the adapter unit tests, native Skill 
 | Model/data policy | Heartwood | Deny unapproved routes, enforce platform data-use rules, and emit attestations. |
 | Audit and compliance export | Heartwood | Translate execution events into a content-minimized, hash-chained record and explicit export artifacts. |
 | User interfaces | Heartwood | Render the same session contract in a coding-agent-style CLI and conversation-first web UI. |
+| Terminal presentation | Textual | Provide maintained full-screen rendering, input, workers, and headless tests over Heartwood's framework-neutral interaction controller; own no agent or session state. |
 
 The current runtime satisfies this ownership boundary for the agent loop and interfaces. Platform and data-source adaptation is not complete: runtime construction currently uses `GenericPlatformAdapter` and the synthetic OMOP data-source adapter unless a caller injects alternatives. A real platform adapter must replace those defaults before controlled workspace data is described as detected or supported.
 
@@ -118,6 +119,10 @@ Heartwood verifies checked-in and installed `SKILL.md` packages, then loads the 
 ## Interaction Surfaces
 
 The CLI and web UI expose the same core conversation actions: address a persisted session id, submit a task, inspect messages and tool activity, allow or reject a pending action, select an allowed action-confirmation mode, pause or resume execution, and export the audit record. The CLI also exposes model-profile and artifact-management commands for administrators and technical users.
+
+The default CLI is a full-screen Textual application over a framework-neutral terminal controller and the gateway command/event contract. Textual supplies terminal rendering, keyboard input, background workers, and headless application tests; it does not own conversation state or agent behavior. The line-oriented client remains available for basic terminals and automation, and one-shot commands remain stable for scripts and CI. Heartwood does not import the OpenHands CLI application's private widgets or conversation manager: those components own a separate OpenHands conversation and settings lifecycle, are not a supported frontend library, and currently resolve a different SDK dependency set. The terminal adapter follows the upstream interaction pattern while the Heartwood gateway remains the only conversation owner.
+
+Gateway commands currently return a completed event batch. Terminal clients execute that blocking operation in a worker so input rendering and status remain responsive, but they must not imply token streaming or mid-turn cancellation. Incremental durable events, OpenHands lifecycle state, and interruption require the typed adapter work in [Priority 1](09-implementation-plan.md); the terminal controller is deliberately independent of Textual so the same transition can serve SSH, Carina, and future remote-gateway clients without another command path.
 
 The session-oriented researcher experience below defines the presentation contract. The web UI uses gateway-owned session metadata, progressive disclosure, typed event projections, responsive overlays, and the same command vocabulary as the CLI. Boundary evidence, workflow progress, and other states require typed gateway records and are omitted when those records are absent; [Priority 2](09-implementation-plan.md) defines the target-user validation gate.
 
