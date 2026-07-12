@@ -187,5 +187,5 @@ sequenceDiagram
     OH->>T: execute allowed action
     OH-->>GW: messages and observations
     GW->>A: append content-minimized events
-    GW-->>R: streamed result and activity
+    GW-->>R: completed event batch and activity
 ```
