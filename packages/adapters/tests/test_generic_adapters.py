@@ -18,7 +18,12 @@ from heartwood.adapters import (
     assert_registry_adapter_conforms,
 )
 from heartwood.adapters.data import DataSourceBoundaryError, LocalFilesystemDataSourceAdapter
-from heartwood.adapters.platform import CarinaPlatformAdapter, GenericPlatformAdapter
+from heartwood.adapters.platform import (
+    CarinaPlatformAdapter,
+    GenericPlatformAdapter,
+    TerraPlatformAdapter,
+    select_platform_adapter,
+)
 from heartwood.adapters.registry import LocalRegistryAdapter, RegistryBoundaryError
 
 
@@ -35,8 +40,19 @@ def test_carina_platform_adapter_conforms_and_defaults_to_local_only() -> None:
     assert detection.confidence > 0.0
     assert adapter.data_mounts() == ()
     assert policy.platform_id == "carina"
-    assert policy.allowed_action_confirmation_modes == ("always-confirm",)
+    assert policy.allowed_action_confirmation_modes == ("always-confirm", "confirm-risky")
     assert policy.credential_allowlist == ()
+
+
+def test_terra_platform_adapter_conforms_and_uses_provisioned_compute() -> None:
+    adapter = TerraPlatformAdapter()
+    assert_platform_adapter_conforms(adapter)
+    detection = adapter.detect({"GOOGLE_PROJECT": "synthetic-project"})
+    policy = adapter.default_policy_profile()
+    assert detection.adapter_id == "terra"
+    assert detection.confidence > 0.0
+    assert policy.platform_id == "terra"
+    assert select_platform_adapter({"GOOGLE_PROJECT": "synthetic-project"}).adapter_id == "terra"
 
 
 def test_local_filesystem_data_adapter_conforms() -> None:
