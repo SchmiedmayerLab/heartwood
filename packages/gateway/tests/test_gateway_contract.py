@@ -20,6 +20,7 @@ from heartwood.gateway import (
     ModelArtifactCatalog,
     ModelCatalogService,
     ModelSnapshot,
+    ModelSnapshotError,
     ProviderModel,
     RestGateway,
     RestRequest,
@@ -554,6 +555,8 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
         ("artifact", "llama-cpp-stories260k-ci", tmp_path / "models"),
         ("snapshot", "qwen25-7b-instruct-vllm", snapshot_cache),
     ]
+    with pytest.raises(ModelSnapshotError, match="unknown reviewed local model: missing"):
+        gateway.download_local_model_now("missing")
 
 
 def test_gateway_does_not_mask_unexpected_artifact_catalog_errors(

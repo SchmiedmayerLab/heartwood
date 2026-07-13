@@ -60,6 +60,7 @@ from heartwood.gateway._model_settings import (
 )
 from heartwood.gateway._model_snapshots import (
     ModelSnapshotCatalog,
+    ModelSnapshotError,
     download_model_snapshot,
     load_model_snapshot_catalog,
 )
@@ -540,7 +541,10 @@ class SessionGateway:
         try:
             artifact = self.artifact_catalog.artifact(model_id)
         except ModelArtifactError:
-            snapshot = self.snapshot_catalog.snapshot(model_id)
+            try:
+                snapshot = self.snapshot_catalog.snapshot(model_id)
+            except ModelSnapshotError as error:
+                raise ModelSnapshotError(f"unknown reviewed local model: {model_id}") from error
             return download_model_snapshot(snapshot, cache_dir=destination)
         return download_artifact(artifact, cache_dir=destination)
 
