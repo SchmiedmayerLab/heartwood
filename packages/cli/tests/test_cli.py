@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from heartwood.cli import main
+from heartwood.cli import __version__, main
 from heartwood.gateway import (
     ActionSettings,
     ActionSettingsStore,
@@ -39,7 +39,7 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--version"])
 
     assert error.value.code == 0
-    assert "heartwood 0.0.0" in capsys.readouterr().out
+    assert f"heartwood {__version__}" in capsys.readouterr().out
 
 
 def test_doctor_reports_setup_without_mutating_state(

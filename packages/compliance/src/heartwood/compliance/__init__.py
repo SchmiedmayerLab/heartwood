@@ -12,4 +12,4 @@ from heartwood.compliance._reviewer_packet import ReviewerPacket, ReviewerPacket
 
 __all__ = ["ReviewerPacket", "ReviewerPacketGenerator", "__version__"]
 
-__version__ = "0.0.0"
+__version__ = "0.1.0"

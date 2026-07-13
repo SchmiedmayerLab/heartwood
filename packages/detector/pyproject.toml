@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-detector"
-version = "0.0.0"
+version = "0.1.0"
 description = "Deterministic, propose-not-commit environment and dataset detection for Heartwood."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-notebook"
-version = "0.0.0"
+version = "0.1.0"
 description = "Notebook-facing Python API and widget bridge for Heartwood sessions."
 readme = "README.md"
 requires-python = ">=3.11"

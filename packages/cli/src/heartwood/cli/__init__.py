@@ -50,7 +50,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = os.environ.get("HEARTWOOD_VERSION", "0.0.0")
+__version__ = os.environ.get("HEARTWOOD_VERSION", "0.1.0")
 
 _PROG = "heartwood"
 _DEFAULT_WORKSPACE = Path(".heartwood") / "sessions"
