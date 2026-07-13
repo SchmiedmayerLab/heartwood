@@ -126,6 +126,7 @@ jobs:
       - name: Build candidate by digest
         id: candidate
         env:
+          BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           TARGET: ${{ matrix.target }}
           MEDIA_OUTPUT: ${{ matrix.media_output }}
@@ -173,6 +174,18 @@ jobs:
           if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
             echo "immutable GPU commit tag does not match the validated candidate" >&2
             exit 1
+          fi
+          raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
+          if [ "${FLATTEN}" = "true" ]; then
+            jq --exit-status '
+              .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
+              and .config.mediaType == "application/vnd.docker.container.image.v1+json"
+            ' <<<"${raw}" >/dev/null
+          else
+            jq --exit-status '
+              [.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
+              == ["linux/amd64"]
+            ' <<<"${raw}" >/dev/null
           fi
 
   promote:

@@ -63,25 +63,38 @@ for mapping in "${mappings[@]}"; do
   IFS='|' read -r source_tag target_tag media_shape <<<"${mapping}"
   source_ref="${image_name}:${source_tag}"
   target_ref="${image_name}:${target_tag}"
+  echo "verifying release image candidate: ${source_ref}"
   source_digest="$(digest "${source_ref}")"
-  [[ "${source_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+  if [[ ! "${source_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "release image candidate returned an invalid digest: ${source_ref}" >&2
+    exit 1
+  fi
 
   raw="$(imagetools_inspect --raw "${source_ref}")"
   if [[ "${media_shape}" == "single" ]]; then
-    jq -e '
+    if ! jq -e '
       .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
       and .config.mediaType == "application/vnd.docker.container.image.v1+json"
-    ' <<<"${raw}" >/dev/null
+    ' <<<"${raw}" >/dev/null; then
+      echo "release image candidate is not a Docker schema-2 manifest: ${source_ref}" >&2
+      exit 1
+    fi
   elif [[ "${media_shape}" == "multi" ]]; then
-    jq -e '
+    if ! jq -e '
       ([.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"] | sort)
       == ["linux/amd64", "linux/arm64"]
-    ' <<<"${raw}" >/dev/null
+    ' <<<"${raw}" >/dev/null; then
+      echo "release image candidate is not an AMD64/ARM64 index: ${source_ref}" >&2
+      exit 1
+    fi
   else
-    jq -e '
+    if ! jq -e '
       [.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
       == ["linux/amd64"]
-    ' <<<"${raw}" >/dev/null
+    ' <<<"${raw}" >/dev/null; then
+      echo "release image candidate is not an AMD64 index: ${source_ref}" >&2
+      exit 1
+    fi
   fi
 
   if [[ "${mode}" == "verify" ]]; then

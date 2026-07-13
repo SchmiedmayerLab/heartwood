@@ -344,7 +344,9 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "Promote GPU Channel Tags" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
+    assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
     assert "--prefer-index=false" in workflow
+    assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
     assert "/opt/heartwood-vllm/bin/python" in workflow
     assert "find" in workflow
     assert "-size +10M" in workflow
