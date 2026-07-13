@@ -80,17 +80,17 @@ export const ConversationWorkspace = ({
     </div>
 
     <div className="composer-area">
-      {pendingActions.map((control) => (
+      {pendingActions.length > 0 ?
         <ApprovalRequest
-          control={control}
-          key={control.targetId}
+          busy={requestStatus === "busy"}
+          controls={pendingActions}
           onDecision={onDecision}
         />
-      ))}
+      : null}
       <div className="composer">
         <Textarea
           aria-label="Task"
-          disabled={paused || !modelConfigured}
+          disabled={paused || !modelConfigured || pendingActions.length > 0}
           placeholder={
             paused ? "Resume the session to continue"
             : !modelConfigured ?
@@ -123,7 +123,12 @@ export const ConversationWorkspace = ({
           <Tooltip tooltip="Send task">
             <Button
               aria-label="Send task"
-              disabled={!prompt.trim() || paused || !modelConfigured}
+              disabled={
+                !prompt.trim() ||
+                paused ||
+                !modelConfigured ||
+                pendingActions.length > 0
+              }
               isPending={requestStatus === "busy"}
               size="sm"
               onClick={onSubmit}
@@ -193,49 +198,71 @@ const ConversationItem = ({ message }: { message: ConversationMessage }) => {
 };
 
 const ApprovalRequest = ({
-  control,
+  busy,
+  controls,
   onDecision,
 }: {
-  control: ApprovalControl;
+  busy: boolean;
+  controls: ApprovalControl[];
   onDecision: (decision: "approve" | "deny", control: ApprovalControl) => void;
-}) => (
-  <section
-    className="approval-request"
-    aria-label={`Approval required for ${control.toolName}`}
-  >
-    <div className="approval-copy">
-      <div className="approval-heading">
-        <small>Approval required</small>
-        {control.risk ?
-          <Badge variant="secondary">{control.risk} risk</Badge>
-        : null}
+}) => {
+  const target = controls[0];
+  if (!target) return null;
+  const label = controls.length === 1 ? "action" : "actions";
+  return (
+    <section
+      className="approval-request"
+      aria-label="Approval required for OpenHands action set"
+      aria-busy={busy}
+    >
+      <div className="approval-copy">
+        <div className="approval-heading">
+          <small>Approval required</small>
+          <Badge variant="secondary">
+            {controls.length} {label}
+          </Badge>
+        </div>
+        <strong>Review the complete action set</strong>
+        <p>
+          OpenHands proposed these actions together. One decision applies to
+          every action below.
+        </p>
+        <ol className="approval-batch-list">
+          {controls.map((control) => (
+            <li key={control.targetId}>
+              <span>{control.summary ?? control.toolName}</span>
+              <small>
+                {control.toolName || "tool"}
+                {control.risk ? ` · ${control.risk} risk` : ""}
+              </small>
+            </li>
+          ))}
+        </ol>
       </div>
-      <strong>{control.toolName || "Tool action"}</strong>
-      {control.summary ?
-        <p>{control.summary}</p>
-      : null}
-    </div>
-    <div className="approval-actions">
-      <Button
-        aria-label={`Allow ${control.targetId}`}
-        size="sm"
-        onClick={() => onDecision("approve", control)}
-      >
-        <Check size={16} />
-        Allow once
-      </Button>
-      <Button
-        aria-label={`Reject ${control.targetId}`}
-        size="sm"
-        variant="outline"
-        onClick={() => onDecision("deny", control)}
-      >
-        <Ban size={16} />
-        Reject
-      </Button>
-    </div>
-  </section>
-);
+      <div className="approval-actions">
+        <Button
+          aria-label={`Allow all ${controls.length} ${label} once`}
+          disabled={busy}
+          size="sm"
+          onClick={() => onDecision("approve", target)}
+        >
+          <Check size={16} />
+          Allow all once
+        </Button>
+        <Button
+          aria-label={`Reject all ${controls.length} ${label}`}
+          disabled={busy}
+          size="sm"
+          variant="outline"
+          onClick={() => onDecision("deny", target)}
+        >
+          <Ban size={16} />
+          Reject all
+        </Button>
+      </div>
+    </section>
+  );
+};
 
 const TASK_STARTERS = [
   "Inspect the workspace",

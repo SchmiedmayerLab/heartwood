@@ -340,7 +340,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
 
     assert restored_ids == [first.tool_call_id, second.tool_call_id]
     assert restored_backend.resolutions == [(first.tool_call_id, True)]
-    assert not any(
+    assert any(
         event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value for event in result.events
     )
 

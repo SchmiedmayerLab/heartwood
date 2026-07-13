@@ -179,7 +179,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert 'source_participant_count"] == 24' in combined
     assert '"name": "heartwood"' in _read("docs/terra-jupyter-demo.ipynb")
     assert "session.audit_export()" in combined
-    assert "Review the printed pending action" in combined
+    assert "Review every member of the pending OpenHands action set" in combined
     for cell in cells:
         if cell["cell_type"] == "code":
             assert cell["execution_count"] is None
@@ -252,8 +252,8 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "models refresh local" in runbook
     assert "HEARTWOOD_MODEL_CONNECTIONS" in runbook
     assert "business associate agreement" in runbook
-    assert "Allow once" in runbook
-    assert "Reject" in runbook
+    assert "Allow all once" in runbook
+    assert "Reject all" in runbook
     assert "WORKSPACE_BUCKET" in runbook
     assert "24 synthetic people" in runbook
     assert "target-condition cohort" in runbook

@@ -39,7 +39,7 @@ The CLI, notebook, and web UI render the same plain-language sequence from the s
 
 ## Replay And Resume
 
-Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, and pending action. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
+Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, and pending action set. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
 
 ## Improvement Export
 

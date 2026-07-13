@@ -20,7 +20,10 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, ClassVar, cast
 
+import pytest
 from packaging.requirements import Requirement
+
+from heartwood.gateway import verify_model_snapshot
 
 
 def test_generic_image_packages_one_no_weight_runtime() -> None:
@@ -195,6 +198,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "uv pip sync --require-hashes" in dockerfile
         assert "images/gpu/vllm-requirements.txt" in dockerfile
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
+        assert "ffmpeg" in dockerfile
     assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock
@@ -202,6 +206,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
+    assert "VLLM_USE_FLASHINFER_SAMPLER" in launcher
     assert "huggingface.co" not in launcher
 
 
@@ -237,22 +242,26 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert denied.returncode == 64
 
 
-def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
+def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     bootstrap = _read("deploy/carina/bootstrap.sh")
-    launcher = _read("deploy/carina/launch-interactive.sh")
     launch_runtime = _read("packages/cli/src/heartwood/cli/_launch.py")
-    batch = _read("deploy/carina/interactive.sbatch")
     environment = _toml("images/generic/image-flavors.toml")
+    bootstrap_environment = _read("deploy/carina/environment.yml")
 
     assert "micromamba create" in bootstrap
     assert "micromamba install" in bootstrap
+    assert "module load" in bootstrap
     assert '"${root}/bootstrap/conda-meta"' in bootstrap
     assert "images/gpu/vllm-requirements.txt" in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
-    assert "SLURM_JOB_ID" in launcher
-    assert "LOCAL_SCRATCH_JOB" in launcher
-    assert "--inside-allocation" in launcher
-    assert "HEARTWOOD_PLATFORM=carina" in launcher
+    assert "import torchcodec" in bootstrap
+    assert "import vllm" in bootstrap
+    assert "VLLM_USE_FLASHINFER_SAMPLER=0" in bootstrap
+    assert "ffmpeg=" in bootstrap_environment
+    assert "SLURM_JOB_ID" in launch_runtime
+    assert "LOCAL_SCRATCH_JOB" in launch_runtime
+    assert "--inside-allocation" in launch_runtime
+    assert "HEARTWOOD_PLATFORM=carina" in launch_runtime
     assert "verify_snapshot(options.model_root)" in launch_runtime
     assert 'env.get("LOCAL_SCRATCH_JOB"' in launch_runtime
     assert "allowed_names" in launch_runtime
@@ -260,9 +269,8 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert '"OPENAI_API_KEY"' not in launch_runtime
     assert '"--model-source"' in launch_runtime
     assert "127.0.0.1:8765/v1/models" in launch_runtime
-    assert "#SBATCH --partition=gpu" in batch
-    assert "#SBATCH --gres=gpu:1" in batch
-    assert "${script_dir}/launch-interactive.sh" in batch
+    assert '"sinfo", "--noheader", "--format=%P|%G|%a"' in launch_runtime
+    assert '"--export=ALL,HEARTWOOD_PLATFORM=carina"' in launch_runtime
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
 
 
@@ -273,24 +281,22 @@ def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) 
     weights.write_bytes(b"synthetic-weights")
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     (model / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
-    verifier = _repo_root() / "deploy/carina/verify_model_snapshot.py"
-    verifier_source = _read("packages/cli/src/heartwood/cli/_model_snapshot.py")
+    verifier_source = _read("packages/gateway/src/heartwood/gateway/_model_snapshots.py")
     assert "file.read(1024 * 1024)" in verifier_source
     assert "os.O_NOFOLLOW" in verifier_source
     assert ".read_bytes()" not in verifier_source
 
-    verified = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
-    assert verified.returncode == 0
+    verify_model_snapshot(model)
 
     (model / "unlisted.json").write_text("{}", encoding="utf-8")
-    unlisted = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
-    assert unlisted.returncode == 66
+    with pytest.raises(ValueError, match="unlisted"):
+        verify_model_snapshot(model)
     (model / "unlisted.json").unlink()
 
     weights.unlink()
     weights.symlink_to(model / "missing-weights")
-    linked = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
-    assert linked.returncode == 66
+    with pytest.raises(ValueError, match="symbolic link"):
+        verify_model_snapshot(model)
 
 
 def test_native_release_assets_are_verified_before_installation() -> None:
@@ -420,8 +426,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "cohort-summary.json" in smoke
     assert " allow " in smoke
     assert " reject " in smoke
-    assert "Action approved" in smoke
-    assert "Action denied" in smoke
+    assert "Action set approved" in smoke
+    assert "Action set denied" in smoke
     assert "audit export" in smoke
     assert "load_skills_from_dir" in smoke
     assert "start_agent_server" not in smoke

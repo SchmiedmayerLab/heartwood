@@ -34,13 +34,32 @@ PATH="${workspace}/bin:${PATH}" "${assets}/heartwood-installer" \
   --root "${workspace}/installation" \
   --platform generic
 
+if HEARTWOOD_INSTALL_MINIMUM_FREE_GIB=invalid \
+  "${assets}/heartwood-installer" \
+  --bundle "${assets}/heartwood-native.tar.gz" \
+  --checksums "${assets}/SHA256SUMS" \
+  --root "${workspace}/invalid-capacity" \
+  --platform generic \
+  --dry-run; then
+  echo "installer accepted an invalid storage requirement" >&2
+  exit 1
+fi
+
 test -x "${workspace}/installation/bin/heartwood"
 test -L "${workspace}/installation/current"
+for directory in state state/sessions state/workspaces state/runtime models cache logs; do
+  test -d "${workspace}/installation/${directory}"
+  test "$(stat -c '%a' "${workspace}/installation/${directory}")" = "700"
+done
 output="$("${workspace}/installation/bin/heartwood")"
 case "${output}" in
   "${workspace}/installation/versions/"*"|"*"|"*"|${workspace}/installation/state") ;;
   *) echo "installed command did not receive native installation metadata" >&2; exit 1 ;;
 esac
+grep --fixed-strings "HEARTWOOD_MODEL_CACHE=${workspace}/installation/models" \
+  "${workspace}/installation/bin/heartwood"
+grep --fixed-strings "HF_HOME=${workspace}/installation/cache/huggingface" \
+  "${workspace}/installation/bin/heartwood"
 
 printf '%064d  heartwood-native.tar.gz\n' 0 >"${workspace}/invalid-SHA256SUMS"
 if "${assets}/heartwood-installer" \

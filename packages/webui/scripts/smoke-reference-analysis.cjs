@@ -286,7 +286,7 @@ async function main() {
 
     const replay = runCli("--session-id", sessionId, "replay");
     if (
-      !replay.includes("Action approved") ||
+      !replay.includes("Action set approved") ||
       replay.match(/Tool terminal exit=0/gu)?.length !== 3 ||
       replay.match(/Tool terminal exit=1/gu)?.length !== 1 ||
       !replay.includes(

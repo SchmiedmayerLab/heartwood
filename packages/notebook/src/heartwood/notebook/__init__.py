@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from heartwood.notebook._view_model import (
     ActivityItem,
+    ApprovalAction,
     ApprovalControl,
     ChatMessage,
     DatasetProposal,
@@ -25,6 +26,7 @@ from heartwood.notebook._widgets import WidgetSpec, build_widget_spec, render_wi
 
 __all__ = [
     "ActivityItem",
+    "ApprovalAction",
     "ApprovalControl",
     "ChatMessage",
     "DatasetProposal",

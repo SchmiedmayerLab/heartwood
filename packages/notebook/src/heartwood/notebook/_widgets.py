@@ -59,10 +59,7 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
         ),
         WidgetSpec(
             "Approvals",
-            tuple(
-                f"{control.target_type} {control.target_id}: {control.decision or 'pending'}"
-                for control in view_model.approval_controls
-            ),
+            _approval_items(view_model),
         ),
         WidgetSpec(
             "Policy",
@@ -76,6 +73,17 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
             tuple(f"{action.label}: {action.path}" for action in view_model.export_actions),
         ),
     )
+
+
+def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
+    items: list[str] = []
+    for control in view_model.approval_controls:
+        items.append(f"{control.label}: {control.decision or 'pending'}")
+        items.extend(
+            f"{index}. {action.summary} ({action.tool_name}, {action.risk} risk)"
+            for index, action in enumerate(control.actions, 1)
+        )
+    return tuple(items)
 
 
 def render_widgets(view_model: NotebookViewModel) -> object:

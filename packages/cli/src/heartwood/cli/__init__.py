@@ -11,9 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +24,12 @@ from typing import Literal, cast
 
 import uvicorn
 
-from heartwood.cli._interactive import InteractiveSession, command_help
+from heartwood.cli._interactive import (
+    InteractionResult,
+    InteractiveSession,
+    command_help,
+    pending_actions,
+)
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
@@ -32,6 +40,7 @@ from heartwood.gateway import (
     ModelCatalogError,
     ModelProfile,
     ModelSettingsError,
+    ModelSnapshotError,
     SessionGateway,
     SkillSettingsError,
     action_settings_path,
@@ -135,11 +144,15 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--environment-root", type=Path, help="Native runtime environment root.")
     launch.add_argument("--vllm-executable", type=Path, help="Explicit vLLM executable.")
     launch.add_argument("--model-id", default="heartwood-local-model")
-    launch.add_argument("--partition", default="gpu")
+    launch.add_argument(
+        "--partition",
+        help="Slurm GPU partition; by default Heartwood selects the available default.",
+    )
     launch.add_argument("--gpus", type=int, default=1)
     launch.add_argument("--cpus", type=int, default=8)
     launch.add_argument("--memory", default="64G")
     launch.add_argument("--time", dest="time_limit", default="02:00:00")
+    launch.add_argument("--startup-timeout", type=int, default=600)
     launch.add_argument("--dry-run", action="store_true")
     launch.add_argument("--no-allocate", action="store_true")
     launch.add_argument(
@@ -153,15 +166,23 @@ def _build_parser() -> argparse.ArgumentParser:
     allow = subparsers.add_parser(
         "allow",
         aliases=["approve"],
-        help="Allow the current pending action once.",
+        help="Allow the complete pending OpenHands action set once.",
     )
-    allow.add_argument("tool_call_id", help="Pending action id shown in the transcript.")
+    allow.add_argument(
+        "tool_call_id",
+        nargs="?",
+        help="Optional member id for automation compatibility.",
+    )
     reject = subparsers.add_parser(
         "reject",
         aliases=["deny"],
-        help="Reject the current pending action.",
+        help="Reject the complete pending OpenHands action set.",
     )
-    reject.add_argument("tool_call_id", help="Pending action id shown in the transcript.")
+    reject.add_argument(
+        "tool_call_id",
+        nargs="?",
+        help="Optional member id for automation compatibility.",
+    )
     subparsers.add_parser("pause", help="Pause the current session.")
     subparsers.add_parser("resume", help="Resume the current session.")
     subparsers.add_parser("replay", help="Replay the persisted session event stream.")
@@ -232,9 +253,9 @@ def _build_parser() -> argparse.ArgumentParser:
     remove = model_subparsers.add_parser("remove", help="Remove a profile.")
     remove.add_argument("profile_id")
     download = model_subparsers.add_parser(
-        "download", help="Download and verify a reviewed Hugging Face artifact."
+        "download", help="Download and verify a reviewed local model."
     )
-    download.add_argument("artifact_id")
+    download.add_argument("model_id")
     download.add_argument("--cache", type=Path, help="Mounted model cache directory.")
 
     skills = subparsers.add_parser("skills", help="Inspect bundled Skills and extensions.")
@@ -306,8 +327,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "setup":
         return _handle_setup(parser, args)
     if args.command == "launch":
-        if args.gpus < 1 or args.cpus < 1:
-            parser.error("--gpus and --cpus must be positive")
+        if args.gpus < 1 or args.cpus < 1 or args.startup_timeout < 1:
+            parser.error("--gpus, --cpus, and --startup-timeout must be positive")
         state_root = args.state_root or args.workspace.parent
         if args.workspace.parent != state_root:
             parser.error("--state-root must be the parent of --workspace")
@@ -330,6 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 yes_request_allocation=args.yes_request_allocation,
                 inside_allocation=args.inside_allocation,
                 plain=args.plain,
+                startup_timeout=args.startup_timeout,
             )
         )
     if args.command is None and sys.stdin.isatty():
@@ -369,16 +391,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 kind=CommandKind.RUN,
             )
         if args.command in {"allow", "approve", "reject", "deny"}:
-            kind = CommandKind.APPROVE if args.command in {"allow", "approve"} else CommandKind.DENY
-            command = _command(
-                gateway,
-                session_id=args.session_id,
-                kind=kind,
-                payload={"target_type": "tool-call", "target_id": args.tool_call_id},
-            )
-            events = gateway.handle(command).events
-            print(_format_transcript(events))
-            return _event_exit_code(events)
+            directive = "/allow" if args.command in {"allow", "approve"} else "/reject"
+            if args.tool_call_id:
+                directive = f"{directive} {shlex.quote(args.tool_call_id)}"
+            result = InteractiveSession(gateway, session_id=args.session_id).submit(directive)
+            if result.message:
+                print(result.message)
+            if result.events:
+                print(_format_transcript(result.events))
+            return 1 if result.failed else 0
         if args.command == "pause":
             return _submit_simple(gateway, session_id=args.session_id, kind=CommandKind.PAUSE)
         if args.command == "resume":
@@ -601,13 +622,13 @@ def _handle_models(
             print(_format_model_settings(gateway.remove_model_profile(args.profile_id)))
             return 0
         if command == "download":
-            path = gateway.download_model_artifact_now(
-                args.artifact_id,
+            path = gateway.download_local_model_now(
+                args.model_id,
                 cache_dir=args.cache,
             )
-            print(f"Model artifact: {path}")
+            print(f"Local model: {path}")
             return 0
-    except (ModelArtifactError, ModelCatalogError, ModelSettingsError) as error:
+    except (ModelArtifactError, ModelCatalogError, ModelSettingsError, ModelSnapshotError) as error:
         parser.error(str(error))
     parser.parse_args(["models", "--help"])
     return 0
@@ -723,6 +744,15 @@ def _format_model_artifacts(catalog: dict[str, object]) -> str:
             size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
             lines.append(f"{item.get('artifact_id')}  {size_gib:.2f} GiB")
             lines.append(f"    {item.get('purpose')}")
+    snapshots = catalog.get("snapshots", [])
+    if isinstance(snapshots, list):
+        for item in snapshots:
+            if not isinstance(item, dict):
+                continue
+            size = item.get("expected_size_bytes")
+            size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
+            lines.append(f"{item.get('snapshot_id')}  {size_gib:.2f} GiB")
+            lines.append(f"    {item.get('purpose')}")
     return "\n".join(lines)
 
 
@@ -818,7 +848,7 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
     if not plain and _supports_full_screen_terminal():
         from heartwood.cli._tui import run_terminal
 
-        return run_terminal(session, format_event=_format_event)
+        return run_terminal(session, format_events=_format_tui_event_lines)
     print(f"Heartwood agent. Commands: {command_help()}.")
     while True:
         try:
@@ -830,13 +860,47 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
             return 0
         if not line:
             continue
-        result = session.submit(line)
+        directive = line.split(maxsplit=1)[0]
+        result = (
+            _submit_with_progress(session, line)
+            if not line.startswith("/") or directive in {"/allow", "/resume"}
+            else session.submit(line)
+        )
         if result.exit_requested:
             return 0
         if result.message:
             print(result.message)
         if result.events:
-            print(_format_transcript(result.events))
+            print(_format_transcript(result.events, live=not result.replace_transcript))
+
+
+def _submit_with_progress(
+    session: InteractiveSession,
+    line: str,
+    *,
+    update_interval: float = 15,
+) -> InteractionResult:
+    """Submit one blocking line-mode turn while reporting honest elapsed time."""
+    stopped = threading.Event()
+    started = time.monotonic()
+
+    def report_progress() -> None:
+        while not stopped.wait(update_interval):
+            elapsed = int(time.monotonic() - started)
+            print(f"Still working ({elapsed} seconds elapsed)...", flush=True)
+
+    print("Working; local models may take several minutes...", flush=True)
+    reporter = threading.Thread(
+        target=report_progress,
+        name="heartwood-line-progress",
+        daemon=True,
+    )
+    reporter.start()
+    try:
+        return session.submit(line)
+    finally:
+        stopped.set()
+        reporter.join()
 
 
 def _supports_full_screen_terminal() -> bool:
@@ -847,8 +911,71 @@ def _supports_full_screen_terminal() -> bool:
     )
 
 
-def _format_transcript(events: Sequence[SessionEvent]) -> str:
-    return "\n".join(line for event in events if (line := _format_event(event)))
+def _format_transcript(events: Sequence[SessionEvent], *, live: bool = False) -> str:
+    return "\n".join(_format_event_lines(events, live=live))
+
+
+def _format_event_lines(
+    events: Sequence[SessionEvent],
+    *,
+    live: bool = False,
+    include_pending_review: bool = True,
+) -> tuple[str, ...]:
+    pending = pending_actions(list(events))
+    pending_ids = {action.tool_call_id for action in pending}
+    lines: list[str] = []
+    event_index = 0
+    while event_index < len(events):
+        event = events[event_index]
+        kind = _event_kind(event)
+        if live and kind == EventKind.USER_MESSAGE_RECORDED.value:
+            event_index += 1
+            continue
+        if (
+            kind == EventKind.TOOL_CALL_PROPOSED.value
+            and event.payload.get("tool_call_id") in pending_ids
+            and include_pending_review
+        ):
+            event_index += 1
+            continue
+        if kind == EventKind.CONFIRMATION_RESOLVED.value:
+            resolved = [event]
+            decision = str(event.payload.get("decision", "resolved"))
+            event_index += 1
+            while event_index < len(events):
+                sibling = events[event_index]
+                if (
+                    _event_kind(sibling) != EventKind.CONFIRMATION_RESOLVED.value
+                    or str(sibling.payload.get("decision", "resolved")) != decision
+                ):
+                    break
+                resolved.append(sibling)
+                event_index += 1
+            sequence = (
+                f"[{resolved[0].sequence:03d}]"
+                if len(resolved) == 1
+                else f"[{resolved[0].sequence:03d}-{resolved[-1].sequence:03d}]"
+            )
+            label = "action" if len(resolved) == 1 else "actions"
+            lines.append(f"{sequence} Action set {decision} ({len(resolved)} {label})")
+            continue
+        if line := _format_event(event):
+            lines.append(line)
+        event_index += 1
+    if pending and include_pending_review:
+        label = "action" if len(pending) == 1 else "actions"
+        lines.append(f"Review {len(pending)} {label} as one OpenHands action set:")
+        for index, action in enumerate(pending, 1):
+            lines.append(
+                f"  {index}. {action.summary} [tool={action.tool_name}, risk={action.risk}]"
+            )
+        lines.extend(("Allow all once: /allow", "Reject all: /reject"))
+    return tuple(lines)
+
+
+def _format_tui_event_lines(events: Sequence[SessionEvent]) -> tuple[str, ...]:
+    """Format durable transcript lines while the TUI owns pending-action controls."""
+    return _format_event_lines(events, include_pending_review=False)
 
 
 def _format_event(event: SessionEvent) -> str:
@@ -863,8 +990,7 @@ def _format_event(event: SessionEvent) -> str:
     if kind == EventKind.USER_MESSAGE_RECORDED.value:
         return f"{prefix} You: {event.payload.get('content', '')}"
     if kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
-        decision = _mapping_payload(event.payload["decision"], "decision")
-        return f"{prefix} Model route {decision['decision']}: {decision['endpoint']}"
+        return ""
     if kind == EventKind.AGENT_MESSAGE_EMITTED.value:
         return f"{prefix} Agent: {event.payload.get('content', '')}"
     if kind == EventKind.TOOL_CALL_PROPOSED.value:
@@ -873,8 +999,7 @@ def _format_event(event: SessionEvent) -> str:
             f"(risk={event.payload.get('risk', 'unknown')})"
         )
     if kind == EventKind.CONFIRMATION_REQUESTED.value:
-        request = _mapping_payload(event.payload["request"], "request")
-        return f"{prefix} Allow once or reject: {request['request_id']} ({request['tool_call_id']})"
+        return ""
     if kind == EventKind.CONFIRMATION_RESOLVED.value:
         return f"{prefix} Action {event.payload.get('decision', '')}"
     if kind == EventKind.TOOL_EXECUTION_RECORDED.value:

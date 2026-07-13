@@ -182,10 +182,12 @@ Heartwood exposes two OpenHands-native modes through `heartwood actions` and the
 - **Ask Every Time** is the default and maps to OpenHands `AlwaysConfirm`.
 - **Auto-Approve Low Risk** maps to OpenHands `ConfirmRisky` with a `MEDIUM` threshold and unknown actions confirmed.
 
-Both modes use the OpenHands ensemble of deterministic policy-rail and pattern analyzers plus its model risk analyzer. In the automatic mode, only low-risk actions execute without a prompt; medium-, high-, and unknown-risk actions show the pending action identifier and offer two decisions:
+Both modes use the OpenHands ensemble of deterministic policy-rail and pattern analyzers plus its model risk analyzer. In the automatic mode, only low-risk actions execute without a prompt; medium-, high-, and unknown-risk actions are listed as one pending OpenHands action set and offer two decisions:
 
-- Allow once: execute the current action and continue until the next confirmation or completion. If OpenHands proposes multiple confirmation-required actions in one step, Heartwood rejects that complete batch before execution and records every action as denied so one approval cannot release unreviewed work.
-- Reject: return the rejection to OpenHands and stop without another model call; resume explicitly when further model work is wanted.
+- Allow all once: execute every displayed member of the action set and continue until the next confirmation or completion.
+- Reject all: return one whole-set rejection to OpenHands without executing a member or making another model call.
+
+The public OpenHands conversation API does not expose selective execution within one pending set. Heartwood therefore shows every member before the decision and does not claim per-action approval semantics that the upstream runtime cannot enforce.
 
 Generic synthetic development permits both modes:
 

@@ -184,7 +184,7 @@ class OpenHandsSdkBackend:
         tool_call_id: str,
         approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        """Resolve one pending OpenHands action and continue the conversation."""
+        """Resolve the OpenHands pending action set and continue the conversation."""
         pending = self._pending.get(tool_call_id)
         if pending is None:
             return (
@@ -193,34 +193,15 @@ class OpenHandsSdkBackend:
                     message=f"no matching pending action: {tool_call_id}",
                 ),
             )
-        if len(self._pending) != 1:
-            pending_actions = tuple(self._pending.values())
-            self._get_conversation().reject_pending_actions(
-                "Heartwood requires one-at-a-time action confirmation"
-            )
-            self._pending.clear()
-            return (
-                *(
-                    BackendEvent(
-                        kind=BackendEventKind.CONFIRMATION_RESOLVED,
-                        tool_call=action,
-                        approved=False,
-                    )
-                    for action in pending_actions
-                ),
-                BackendEvent(
-                    kind=BackendEventKind.ERROR,
-                    message=(
-                        "OpenHands proposed multiple actions in one confirmation step; "
-                        "all were rejected before execution"
-                    ),
-                ),
-            )
+        pending_actions = tuple(self._pending.values())
         self._captured.clear()
-        resolved = BackendEvent(
-            kind=BackendEventKind.CONFIRMATION_RESOLVED,
-            tool_call=pending,
-            approved=approved,
+        resolved = tuple(
+            BackendEvent(
+                kind=BackendEventKind.CONFIRMATION_RESOLVED,
+                tool_call=action,
+                approved=approved,
+            )
+            for action in pending_actions
         )
         try:
             conversation = self._get_conversation()
@@ -228,17 +209,17 @@ class OpenHandsSdkBackend:
             return (_backend_error(error),)
         if not approved:
             try:
-                conversation.reject_pending_actions("User rejected the action")
+                conversation.reject_pending_actions("User rejected the pending action set")
             except Exception as error:
                 return (_backend_error(error),)
             self._pending.clear()
-            return (resolved,)
+            return resolved
         try:
             self._pending.clear()
             conversation.run()
         except Exception as error:
-            return (resolved, _backend_error(error))
-        return (resolved, *self._translate_capture(session_id=session_id))
+            return (*resolved, _backend_error(error))
+        return (*resolved, *self._translate_capture(session_id=session_id))
 
     def pause(self) -> None:
         """Pause the OpenHands conversation."""

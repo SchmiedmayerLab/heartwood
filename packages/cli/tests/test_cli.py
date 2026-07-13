@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from heartwood.cli import __version__, main
+from heartwood.cli import __version__, _submit_with_progress, main
+from heartwood.cli._interactive import InteractionResult, InteractiveSession
 from heartwood.gateway import (
     ActionSettings,
     ActionSettingsStore,
@@ -40,6 +43,26 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert error.value.code == 0
     assert f"heartwood {__version__}" in capsys.readouterr().out
+
+
+def test_line_mode_reports_elapsed_progress_for_a_slow_turn(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class SlowSession:
+        def submit(self, _line: str) -> InteractionResult:
+            time.sleep(0.03)
+            return InteractionResult(message="complete")
+
+    result = _submit_with_progress(
+        cast(InteractiveSession, SlowSession()),
+        "inspect the synthetic workspace",
+        update_interval=0.005,
+    )
+
+    assert result.message == "complete"
+    output = capsys.readouterr().out
+    assert "Working; local models may take several minutes" in output
+    assert "Still working" in output
 
 
 def test_doctor_reports_setup_without_mutating_state(
@@ -365,10 +388,10 @@ def test_chat_uses_agentic_task_and_shows_pending_action(
 
     output = capsys.readouterr().out
     assert code == 0
-    assert "Model route allow" in output
+    assert "Model route" not in output
     assert "Agent:" in output
-    assert "Action:" in output
-    assert "Allow once or reject" in output
+    assert "Review 1 action as one OpenHands action set" in output
+    assert "Allow all once: /allow" in output
 
 
 def test_allow_once_resumes_pending_action_across_cli_processes(
@@ -407,7 +430,7 @@ def test_allow_once_resumes_pending_action_across_cli_processes(
 
     output = capsys.readouterr().out
     assert code == 0
-    assert "Action approved" in output
+    assert "Action set approved (1 action)" in output
     assert "Tool heartwood.synthetic.noop exit=0" in output
 
 
@@ -430,7 +453,7 @@ def test_action_decision_returns_failure_for_unknown_pending_action(
     )
 
     assert code == 1
-    assert "no matching pending action" in capsys.readouterr().out
+    assert "No actions are awaiting review" in capsys.readouterr().out
 
 
 def test_run_remains_a_one_shot_task_alias(
@@ -443,7 +466,7 @@ def test_run_remains_a_one_shot_task_alias(
     code = main(["--workspace", str(tmp_path / "sessions"), "run", "inspect workspace"])
 
     assert code == 0
-    assert "Allow once or reject" in capsys.readouterr().out
+    assert "Allow all once: /allow" in capsys.readouterr().out
 
 
 def test_actions_selects_low_risk_auto_approval_for_the_shared_runtime(
@@ -708,7 +731,7 @@ def test_interactive_agent_supports_action_and_session_commands(
     lines = iter(
         [
             "summarize",
-            "/allow interactive-toolcall-0",
+            "/allow",
             "/pause",
             "/resume",
             "/audit-export",
@@ -731,8 +754,9 @@ def test_interactive_agent_supports_action_and_session_commands(
     output = capsys.readouterr().out
     assert code == 0
     assert "Heartwood agent." in output
-    assert "You: summarize" in output
-    assert "Action approved" in output
+    assert output.count("You: summarize") == 1
+    assert "Allow all once: /allow" in output
+    assert "Action set approved (1 action)" in output
     assert "Session paused" in output
     assert "Session resumed" in output
     assert "Audit export:" in output

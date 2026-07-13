@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Heartwood CLI
 
-The `heartwood` command opens an interactive coding-agent session for research work. You can describe a task in natural language, follow the agent's responses and proposed actions, allow or reject individual actions, pause or resume work, and return to the persisted conversation later.
+The `heartwood` command opens an interactive coding-agent session for research work. You can describe a task in natural language, follow the agent's responses and proposed actions, review each complete OpenHands action set, pause or resume work, and return to the persisted conversation later.
 
 Start the full-screen terminal interface:
 
@@ -23,8 +23,8 @@ On first use, bare `heartwood` opens the setup flow instead. `heartwood doctor` 
 Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
 
 ```text
-/allow <id>   Allow a proposed action once
-/reject <id>  Reject a proposed action
+/allow        Allow the complete pending OpenHands action set once
+/reject       Reject the complete pending OpenHands action set
 /pause        Pause the session
 /resume       Resume the session
 /status       Show the active model and policy status

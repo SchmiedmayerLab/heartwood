@@ -259,7 +259,7 @@ def test_openhands_backend_rejects_pending_action_without_model_continuation(
 
     assert [event.kind for event in events] == [BackendEventKind.CONFIRMATION_RESOLVED]
     assert events[0].approved is False
-    assert conversation.rejection_reasons == ["User rejected the action"]
+    assert conversation.rejection_reasons == ["User rejected the pending action set"]
     assert conversation.run_count == 1
 
 
@@ -345,7 +345,7 @@ def test_openhands_backend_reports_unknown_confirmation_and_restores_pending(
     assert "no matching pending action" in str(missing[0].message)
 
 
-def test_openhands_backend_rejects_parallel_pending_actions_before_execution(
+def test_openhands_backend_approves_parallel_pending_actions_as_one_sdk_batch(
     tmp_path: Path,
 ) -> None:
     conversation = _ParallelConversation()
@@ -367,16 +367,41 @@ def test_openhands_backend_rejects_parallel_pending_actions_before_execution(
     assert [event.kind for event in resolved] == [
         BackendEventKind.CONFIRMATION_RESOLVED,
         BackendEventKind.CONFIRMATION_RESOLVED,
-        BackendEventKind.ERROR,
+        BackendEventKind.TOOL_EXECUTION,
+        BackendEventKind.TOOL_EXECUTION,
+        BackendEventKind.AGENT_MESSAGE,
     ]
     assert [
         event.tool_call.tool_call_id for event in resolved[:2] if event.tool_call
     ] == pending_ids
-    assert all(event.approved is False for event in resolved[:2])
-    assert "multiple actions" in str(resolved[-1].message)
-    assert conversation.rejection_reasons == [
-        "Heartwood requires one-at-a-time action confirmation"
+    assert all(event.approved is True for event in resolved[:2])
+    assert conversation.rejection_reasons == []
+
+
+def test_openhands_backend_rejects_parallel_pending_actions_as_one_sdk_batch(
+    tmp_path: Path,
+) -> None:
+    conversation = _ParallelConversation()
+    backend = _backend(tmp_path, conversation)
+    events = backend.submit_turn(session_id="session-1", prompt="parallel")
+    pending_ids = [
+        event.tool_call.tool_call_id
+        for event in events
+        if event.kind == BackendEventKind.CONFIRMATION_REQUESTED and event.tool_call is not None
     ]
+
+    resolved = backend.resolve_confirmation(
+        session_id="session-1",
+        tool_call_id=pending_ids[1],
+        approved=False,
+    )
+
+    assert [event.kind for event in resolved] == [
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.CONFIRMATION_RESOLVED,
+    ]
+    assert all(event.approved is False for event in resolved)
+    assert conversation.rejection_reasons == ["User rejected the pending action set"]
 
 
 def test_openhands_backend_pause_and_resume_translate_error_observation(
@@ -413,8 +438,8 @@ class ActionEvent:
 
 
 class ObservationEvent:
-    def __init__(self) -> None:
-        self.tool_call_id = "call-1"
+    def __init__(self, tool_call_id: str = "call-1") -> None:
+        self.tool_call_id = tool_call_id
         self.tool_name = "terminal"
         self.observation = SimpleNamespace(exit_code=0, is_error=False)
 
@@ -492,9 +517,16 @@ class _ParallelConversation(_FakeConversation):
     def run(self) -> None:
         callback = self.callback
         assert callback is not None
-        callback(ActionEvent("call-1"))
-        callback(ActionEvent("call-2"))
-        self.state.execution_status.value = "waiting_for_confirmation"
+        self.run_count += 1
+        if self.run_count == 1:
+            callback(ActionEvent("call-1"))
+            callback(ActionEvent("call-2"))
+            self.state.execution_status.value = "waiting_for_confirmation"
+        else:
+            callback(ObservationEvent("call-1"))
+            callback(ObservationEvent("call-2"))
+            callback(MessageEvent("Both workspace actions completed."))
+            self.state.execution_status.value = "finished"
 
 
 class _ErrorConversation(_FakeConversation):

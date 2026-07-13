@@ -82,7 +82,7 @@ jobs:
         run: |
           image="heartwood-gpu-pr:${TARGET}"
           docker run --rm --platform linux/amd64 --entrypoint /opt/heartwood-vllm/bin/python \
-            "${image}" -c 'from importlib.metadata import version; print(version("vllm"))'
+            "${image}" -c 'import torchcodec, vllm; from importlib.metadata import version; print(version("torchcodec"), version("vllm"))'
           test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${image}" \
             /opt /home -type f -size +10M \
             \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
@@ -145,7 +145,7 @@ jobs:
         run: |
           docker pull --platform linux/amd64 "${CANDIDATE}"
           docker run --rm --platform linux/amd64 --entrypoint /opt/heartwood-vllm/bin/python \
-            "${CANDIDATE}" -c 'from importlib.metadata import version; print(version("vllm"))'
+            "${CANDIDATE}" -c 'import torchcodec, vllm; from importlib.metadata import version; print(version("torchcodec"), version("vllm"))'
           test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${CANDIDATE}" \
             /opt /home -type f -size +10M \
             \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
