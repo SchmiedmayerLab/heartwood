@@ -248,8 +248,23 @@ def test_local_setup_persists_conservative_restart_configuration(tmp_path: Path)
     assert connections.stat().st_mode & 0o777 == 0o600
     payload = json.loads(policy.read_text(encoding="utf-8"))
     assert payload["platform_id"] == "carina"
-    assert payload["allowed_action_confirmation_modes"] == ["always-confirm"]
+    assert payload["allowed_action_confirmation_modes"] == ["always-confirm", "confirm-risky"]
     assert payload["credential_allowlist"] == []
+
+    gateway = SessionGateway(workspace=workspace, env={"HEARTWOOD_PLATFORM": "carina"})
+    selected = gateway.select_action_confirmation_mode("confirm-risky")
+    assert selected["confirmation_mode"] == "confirm-risky"
+
+
+def test_stanford_setup_inherits_carina_confirmation_modes(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    _, policy, _ = persist_deployment_profile(
+        workspace,
+        model_source="stanford-ai-api-gateway",
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+    payload = json.loads(policy.read_text(encoding="utf-8"))
+    assert payload["allowed_action_confirmation_modes"] == ["always-confirm", "confirm-risky"]
 
 
 def test_stanford_setup_is_discovered_after_gateway_restart(tmp_path: Path) -> None:

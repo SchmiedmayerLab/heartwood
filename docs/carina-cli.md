@@ -14,7 +14,7 @@ This guide defines the synthetic-only Heartwood pilot on Stanford Carina. The re
 
 ## Safety Boundary
 
-Use a new project directory containing only the public Heartwood repository, a reviewed public model, and synthetic fixtures. Do not point Heartwood at an existing research directory, enumerate unrelated project storage, print the full environment, or copy controlled data into job-local scratch. The first pilot uses **Ask Every Time** and one CLI process; terminal and file tools still run with the researcher's Unix permissions.
+Use a new project directory containing only the verified Heartwood installation, a reviewed public model, and synthetic fixtures. Do not point Heartwood at an existing research directory, enumerate unrelated project storage, print the full environment, or copy controlled data into job-local scratch. The first pilot uses **Ask Every Time** and one CLI process; terminal and file tools still run with the researcher's Unix permissions.
 
 ## Prepare Persistent Storage
 
@@ -22,49 +22,58 @@ On a login node, select protected project paths owned by the pilot:
 
 ```bash
 export HEARTWOOD_ROOT=/projects/<group>/<project>/heartwood-pilot
-mkdir -p "${HEARTWOOD_ROOT}/environments" "${HEARTWOOD_ROOT}/models" "${HEARTWOOD_ROOT}/state"
+mkdir -p "${HEARTWOOD_ROOT}/models"
 ```
 
-Clone the public repository over HTTPS. Carina does not support GitHub SSH access. Do not leave a GitHub token in the job environment.
+Do not leave a GitHub token in the job environment.
 
-## Install The Native Environments
+## Install A Tagged Release
 
-Load Carina's supported Micromamba module, enter the repository, and run:
+Load Carina's supported Micromamba module. Download the standalone installer from the selected GitHub Release, review its checksum or attestation, and run:
 
 ```bash
-deploy/carina/bootstrap.sh --environment-root "${HEARTWOOD_ROOT}/environments"
+chmod +x heartwood-installer
+./heartwood-installer --root "${HEARTWOOD_ROOT}" --platform carina --version <release-tag>
+export PATH="${HEARTWOOD_ROOT}/bin:${PATH}"
 ```
 
-The bootstrap creates separate locked Heartwood and vLLM environments. This prevents the NVIDIA inference dependency set from changing the OpenHands application environment.
+The installer retrieves and verifies the matching native bundle, keeps the immutable source payload and runtime under versioned directories, creates separate locked Heartwood and vLLM environments, and publishes `${HEARTWOOD_ROOT}/bin/heartwood`. For restricted-network transfer, place `heartwood-native.tar.gz`, `SHA256SUMS`, and `heartwood-installer` through the approved path and use `--bundle` with `--checksums`. The installer never downloads model weights or stores credentials.
 
 ## Stage A Reviewed Model
 
 Place the approved Hugging Face snapshot under `${HEARTWOOD_ROOT}/models/<model>` using an approved transfer path. Add a `SHA256SUMS` file containing every regular model file. The launcher rejects missing, unlisted, linked, or modified files and stages the verified snapshot into a fresh job-scratch directory. Model acquisition is deliberately separate from agent startup; the launcher never downloads weights.
 
-## Start An Interactive Allocation
+## Review And Launch
 
-```bash
-srun --pty --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=02:00:00 bash
-```
-
-Inside the allocation, confirm the detected state without changing it:
+Preview the complete launch plan without requesting compute:
 
 ```bash
 export HEARTWOOD_PLATFORM=carina
-export PATH="${HEARTWOOD_ROOT}/environments/heartwood/bin:${PATH}"
 heartwood --workspace "${HEARTWOOD_ROOT}/state/sessions" doctor
+heartwood launch \
+  --model-root "${HEARTWOOD_ROOT}/models/<model>" \
+  --dry-run
 ```
 
-Start verified local inference and the CLI:
+Launch the session:
 
 ```bash
-deploy/carina/launch-interactive.sh \
-  --environment-root "${HEARTWOOD_ROOT}/environments" \
-  --model-root "${HEARTWOOD_ROOT}/models/<model>" \
-  --state-root "${HEARTWOOD_ROOT}/state"
+heartwood launch --model-root "${HEARTWOOD_ROOT}/models/<model>"
 ```
 
-The launcher requires an active allocation and job-local scratch, verifies the model manifest, stages it into `$LOCAL_SCRATCH_JOB`, removes unrelated provider and source-control credentials, starts vLLM on `127.0.0.1:8765`, waits for `/v1/models`, configures the Local connection, and opens `heartwood chat`. vLLM stops when the CLI exits.
+On a login node, Heartwood displays the `gpu` partition, GPU, CPU, memory, and time request and asks before invoking `srun`. Scheduler consent is independent of agent action confirmation. Inside the allocation, the same command verifies the model manifest, stages it into `$LOCAL_SCRATCH_JOB`, removes unrelated provider and source-control credentials, starts vLLM on `127.0.0.1:8765`, waits for `/v1/models`, configures the Local connection, and opens `heartwood chat`. vLLM stops when the CLI exits. Use `--no-allocate` to prohibit scheduler submission or `--yes-request-allocation` only in reviewed automation.
+
+The compatibility scripts under `deploy/carina` remain available from the installed source payload for troubleshooting; they delegate to the packaged launch contract and are not the normal researcher workflow.
+
+## Action Confirmation
+
+Setup defaults to **Ask Every Time**. After validating the synthetic workflow, a researcher may explicitly select:
+
+```bash
+heartwood actions set auto-approve-low-risk
+```
+
+This uses OpenHands risk analysis: low-risk actions continue automatically, while medium-, high-, and unknown-risk actions still require **Allow once** or **Reject**. Heartwood does not expose unconditional auto-approval. This software option does not establish approval for controlled data.
 
 ## Stanford AI API Gateway
 

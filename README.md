@@ -40,6 +40,16 @@ The default runtime uses the generic platform policy and synthetic OMOP data-sou
 
 See [Platform Support](docs/platform-support.md) for platform-specific evidence and limitations. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets rather than supported platforms.
 
+Tagged releases publish a verified native bundle for environments where a platform image is not appropriate. Download the release installer, verify it before execution, and use the installed environment-aware launcher:
+
+```bash
+./heartwood-installer --root /persistent/project/heartwood
+export PATH="/persistent/project/heartwood/bin:${PATH}"
+heartwood launch --model-root /persistent/project/models/<reviewed-model>
+```
+
+`heartwood launch --dry-run` reports the detected platform, storage, model, and compute plan without changing state. On Carina it asks before invoking Slurm; Terra and generic containers use their already-provisioned compute. See [Carina CLI Pilot](docs/carina-cli.md) for the synthetic native GPU workflow.
+
 ## Researcher Experience
 
 ![Heartwood synthetic reference analysis](docs/assets/web-reference-analysis.png)

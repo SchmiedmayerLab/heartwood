@@ -216,6 +216,7 @@ def persist_deployment_profile(
     policy_path = state_root / "policy.json"
     connections_path = state_root / "model-connections.json"
     setup_path = state_root / "setup.json"
+    platform_policy = adapter.default_policy_profile()
     if model_source == "stanford-ai-api-gateway":
         connections = _stanford_connection_manifest()
         policy: object = {
@@ -226,14 +227,16 @@ def persist_deployment_profile(
             "allowed_model_endpoints": [f"{_STANFORD_ROOT}/chat/completions"],
             "allowed_model_catalog_endpoints": [f"{_STANFORD_ROOT}/models"],
             "allowed_capability_tiers": ["supervised", "experimental"],
-            "allowed_action_confirmation_modes": ["always-confirm"],
+            "allowed_action_confirmation_modes": list(
+                platform_policy.allowed_action_confirmation_modes
+            ),
             "credential_allowlist": ["STANFORD_AI_API_KEY"],
             "aggregate_count_floor": 20,
             "notes": "Stanford gateway route; data eligibility requires deployment approval.",
         }
     else:
         connections = {"schema_version": "heartwood.model-connections.v1", "connections": []}
-        policy = adapter.default_policy_profile().model_dump(mode="json")
+        policy = platform_policy.model_dump(mode="json")
     _atomic_json(connections_path, connections)
     _atomic_json(policy_path, policy)
     _atomic_json(

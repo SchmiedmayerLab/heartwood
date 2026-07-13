@@ -240,6 +240,7 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
 def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     bootstrap = _read("deploy/carina/bootstrap.sh")
     launcher = _read("deploy/carina/launch-interactive.sh")
+    launch_runtime = _read("packages/cli/src/heartwood/cli/_launch.py")
     batch = _read("deploy/carina/interactive.sbatch")
     environment = _toml("images/generic/image-flavors.toml")
 
@@ -250,15 +251,15 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert '"${root}/vllm/bin/python"' in bootstrap
     assert "SLURM_JOB_ID" in launcher
     assert "LOCAL_SCRATCH_JOB" in launcher
-    assert "verify_model_snapshot.py" in launcher
-    assert 'repo_root="$(cd "${script_dir}/../.." && pwd)"' in launcher
-    assert 'kill -KILL "${runtime_pid}"' in launcher
-    assert 'mktemp -d "${LOCAL_SCRATCH_JOB%/}/heartwood-model.XXXXXX"' in launcher
-    assert 'rm -rf "${staged_model}"' in launcher
-    assert "unset GH_TOKEN GITHUB_TOKEN HF_TOKEN" in launcher
-    assert "unset OPENAI_API_KEY ANTHROPIC_API_KEY AZURE_API_KEY" in launcher
-    assert "--model-source local" in launcher
-    assert "127.0.0.1:8765/v1/models" in launcher
+    assert "--inside-allocation" in launcher
+    assert "HEARTWOOD_PLATFORM=carina" in launcher
+    assert "verify_snapshot(options.model_root)" in launch_runtime
+    assert 'env.get("LOCAL_SCRATCH_JOB"' in launch_runtime
+    assert "allowed_names" in launch_runtime
+    assert "result = {name: env[name] for name in allowed_names if name in env}" in launch_runtime
+    assert '"OPENAI_API_KEY"' not in launch_runtime
+    assert '"--model-source"' in launch_runtime
+    assert "127.0.0.1:8765/v1/models" in launch_runtime
     assert "#SBATCH --partition=gpu" in batch
     assert "#SBATCH --gres=gpu:1" in batch
     assert "${script_dir}/launch-interactive.sh" in batch
@@ -273,7 +274,7 @@ def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) 
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     (model / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
     verifier = _repo_root() / "deploy/carina/verify_model_snapshot.py"
-    verifier_source = verifier.read_text(encoding="utf-8")
+    verifier_source = _read("packages/cli/src/heartwood/cli/_model_snapshot.py")
     assert "file.read(1024 * 1024)" in verifier_source
     assert "os.O_NOFOLLOW" in verifier_source
     assert ".read_bytes()" not in verifier_source
@@ -290,6 +291,27 @@ def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) 
     weights.symlink_to(model / "missing-weights")
     linked = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
     assert linked.returncode == 66
+
+
+def test_native_release_assets_are_verified_before_installation() -> None:
+    installer = _read("deploy/install.sh")
+    packager = _read("deploy/package-native.sh")
+    workflow = _read(".github/workflows/native-release.yml")
+    smoke = _read("deploy/tests/native_installer_smoke.sh")
+
+    assert "sha256sum --check --strict" in installer
+    assert "--bundle" in installer
+    assert "--dry-run" in installer
+    assert "HEARTWOOD_INSTALL_ROOT" in installer
+    assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
+    assert "[A-Za-z0-9._+-]{0,127}" in installer
+    assert "git archive --format=tar HEAD" in packager
+    assert "actions/attest@v4" in workflow
+    assert "gh release upload" in workflow
+    assert "Build And Verify Native Assets" in workflow
+    assert "native_installer_smoke.sh" in workflow
+    assert "installer accepted a corrupted checksum" in smoke
+    assert "installer accepted an unsafe checksum manifest" in smoke
 
 
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
