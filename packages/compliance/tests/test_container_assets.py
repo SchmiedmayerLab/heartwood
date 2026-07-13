@@ -315,6 +315,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
     assert "git archive --format=tar HEAD" in packager
+    assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow
