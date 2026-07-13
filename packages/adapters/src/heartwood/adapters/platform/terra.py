@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Stanford Carina platform adapter."""
+"""Minimal Terra interactive-runtime platform adapter."""
 
 from __future__ import annotations
 
@@ -16,27 +16,23 @@ from heartwood.detector import Platform, detect_platform
 from heartwood.schemas import PolicyProfile
 
 
-class CarinaPlatformAdapter:
-    """Platform contract for a synthetic-only Carina CLI deployment."""
+class TerraPlatformAdapter:
+    """Platform contract for an already-provisioned Terra Jupyter runtime."""
 
     @property
     def adapter_id(self) -> str:
         """Return the stable platform adapter id."""
-        return "carina"
+        return "terra"
 
     def detect(self, env: Mapping[str, str]) -> AdapterDetection:
-        """Detect explicit or cluster-provided Carina evidence."""
+        """Detect Terra from deterministic workspace markers."""
         detection = detect_platform(env)
-        if detection.platform is Platform.CARINA:
-            return AdapterDetection(
-                adapter_id=self.adapter_id,
-                confidence=detection.confidence,
-                evidence=detection.evidence,
-            )
+        if detection.platform is Platform.TERRA:
+            return AdapterDetection(self.adapter_id, detection.confidence, detection.evidence)
         return AdapterDetection(
-            adapter_id=self.adapter_id,
-            confidence=0.0,
-            evidence=("Carina platform evidence not found", *detection.evidence),
+            self.adapter_id,
+            0.0,
+            ("Terra platform evidence not found", *detection.evidence),
         )
 
     def data_mounts(self) -> tuple[Path, ...]:
@@ -44,13 +40,13 @@ class CarinaPlatformAdapter:
         return ()
 
     def credential_allowlist(self) -> tuple[str, ...]:
-        """Return credentials permitted by the optional managed route."""
-        return ("STANFORD_AI_API_KEY",)
+        """Return no implicit provider credential."""
+        return ()
 
     def default_policy_profile(self) -> PolicyProfile:
-        """Return the conservative synthetic Carina policy."""
+        """Return the conservative local-runtime Terra policy."""
         return PolicyProfile(
-            policy_id="carina-synthetic",
+            policy_id="terra-local-default",
             platform_id=self.adapter_id,
             deny_egress_by_default=True,
             allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
@@ -58,8 +54,5 @@ class CarinaPlatformAdapter:
             allowed_capability_tiers=("supervised", "experimental"),
             allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
             credential_allowlist=(),
-            notes=(
-                "Synthetic-only Carina policy with loopback inference; Ask Every Time is the "
-                "default and researchers may explicitly select low-risk auto-approval."
-            ),
+            notes="Terra local-runtime policy; deployment controls remain authoritative.",
         )

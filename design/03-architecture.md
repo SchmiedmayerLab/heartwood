@@ -151,6 +151,14 @@ Notebook support reuses the gateway and web UI through the platform's authentica
 
 Provider-specific execution adapters are not part of the default architecture. A platform adapter may supply identity, endpoint, visibility, and static-catalog metadata. Narrow catalog adapters call maintained SDK listing operations only; OpenHands and LiteLLM remain the provider execution and compatibility layer.
 
+### Installation And Launch Lifecycle
+
+Native deployments use a small standalone installer only before the `heartwood` command exists. The installer verifies a versioned GitHub Release bundle, places its immutable source payload under a versioned installation root, creates locked runtime environments, and publishes a stable command link. It never downloads model weights, stores credentials, submits compute jobs, or selects a data route.
+
+After installation, `heartwood launch` owns the common lifecycle contract. A platform launch adapter detects whether compute is already provisioned, returns a typed resource proposal, and optionally constructs a scheduler request. Scheduler submission requires a separate explicit user decision and is never implied by action-confirmation settings. Once compute is available, the command verifies the selected model snapshot, stages it into platform scratch when required, starts the configured OpenAI-compatible runtime, waits for readiness, opens the normal Heartwood conversation, and cleans up only the processes and temporary files it created.
+
+Carina implements scheduler acquisition through Slurm. Terra and generic container environments report already-provisioned compute and use the same post-allocation lifecycle without invoking Slurm. Shell and batch files remain thin compatibility and debugging wrappers over this contract; they do not own model policy, session state, or agent execution.
+
 ## Audit And Durability
 
 OpenHands persists the operational conversation state needed for resume. Heartwood records researcher and agent messages in its in-boundary session event stream so every client can reconstruct the same transcript, and derives a separate hash-chained audit record from the session events. The audit record stores route ids, endpoint decisions, tool names, risk levels, result status, activated Skill ids, and human decisions. Prompt text, model response text, action summaries, filesystem paths, row values, and secrets are excluded from exported records; message content and action summaries remain available only in the in-boundary conversation and session event stores.

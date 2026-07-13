@@ -79,6 +79,8 @@ The service starts without a secret or model. Configure a profile from the web s
 
 The state volume contains sessions, non-secret model and action settings, installed Skills, OpenHands state, workspaces, and audit data. The separate model volume allows large weights to use a different quota and retention policy and also owns Hugging Face transfer metadata through `HF_HOME`. Override `HEARTWOOD_MODEL_CACHE` and `HF_HOME` together when mounting a different model path. [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) tracks a canonical versioned root and one-volume default while preserving the split cache as an advanced option; the current two-volume layout remains the supported contract until that migration is implemented and restart-tested.
 
+Native environments use the same application and dependency locks through GitHub Release assets rather than a platform image. The release publishes `heartwood-installer`, `heartwood-native.tar.gz`, and `SHA256SUMS`; pull requests build and dry-run the same assets without publishing. Native installation contains no model weights or credentials and does not request compute. The installed `heartwood launch` command owns platform-aware compute planning and runtime startup.
+
 Run an explicitly mounted local model in the same container:
 
 ```bash

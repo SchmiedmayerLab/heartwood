@@ -22,6 +22,7 @@ from typing import Literal, cast
 import uvicorn
 
 from heartwood.cli._interactive import InteractiveSession, command_help
+from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
     ActionSettingsError,
@@ -49,7 +50,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.0.0"
+__version__ = os.environ.get("HEARTWOOD_VERSION", "0.0.0")
 
 _PROG = "heartwood"
 _DEFAULT_WORKSPACE = Path(".heartwood") / "sessions"
@@ -125,6 +126,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Require explicit inputs and do not prompt.",
     )
     setup.add_argument("--yes", action="store_true", help="Confirm the displayed configuration.")
+
+    launch = subparsers.add_parser(
+        "launch", help="Prepare platform compute and open an interactive Heartwood session."
+    )
+    launch.add_argument("--model-root", type=Path, help="Verified local-model snapshot directory.")
+    launch.add_argument("--state-root", type=Path, help="Persistent Heartwood state root.")
+    launch.add_argument("--environment-root", type=Path, help="Native runtime environment root.")
+    launch.add_argument("--vllm-executable", type=Path, help="Explicit vLLM executable.")
+    launch.add_argument("--model-id", default="heartwood-local-model")
+    launch.add_argument("--partition", default="gpu")
+    launch.add_argument("--gpus", type=int, default=1)
+    launch.add_argument("--cpus", type=int, default=8)
+    launch.add_argument("--memory", default="64G")
+    launch.add_argument("--time", dest="time_limit", default="02:00:00")
+    launch.add_argument("--dry-run", action="store_true")
+    launch.add_argument("--no-allocate", action="store_true")
+    launch.add_argument(
+        "--yes-request-allocation",
+        action="store_true",
+        help="Confirm the displayed scheduler request without an interactive prompt.",
+    )
+    launch.add_argument("--inside-allocation", action="store_true", help=argparse.SUPPRESS)
+    launch.add_argument("--plain", action="store_true", help="Open the line-oriented chat.")
 
     allow = subparsers.add_parser(
         "allow",
@@ -281,6 +305,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _handle_doctor(workspace=args.workspace, as_json=args.json)
     if args.command == "setup":
         return _handle_setup(parser, args)
+    if args.command == "launch":
+        if args.gpus < 1 or args.cpus < 1:
+            parser.error("--gpus and --cpus must be positive")
+        state_root = args.state_root or args.workspace.parent
+        if args.workspace.parent != state_root:
+            parser.error("--state-root must be the parent of --workspace")
+        return run_launch(
+            LaunchOptions(
+                workspace=args.workspace,
+                session_id=args.session_id,
+                model_root=args.model_root,
+                state_root=state_root,
+                environment_root=args.environment_root,
+                vllm_executable=args.vllm_executable,
+                model_id=args.model_id,
+                partition=args.partition,
+                gpus=args.gpus,
+                cpus=args.cpus,
+                memory=args.memory,
+                time_limit=args.time_limit,
+                dry_run=args.dry_run,
+                no_allocate=args.no_allocate,
+                yes_request_allocation=args.yes_request_allocation,
+                inside_allocation=args.inside_allocation,
+                plain=args.plain,
+            )
+        )
     if args.command is None and sys.stdin.isatty():
         readiness = inspect_deployment(args.workspace)
         if readiness.state == "setup-required":
