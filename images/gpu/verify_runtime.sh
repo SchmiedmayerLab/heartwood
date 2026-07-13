@@ -7,8 +7,27 @@
 
 set -euo pipefail
 
-vllm_python="${HEARTWOOD_VLLM_PYTHON:-/opt/heartwood-vllm/bin/python}"
+find_model_artifact() {
+  find "$@" -type f \
+    \( -name '*.gguf' -o -name '*.safetensors' -o \( -name '*.bin' -size +10M \) \) \
+    -print -quit
+}
 
+verify_no_model_artifacts() {
+  local model_artifact
+  model_artifact="$(find_model_artifact "$@")"
+  if [[ -n "${model_artifact}" ]]; then
+    echo "GPU runtime image contains a model artifact: ${model_artifact}" >&2
+    return 65
+  fi
+  return 0
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
+vllm_python="${HEARTWOOD_VLLM_PYTHON:-/opt/heartwood-vllm/bin/python}"
 if [[ ! -x "${vllm_python}" ]]; then
   echo "vLLM Python is unavailable: ${vllm_python}" >&2
   exit 69
@@ -17,14 +36,6 @@ fi
 "${vllm_python}" -c \
   'import torchcodec, vllm; from importlib.metadata import version; print(version("torchcodec"), version("vllm"))'
 
-model_artifact="$(
-  find /opt /home -type f -size +10M \
-    \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) \
-    -print -quit
-)"
-if [[ -n "${model_artifact}" ]]; then
-  echo "GPU runtime image contains a model artifact: ${model_artifact}" >&2
-  exit 65
-fi
+verify_no_model_artifacts /opt /home
 
 echo "GPU runtime verification passed"

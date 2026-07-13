@@ -221,10 +221,35 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "huggingface.co" not in launcher
     assert "/opt/heartwood-vllm/bin/python" in verifier
     assert "import torchcodec, vllm" in verifier
-    assert "find /opt /home -type f -size +10M" in verifier
-    assert "*.safetensors" in verifier
+    assert "-name '*.gguf' -o -name '*.safetensors'" in verifier
+    assert "-name '*.bin' -size +10M" in verifier
+    assert "verify_no_model_artifacts /opt /home" in verifier
     assert "GPU runtime image contains a model artifact" in verifier
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
+
+
+@pytest.mark.parametrize("filename", ["small.gguf", "small.safetensors"])
+def test_gpu_runtime_verifier_rejects_small_model_artifacts(tmp_path: Path, filename: str) -> None:
+    artifact = tmp_path / filename
+    artifact.write_bytes(b"synthetic-test-artifact")
+    verifier = _repo_root() / "images/gpu/verify_runtime.sh"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; verify_no_model_artifacts "$2"',
+            "heartwood-gpu-verifier-test",
+            str(verifier),
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 65
+    assert str(artifact) in completed.stderr
 
 
 def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
