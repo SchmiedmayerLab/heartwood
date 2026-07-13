@@ -115,6 +115,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const selectionGeneration = useRef(0);
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
+  const commandInFlight = useRef(false);
 
   const refreshSessions = useCallback(async () => {
     const response = await resolvedClient.listSessions();
@@ -357,7 +358,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     kind: Parameters<typeof createCommand>[1],
     payload: Record<string, JsonValue> = {},
   ) => {
-    if (sessionId === null) return false;
+    if (sessionId === null || commandInFlight.current) return false;
+    commandInFlight.current = true;
     setRequestStatus("busy");
     setError(null);
     try {
@@ -386,6 +388,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       setError(errorMessage(caught));
       setRequestStatus("error");
       return false;
+    } finally {
+      commandInFlight.current = false;
     }
   };
 

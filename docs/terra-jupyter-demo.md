@@ -19,7 +19,7 @@ The Terra image and its continuous-integration contracts are implemented. The li
 Use:
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra
+ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra
 ```
 
 The Semantic Version tag is the reproducible release reference. Use `sha-<git-sha>-terra` to identify the exact validated source commit or `edge-terra` only to follow the moving validated-main channel. Every variant remains derived from the pinned Terra Jupyter Notebook base image.
@@ -146,11 +146,11 @@ Open the existing `terra-demo` session and confirm in Settings that the selected
 2. `Fit the repository-verified training-only age-only baseline for recorded condition 201826 history in the localized synthetic tables. Write baseline-model.json and report aggregate training diagnostics, the lack of holdout evaluation, and that this is not a clinical model.`
 3. `Prepare the aggregate export from cohort-summary.json with the repository-verified aggregate export Skill. Apply a count floor of 20, write aggregate-export.json, and do not include row-level values.`
 
-Review each proposed terminal or file action and select **Allow once** only when its command, paths, and expected output match the request. Exercise **Reject** in a separate synthetic session so the reference artifacts remain complete. The expected cohort output reports 24 source participants, 39 source condition rows, 20 cohort participants, 35 cohort condition rows, 20 target-condition occurrences, passing identifier, chronology, and referential-integrity checks, and no row values. The baseline output must identify itself as training-only with no holdout evaluation. The export output must report a count floor of 20, `exported: true`, and `suppressed: false`; successful script output is not an authorization to move data outside the workspace.
+Review every terminal or file action in the displayed OpenHands action set and select **Allow all once** only when every command, path, and expected output matches the request. Exercise **Reject all** on a separate synthetic action set so the reference artifacts remain complete. The expected cohort output reports 24 source participants, 39 source condition rows, 20 cohort participants, 35 cohort condition rows, 20 target-condition occurrences, passing identifier, chronology, and referential-integrity checks, and no row values. The baseline output must identify itself as training-only with no holdout evaluation. The export output must report a count floor of 20, `exported: true`, and `suppressed: false`; successful script output is not an authorization to move data outside the workspace.
 
 Verify that agent messages and actual tool outcomes appear in the conversation, then use Activity for the ordered event trace and Export Audit for the scrubbed record. Do not expect model route or repository-verified Skill activation prompts; those are deployment and installation decisions, not conversational action confirmation.
 
-Action confirmation defaults to **Ask Every Time**. To validate the deployment-allowed risk-based path with synthetic data, select **Auto-Approve Low Risk** in Settings or run `heartwood --workspace /home/jupyter/heartwood-workspace/sessions actions set auto-approve-low-risk`. Confirm that low-risk actions still appear in Activity and that medium-, high-, and unknown-risk actions retain Allow once and Reject controls.
+Action confirmation defaults to **Ask Every Time**. To validate the deployment-allowed risk-based path with synthetic data, select **Auto-Approve Low Risk** in Settings or run `heartwood --workspace /home/jupyter/heartwood-workspace/sessions actions set auto-approve-low-risk`. Confirm that low-risk actions still appear in Activity and that medium-, high-, and unknown-risk action sets retain **Allow all once** and **Reject all** controls.
 
 ## Verify CLI And Notebook Parity
 

@@ -23,7 +23,7 @@ RUN npm run build
 
 FROM --platform=${HEARTWOOD_PLATFORM_BASE_PLATFORM} ghcr.io/astral-sh/uv:python3.12-trixie-slim AS uv-bin
 
-FROM --platform=${HEARTWOOD_PLATFORM_BASE_PLATFORM} ${HEARTWOOD_PLATFORM_BASE_IMAGE}
+FROM --platform=${HEARTWOOD_PLATFORM_BASE_PLATFORM} ${HEARTWOOD_PLATFORM_BASE_IMAGE} AS heartwood-platform-base
 
 ARG HEARTWOOD_PLATFORM_BASE_IMAGE
 ARG HEARTWOOD_PLATFORM_BASE_PLATFORM
@@ -83,6 +83,9 @@ RUN apt-get update \
       jq \
       libgomp1 \
       tmux \
+    && if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ffmpeg; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -103,6 +106,18 @@ ENV HF_HOME=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models/.huggingface
 
 WORKDIR /opt/heartwood
 
+COPY images/gpu/vllm-requirements.txt ./images/gpu/vllm-requirements.txt
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    export UV_CACHE_DIR=/root/.cache/uv; \
+    if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      uv venv /opt/heartwood-vllm --python 3.12 \
+      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt \
+      && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm; \
+    elif [ "${HEARTWOOD_GPU_RUNTIME}" != "none" ]; then \
+      echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
+    fi
+
 COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 COPY fixtures ./fixtures
@@ -115,16 +130,7 @@ COPY design ./design
 COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --all-extras --python 3.12
-
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
-      uv venv /opt/heartwood-vllm --python 3.12 \
-      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt \
-      && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm; \
-    elif [ "${HEARTWOOD_GPU_RUNTIME}" != "none" ]; then \
-      echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
-    fi
+    UV_CACHE_DIR=/root/.cache/uv uv sync --locked --no-dev --all-extras --python 3.12
 
 RUN ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood \
     && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python
@@ -145,3 +151,9 @@ RUN mkdir -p \
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}
 
 USER ${HEARTWOOD_PLATFORM_USER}
+
+FROM heartwood-platform-base AS gpu-ci-validate
+
+RUN /opt/heartwood/images/gpu/verify_runtime.sh
+
+FROM heartwood-platform-base AS platform-runtime-image

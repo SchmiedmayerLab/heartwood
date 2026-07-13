@@ -39,15 +39,15 @@ The selected connection must have an available credential reference and an allow
 
 ## Run The Synthetic Reference Analysis
 
-Create a session, select **Detect environment**, and submit the three tasks from the [Terra Jupyter Demo](terra-jupyter-demo.md#start-the-web-interface). Review each proposed action before selecting **Allow once**. The reference sequence builds the adult target-condition cohort, fits the explicitly training-only age baseline, and prepares the count-floor-controlled aggregate export.
+Create a session, select **Detect environment**, and submit the three tasks from the [Terra Jupyter Demo](terra-jupyter-demo.md#start-the-web-interface). Review every member of the proposed action set before selecting **Allow all once**. The reference sequence builds the adult target-condition cohort, fits the explicitly training-only age baseline, and prepares the count-floor-controlled aggregate export.
 
 ![Heartwood synthetic reference analysis showing the cohort, baseline, and aggregate-export conversation](assets/web-reference-analysis.png)
 
-This screenshot is produced by the real reference-analysis system test using the production web build, gateway, OpenHands SDK adapter, repository-verified Skills, persisted session store, and deterministic loopback model fixture. It validates orchestration and interface parity, not model quality or live Terra behavior.
+The synthetic reference analysis demonstrates one shared conversation across cohort discovery, baseline analysis, and aggregate export, including action review and persisted evidence. It validates orchestration and interface parity, not model quality or live Terra behavior.
 
 ## Review Actions And Evidence
 
-**Ask Every Time** requires an explicit decision for every OpenHands action. **Auto-Approve Low Risk** delegates risk analysis and confirmation to OpenHands: low-risk actions continue automatically, while medium-, high-, and unknown-risk actions still require **Allow once** or **Reject**. Pending decisions survive a gateway or CLI restart. If OpenHands proposes multiple confirmation-required actions in one step, Heartwood rejects that complete batch before execution so allowing one visible action cannot release another action implicitly. The web interface never exposes an unconditional automatic mode.
+**Ask Every Time** requires an explicit decision for each OpenHands confirmation stop. **Auto-Approve Low Risk** delegates risk analysis and confirmation to OpenHands: low-risk actions continue automatically, while medium-, high-, and unknown-risk action sets require review. The web interface lists every member and presents **Allow all once** or **Reject all**, matching the public OpenHands set-level confirmation API. Pending decisions survive a gateway or CLI restart. The web interface never exposes an unconditional automatic mode or implies unsupported selective member execution.
 
 Open **Activity & audit** to inspect ordered route decisions, action proposals, confirmations, tool outcomes, and errors. **Export audit** downloads a content-minimized JSON Lines record that excludes prompts, model responses, action summaries, paths, row values, and secrets. Successful tool execution does not authorize data export outside the workspace.
 

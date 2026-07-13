@@ -27,4 +27,4 @@ __all__ = [
     "platform_detection_evidence",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

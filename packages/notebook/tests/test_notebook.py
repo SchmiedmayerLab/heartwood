@@ -15,9 +15,15 @@ import pytest
 
 from heartwood.core_adapter import SessionResult
 from heartwood.gateway import ModelProfile, SessionGateway
-from heartwood.notebook import NotebookSession, build_widget_spec, jupyter_proxy_url, render_widgets
+from heartwood.notebook import (
+    NotebookSession,
+    build_view_model,
+    build_widget_spec,
+    jupyter_proxy_url,
+    render_widgets,
+)
 from heartwood.notebook._widgets import WidgetSpec
-from heartwood.session import SessionCommand, SessionEvent
+from heartwood.session import EventKind, SessionCommand, SessionEvent
 
 
 class _CountingGateway:
@@ -86,6 +92,49 @@ def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
 
     assert len(matching) == 1
     assert matching[0].decision == "denied"
+
+
+def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
+    events = tuple(
+        SessionEvent(
+            event_id=f"event-{index}",
+            session_id="notebook-batch",
+            sequence=index,
+            kind=EventKind.CONFIRMATION_REQUESTED,
+            occurred_at="2026-07-13T00:00:00Z",
+            payload={
+                "request": {
+                    "request_id": f"request-{index}",
+                    "tool_call_id": f"tool-{index}",
+                    "tool_name": tool_name,
+                    "risk": risk,
+                    "summary": summary,
+                }
+            },
+        )
+        for index, (tool_name, risk, summary) in enumerate(
+            (
+                ("terminal", "medium", "Run the synthetic cohort command"),
+                ("file_editor", "unknown", "Write the aggregate result"),
+            ),
+            1,
+        )
+    )
+
+    view_model = build_view_model(events)
+    pending = view_model.approval_controls
+    approval_items = next(
+        section.items for section in build_widget_spec(view_model) if section.title == "Approvals"
+    )
+
+    assert len(pending) == 1
+    assert pending[0].target_id == "tool-1"
+    assert [action.target_id for action in pending[0].actions] == ["tool-1", "tool-2"]
+    assert approval_items == (
+        "Review complete action set (2 actions): pending",
+        "1. Run the synthetic cohort command (terminal, medium risk)",
+        "2. Write the aggregate result (file_editor, unknown risk)",
+    )
 
 
 def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -> None:

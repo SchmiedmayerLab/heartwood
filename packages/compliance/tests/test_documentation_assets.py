@@ -129,7 +129,8 @@ def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None
     package = json.loads(_read("packages/webui/package.json"))
     assets = _repo_root() / "docs" / "assets"
 
-    assert "production web build, gateway, OpenHands SDK adapter" in web_interface
+    assert "synthetic reference analysis demonstrates one shared conversation" in web_interface
+    assert "including action review and persisted evidence" in web_interface
     assert "not model quality or live Terra behavior" in web_interface
     assert "npm run screenshots:docs" in web_interface
     assert "responsive layout, not live Leonardo proxy" in terra
@@ -165,7 +166,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
 
     assert notebook["nbformat"] == 4
     assert "Terra-Style Jupyter Demo" in sources[0]
-    assert "0.1.0-terra`" in combined
+    assert "0.1.1-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
@@ -179,7 +180,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert 'source_participant_count"] == 24' in combined
     assert '"name": "heartwood"' in _read("docs/terra-jupyter-demo.ipynb")
     assert "session.audit_export()" in combined
-    assert "Review the printed pending action" in combined
+    assert "Review every member of the pending OpenHands action set" in combined
     for cell in cells:
         if cell["cell_type"] == "code":
             assert cell["execution_count"] is None
@@ -238,10 +239,17 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
     assert "The CLI has no token argument" in guide
 
 
+def test_carina_runbook_uses_the_release_with_the_runtime_fixes() -> None:
+    runbook = _read("docs/carina-cli.md")
+
+    assert "HEARTWOOD_VERSION=0.1.1" in runbook
+    assert "first release with the corrected Carina" in runbook
+
+
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     runbook = _read("docs/terra-jupyter-demo.md")
 
-    assert "ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra" in runbook
+    assert "ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra" in runbook
     assert "contains no model weights" in runbook
     assert "Terra Jupyter Notebook base image" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
@@ -252,8 +260,8 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "models refresh local" in runbook
     assert "HEARTWOOD_MODEL_CONNECTIONS" in runbook
     assert "business associate agreement" in runbook
-    assert "Allow once" in runbook
-    assert "Reject" in runbook
+    assert "Allow all once" in runbook
+    assert "Reject all" in runbook
     assert "WORKSPACE_BUCKET" in runbook
     assert "24 synthetic people" in runbook
     assert "target-condition cohort" in runbook

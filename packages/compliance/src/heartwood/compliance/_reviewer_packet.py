@@ -201,7 +201,8 @@ class ReviewerPacketGenerator:
                     "installation review."
                 ),
                 (
-                    "- OpenHands Ask Every Time requires Allow once or Reject for tool actions. "
+                    "- OpenHands Ask Every Time requires Allow all once or Reject all "
+                    "for each pending action set. "
                     "The optional Auto-Approve Low Risk mode still confirms medium-, high-, "
                     "and unknown-risk actions."
                 ),

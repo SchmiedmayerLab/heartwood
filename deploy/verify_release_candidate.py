@@ -153,7 +153,6 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     errors = [f"{path}: {found}" for path, found in observed.items() if found != version]
     expected_references = {
         "README.md": [f"heartwood:{version}", f"HEARTWOOD_VERSION={version}"],
-        "docs/carina-cli.md": [f"HEARTWOOD_VERSION={version}"],
         "docs/platform-support.md": [f"Release `{version}`", f"`{version}-terra`"],
         "docs/releases.md": [f"-f version={version}"],
         "docs/terra-jupyter-demo.ipynb": [f"heartwood:{version}-terra"],

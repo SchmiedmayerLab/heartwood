@@ -19,7 +19,7 @@ trap cleanup EXIT
 mkdir -p "${output_dir}" "${workspace}/heartwood"
 git archive --format=tar HEAD | tar -xf - -C "${workspace}/heartwood"
 printf '%s\n' "${version}" >"${workspace}/heartwood/HEARTWOOD_VERSION"
-tar -czf "${archive}" -C "${workspace}" heartwood
+COPYFILE_DISABLE=1 tar --no-xattrs -czf "${archive}" -C "${workspace}" heartwood
 (
   cd "${output_dir}"
   sha256sum "$(basename "${archive}")" >SHA256SUMS

@@ -52,6 +52,14 @@ from heartwood.gateway._model_settings import (
     model_settings_from_mapping,
     model_settings_path,
 )
+from heartwood.gateway._model_snapshots import (
+    ModelSnapshot,
+    ModelSnapshotCatalog,
+    ModelSnapshotError,
+    download_model_snapshot,
+    load_model_snapshot_catalog,
+    verify_model_snapshot,
+)
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, OpenHandsSdkError
 from heartwood.gateway._readiness import (
     DeploymentReadiness,
@@ -99,6 +107,9 @@ __all__ = [
     "ModelSettings",
     "ModelSettingsError",
     "ModelSettingsStore",
+    "ModelSnapshot",
+    "ModelSnapshotCatalog",
+    "ModelSnapshotError",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
     "ProviderModel",
@@ -118,13 +129,16 @@ __all__ = [
     "action_settings_path",
     "custom_model_connection",
     "download_model_artifact",
+    "download_model_snapshot",
     "inspect_deployment",
     "load_model_artifact_catalog",
     "load_model_connections",
+    "load_model_snapshot_catalog",
     "model_connections_path",
     "model_profile_from_mapping",
     "model_profile_from_preset",
     "model_settings_from_mapping",
     "model_settings_path",
     "persist_deployment_profile",
+    "verify_model_snapshot",
 ]

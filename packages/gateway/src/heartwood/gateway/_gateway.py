@@ -32,6 +32,7 @@ from heartwood.gateway._action_settings import (
 )
 from heartwood.gateway._model_artifacts import (
     ModelArtifactCatalog,
+    ModelArtifactError,
     ModelArtifactManager,
     load_model_artifact_catalog,
 )
@@ -56,6 +57,12 @@ from heartwood.gateway._model_settings import (
     ModelSettingsStore,
     model_profile_from_preset,
     model_settings_path,
+)
+from heartwood.gateway._model_snapshots import (
+    ModelSnapshotCatalog,
+    ModelSnapshotError,
+    download_model_snapshot,
+    load_model_snapshot_catalog,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 from heartwood.gateway._session_catalog import SessionCatalog, SessionCatalogError
@@ -164,6 +171,7 @@ class SessionGateway:
         settings_store: ModelSettingsStore | None = None,
         action_settings_store: ActionSettingsStore | None = None,
         artifact_catalog: ModelArtifactCatalog | None = None,
+        snapshot_catalog: ModelSnapshotCatalog | None = None,
         model_connections: Sequence[ModelConnection] | None = None,
         model_catalog_service: ModelCatalogService | None = None,
     ) -> None:
@@ -203,6 +211,15 @@ class SessionGateway:
             )
         )
         self.artifact_catalog = artifact_catalog or load_model_artifact_catalog(catalog_path)
+        snapshot_catalog_path = Path(
+            self.env.get(
+                "HEARTWOOD_MODEL_SNAPSHOT_CATALOG",
+                str(repository_root / "images" / "generic" / "local-runtime" / "snapshots.toml"),
+            )
+        )
+        self.snapshot_catalog = snapshot_catalog or load_model_snapshot_catalog(
+            snapshot_catalog_path
+        )
         self.model_cache_dir = Path(
             self.env.get("HEARTWOOD_MODEL_CACHE", str(workspace.parent / "models"))
         )
@@ -488,8 +505,11 @@ class SessionGateway:
 
     def model_artifacts(self) -> dict[str, object]:
         """Return reviewed artifacts and background download status."""
+        snapshot_catalog = self.snapshot_catalog.safe_dict()
         return {
             **self.artifact_catalog.safe_dict(),
+            "snapshot_schema_version": snapshot_catalog["schema_version"],
+            "snapshots": snapshot_catalog["snapshots"],
             "downloads": [status.safe_dict() for status in self.artifact_manager.statuses()],
         }
 
@@ -509,6 +529,24 @@ class SessionGateway:
             artifact,
             cache_dir=self.model_cache_dir if cache_dir is None else cache_dir,
         )
+
+    def download_local_model_now(
+        self,
+        model_id: str,
+        *,
+        cache_dir: Path | None = None,
+    ) -> Path:
+        """Download a reviewed single-file artifact or multi-file snapshot."""
+        destination = self.model_cache_dir if cache_dir is None else cache_dir
+        try:
+            artifact = self.artifact_catalog.artifact(model_id)
+        except ModelArtifactError:
+            try:
+                snapshot = self.snapshot_catalog.snapshot(model_id)
+            except ModelSnapshotError as error:
+                raise ModelSnapshotError(f"unknown reviewed local model: {model_id}") from error
+            return download_model_snapshot(snapshot, cache_dir=destination)
+        return download_artifact(artifact, cache_dir=destination)
 
     def skill_settings(self) -> dict[str, object]:
         """Return bundled and explicitly installed Skills."""

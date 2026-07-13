@@ -27,8 +27,12 @@ from heartwood.gateway import (
 )
 
 
-def _write_ready_local_state(workspace: Path) -> None:
-    persist_deployment_profile(workspace, model_source="local", env={})
+def _write_ready_local_state(
+    workspace: Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
+    persist_deployment_profile(workspace, model_source="local", env=env or {})
     ModelSettingsStore(workspace.parent / "models.json").save(
         ModelSettings(
             active_profile="local",
@@ -78,14 +82,19 @@ def test_carina_readiness_reports_allocation_scratch_and_gpu(tmp_path: Path) -> 
     }
 
 
-def test_carina_without_compute_allocation_requires_recovery(tmp_path: Path) -> None:
+def test_unconfigured_carina_login_node_requires_setup_not_recovery(tmp_path: Path) -> None:
     readiness = inspect_deployment(
         tmp_path / "state" / "sessions", env={"HEARTWOOD_PLATFORM": "carina"}
     )
-    assert readiness.state == "recovery-required"
+    assert readiness.state == "setup-required"
+    checks = {check.check_id: check for check in readiness.checks}
+    assert checks["slurm-allocation"].status == "warning"
+    assert "only for local inference" in checks["slurm-allocation"].summary
 
 
-def test_carina_reports_optional_gpu_and_scratch_as_warnings(tmp_path: Path) -> None:
+def test_unconfigured_carina_allocation_reports_gpu_and_scratch_as_warnings(
+    tmp_path: Path,
+) -> None:
     readiness = inspect_deployment(
         tmp_path / "state" / "sessions",
         env={"HEARTWOOD_PLATFORM": "carina", "SLURM_JOB_ID": "123"},
@@ -93,6 +102,93 @@ def test_carina_reports_optional_gpu_and_scratch_as_warnings(tmp_path: Path) -> 
     checks = {check.check_id: check.status for check in readiness.checks}
     assert checks["job-scratch"] == "warning"
     assert checks["gpu"] == "warning"
+
+
+def test_configured_carina_local_model_requires_compute_on_login_node(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    env = {"HEARTWOOD_PLATFORM": "carina"}
+    _write_ready_local_state(workspace, env=env)
+
+    readiness = inspect_deployment(workspace, env=env)
+
+    assert readiness.state == "compute-required"
+    checks = {check.check_id: check for check in readiness.checks}
+    assert checks["slurm-allocation"].status == "warning"
+    assert checks["job-scratch"].status == "warning"
+    assert checks["gpu"].status == "warning"
+
+
+def test_configured_carina_local_allocation_requires_scratch_and_gpu(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
+    _write_ready_local_state(workspace, env=platform_env)
+
+    readiness = inspect_deployment(
+        workspace,
+        env={**platform_env, "SLURM_JOB_ID": "123"},
+    )
+
+    assert readiness.state == "recovery-required"
+    checks = {check.check_id: check for check in readiness.checks}
+    assert checks["job-scratch"].status == "fail"
+    assert checks["gpu"].status == "fail"
+
+
+def test_configured_carina_local_allocation_is_ready(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
+    _write_ready_local_state(workspace, env=platform_env)
+
+    readiness = inspect_deployment(
+        workspace,
+        env={
+            **platform_env,
+            "SLURM_JOB_ID": "123",
+            "LOCAL_SCRATCH_JOB": str(scratch),
+            "CUDA_VISIBLE_DEVICES": "0",
+        },
+    )
+
+    assert readiness.state == "ready"
+
+
+def test_carina_managed_model_route_does_not_require_compute(tmp_path: Path) -> None:
+    workspace = tmp_path / "state" / "sessions"
+    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
+    persist_deployment_profile(
+        workspace,
+        model_source="stanford-ai-api-gateway",
+        env=platform_env,
+    )
+    ModelSettingsStore(workspace.parent / "models.json").save(
+        ModelSettings(
+            active_profile="stanford-ai-api-gateway",
+            profiles=(
+                ModelProfile(
+                    profile_id="stanford-ai-api-gateway",
+                    model="openai/test-model",
+                    policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
+                    base_url="https://aiapi-prod.stanford.edu/v1",
+                    credential_kind="environment",
+                    api_key_env="STANFORD_AI_API_KEY",
+                ),
+            ),
+        )
+    )
+    ActionSettingsStore(workspace.parent / "actions.json").save(ActionSettings())
+
+    readiness = inspect_deployment(
+        workspace,
+        env={**platform_env, "STANFORD_AI_API_KEY": "synthetic-secret"},
+    )
+
+    assert readiness.state == "ready"
+    checks = {check.check_id: check for check in readiness.checks}
+    assert checks["slurm-allocation"].status == "pass"
+    assert "job-scratch" not in checks
+    assert "gpu" not in checks
 
 
 def test_completed_setup_with_active_model_is_ready(tmp_path: Path) -> None:
