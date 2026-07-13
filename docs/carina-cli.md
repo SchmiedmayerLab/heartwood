@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Carina CLI Pilot
 
-This guide defines the synthetic-only Heartwood pilot on Stanford Carina. The repository implements the platform detector, conservative local policy, setup diagnostics, locked native environments, Slurm launcher, loopback vLLM profile, and Stanford AI API Gateway connection. Live Carina execution remains required before this path is marked live-validated. Nothing in this guide authorizes protected health information or unrestricted agent tools for controlled data.
+This guide defines the synthetic-only Heartwood pilot on Stanford Carina. The repository implements the platform detector, conservative local policy, setup diagnostics, locked native environments, Slurm launcher, loopback vLLM profile, and Stanford AI API Gateway connection. Release `0.1.0` was partially exercised on Carina but required manual runtime workarounds and did not complete an action; see [Carina Release 0.1.0 Validation Findings](carina-live-validation.md). The path is not live-validated. Nothing in this guide authorizes protected health information or unrestricted agent tools for controlled data.
 
 ## Safety Boundary
 
@@ -64,7 +64,7 @@ Launch the session:
 heartwood launch --model-root "${HEARTWOOD_ROOT}/models/<model>"
 ```
 
-On a login node, Heartwood displays the `gpu` partition, GPU, CPU, memory, and time request and asks before invoking `srun`. Scheduler consent is independent of agent action confirmation. Inside the allocation, the same command verifies the model manifest, stages it into `$LOCAL_SCRATCH_JOB`, removes unrelated provider and source-control credentials, starts vLLM on `127.0.0.1:8765`, waits for `/v1/models`, configures the Local connection, and opens `heartwood chat`. vLLM stops when the CLI exits. Use `--no-allocate` to prohibit scheduler submission or `--yes-request-allocation` only in reviewed automation.
+On a login node, Heartwood displays the configured partition, GPU, CPU, memory, and time request and asks before invoking `srun`. Release `0.1.0` defaults to a `gpu` partition that was not present during the recorded pilot; inspect the current Carina partitions and pass a valid reviewed value such as `--partition dev`, `--partition normal`, or `--partition long` as appropriate for the current deployment. Scheduler consent is independent of agent action confirmation. Inside the allocation, the same command verifies the model manifest, stages it into `$LOCAL_SCRATCH_JOB`, removes unrelated provider and source-control credentials, starts vLLM on `127.0.0.1:8765`, waits for `/v1/models`, configures the Local connection, and opens `heartwood chat`. vLLM stops when the CLI exits. Use `--no-allocate` to prohibit scheduler submission or `--yes-request-allocation` only in reviewed automation.
 
 The compatibility scripts under `deploy/carina` remain available from the installed source payload for troubleshooting; they delegate to the packaged launch contract and are not the normal researcher workflow.
 
