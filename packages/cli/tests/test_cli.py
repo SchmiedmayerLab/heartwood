@@ -26,6 +26,7 @@ from heartwood.gateway import (
     ProviderModel,
     persist_deployment_profile,
 )
+from heartwood.session import EventKind, SessionEvent
 
 
 def test_no_command_prints_help_when_stdin_is_not_interactive(
@@ -454,6 +455,40 @@ def test_action_decision_returns_failure_for_unknown_pending_action(
 
     assert code == 1
     assert "No actions are awaiting review" in capsys.readouterr().out
+
+
+def test_action_decision_returns_failure_for_gateway_error_event(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_event = SessionEvent(
+        event_id="decision-error",
+        session_id="gateway-error",
+        sequence=0,
+        kind=EventKind.ERROR_RECORDED,
+        occurred_at="2026-07-13T00:00:00Z",
+        payload={"reason": "synthetic gateway failure"},
+    )
+
+    monkeypatch.setattr(
+        InteractiveSession,
+        "submit",
+        lambda _session, _directive: InteractionResult(events=(error_event,)),
+    )
+
+    code = main(
+        [
+            "--workspace",
+            str(tmp_path / "sessions"),
+            "--session-id",
+            "gateway-error",
+            "allow",
+        ]
+    )
+
+    assert code == 1
+    assert "Error: synthetic gateway failure" in capsys.readouterr().out
 
 
 def test_run_remains_a_one_shot_task_alias(
