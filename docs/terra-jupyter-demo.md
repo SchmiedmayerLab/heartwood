@@ -19,7 +19,7 @@ The Terra image and its continuous-integration contracts are implemented. The li
 Use:
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra
+ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra
 ```
 
 The Semantic Version tag is the reproducible release reference. Use `sha-<git-sha>-terra` to identify the exact validated source commit or `edge-terra` only to follow the moving validated-main channel. Every variant remains derived from the pinned Terra Jupyter Notebook base image.

@@ -166,7 +166,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
 
     assert notebook["nbformat"] == 4
     assert "Terra-Style Jupyter Demo" in sources[0]
-    assert "0.1.0-terra`" in combined
+    assert "0.1.1-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
@@ -239,18 +239,17 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
     assert "The CLI has no token argument" in guide
 
 
-def test_carina_runbook_requires_a_release_with_the_runtime_fixes() -> None:
+def test_carina_runbook_uses_the_release_with_the_runtime_fixes() -> None:
     runbook = _read("docs/carina-cli.md")
 
-    assert "HEARTWOOD_VERSION=0.1.0" not in runbook
-    assert "${HEARTWOOD_VERSION:?" in runbook
-    assert "Release `0.1.0` predates the corrected native dependency and launch path" in runbook
+    assert "HEARTWOOD_VERSION=0.1.1" in runbook
+    assert "first release with the corrected Carina" in runbook
 
 
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     runbook = _read("docs/terra-jupyter-demo.md")
 
-    assert "ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra" in runbook
+    assert "ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra" in runbook
     assert "contains no model weights" in runbook
     assert "Terra Jupyter Notebook base image" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook

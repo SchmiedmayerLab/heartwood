@@ -44,16 +44,16 @@ See [Platform Support](docs/platform-support.md) for platform-specific evidence 
 Tagged releases publish a verified native bundle for environments where a platform image is not appropriate. The [latest GitHub Release](https://github.com/SchmiedmayerLab/heartwood/releases/latest) contains the installer, checksum manifest, source bundle, generated notes, and attestations. Install a selected immutable release with:
 
 ```bash
-HEARTWOOD_VERSION=0.1.0
+HEARTWOOD_VERSION=0.1.1
 curl --fail --location --remote-name \
   "https://github.com/SchmiedmayerLab/heartwood/releases/download/${HEARTWOOD_VERSION}/heartwood-installer"
 chmod +x heartwood-installer
 ./heartwood-installer --root /persistent/project/heartwood --version "${HEARTWOOD_VERSION}"
 export PATH="/persistent/project/heartwood/bin:${PATH}"
-heartwood doctor
+heartwood
 ```
 
-Maintainers create releases through the protected [release workflow](docs/releases.md). The workflow accepts Semantic Versioning without a `v` prefix and publishes only after all required checks pass for the exact `main` commit and the designated maintainer approves the protected environment.
+The bare `heartwood` command inspects the persisted setup and detected platform, then opens the next useful step: initial setup, Carina compute guidance, recovery guidance, or the interactive conversation. `heartwood doctor` remains available as a read-only diagnostic. Maintainers create releases through the protected [release workflow](docs/releases.md), which publishes only after all required checks pass for the exact `main` commit and the designated maintainer approves the protected environment.
 
 `heartwood launch --dry-run` reports the detected platform, storage, model, and compute plan without changing state. On Carina it discovers an available GPU partition and asks before invoking Slurm; Terra and generic containers use their already-provisioned compute. See [Set Up Heartwood On Carina](docs/carina-cli.md) for the synthetic native GPU workflow and [Using Heartwood](docs/using-heartwood.md) for the shared interaction model.
 
@@ -125,14 +125,14 @@ Installation verifies metadata, allowed tools, network posture, entrypoint, path
 
 ## Container Runtime
 
-The immutable `0.1.0` generic image supports `linux/amd64` and `linux/arm64`. It contains no credentials and no model weights. The `edge` tag follows validated `main` builds and is intended for development rather than reproducible deployment.
+The immutable `0.1.1` generic image supports `linux/amd64` and `linux/arm64`. It contains no credentials and no model weights. The `edge` tag follows validated `main` builds and is intended for development rather than reproducible deployment.
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:0.1.0
+docker pull ghcr.io/schmiedmayerlab/heartwood:0.1.1
 docker run --rm -p 127.0.0.1:8767:8767 \
   -v heartwood-state:/home/heartwood/.local/share/heartwood \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:0.1.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.1.1 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
@@ -143,10 +143,10 @@ The image includes a pinned CPU `llama-server`. List and explicitly download rev
 ```bash
 docker run --rm \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:0.1.0 heartwood models artifacts
+  ghcr.io/schmiedmayerlab/heartwood:0.1.1 heartwood models artifacts
 docker run --rm \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:0.1.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.1.1 \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
@@ -164,7 +164,7 @@ See [Container Images](docs/container-images.md) and [Getting Started With Local
 
 ## Terra
 
-Release `0.1.0` publishes `ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra`, a no-weight image derived from the pinned Terra Jupyter Python base. It preserves the Terra user, home, Jupyter entrypoint, kernel environment, and Leonardo route behavior while adding the same Heartwood application and Skills as the generic image. Terra requires this separate `linux/amd64` Docker schema-2 tag because Leonardo does not accept the generic multi-platform OCI index. The `edge-terra` tag remains the moving validated-main channel.
+Release `0.1.1` publishes `ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra`, a no-weight image derived from the pinned Terra Jupyter Python base. It preserves the Terra user, home, Jupyter entrypoint, kernel environment, and Leonardo route behavior while adding the same Heartwood application and Skills as the generic image. Terra requires this separate `linux/amd64` Docker schema-2 tag because Leonardo does not accept the generic multi-platform OCI index. The `edge-terra` tag remains the moving validated-main channel.
 
 Use the [Terra Jupyter Demo](docs/terra-jupyter-demo.md) for the synthetic end-to-end workflow and the [Platform Image Extension Guide](docs/platform-images.md) for adding another platform base.
 

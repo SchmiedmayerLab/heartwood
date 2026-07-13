@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Semantic version without a prefix, for example 0.1.0
+        description: Semantic version without a prefix, for example 0.1.1
         required: true
         type: string
 

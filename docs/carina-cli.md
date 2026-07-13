@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Set Up Heartwood On Carina
 
-This guide installs Heartwood in isolated project storage, downloads the reviewed public demonstration model, requests one Carina GPU allocation, and opens the shared Heartwood conversation. Use synthetic data only. This workflow is implemented but remains pending clean published-artifact validation in [Issue #25](https://github.com/SchmiedmayerLab/heartwood/issues/25); it does not authorize protected health information or controlled-data access.
+This guide installs Heartwood `0.1.1` in isolated project storage, downloads the reviewed public demonstration model, requests one Carina GPU allocation, and opens the shared Heartwood conversation. Heartwood handles the runtime dependencies, model manifest, scheduler discovery, compute-local staging, local inference startup, setup, and cleanup. Use synthetic data only. This workflow is implemented but remains pending clean published-artifact validation in [Issue #25](https://github.com/SchmiedmayerLab/heartwood/issues/25); it does not authorize protected health information or controlled-data access.
 
 ## Choose Isolated Project Storage
 
@@ -26,11 +26,10 @@ The local demonstration requires at least 20 GiB free for the reviewed model sna
 
 ## Install A Release
 
-Select a published release that contains the corrected Carina installation and launch path, set `HEARTWOOD_VERSION` to that immutable tag, and download its standalone installer:
+Select the immutable `0.1.1` release and download its standalone installer:
 
 ```bash
-: "${HEARTWOOD_VERSION:?Set HEARTWOOD_VERSION to a published release containing the Carina fixes}"
-export HEARTWOOD_VERSION
+export HEARTWOOD_VERSION=0.1.1
 curl --fail --location --remote-name \
   "https://github.com/SchmiedmayerLab/heartwood/releases/download/${HEARTWOOD_VERSION}/heartwood-installer"
 chmod +x heartwood-installer
@@ -41,9 +40,9 @@ chmod +x heartwood-installer
 export PATH="${HEARTWOOD_ROOT}/bin:${PATH}"
 ```
 
-Release `0.1.0` predates the corrected native dependency and launch path and must not be used as clean acceptance evidence; [Issue #25](https://github.com/SchmiedmayerLab/heartwood/issues/25) tracks the first published candidate validation. Available immutable tags are listed under [Heartwood releases](https://github.com/SchmiedmayerLab/heartwood/releases).
+Release `0.1.1` is the first release with the corrected Carina installation and launch path. Available immutable tags are listed under [Heartwood releases](https://github.com/SchmiedmayerLab/heartwood/releases), and [Issue #25](https://github.com/SchmiedmayerLab/heartwood/issues/25) tracks its clean live-platform validation.
 
-The installer verifies the release bundle, loads the supported Carina Micromamba module when needed, creates the private state, model, cache, runtime, and log directories, installs a version-pinned FFmpeg bootstrap plus the locked Heartwood and hash-locked vLLM environments, and imports the real TorchCodec and vLLM modules. It does not download a model or store credentials.
+The installer reports each stage and elapsed completion time, verifies the release bundle, loads the supported Carina Micromamba module when needed, creates the private state, model, cache, runtime, and log directories, installs a version-pinned FFmpeg bootstrap plus the locked Heartwood and hash-locked vLLM environments, and imports the real TorchCodec and vLLM modules. Dependency solving and runtime installation can take several minutes. The installer does not download a model or store credentials.
 
 Run the read-only readiness check:
 
@@ -63,7 +62,7 @@ heartwood models download qwen25-7b-instruct-vllm
 export HEARTWOOD_MODEL_ROOT="${HEARTWOOD_ROOT}/models/qwen25-7b-instruct-vllm"
 ```
 
-Heartwood uses Hugging Face's snapshot downloader at the pinned repository revision, reports its native transfer progress, removes transient cache metadata, writes source provenance and an exact `SHA256SUMS` manifest, and verifies every file before publishing the directory. A public download does not require a Hugging Face token; a token may provide higher rate limits but must remain a runtime-only secret.
+Heartwood creates the destination, uses Hugging Face's snapshot downloader at the pinned repository revision, reports its native transfer progress, removes transient cache metadata, writes source provenance and an exact `SHA256SUMS` manifest, and verifies every file before publishing the directory. A public download does not require a Hugging Face token; a token may provide higher rate limits but must remain a runtime-only secret.
 
 An administrator may instead place an approved snapshot at the same location through an authorized transfer path. It must contain an exact `SHA256SUMS` manifest before launch.
 
@@ -83,7 +82,7 @@ Start the session:
 heartwood launch --model-root "${HEARTWOOD_MODEL_ROOT}"
 ```
 
-Review the displayed partition, GPU, CPU, memory, and time request. Heartwood asks before invoking `srun`. After allocation, it verifies and stages the model in job-local scratch, validates the packaged inference runtime, starts vLLM on loopback, reports startup progress and elapsed time, configures the local model route, displays the managed agent workspace, and opens the terminal client. vLLM and owned scratch staging stop when the session exits.
+Review the displayed partition, GPU, CPU, memory, and time request. Heartwood asks before invoking `srun`. After allocation, a six-stage progress display verifies and stages the model in job-local scratch, validates the packaged inference runtime, starts vLLM on loopback, reports elapsed startup time and periodic waiting updates, configures the local model route, displays the managed agent workspace, and opens the terminal client. A startup failure reports the runtime log and last relevant error. vLLM and owned scratch staging stop when the session exits.
 
 Use `--partition`, `--gpus`, `--cpus`, `--memory`, and `--time` only when the reviewed task needs a non-default request. Use `--no-allocate` to prohibit scheduler submission and `--yes-request-allocation` only in reviewed automation.
 
