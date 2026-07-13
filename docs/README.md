@@ -50,7 +50,7 @@ Design documents explain why the system is shaped this way. Runnable commands an
 
 ## Published Documentation
 
-The public [Heartwood documentation site](https://schmiedmayerlab.github.io/heartwood/) is built from the canonical `README.md`, `docs/`, `design/01` through `design/08`, and `ACRONYMS.md`; there is no second editable documentation copy. Pull requests and `main` build that source strictly, while the public site changes only when the protected release workflow publishes an existing Semantic Version tag. A manual recovery deployment accepts only an already-published release, so continued documentation work on `main` cannot alter the public release snapshot.
+The public [Heartwood documentation site](https://schmiedmayerlab.github.io/heartwood/) is built from the canonical `README.md`, `docs/`, `design/01` through `design/08`, and `ACRONYMS.md`; there is no second editable documentation copy. Pull requests and `main` build that source strictly, while the public site changes only when the protected release workflow publishes an existing Semantic Version tag. A manual recovery deployment accepts only the current latest published release, so continued documentation work on `main` cannot alter or roll back the public release snapshot.
 
 Preview the current source locally:
 

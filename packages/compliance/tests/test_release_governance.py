@@ -117,6 +117,8 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "  release:" not in documentation
     assert "refs/tags/{0}" in documentation
     assert "gh release view" in documentation
+    assert "--json tagName" in documentation
+    assert "Documentation can be published only for the latest release." in documentation
     assert "--version-only" in documentation
     assert "zensical build --clean --strict" in documentation
     assert "actions/upload-pages-artifact@v5" in documentation
@@ -132,6 +134,7 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "name: github-pages" in publication
     assert "group: github-pages" in publication
     assert "needs: publish" in release
+    assert "--draft=false --latest" in release
     assert "uses: ./.github/workflows/publish-documentation.yml" in release
 
 

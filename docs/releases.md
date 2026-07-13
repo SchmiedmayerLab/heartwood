@@ -43,10 +43,10 @@ Release-required workflows are declared as jobs in `.github/workflows/main-valid
 
 The release workflow is intentionally serialized. If publication is interrupted after a versioned image tag is created, a rerun accepts that tag only when it resolves to the same verified digest. If an interruption leaves a draft release for the exact candidate commit, the approved publication job replaces that draft with freshly verified assets before publishing. A published release, a draft for another commit, or a version tag that points elsewhere is never overwritten.
 
-If only the Pages deployment fails after a release is public, rerun it from `main` without changing the release:
+If only the Pages deployment fails after the latest release is public, rerun it from `main` without changing the release:
 
 ```bash
 gh workflow run publish-documentation.yml --ref main -f version=0.1.1
 ```
 
-The recovery workflow verifies the canonical version, Git tag, release state, and target commit before it can update the site.
+The recovery workflow verifies the canonical version, Git tag, release state, target commit, and latest-release designation before it can update the site. It rejects older releases so recovery cannot roll the public documentation back.

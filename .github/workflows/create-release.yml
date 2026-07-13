@@ -239,7 +239,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-        run: gh release edit "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false
+        run: gh release edit "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
 
   documentation:
     name: Publish Release Documentation
