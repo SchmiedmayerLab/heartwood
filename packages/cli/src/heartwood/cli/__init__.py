@@ -363,6 +363,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(_format_readiness(readiness))
             print("\nResolve the failed checks, then run `heartwood doctor` again.")
             return 1
+        if readiness.state == "compute-required":
+            print(_format_readiness(readiness))
+            print(
+                "\nLocal inference is configured. Start it with "
+                "`heartwood launch --model-root <verified-model-directory>`."
+            )
+            return 0
 
     gateway = SessionGateway(workspace=args.workspace)
     gateway.start()
@@ -454,6 +461,16 @@ def _handle_setup(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             print("\nSetup cancelled because input closed.")
             return 1
         source = "stanford-ai-api-gateway" if choice == "2" else "local"
+    if (
+        readiness.platform_id == "carina"
+        and source == "local"
+        and not os.environ.get("SLURM_JOB_ID")
+    ):
+        print(
+            "Local model setup runs automatically after Carina compute starts. "
+            "Use `heartwood launch --model-root <verified-model-directory>`."
+        )
+        return 1
     if non_interactive and model_id is None:
         parser.error("--model-id is required with --non-interactive")
     print("\nConfiguration")

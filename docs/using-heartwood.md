@@ -14,7 +14,7 @@ Heartwood provides one persisted coding-agent session through the terminal, web 
 
 ## Start Or Resume
 
-Run `heartwood` in an interactive terminal. A new installation opens setup when configuration is missing, reports recovery guidance when readiness checks fail, and otherwise resumes the selected conversation. Use `heartwood doctor` for a read-only readiness report and `heartwood --help` for automation and administration commands.
+Run `heartwood` in an interactive terminal. A new installation opens setup when configuration is missing, directs a configured Carina local-model session through `heartwood launch` when compute is not yet allocated, reports recovery guidance when readiness checks fail, and otherwise resumes the selected conversation. Use `heartwood doctor` for a read-only readiness report and `heartwood --help` for automation and administration commands.
 
 The terminal client opens full screen when the terminal supports it. The conversation is replayed from persistent state, the prompt composer remains available while the session is idle, and an elapsed-time status remains visible while the local model or agent is working. Use `Ctrl+Q` to exit and `Ctrl+L` to return focus to the prompt.
 

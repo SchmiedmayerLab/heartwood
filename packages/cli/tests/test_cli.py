@@ -243,8 +243,48 @@ def test_carina_setup_refuses_login_node_without_mutating_state(
     )
 
     assert code == 1
-    assert "active Slurm compute allocation" in capsys.readouterr().out
+    assert "runs automatically after Carina compute starts" in capsys.readouterr().out
     assert not (tmp_path / "state").exists()
+
+
+def test_carina_doctor_and_bare_command_report_compute_required(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "carina")
+    workspace = tmp_path / "state" / "sessions"
+    persist_deployment_profile(
+        workspace,
+        model_source="local",
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+    ModelSettingsStore(workspace.parent / "models.json").save(
+        ModelSettings(
+            active_profile="local",
+            profiles=(
+                ModelProfile(
+                    profile_id="local",
+                    model="openai/heartwood-local-model",
+                    policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+                    base_url="http://127.0.0.1:8765/v1",
+                    credential_kind="none",
+                ),
+            ),
+        )
+    )
+    ActionSettingsStore(workspace.parent / "actions.json").save(ActionSettings())
+
+    assert main(["--workspace", str(workspace), "doctor"]) == 0
+    doctor_output = capsys.readouterr().out
+    assert "State: compute-required" in doctor_output
+    assert "will be checked after allocation" in doctor_output
+
+    monkeypatch.setattr("heartwood.cli.sys.stdin.isatty", lambda: True)
+    assert main(["--workspace", str(workspace)]) == 0
+    output = capsys.readouterr().out
+    assert "State: compute-required" in output
+    assert "heartwood launch --model-root" in output
 
 
 def test_interactive_setup_can_be_cancelled_without_writing_state(

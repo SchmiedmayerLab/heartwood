@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, assert_never
+from typing import Literal, assert_never, cast
 
 from pydantic import ValidationError
 
@@ -29,7 +29,7 @@ from heartwood.gateway._model_settings import (
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
 
-ReadinessState = Literal["ready", "setup-required", "recovery-required"]
+ReadinessState = Literal["ready", "setup-required", "compute-required", "recovery-required"]
 ModelSource = Literal["local", "stanford-ai-api-gateway"]
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
@@ -163,43 +163,102 @@ def inspect_deployment(
                 ),
             )
         )
+    local_compute_required = False
     if adapter.adapter_id == "carina":
-        allocation = bool(active_env.get("SLURM_JOB_ID"))
-        checks.append(
-            ReadinessCheck(
-                "slurm-allocation",
-                "pass" if allocation else "fail",
-                (
-                    "Active Slurm allocation detected"
-                    if allocation
-                    else "Carina setup requires an active Slurm compute allocation"
-                ),
-            )
+        model_source = cast(ModelSource, setup["model_source"]) if setup is not None else None
+        carina_checks, local_compute_required = _carina_compute_checks(
+            model_source=model_source,
+            env=active_env,
         )
-        scratch = active_env.get("LOCAL_SCRATCH_JOB")
-        scratch_ready = bool(scratch and Path(scratch).is_dir())
-        checks.append(
-            ReadinessCheck(
-                "job-scratch",
-                "pass" if scratch_ready else "warning",
-                f"Job-local scratch detected at {scratch}" if scratch_ready else "No job scratch",
-            )
-        )
-        gpu = _gpu_visible(active_env)
-        checks.append(
-            ReadinessCheck(
-                "gpu",
-                "pass" if gpu else "warning",
-                "NVIDIA GPU is visible" if gpu else "No NVIDIA GPU evidence detected",
-            )
-        )
+        checks.extend(carina_checks)
     if any(check.status == "fail" for check in checks):
         state: ReadinessState = "recovery-required"
     elif setup is None or active_model is None:
         state = "setup-required"
+    elif local_compute_required:
+        state = "compute-required"
     else:
         state = "ready"
     return DeploymentReadiness(state, adapter.adapter_id, detection.evidence, tuple(checks))
+
+
+def _carina_compute_checks(
+    *,
+    model_source: ModelSource | None,
+    env: Mapping[str, str],
+) -> tuple[tuple[ReadinessCheck, ...], bool]:
+    allocation = bool(env.get("SLURM_JOB_ID"))
+    if model_source == "stanford-ai-api-gateway":
+        return (
+            (
+                ReadinessCheck(
+                    "slurm-allocation",
+                    "pass",
+                    "Selected managed model route does not require a Slurm allocation",
+                ),
+            ),
+            False,
+        )
+
+    local_model = model_source == "local"
+    if not allocation:
+        allocation_summary = (
+            "Local model is configured; request a Carina Slurm allocation to start it"
+            if local_model
+            else "No active Slurm allocation; one is required only for local inference"
+        )
+        return (
+            (
+                ReadinessCheck("slurm-allocation", "warning", allocation_summary),
+                ReadinessCheck(
+                    "job-scratch",
+                    "warning",
+                    "Job-local scratch will be checked after allocation",
+                ),
+                ReadinessCheck(
+                    "gpu",
+                    "warning",
+                    "NVIDIA GPU visibility will be checked after allocation",
+                ),
+            ),
+            local_model,
+        )
+
+    requirement_status: Literal["warning", "fail"] = "fail" if local_model else "warning"
+    scratch = env.get("LOCAL_SCRATCH_JOB")
+    scratch_path = Path(scratch) if scratch else None
+    scratch_ready = bool(
+        scratch_path and scratch_path.is_dir() and os.access(scratch_path, os.W_OK)
+    )
+    gpu = _gpu_visible(env)
+    return (
+        (
+            ReadinessCheck("slurm-allocation", "pass", "Active Slurm allocation detected"),
+            ReadinessCheck(
+                "job-scratch",
+                "pass" if scratch_ready else requirement_status,
+                (
+                    f"Writable job-local scratch detected at {scratch_path}"
+                    if scratch_ready
+                    else "Active local-model allocation does not expose writable job scratch"
+                    if local_model
+                    else "No writable job-local scratch detected"
+                ),
+            ),
+            ReadinessCheck(
+                "gpu",
+                "pass" if gpu else requirement_status,
+                (
+                    "NVIDIA GPU is visible"
+                    if gpu
+                    else "Active local-model allocation does not expose an NVIDIA GPU"
+                    if local_model
+                    else "No NVIDIA GPU evidence detected"
+                ),
+            ),
+        ),
+        False,
+    )
 
 
 def persist_deployment_profile(

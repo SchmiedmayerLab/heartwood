@@ -414,6 +414,7 @@ def test_launch_runtime_helpers_scrub_credentials_and_resolve_native_vllm(tmp_pa
         "CUDA_VISIBLE_DEVICES": "0",
         "HEARTWOOD_NATIVE_ROOT": str(tmp_path),
         "HEARTWOOD_NATIVE_VERSION": "v1",
+        "HEARTWOOD_MODEL_CACHE": str(tmp_path / "models"),
     }
     runtime_env = _runtime_environment(env)
     assert "OPENAI_API_KEY" not in runtime_env
@@ -424,6 +425,7 @@ def test_launch_runtime_helpers_scrub_credentials_and_resolve_native_vllm(tmp_pa
     assert runtime_env["CUDA_VISIBLE_DEVICES"] == "0"
     assert runtime_env["HEARTWOOD_AGENT_BACKEND"] == "openhands-sdk"
     assert runtime_env["HEARTWOOD_NATIVE_ROOT"] == str(tmp_path)
+    assert runtime_env["HEARTWOOD_MODEL_CACHE"] == str(tmp_path / "models")
     assert runtime_env["PATH"].startswith(str(tmp_path / "runtimes" / "v1" / "bootstrap" / "bin"))
     assert runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert _resolve_vllm(_options(tmp_path, vllm_executable=None, environment_root=None), env) == (

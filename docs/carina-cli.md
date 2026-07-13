@@ -51,7 +51,7 @@ Run the read-only readiness check:
 heartwood doctor
 ```
 
-The login node is expected to report that a Slurm allocation is required. A missing GPU or job scratch before allocation is informational, not a failed installation.
+Before local-model setup, the login node reports `State: setup-required`. After a successful local-model launch has configured the persistent route, it reports `State: compute-required`. Both states are healthy on a login node: GPU visibility and job-local scratch are checked only after Heartwood enters an allocation. `State: recovery-required` identifies an actual configuration or in-allocation failure.
 
 ## Download The Reviewed Local Model
 

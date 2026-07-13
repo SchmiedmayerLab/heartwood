@@ -380,6 +380,7 @@ def _runtime_environment(env: Mapping[str, str]) -> dict[str, str]:
         "HEARTWOOD_NATIVE_ROOT",
         "HEARTWOOD_NATIVE_VERSION",
         "HEARTWOOD_HOME",
+        "HEARTWOOD_MODEL_CACHE",
         "LOCAL_SCRATCH_JOB",
         "SLURM_JOB_ID",
         "SLURM_JOB_PARTITION",
