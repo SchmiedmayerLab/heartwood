@@ -297,6 +297,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     installer = _read("deploy/install.sh")
     packager = _read("deploy/package-native.sh")
     workflow = _read(".github/workflows/native-release.yml")
+    main_workflow = _read(".github/workflows/main-validation.yml")
     release_workflow = _read(".github/workflows/create-release.yml")
     smoke = _read("deploy/tests/native_installer_smoke.sh")
 
@@ -307,7 +308,9 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
     assert "git archive --format=tar HEAD" in packager
-    assert "branches: [main]" in workflow
+    assert "workflow_call:" in workflow
+    assert "uses: ./.github/workflows/native-release.yml" in main_workflow
+    assert "name: Release Candidate Ready" in main_workflow
     assert "actions/attest@v4" in release_workflow
     assert "gh release create" in release_workflow
     assert "--draft" in release_workflow
@@ -318,7 +321,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "release draft assets differ from the verified candidate" in release_workflow
     assert "--source-root ." in release_workflow
     assert "docker/login-action@v4" in release_workflow
-    assert "unable to fetch check runs" in release_workflow
+    assert "--required-check 'Release Candidate Ready'" in release_workflow
     assert "environment: release" in release_workflow
     assert "verify_release_candidate.py" in release_workflow
     assert "promote-release-images.sh verify" in release_workflow
