@@ -8,9 +8,21 @@
 set -euo pipefail
 
 find_model_artifact() {
-  find "$@" -type f \
-    \( -name '*.gguf' -o -name '*.safetensors' -o \( -name '*.bin' -size +10M \) \) \
-    -print -quit
+  local allowed_runtime_asset
+  local candidate
+  allowed_runtime_asset="${HEARTWOOD_VLLM_ROOT:-/opt/heartwood-vllm}/lib/python3.12/site-packages/compressed_tensors/transform/utils/hadamards.safetensors"
+
+  while IFS= read -r -d '' candidate; do
+    if [[ "${candidate}" == "${allowed_runtime_asset}" ]]; then
+      continue
+    fi
+    printf '%s\n' "${candidate}"
+    return 0
+  done < <(
+    find "$@" -type f \
+      \( -name '*.gguf' -o -name '*.safetensors' -o \( -name '*.bin' -size +10M \) \) \
+      -print0
+  )
 }
 
 verify_no_model_artifacts() {
