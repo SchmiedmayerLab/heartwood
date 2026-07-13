@@ -299,6 +299,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     workflow = _read(".github/workflows/native-release.yml")
     main_workflow = _read(".github/workflows/main-validation.yml")
     release_workflow = _read(".github/workflows/create-release.yml")
+    release_images = _read("deploy/promote-release-images.sh")
     smoke = _read("deploy/tests/native_installer_smoke.sh")
 
     assert "sha256sum --check --strict" in installer
@@ -326,6 +327,8 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "verify_release_candidate.py" in release_workflow
     assert "promote-release-images.sh verify" in release_workflow
     assert "promote-release-images.sh promote" in release_workflow
+    assert "observed media type:" in release_images
+    assert "Linux platforms:" in release_images
     assert "Build And Verify Native Assets" in workflow
     assert "native_installer_smoke.sh" in workflow
     assert "installer accepted a corrupted checksum" in smoke
@@ -344,7 +347,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "Promote GPU Channel Tags" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
+    assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
     assert "--prefer-index=false" in workflow
+    assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
+    assert "observed media type:" in workflow
+    assert "Linux platforms:" in workflow
     assert "/opt/heartwood-vllm/bin/python" in workflow
     assert "find" in workflow
     assert "-size +10M" in workflow
