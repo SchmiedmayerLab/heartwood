@@ -1,0 +1,62 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Publish Documentation
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Published Semantic Version to deploy
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published Semantic Version to deploy, for example 0.1.1
+        required: true
+        type: string
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Release Documentation
+    permissions:
+      contents: read
+    uses: ./.github/workflows/documentation.yml
+    with:
+      publish_artifact: true
+      version: ${{ inputs.version }}
+
+  deploy:
+    name: Deploy Documentation
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Read GitHub Pages configuration
+        uses: actions/configure-pages@v6
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+      - name: Verify the deployed documentation
+        env:
+          DOCUMENTATION_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --max-time 30 "${DOCUMENTATION_URL}" >/dev/null

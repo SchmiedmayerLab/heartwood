@@ -248,7 +248,6 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: ./.github/workflows/documentation.yml
+    uses: ./.github/workflows/publish-documentation.yml
     with:
-      publish: true
       version: ${{ inputs.version }}

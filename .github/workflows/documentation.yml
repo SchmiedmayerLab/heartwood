@@ -9,8 +9,8 @@ name: Documentation
 on:
   workflow_call:
     inputs:
-      publish:
-        description: Deploy the documentation from an existing published release
+      publish_artifact:
+        description: Build and upload an existing published release for GitHub Pages
         required: false
         default: false
         type: boolean
@@ -20,17 +20,6 @@ on:
         default: ""
         type: string
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Deploy an existing published release to GitHub Pages
-        required: true
-        default: false
-        type: boolean
-      version:
-        description: Published Semantic Version to deploy, for example 0.1.1
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -41,18 +30,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Require a version for publication
-        if: inputs.publish && inputs.version == ''
+        if: inputs.publish_artifact && inputs.version == ''
         run: |
           echo "A published Semantic Version is required for deployment." >&2
           exit 1
       - name: Checkout documentation source
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.publish && format('refs/tags/{0}', inputs.version) || github.sha }}
+          ref: ${{ inputs.publish_artifact && format('refs/tags/{0}', inputs.version) || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify published release source
-        if: inputs.publish
+        if: inputs.publish_artifact
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -80,35 +69,7 @@ jobs:
       - name: Verify the static site
         run: test -s site/index.html
       - name: Upload GitHub Pages artifact
-        if: inputs.publish
+        if: inputs.publish_artifact
         uses: actions/upload-pages-artifact@v5
         with:
           path: site
-
-  deploy:
-    name: Deploy Documentation
-    if: inputs.publish
-    needs: build
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: github-pages
-      cancel-in-progress: false
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Read GitHub Pages configuration
-        uses: actions/configure-pages@v6
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
-      - name: Verify the deployed documentation
-        env:
-          DOCUMENTATION_URL: ${{ steps.deployment.outputs.page_url }}
-        run: |
-          curl --fail --silent --show-error \
-            --retry 5 --retry-delay 2 --retry-all-errors \
-            --max-time 30 "${DOCUMENTATION_URL}" >/dev/null

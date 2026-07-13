@@ -107,6 +107,9 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
 
 def test_documentation_is_validated_continuously_and_published_from_releases() -> None:
     documentation = Path(".github/workflows/documentation.yml").read_text(encoding="utf-8")
+    publication = Path(".github/workflows/publish-documentation.yml").read_text(
+        encoding="utf-8"
+    )
     release = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
 
     assert "  workflow_call:" in documentation
@@ -119,14 +122,19 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "--version-only" in documentation
     assert "zensical build --clean --strict" in documentation
     assert "actions/upload-pages-artifact@v5" in documentation
-    assert "actions/deploy-pages@v5" in documentation
-    assert "Verify the deployed documentation" in documentation
-    assert '"${DOCUMENTATION_URL}"' in documentation
-    assert "name: github-pages" in documentation
-    assert "group: github-pages" in documentation
+    assert "pages: write" not in documentation
+    assert "id-token: write" not in documentation
+    assert "  workflow_call:" in publication
+    assert "  workflow_dispatch:" in publication
+    assert "uses: ./.github/workflows/documentation.yml" in publication
+    assert "publish_artifact: true" in publication
+    assert "actions/deploy-pages@v5" in publication
+    assert "Verify the deployed documentation" in publication
+    assert '"${DOCUMENTATION_URL}"' in publication
+    assert "name: github-pages" in publication
+    assert "group: github-pages" in publication
     assert "needs: publish" in release
-    assert "uses: ./.github/workflows/documentation.yml" in release
-    assert "publish: true" in release
+    assert "uses: ./.github/workflows/publish-documentation.yml" in release
 
 
 def test_release_checks_require_latest_successful_run() -> None:

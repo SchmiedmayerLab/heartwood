@@ -46,7 +46,7 @@ The release workflow is intentionally serialized. If publication is interrupted 
 If only the Pages deployment fails after a release is public, rerun it from `main` without changing the release:
 
 ```bash
-gh workflow run documentation.yml --ref main -f publish=true -f version=0.1.1
+gh workflow run publish-documentation.yml --ref main -f version=0.1.1
 ```
 
 The recovery workflow verifies the canonical version, Git tag, release state, and target commit before it can update the site.
