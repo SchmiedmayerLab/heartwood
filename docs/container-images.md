@@ -128,7 +128,7 @@ Pull requests run:
 - fresh named-volume creation and cross-container recovery for state and model storage;
 - OpenHands native loading of every repository-verified Skill;
 - model connection, catalog, profile, and artifact integrity tests;
-- dedicated generic and Terra GPU validation stages that reuse the hash-locked vLLM dependency layer, import TorchCodec and vLLM, and reject embedded model artifacts through a cache-only BuildKit output; the verifier permits only the exact Hadamard transform tensor installed by the hash-locked `compressed-tensors` dependency;
+- dedicated generic and Terra GPU validation stages that reuse the hash-locked vLLM dependency layer, keep uv archives in non-persistent BuildKit cache mounts, import TorchCodec and vLLM, and reject embedded model artifacts through a cache-only BuildKit output; the verifier permits only the exact Hadamard transform tensor installed by the hash-locked `compressed-tensors` dependency;
 - a no-weight Terra CI image built through the production platform Dockerfile;
 - Terra Jupyter contract, platform payload, inherited entrypoint, Leonardo route, and OpenHands loopback smokes.
 

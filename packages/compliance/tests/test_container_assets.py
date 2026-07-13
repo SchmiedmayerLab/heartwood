@@ -210,6 +210,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
         "COPY packages ./packages"
     )
+    assert platform.count("UV_CACHE_DIR=/root/.cache/uv") == 2
     assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock

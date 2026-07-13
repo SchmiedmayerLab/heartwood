@@ -109,6 +109,7 @@ WORKDIR /opt/heartwood
 COPY images/gpu/vllm-requirements.txt ./images/gpu/vllm-requirements.txt
 
 RUN --mount=type=cache,target=/root/.cache/uv \
+    export UV_CACHE_DIR=/root/.cache/uv; \
     if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
       uv venv /opt/heartwood-vllm --python 3.12 \
       && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt \
@@ -129,7 +130,7 @@ COPY design ./design
 COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --all-extras --python 3.12
+    UV_CACHE_DIR=/root/.cache/uv uv sync --locked --no-dev --all-extras --python 3.12
 
 RUN ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood \
     && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python
