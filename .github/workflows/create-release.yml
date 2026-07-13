@@ -63,43 +63,19 @@ jobs:
             echo "tag already exists: ${RELEASE_VERSION}" >&2
             exit 1
           fi
-      - name: Wait for required checks on the exact commit
+      - name: Verify release readiness on the exact commit
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          for attempt in $(seq 1 180); do
-            if ! gh api --paginate --slurp \
-              "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-              > /tmp/check-runs.json; then
-              echo "unable to fetch check runs (attempt ${attempt}/180)" >&2
-              sleep 30
-              continue
-            fi
-            if ! gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/status" \
-              > /tmp/statuses.json; then
-              echo "unable to fetch commit statuses (attempt ${attempt}/180)" >&2
-              sleep 30
-              continue
-            fi
-            if python3 deploy/verify_release_candidate.py \
-              --version "${RELEASE_VERSION}" \
-              --source-root . \
-              --checks /tmp/check-runs.json \
-              --statuses /tmp/statuses.json \
-              --required-checks .github/release-required-checks.txt; then
-              exit 0
-            else
-              status=$?
-            fi
-            if [[ "${status}" -ne 2 ]]; then
-              exit "${status}"
-            fi
-            echo "required checks are still running (attempt ${attempt}/180)"
-            sleep 30
-          done
-          echo "timed out waiting for required checks" >&2
-          exit 1
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            > /tmp/check-runs.json
+          python3 deploy/verify_release_candidate.py \
+            --version "${RELEASE_VERSION}" \
+            --source-root . \
+            --checks /tmp/check-runs.json \
+            --required-check 'Release Candidate Ready'
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry
@@ -181,7 +157,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft 2>/dev/null || true)" == "true" ]]; then
+          draft="$(gh release view "${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ "${draft}" == "true" ]]; then
             gh release delete "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --yes
           fi
           gh release create "${RELEASE_VERSION}" dist/* \

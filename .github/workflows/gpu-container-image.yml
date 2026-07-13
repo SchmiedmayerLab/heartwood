@@ -7,21 +7,11 @@
 name: GPU Container Image
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/gpu-container-image.yml"
-      - "docker-bake.hcl"
-      - "images/generic/Dockerfile"
-      - "images/platform/Dockerfile"
-      - "images/gpu/**"
-      - "images/generic/image-flavors.toml"
-      - "images/platforms.toml"
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
-  group: gpu-container-image-${{ github.ref }}
+  group: gpu-container-image-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
