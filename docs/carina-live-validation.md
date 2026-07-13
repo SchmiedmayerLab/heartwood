@@ -14,7 +14,7 @@ This record captures the synthetic-only validation of the published Heartwood `0
 
 ## Validation Status
 
-The release is **partially live-exercised** and is not live-validated on Carina. Installation, artifact verification, model transfer, model verification, GPU allocation, local model startup after manual runtime workarounds, platform-policy correction, and a genuine OpenHands tool proposal succeeded. The end-to-end action workflow did not complete because the CLI exposed the wrong confirmation identifier and then rejected a valid multi-action OpenHands confirmation step before execution.
+The release is **partially live-exercised** and is not live-validated on Carina. Installation, artifact verification, model transfer, model verification, GPU allocation, local model startup after manual runtime workarounds, platform-policy correction, a genuine OpenHands tool proposal, one approved file action, one rejected file action, scrubbed audit export, and fresh-process replay succeeded. A normal create-and-view turn did not complete because the CLI exposed the wrong confirmation identifier and then rejected a valid multi-action OpenHands confirmation step before execution.
 
 ## Validated Evidence
 
@@ -28,7 +28,12 @@ The release is **partially live-exercised** and is not live-validated on Carina.
 - Disabling the FlashInfer sampler through a temporary wrapper allowed vLLM to initialize and expose the loopback OpenAI-compatible endpoint.
 - After correcting persisted setup metadata, setup, policy, model source, connection, and action-confirmation mode agreed on the Carina profile.
 - A real local-model turn reached OpenHands and proposed two file-editor actions confined to the Heartwood-managed synthetic session workspace.
-- Neither proposed file action executed after the failed approval attempts.
+- Neither action in the initial multi-action proposal executed after the failed approval attempts.
+- A separately constrained single-action turn created one synthetic file through OpenHands and `file_editor` with exit code `0`, then returned a final model response without proposing another action.
+- A separately constrained single-action turn was rejected, recorded one denial, made no continuation model call, and created no file.
+- Filesystem verification confirmed the approved file's exact bytes and the absence of both rejected files.
+- Audit export contained the required model-route, confirmation-resolution, tool-execution, and export event types while excluding prompts, generated markers, and absolute installation paths.
+- A fresh Heartwood process replayed the approved execution and rejected action from persistent state without restarting the model runtime.
 
 ## Findings
 
@@ -105,6 +110,83 @@ The pilot installed FFmpeg `8.1.2` in a separate Micromamba prefix, added its `b
 
 ## Required Implementation Passes
 
+## Target Researcher Workflow
+
+The next Carina pilot should require only the following researcher decisions:
+
+1. Run the signed standalone installer for a selected Heartwood release in an authorized synthetic project directory.
+2. Run `heartwood setup`; confirm the detected Carina environment, persistent root, model route, and action-confirmation mode.
+3. For local inference, select a reviewed model and approve its pinned download, or point to an already verified snapshot. For the Stanford AI API Gateway, select an available model and provide the runtime credential reference.
+4. Run `heartwood launch`; review and approve the proposed Slurm resources.
+5. Enter the conversation, review actions through the interactive terminal, and exit normally.
+
+The normal path must not require loading Micromamba manually, creating Heartwood subdirectories, constructing checksum manifests by hand, installing FFmpeg separately, exporting runtime library paths, writing executable wrappers, inspecting Slurm partitions manually, correcting setup through Python, tailing logs, or copying internal confirmation identifiers.
+
+## Installation And Setup Automation
+
+### Standalone Installer
+
+The installer runs before the `heartwood` command exists and therefore owns release bootstrap only. It must:
+
+- Detect Carina conservatively and report the evidence used without enumerating unrelated storage or environment values.
+- Locate Carina's supported Micromamba module and use it inside the installer process when Micromamba is not already available; report one actionable command only when automatic activation is impossible.
+- Verify the installer, native bundle, lock files, and release identity before mutation.
+- Create versioned source and runtime roots plus stable `bin`, `state`, `models`, `cache`, and `logs` roots with restrictive permissions.
+- Check writable capacity before installation and report separate minimums for the application runtime and any later model selection.
+- Install the complete locked Heartwood and GPU runtime dependency set, including FFmpeg and the selected sampler configuration, without relying on user shell state.
+- Import Heartwood, vLLM, TorchCodec, and their resolved native libraries as an installation check. Accelerator startup remains an allocation-side check.
+- Publish one stable `heartwood` executable and print the exact next command, normally `heartwood setup`.
+- Remain idempotent: rerunning the same version verifies or repairs only owned artifacts, while upgrades install a new versioned runtime and preserve state and models.
+
+The installer must continue to exclude model weights and credentials. Model acquisition belongs to explicit Heartwood setup or model commands after installation.
+
+### Shared `heartwood setup`
+
+Setup owns user and deployment configuration and must:
+
+- Detect Carina, expected login-node state, persistent storage, available scheduler metadata, and whether an allocation is already active.
+- Validate or create the Heartwood-owned state, model, cache, runtime-log, and session-workspace directories.
+- Offer the two supported route classes in plain language: a local GPU model or the Stanford AI API Gateway. Provider-specific fields remain under advanced settings.
+- Discover reviewed local artifacts from the Heartwood catalog and already verified snapshots from the configured model root. Download only after showing model identity, revision, expected size, destination, available capacity, and an explicit confirmation.
+- Discover Stanford gateway models from the authorized API instead of maintaining model identifiers in Heartwood.
+- Discover or deployment-configure valid Slurm partitions and resource defaults, show their source, validate them, and persist non-secret selections for `launch`.
+- Persist typed Carina setup context directly; subprocess credential scrubbing must not erase platform, scheduler, storage, or policy identity needed by setup and doctor.
+- Be resumable after interruption and distinguish incomplete setup from a damaged installation.
+
+### `heartwood launch`
+
+Launch owns one execution lifecycle and must:
+
+- Run the relevant read-only preflight automatically and explain expected login-node limitations.
+- Show the selected model, managed agent workspace, persistent state root, scheduler request, runtime endpoint, and expected startup stages before requesting compute.
+- Validate the partition and resource request before asking for consent, then report scheduler queue state until the allocation starts.
+- Verify the source model, stage it only when the platform requires scratch, verify the staged copy, start the packaged runtime, wait for model readiness, open the shared conversation, and clean up only owned processes and scratch files.
+- Preserve safe platform and allocation context while separating provider credentials from agent tool subprocesses.
+- Resume existing setup and sessions without repeating completed downloads or configuration.
+
+Bare `heartwood` may route to setup, recovery, or the conversation from typed readiness state, but every mutation, download, and scheduler request remains an explicit confirmed operation.
+
+## Progress And Time Feedback Contract
+
+Long operations require a shared typed progress projection so the CLI, web UI, notebook bridge, logs, and future remote gateway display the same state. Each update must include an operation identifier, stage, state, elapsed time, optional completed and total units, estimate quality, concise detail, and a stable log reference. Progress records must not contain credentials, prompt content, model responses, participant values, or unrestricted paths.
+
+The following stages require visible progress:
+
+| Operation | Required feedback |
+|---|---|
+| Release installation | Resolve, download, verify, create environments, install application, install GPU runtime, import-check, publish command, complete |
+| Model acquisition | Resolve manifest, confirm size and destination, download bytes, verify files, write manifest, complete |
+| Scheduler request | Validate resources, awaiting consent, submitted, queued with elapsed time, allocated, cancelled or failed |
+| Model preparation | Verify source files, copy to scratch with bytes and files completed, verify staged files |
+| Runtime startup | Import-check, process started, model metadata loaded, weights loaded, cache initialized, warm-up, endpoint ready |
+| Agent turn | Submitted, awaiting model, model responding, action review required, executing approved action, complete, interrupted or failed |
+
+Known-byte operations use a moving transfer rate and an estimated completion range. Scheduler queues must not invent an estimate; they show elapsed queue time and the current scheduler reason. Runtime startup initially reports an evidence-based range such as “typically several minutes on this model and GPU” only after Heartwood has recorded comparable synthetic runs; otherwise it shows elapsed time and the active stage. Every indeterminate operation emits a heartbeat at a bounded interval so a quiet terminal never appears frozen.
+
+The Textual client should use a subtle animated Heartwood plant mark as the indeterminate activity indicator, accompanied by the stage and elapsed time. The animation is operational rather than decorative: it stops when input or approval is required, degrades to a standard spinner when space is limited, becomes a static mark when reduced motion or `NO_COLOR` is selected, and is omitted in non-interactive output. Line mode prints periodic single-line stage updates; automation receives structured progress without terminal escape sequences.
+
+The live conversation view must separate presentation from audit fidelity. It should show the submitted prompt once, concise model output, current work, action review, and outcomes. Sequence numbers, internal identifiers, routine allowed-route records, and complete diagnostic payloads remain available through details, replay, logs, or audit export rather than dominating the normal conversation.
+
 ### Pass 1 — Native Runtime Completeness
 
 - Package and lock the complete vLLM, PyTorch, TorchCodec, FFmpeg, CUDA-driver compatibility, and sampler configuration.
@@ -143,6 +225,18 @@ The pilot installed FFmpeg `8.1.2` in a separate Micromamba prefix, added its `b
 - Add a native NVIDIA gate that imports the resolved runtime, starts vLLM, completes warm-up without a compiler dependency, serves the pinned test model, and completes a real OpenHands file or terminal action.
 - Repeat the published-artifact Carina pilot from a clean project root and complete approve, reject, execution, replay, restart, and scrubbed audit export before changing the platform status to live-validated.
 
+## Current Allocation Closure Results
+
+The following synthetic closure tests were completed before ending the allocation:
+
+1. **Single-action execution passed:** the local model proposed exactly one confined file-editor create action, approval continued through route authorization, `file_editor` returned exit code `0`, and the model returned a final response.
+2. **Explicit rejection passed:** a second confined create action was rejected, no continuation route decision or tool execution followed, and the target file was absent.
+3. **Replay and scrubbed export passed:** replay reconstructed the proposals, failed identifier attempt, multi-action denial, successful execution, rejection, and model-route decisions. Audit export retained the required content-minimized event types while excluding prompt text, generated markers, and absolute installation paths.
+4. **Fresh-process replay passed:** after the runtime exited, a new Heartwood process reconstructed the successful execution and denial from persistent state.
+5. **Full runtime restart deferred:** restarting vLLM and resuming the OpenHands conversation would still depend on the manual FFmpeg and sampler workarounds and would not change the confirmed release blockers. This remains part of the clean-artifact acceptance run after the runtime fixes.
+
+Do not spend the current allocation on a Stanford AI API Gateway call, controlled-data path, benchmark, broad filesystem inspection, or additional model download. Those activities require separate authorization or do not reduce the confirmed release blockers.
+
 ## Completion Gate
 
-Carina remains not live-validated until an unmodified published artifact completes the synthetic workflow without manually installing runtime dependencies, creating wrappers, editing persisted settings through Python, discovering an undocumented partition override, or entering internal confirmation identifiers. The final evidence must include successful local-model startup, a genuine model response, separately reviewed actions, at least one executed action, at least one rejected action, restart replay, and a scrubbed audit export.
+Carina remains not live-validated until an unmodified published artifact completes the synthetic workflow without manually installing runtime dependencies, creating wrappers, editing persisted settings through Python, discovering an undocumented partition override, constraining the model to avoid a normal multi-action turn, or entering internal confirmation identifiers. The pilot established successful local-model startup, a genuine model response, one executed action, one rejected action, fresh-process replay, and a scrubbed audit export under the documented workarounds. Clean runtime startup, sequential review of a natural multi-action turn, full runtime and OpenHands conversation restart, and the same evidence from an unmodified published artifact remain required.

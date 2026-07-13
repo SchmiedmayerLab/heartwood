@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Carina CLI Pilot
 
-This guide defines the synthetic-only Heartwood pilot on Stanford Carina. The repository implements the platform detector, conservative local policy, setup diagnostics, locked native environments, Slurm launcher, loopback vLLM profile, and Stanford AI API Gateway connection. Release `0.1.0` was partially exercised on Carina but required manual runtime workarounds and did not complete an action; see [Carina Release 0.1.0 Validation Findings](carina-live-validation.md). The path is not live-validated. Nothing in this guide authorizes protected health information or unrestricted agent tools for controlled data.
+This guide defines the synthetic-only Heartwood pilot on Stanford Carina. The repository implements the platform detector, conservative local policy, setup diagnostics, locked native environments, Slurm launcher, loopback vLLM profile, and Stanford AI API Gateway connection. Release `0.1.0` was partially exercised on Carina and completed constrained approve, execute, reject, audit, and fresh-process replay checks, but it required manual runtime workarounds and failed a normal multi-action confirmation turn; see [Carina Release 0.1.0 Validation Findings](carina-live-validation.md). The path is not live-validated. Nothing in this guide authorizes protected health information or unrestricted agent tools for controlled data.
 
 ## Safety Boundary
 
