@@ -129,6 +129,7 @@ def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None
     package = json.loads(_read("packages/webui/package.json"))
     assets = _repo_root() / "docs" / "assets"
 
+    assert "synthetic reference-analysis system test exercises" in web_interface
     assert "production web build, gateway, OpenHands SDK adapter" in web_interface
     assert "not model quality or live Terra behavior" in web_interface
     assert "npm run screenshots:docs" in web_interface
@@ -236,6 +237,14 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
     assert "aws_region_name" in guide
     assert "aws_profile_name" in guide
     assert "The CLI has no token argument" in guide
+
+
+def test_carina_runbook_requires_a_release_with_the_runtime_fixes() -> None:
+    runbook = _read("docs/carina-cli.md")
+
+    assert "HEARTWOOD_VERSION=0.1.0" not in runbook
+    assert "${HEARTWOOD_VERSION:?" in runbook
+    assert "Release `0.1.0` predates the corrected native dependency and launch path" in runbook
 
 
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:

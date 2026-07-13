@@ -251,6 +251,8 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "micromamba create" in bootstrap
     assert "micromamba install" in bootstrap
     assert "module load" in bootstrap
+    assert "HEARTWOOD_MODULE_INIT" in bootstrap
+    assert "/usr/share/lmod/lmod/init/profile" in bootstrap
     assert '"${root}/bootstrap/conda-meta"' in bootstrap
     assert "images/gpu/vllm-requirements.txt" in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
@@ -270,7 +272,8 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert '"--model-source"' in launch_runtime
     assert "127.0.0.1:8765/v1/models" in launch_runtime
     assert '"sinfo", "--noheader", "--format=%P|%G|%a"' in launch_runtime
-    assert '"--export=ALL,HEARTWOOD_PLATFORM=carina"' in launch_runtime
+    assert "_SLURM_EXPORTED_ENVIRONMENT" in launch_runtime
+    assert "--export=ALL" not in launch_runtime
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
 
 

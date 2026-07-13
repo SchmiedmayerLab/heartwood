@@ -20,6 +20,8 @@ from importlib import import_module
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 
+from filelock import FileLock
+
 _ENTRY = re.compile(r"^([0-9a-fA-F]{64}) [ *](.+)$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 _REVISION = re.compile(r"^[0-9a-f]{40,64}$")
@@ -149,56 +151,56 @@ def download_model_snapshot(
     destination = (cache_dir / snapshot.snapshot_id).resolve()
     if cache_dir != destination and cache_dir not in destination.parents:
         raise ModelSnapshotError("model snapshot path escapes configured cache directory")
-    if destination.exists():
-        try:
-            verify_model_snapshot(destination)
-            _verify_source_record(destination, snapshot)
-        except (OSError, UnicodeError, ValueError) as error:
-            raise ModelSnapshotError(
-                f"existing model snapshot is incomplete or modified: {destination}: {error}"
-            ) from error
-        return destination
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    available = shutil.disk_usage(cache_dir).free
-    if available < snapshot.minimum_free_bytes:
-        required_gib = snapshot.minimum_free_bytes / (1024**3)
-        available_gib = available / (1024**3)
-        raise ModelSnapshotError(
-            f"snapshot requires at least {required_gib:.0f} GiB free; "
-            f"{available_gib:.1f} GiB is available under {cache_dir}"
-        )
-    if downloader is None:
-        downloader = cast(
-            SnapshotDownloader,
-            import_module("huggingface_hub").snapshot_download,
-        )
-    staging = Path(tempfile.mkdtemp(prefix=f".{snapshot.snapshot_id}.", dir=cache_dir))
-    try:
-        downloader(
-            repo_id=snapshot.source_repository,
-            revision=snapshot.source_revision,
-            local_dir=staging,
-        )
-        shutil.rmtree(staging / ".cache", ignore_errors=True)
-        _verify_download_size(staging, snapshot)
-        source_record = {
-            "schema_version": "heartwood.model-snapshot-source.v1",
-            "snapshot_id": snapshot.snapshot_id,
-            "source_repository": snapshot.source_repository,
-            "source_revision": snapshot.source_revision,
-        }
-        (staging / "HEARTWOOD-SOURCE.json").write_text(
-            json.dumps(source_record, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        _write_manifest(staging)
-        verify_model_snapshot(staging)
-        _verify_source_record(staging, snapshot)
-        staging.replace(destination)
-    except Exception:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    return destination
+    with FileLock(cache_dir / f".{snapshot.snapshot_id}.lock", mode=0o600):
+        if destination.exists():
+            try:
+                verify_model_snapshot(destination)
+                _verify_source_record(destination, snapshot)
+            except (OSError, UnicodeError, ValueError) as error:
+                raise ModelSnapshotError(
+                    f"existing model snapshot is incomplete or modified: {destination}: {error}"
+                ) from error
+            return destination
+        available = shutil.disk_usage(cache_dir).free
+        if available < snapshot.minimum_free_bytes:
+            required_gib = snapshot.minimum_free_bytes / (1024**3)
+            available_gib = available / (1024**3)
+            raise ModelSnapshotError(
+                f"snapshot requires at least {required_gib:.0f} GiB free; "
+                f"{available_gib:.1f} GiB is available under {cache_dir}"
+            )
+        if downloader is None:
+            downloader = cast(
+                SnapshotDownloader,
+                import_module("huggingface_hub").snapshot_download,
+            )
+        staging = Path(tempfile.mkdtemp(prefix=f".{snapshot.snapshot_id}.", dir=cache_dir))
+        try:
+            downloader(
+                repo_id=snapshot.source_repository,
+                revision=snapshot.source_revision,
+                local_dir=staging,
+            )
+            shutil.rmtree(staging / ".cache", ignore_errors=True)
+            _verify_download_size(staging, snapshot)
+            source_record = {
+                "schema_version": "heartwood.model-snapshot-source.v1",
+                "snapshot_id": snapshot.snapshot_id,
+                "source_repository": snapshot.source_repository,
+                "source_revision": snapshot.source_revision,
+            }
+            (staging / "HEARTWOOD-SOURCE.json").write_text(
+                json.dumps(source_record, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            _write_manifest(staging)
+            verify_model_snapshot(staging)
+            _verify_source_record(staging, snapshot)
+            staging.replace(destination)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        return destination
 
 
 def verify_model_snapshot(root: Path) -> None:

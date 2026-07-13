@@ -26,10 +26,11 @@ The local demonstration requires at least 20 GiB free for the reviewed model sna
 
 ## Install A Release
 
-Download the standalone installer from the selected GitHub Release:
+Select a published release that contains the corrected Carina installation and launch path, set `HEARTWOOD_VERSION` to that immutable tag, and download its standalone installer:
 
 ```bash
-export HEARTWOOD_VERSION=0.1.0
+: "${HEARTWOOD_VERSION:?Set HEARTWOOD_VERSION to a published release containing the Carina fixes}"
+export HEARTWOOD_VERSION
 curl --fail --location --remote-name \
   "https://github.com/SchmiedmayerLab/heartwood/releases/download/${HEARTWOOD_VERSION}/heartwood-installer"
 chmod +x heartwood-installer
@@ -40,7 +41,7 @@ chmod +x heartwood-installer
 export PATH="${HEARTWOOD_ROOT}/bin:${PATH}"
 ```
 
-Select a release that contains this guide from the [Heartwood releases](https://github.com/SchmiedmayerLab/heartwood/releases). Release `0.1.0` predates the corrected native dependency and launch path and must not be used as clean acceptance evidence; [Issue #25](https://github.com/SchmiedmayerLab/heartwood/issues/25) tracks the first published candidate validation.
+Release `0.1.0` predates the corrected native dependency and launch path and must not be used as clean acceptance evidence; [Issue #25](https://github.com/SchmiedmayerLab/heartwood/issues/25) tracks the first published candidate validation. Available immutable tags are listed under [Heartwood releases](https://github.com/SchmiedmayerLab/heartwood/releases).
 
 The installer verifies the release bundle, loads the supported Carina Micromamba module when needed, creates the private state, model, cache, runtime, and log directories, installs a version-pinned FFmpeg bootstrap plus the locked Heartwood and hash-locked vLLM environments, and imports the real TorchCodec and vLLM modules. It does not download a model or store credentials.
 

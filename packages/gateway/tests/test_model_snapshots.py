@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -57,7 +59,10 @@ def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path
     source = json.loads((destination / "HEARTWOOD-SOURCE.json").read_text(encoding="utf-8"))
     assert source["source_revision"] == snapshot.source_revision
     verify_model_snapshot(destination)
-    assert not list((tmp_path / "models").glob(f".{snapshot.snapshot_id}.*"))
+    assert (tmp_path / "models" / f".{snapshot.snapshot_id}.lock").is_file()
+    assert not any(
+        path.is_dir() for path in (tmp_path / "models").glob(f".{snapshot.snapshot_id}.*")
+    )
 
 
 def test_snapshot_download_reuses_verified_content_and_rejects_tampering(tmp_path: Path) -> None:
@@ -79,6 +84,41 @@ def test_snapshot_download_reuses_verified_content_and_rejects_tampering(tmp_pat
     (destination / "weights.safetensors").write_bytes(b"modified")
     with pytest.raises(ModelSnapshotError, match="incomplete or modified"):
         download_model_snapshot(snapshot, cache_dir=tmp_path, downloader=downloader)
+
+
+def test_snapshot_download_serializes_concurrent_callers(tmp_path: Path) -> None:
+    snapshot = _snapshot()
+    started = Event()
+    release = Event()
+    calls = 0
+
+    def downloader(**kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        local_dir = Path(str(kwargs["local_dir"]))
+        (local_dir / "weights.safetensors").write_bytes(b"synthetic-weights")
+        started.set()
+        assert release.wait(timeout=5)
+        return str(local_dir)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            download_model_snapshot,
+            snapshot,
+            cache_dir=tmp_path,
+            downloader=downloader,
+        )
+        assert started.wait(timeout=5)
+        second = executor.submit(
+            download_model_snapshot,
+            snapshot,
+            cache_dir=tmp_path,
+            downloader=downloader,
+        )
+        release.set()
+
+        assert first.result(timeout=5) == second.result(timeout=5)
+    assert calls == 1
 
 
 def test_snapshot_download_rejects_an_existing_different_revision(tmp_path: Path) -> None:
@@ -110,7 +150,7 @@ def test_snapshot_download_rejects_content_outside_reviewed_size(tmp_path: Path)
 
     with pytest.raises(ModelSnapshotError, match="outside the reviewed range"):
         download_model_snapshot(snapshot, cache_dir=tmp_path, downloader=downloader)
-    assert not list(tmp_path.glob(f".{snapshot.snapshot_id}.*"))
+    assert not any(path.is_dir() for path in tmp_path.glob(f".{snapshot.snapshot_id}.*"))
 
 
 def test_snapshot_metadata_rejects_floating_revisions() -> None:

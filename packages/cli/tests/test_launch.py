@@ -13,6 +13,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -68,16 +69,35 @@ def _model(root: Path) -> None:
     (root / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
 
 
-def test_carina_launch_plan_requests_reviewable_gpu_allocation(tmp_path: Path) -> None:
+def test_carina_launch_plan_requests_reviewable_gpu_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (),
+    )
     options = _options(tmp_path)
-    plan = build_launch_plan(options, {"HEARTWOOD_PLATFORM": "carina"})
+    plan = build_launch_plan(
+        options,
+        {
+            "HEARTWOOD_PLATFORM": "carina",
+            "PATH": "/usr/bin",
+            "HOME": "/home/researcher",
+            "HEARTWOOD_NATIVE_ROOT": "/persistent/heartwood",
+            "OPENAI_API_KEY": "secret",
+        },
+    )
 
     assert plan.platform_id == "carina"
     assert plan.allocation_required
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
     assert "--gres=gpu:1" in plan.allocation_command
     assert "--inside-allocation" in plan.allocation_command
-    assert "--export=ALL,HEARTWOOD_PLATFORM=carina" in plan.allocation_command
+    export = next(item for item in plan.allocation_command if item.startswith("--export="))
+    assert export == ("--export=PATH,HOME,HEARTWOOD_NATIVE_ROOT,HEARTWOOD_PLATFORM=carina")
+    assert "OPENAI_API_KEY" not in export
+    assert "ALL" not in export
     assert "Slurm allocation required" in plan.format()
 
 
@@ -104,8 +124,15 @@ def test_carina_launch_requires_explicit_allocation_consent(
 
 
 def test_carina_launch_defaults_to_no_when_consent_input_closes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (("gpu", False),),
+    )
+
     def closed(_prompt: str) -> str:
         raise EOFError
 
@@ -269,6 +296,26 @@ def test_launch_rejects_job_scratch_without_model_capacity(
     assert "Job-local scratch requires" in capsys.readouterr().out
 
 
+def test_launch_reports_model_staging_io_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _model(tmp_path / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr(
+        "heartwood.cli._launch._copy_snapshot",
+        lambda *_args: (_ for _ in ()).throw(OSError("scratch quota exhausted")),
+    )
+
+    assert run_launch(_options(tmp_path), env={"HEARTWOOD_PLATFORM": "generic"}) == 74
+    assert "Model staging failed: scratch quota exhausted" in capsys.readouterr().out
+    assert not any((tmp_path / "state" / "scratch").iterdir())
+
+
 def test_direct_launch_supervises_runtime_and_opens_existing_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -307,7 +354,8 @@ def test_direct_launch_supervises_runtime_and_opens_existing_chat(
     monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", FakeProcess)
     monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
     monkeypatch.setattr(
-        "heartwood.cli._launch._wait_for_runtime", lambda _runtime, *, timeout: timeout == 600
+        "heartwood.cli._launch._wait_for_runtime",
+        lambda _runtime, *, model_id, timeout: model_id == "test-model" and timeout == 600,
     )
     monkeypatch.setattr(
         "heartwood.cli._launch.subprocess.run",
@@ -423,10 +471,14 @@ def test_runtime_readiness_stops_when_process_exits() -> None:
         def poll(self) -> int:
             return 1
 
-    assert not _wait_for_runtime(ExitedProcess(), timeout=0.1)  # type: ignore[arg-type]
+    assert not _wait_for_runtime(
+        cast(subprocess.Popen[str], ExitedProcess()),
+        model_id="test-model",
+        timeout=0.1,
+    )
 
 
-def test_runtime_readiness_accepts_a_nonempty_local_model_catalog(
+def test_runtime_readiness_accepts_the_requested_local_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RunningProcess:
@@ -444,7 +496,9 @@ def test_runtime_readiness_accepts_a_nonempty_local_model_catalog(
 
     class Opener:
         def open(self, *_args: object, **_kwargs: object) -> Response:
-            return Response(json.dumps({"data": [{"id": "model"}]}).encode())
+            return Response(
+                json.dumps({"data": [{"id": "other-model"}, {"id": "test-model"}]}).encode()
+            )
 
     def build_opener(handler: object) -> Opener:
         assert vars(handler).get("proxies") == {}
@@ -455,7 +509,53 @@ def test_runtime_readiness_accepts_a_nonempty_local_model_catalog(
         build_opener,
     )
 
-    assert _wait_for_runtime(RunningProcess(), timeout=0.1)  # type: ignore[arg-type]
+    assert _wait_for_runtime(
+        cast(subprocess.Popen[str], RunningProcess()),
+        model_id="test-model",
+        timeout=0.1,
+    )
+
+
+@pytest.mark.parametrize("initial_models", [[], [{"id": "other-model"}]])
+def test_runtime_readiness_throttles_empty_or_mismatched_catalogs(
+    initial_models: list[dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RunningProcess:
+        def poll(self) -> None:
+            return None
+
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+    payloads = [
+        {"data": initial_models},
+        {"data": [{"id": "test-model"}]},
+    ]
+
+    class Opener:
+        def open(self, *_args: object, **_kwargs: object) -> Response:
+            return Response(json.dumps(payloads.pop(0)).encode())
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.urllib.request.build_opener",
+        lambda _handler: Opener(),
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("heartwood.cli._launch.time.sleep", sleeps.append)
+
+    assert _wait_for_runtime(
+        cast(subprocess.Popen[str], RunningProcess()),
+        model_id="test-model",
+        timeout=0.1,
+    )
+    assert sleeps == [1]
 
 
 def test_setup_helper_invokes_non_interactive_local_setup(
@@ -550,6 +650,27 @@ def test_carina_reports_invalid_explicit_partition(
 
     assert code == 64
     assert "choose one of: dev, normal" in capsys.readouterr().out
+
+
+def test_carina_requires_selection_between_nondefault_gpu_partitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (("dev", False), ("normal", False)),
+    )
+
+    code = run_launch(
+        _options(tmp_path, partition=None, dry_run=True),
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+
+    assert code == 64
+    assert "no default GPU partition was detected; choose one of: dev, normal" in (
+        capsys.readouterr().out
+    )
 
 
 def test_partition_discovery_handles_scheduler_errors_and_irrelevant_rows(

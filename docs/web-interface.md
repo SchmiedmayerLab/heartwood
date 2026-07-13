@@ -43,7 +43,7 @@ Create a session, select **Detect environment**, and submit the three tasks from
 
 ![Heartwood synthetic reference analysis showing the cohort, baseline, and aggregate-export conversation](assets/web-reference-analysis.png)
 
-This screenshot is produced by the real reference-analysis system test using the production web build, gateway, OpenHands SDK adapter, repository-verified Skills, persisted session store, and deterministic loopback model fixture. It validates orchestration and interface parity, not model quality or live Terra behavior.
+The synthetic reference-analysis system test exercises the production web build, gateway, OpenHands SDK adapter, repository-verified Skills, and persisted session store against a deterministic loopback model fixture. It validates orchestration and interface parity, not model quality or live Terra behavior.
 
 ## Review Actions And Evidence
 

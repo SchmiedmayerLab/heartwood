@@ -1678,6 +1678,7 @@ version = "0.1.0"
 source = { editable = "packages/gateway" }
 dependencies = [
     { name = "anthropic" },
+    { name = "filelock" },
     { name = "heartwood-adapters" },
     { name = "heartwood-core-adapter" },
     { name = "heartwood-model-policy" },
@@ -1697,6 +1698,7 @@ agent = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = "==0.116.0" },
+    { name = "filelock", specifier = "==3.29.7" },
     { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-core-adapter", editable = "packages/core-adapter" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },

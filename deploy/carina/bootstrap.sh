@@ -16,13 +16,37 @@ while (($#)); do
 done
 : "${root:?--environment-root is required}"
 
+initialize_module_command() {
+  if type module >/dev/null 2>&1; then
+    return 0
+  fi
+  local candidate
+  local -a candidates=()
+  if [[ -n "${HEARTWOOD_MODULE_INIT:-}" ]]; then
+    candidates+=("${HEARTWOOD_MODULE_INIT}")
+  fi
+  candidates+=(
+    /etc/profile.d/modules.sh
+    /etc/profile.d/lmod.sh
+    /usr/share/lmod/lmod/init/profile
+    /usr/share/lmod/lmod/init/bash
+    /usr/share/Modules/init/bash
+  )
+  for candidate in "${candidates[@]}"; do
+    if [[ -r "${candidate}" ]]; then
+      # shellcheck source=/dev/null
+      source "${candidate}"
+      if type module >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
 if ! command -v micromamba >/dev/null 2>&1; then
   module_name="${HEARTWOOD_MICROMAMBA_MODULE:-micromamba/2.3.3}"
-  if [[ -r /etc/profile.d/modules.sh ]]; then
-    # shellcheck source=/dev/null
-    source /etc/profile.d/modules.sh
-  fi
-  if type module >/dev/null 2>&1 && module load "${module_name}"; then
+  if initialize_module_command && module load "${module_name}"; then
     printf 'Loaded %s for the native installation.\n' "${module_name}"
   else
     echo "micromamba is unavailable; load ${module_name} and retry" >&2

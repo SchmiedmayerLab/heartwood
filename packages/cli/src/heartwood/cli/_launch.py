@@ -27,6 +27,31 @@ from heartwood.cli._model_snapshot import verify_snapshot
 InputFunction = Callable[[str], str]
 RunFunction = Callable[[Sequence[str]], int]
 
+_SLURM_EXPORTED_ENVIRONMENT = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "LD_LIBRARY_PATH",
+    "XDG_CACHE_HOME",
+    "HF_HOME",
+    "TRANSFORMERS_CACHE",
+    "TORCH_HOME",
+    "HEARTWOOD_HOME",
+    "HEARTWOOD_INSTALL_ROOT",
+    "HEARTWOOD_NATIVE_ROOT",
+    "HEARTWOOD_NATIVE_VERSION",
+    "HEARTWOOD_MODEL_CACHE",
+    "HEARTWOOD_VLLM_EXECUTABLE",
+    "HEARTWOOD_VLLM_PYTHON",
+    "VLLM_USE_FLASHINFER_SAMPLER",
+)
+
 
 class LaunchConfigurationError(ValueError):
     """Raised when a launch cannot be planned without guessing."""
@@ -102,7 +127,7 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
             f"--cpus-per-task={options.cpus}",
             f"--mem={options.memory}",
             f"--time={options.time_limit}",
-            "--export=ALL,HEARTWOOD_PLATFORM=carina",
+            _slurm_export_argument(env),
             *_reentry_command(options),
         )
     return LaunchPlan(
@@ -227,7 +252,11 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     runtime: subprocess.Popen[str] | None = None
     try:
         _stage(3, 6, f"Stage the model on compute-local storage ({scratch_parent})")
-        _copy_snapshot(options.model_root, staged_model)
+        try:
+            _copy_snapshot(options.model_root, staged_model)
+        except OSError as error:
+            print(f"Model staging failed: {error}")
+            return 74
         try:
             verify_snapshot(staged_model)
         except (OSError, UnicodeError, ValueError) as error:
@@ -248,7 +277,11 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             )
         finally:
             log_file.close()
-        if not _wait_for_runtime(runtime, timeout=options.startup_timeout):
+        if not _wait_for_runtime(
+            runtime,
+            model_id=options.model_id,
+            timeout=options.startup_timeout,
+        ):
             print(f"vLLM did not become ready after {options.startup_timeout} seconds.")
             _print_runtime_failure(log_path, runtime.poll())
             return 70
@@ -370,7 +403,12 @@ def _runtime_environment(env: Mapping[str, str]) -> dict[str, str]:
     return result
 
 
-def _wait_for_runtime(runtime: subprocess.Popen[str], timeout: float = 600) -> bool:
+def _wait_for_runtime(
+    runtime: subprocess.Popen[str],
+    *,
+    model_id: str,
+    timeout: float = 600,
+) -> bool:
     started = time.monotonic()
     deadline = time.monotonic() + timeout
     next_update = started + 15
@@ -381,15 +419,25 @@ def _wait_for_runtime(runtime: subprocess.Popen[str], timeout: float = 600) -> b
         try:
             with opener.open("http://127.0.0.1:8765/v1/models", timeout=2) as response:
                 payload = json.load(response)
-                if response.status == 200 and payload.get("data"):
+                if response.status == 200 and _catalog_contains_model(payload, model_id):
                     return True
         except (OSError, ValueError):
-            now = time.monotonic()
-            if now >= next_update:
-                print(f"Still starting vLLM ({int(now - started)} seconds elapsed)...")
-                next_update = now + 15
-            time.sleep(1)
+            pass
+        now = time.monotonic()
+        if now >= next_update:
+            print(f"Still starting vLLM ({int(now - started)} seconds elapsed)...")
+            next_update = now + 15
+        time.sleep(1)
     return False
+
+
+def _catalog_contains_model(payload: object, model_id: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    models = payload.get("data")
+    return isinstance(models, list) and any(
+        isinstance(model, dict) and model.get("id") == model_id for model in models
+    )
 
 
 def _ensure_setup(options: LaunchOptions, env: Mapping[str, str] | None = None) -> int:
@@ -436,8 +484,13 @@ def _resolve_slurm_partition(requested: str | None, env: Mapping[str, str]) -> s
     for name, is_default in partitions:
         if is_default:
             return name
-    if partitions:
+    if len(partitions) == 1:
         return partitions[0][0]
+    if partitions:
+        available = ", ".join(name for name, _is_default in partitions)
+        raise LaunchConfigurationError(
+            f"no default GPU partition was detected; choose one of: {available}"
+        )
     raise LaunchConfigurationError(
         "no available GPU partition was detected; pass --partition or set HEARTWOOD_SLURM_PARTITION"
     )
@@ -478,6 +531,12 @@ def _scheduler_environment(env: Mapping[str, str]) -> dict[str, str]:
         for name in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE")
         if name in env
     }
+
+
+def _slurm_export_argument(env: Mapping[str, str]) -> str:
+    exported = [name for name in _SLURM_EXPORTED_ENVIRONMENT if name in env]
+    exported.append("HEARTWOOD_PLATFORM=carina")
+    return f"--export={','.join(exported)}"
 
 
 def _preflight_vllm(options: LaunchOptions, executable: Path, env: Mapping[str, str]) -> str | None:
