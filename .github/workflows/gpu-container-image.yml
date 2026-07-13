@@ -177,15 +177,32 @@ jobs:
           fi
           raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
           if [ "${FLATTEN}" = "true" ]; then
-            jq --exit-status '
+            if ! jq --exit-status '
               .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
               and .config.mediaType == "application/vnd.docker.container.image.v1+json"
-            ' <<<"${raw}" >/dev/null
+            ' <<<"${raw}" >/dev/null; then
+              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
+              config_media_type="$(jq -r '.config.mediaType // "<missing>"' <<<"${raw}")"
+              echo "immutable Terra GPU tag has incompatible media types: ${commit_ref}" >&2
+              echo "observed media type: ${media_type}; config media type: ${config_media_type}" >&2
+              exit 1
+            fi
           else
-            jq --exit-status '
+            if ! jq --exit-status '
               [.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
               == ["linux/amd64"]
-            ' <<<"${raw}" >/dev/null
+            ' <<<"${raw}" >/dev/null; then
+              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
+              platforms="$(
+                jq -r '
+                  [.manifests[]? | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
+                  | join(", ")
+                ' <<<"${raw}"
+              )"
+              echo "immutable generic GPU tag has an incompatible index: ${commit_ref}" >&2
+              echo "observed media type: ${media_type}; Linux platforms: ${platforms:-<none>}" >&2
+              exit 1
+            fi
           fi
 
   promote:

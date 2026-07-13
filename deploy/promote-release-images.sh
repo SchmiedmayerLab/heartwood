@@ -66,17 +66,21 @@ for mapping in "${mappings[@]}"; do
   echo "verifying release image candidate: ${source_ref}"
   source_digest="$(digest "${source_ref}")"
   if [[ ! "${source_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    echo "release image candidate returned an invalid digest: ${source_ref}" >&2
+    echo "release image candidate returned an invalid digest: ${source_ref} (${source_digest:-<empty>})" >&2
     exit 1
   fi
 
   raw="$(imagetools_inspect --raw "${source_ref}")"
+  media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
+  config_media_type="$(jq -r '.config.mediaType // "<missing>"' <<<"${raw}")"
+  platforms="$(jq -r '[.manifests[]? | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"] | join(", ")' <<<"${raw}")"
   if [[ "${media_shape}" == "single" ]]; then
     if ! jq -e '
       .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
       and .config.mediaType == "application/vnd.docker.container.image.v1+json"
     ' <<<"${raw}" >/dev/null; then
       echo "release image candidate is not a Docker schema-2 manifest: ${source_ref}" >&2
+      echo "observed media type: ${media_type}; config media type: ${config_media_type}" >&2
       exit 1
     fi
   elif [[ "${media_shape}" == "multi" ]]; then
@@ -85,6 +89,7 @@ for mapping in "${mappings[@]}"; do
       == ["linux/amd64", "linux/arm64"]
     ' <<<"${raw}" >/dev/null; then
       echo "release image candidate is not an AMD64/ARM64 index: ${source_ref}" >&2
+      echo "observed media type: ${media_type}; Linux platforms: ${platforms:-<none>}" >&2
       exit 1
     fi
   else
@@ -93,6 +98,7 @@ for mapping in "${mappings[@]}"; do
       == ["linux/amd64"]
     ' <<<"${raw}" >/dev/null; then
       echo "release image candidate is not an AMD64 index: ${source_ref}" >&2
+      echo "observed media type: ${media_type}; Linux platforms: ${platforms:-<none>}" >&2
       exit 1
     fi
   fi
