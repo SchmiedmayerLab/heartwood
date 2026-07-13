@@ -42,7 +42,7 @@ The repository is MIT licensed and REUSE compliant. Every tracked source file ca
 
 ## Testing And Documentation
 
-Pure-code safety paths have enforced coverage, while CLI, notebook, REST, transport, web, and image behavior use contract and integration tests described in [07](07-testing-eval.md). All public fixtures and traces are synthetic. The [documentation index](../docs/README.md) defines document roles and status vocabulary: `docs/` owns current operational guidance and platform evidence, `design/01` through `design/08` own durable rationale, and GitHub Issues and Projects own planned implementation and delivery status. Documentation checks must reject broken internal links, obsolete image tags, unsupported-platform claims, version-relative implementation narrative, and planned work presented as implemented behavior.
+Pure-code safety paths have enforced coverage, while CLI, notebook, REST, transport, web, and image behavior use contract and integration tests described in [07](07-testing-eval.md). All public fixtures and traces are synthetic. The [documentation index](../docs/README.md) defines document roles and status vocabulary: `docs/` owns current operational guidance and platform evidence, `design/01` through `design/08` own durable rationale, and [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) with the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) own planned implementation and delivery status. Documentation checks must reject broken internal links, obsolete image tags, unsupported-platform claims, version-relative implementation narrative, and planned work presented as implemented behavior.
 
 ## Supply Chain
 

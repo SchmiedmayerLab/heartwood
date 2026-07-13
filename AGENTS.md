@@ -34,12 +34,12 @@ When project direction changes, update the relevant design document first, then 
 | Audit log, tamper-evidence, activity view, and improvement loop | [design/06-observability-audit.md](design/06-observability-audit.md) |
 | Testing layers, replay, model capability gates, and CI evaluation flow | [design/07-testing-eval.md](design/07-testing-eval.md) |
 | Python-first toolchain, CI, repository hygiene, and supply chain | [design/08-development.md](design/08-development.md) |
-| Planned implementation, acceptance criteria, and delivery status | [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) |
+| Planned implementation, acceptance criteria, and delivery status | [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) |
 | Acronyms and specialized terms | [ACRONYMS.md](ACRONYMS.md) |
 
 ## Current Implementation Stance
 
-- Follow the relevant [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) for planned implementation and acceptance criteria.
+- Follow the relevant [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) for planned implementation, acceptance criteria, and delivery status.
 - Treat the CLI as the primary development and CI surface; the notebook bridge and researcher web UI are presentation adapters over the same session command/event contract, served through the session gateway and its OpenHands SDK backend. See [design/03-architecture.md](design/03-architecture.md).
 - Use Python for the core, session gateway, OpenHands adapter, model settings, adapters, CLI, schemas, policy layer, audit log, replay tests, synthetic fixtures, Docker entrypoint, notebook API, and widgets; use TypeScript on the Stanford Spezi web stack for the researcher web UI. See [design/08-development.md](design/08-development.md).
 - Keep one core repository through the controlled-data reference workflow unless a reviewed design change establishes independent ownership, release cadence, and versioned contracts.
@@ -57,7 +57,7 @@ When project direction changes, update the relevant design document first, then 
 ## Documentation Rules
 
 - Documentation should be standalone project material, not conversational or version-relative narrative.
-- Keep current operational instructions in `docs/`, durable rationale in `design/01` through `design/08`, and planned implementation, acceptance criteria, dependencies, and delivery status in GitHub Issues and Projects.
+- Keep current operational instructions in `docs/`, durable rationale in `design/01` through `design/08`, and planned implementation, acceptance criteria, dependencies, and delivery status in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
 - Use the status terms defined in [docs/README.md](docs/README.md); do not present implemented or CI-validated behavior as live-validated or institution-approved.
 - Avoid meta-commentary about how the document was created.
 - Keep Markdown prose and list items on single logical lines; do not hard-wrap sentences.

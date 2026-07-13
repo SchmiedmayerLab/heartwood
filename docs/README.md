@@ -46,7 +46,7 @@ Design documents explain why the system is shaped this way. Runnable commands an
 
 ## Project Planning
 
-[GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) own planned implementation, acceptance criteria, dependencies, and delivery status. Project documentation does not serve as a backlog or implementation diary. When a planned change alters a durable product, architecture, security, or testing decision, update the owning design document as part of that change.
+[GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) own planned implementation, acceptance criteria, and dependencies; the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) owns delivery status. Project documentation does not serve as a backlog or implementation diary. When a planned change alters a durable product, architecture, security, or testing decision, update the owning design document as part of that change.
 
 ## Published Documentation
 

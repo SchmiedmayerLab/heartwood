@@ -42,6 +42,7 @@ def test_documentation_index_separates_current_design_and_project_tracking() -> 
     assert "[Platform Support](docs/platform-support.md)" in readme
     assert "[documentation index](../docs/README.md)" in development
     assert "https://github.com/SchmiedmayerLab/heartwood/issues" in index
+    assert "https://github.com/orgs/SchmiedmayerLab/projects/2" in index
     assert "does not serve as a backlog or implementation diary" in index
 
 
@@ -76,9 +77,9 @@ def test_planned_work_is_owned_by_github_tracking() -> None:
         content = _read(path)
         assert "09-implementation-plan" not in content
         assert "Delivery Roadmap" not in content
-    assert "GitHub Issues and Projects own planned implementation" in _read(
-        "design/08-development.md"
-    )
+    project_url = "https://github.com/orgs/SchmiedmayerLab/projects/2"
+    for path in ("README.md", "AGENTS.md", "docs/README.md", "design/08-development.md"):
+        assert project_url in _read(path)
     for documentation_path in _canonical_documentation_paths():
         content = documentation_path.read_text(encoding="utf-8")
         assert "Delivery Roadmap" not in content

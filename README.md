@@ -230,7 +230,7 @@ Do not add protected health information, credentials, live-platform identifiers,
 
 ## Project Planning
 
-Planned implementation, acceptance criteria, dependencies, and delivery status are tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues). Published documentation describes current behavior and durable design decisions; an open issue is not a capability or support claim.
+Planned implementation and acceptance criteria are tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and organized by delivery status in the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2). Published documentation describes current behavior and durable design decisions; an open issue is not a capability or support claim.
 
 ## Contributing
 
