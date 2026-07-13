@@ -32,8 +32,11 @@ Do not leave a GitHub token in the job environment.
 Load Carina's supported Micromamba module. Download the standalone installer from the selected GitHub Release, review its checksum or attestation, and run:
 
 ```bash
+HEARTWOOD_VERSION=0.1.0
+curl --fail --location --remote-name \
+  "https://github.com/SchmiedmayerLab/heartwood/releases/download/${HEARTWOOD_VERSION}/heartwood-installer"
 chmod +x heartwood-installer
-./heartwood-installer --root "${HEARTWOOD_ROOT}" --platform carina --version <release-tag>
+./heartwood-installer --root "${HEARTWOOD_ROOT}" --platform carina --version "${HEARTWOOD_VERSION}"
 export PATH="${HEARTWOOD_ROOT}/bin:${PATH}"
 ```
 

@@ -1,0 +1,263 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version without a prefix, for example 0.1.0
+        required: true
+        type: string
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  packages: read
+  statuses: read
+
+jobs:
+  verify:
+    name: Verify Release Candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify version, ref, and release absence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 deploy/verify_release_candidate.py \
+            --version "${RELEASE_VERSION}" \
+            --source-root . \
+            --version-only
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          test "${main_sha}" = "${GITHUB_SHA}"
+          if release_json="$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft,targetCommitish 2>/dev/null)"; then
+            if [[ "$(jq -r .isDraft <<<"${release_json}")" != "true" ]]; then
+              echo "published release already exists: ${RELEASE_VERSION}" >&2
+              exit 1
+            fi
+            if [[ "$(jq -r .targetCommitish <<<"${release_json}")" != "${GITHUB_SHA}" ]]; then
+              echo "existing draft targets a different commit" >&2
+              exit 1
+            fi
+            echo "an interrupted draft exists and will be replaced after approval"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "tag already exists: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+      - name: Wait for required checks on the exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          for attempt in $(seq 1 180); do
+            if ! gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+              > /tmp/check-runs.json; then
+              echo "unable to fetch check runs (attempt ${attempt}/180)" >&2
+              sleep 30
+              continue
+            fi
+            if ! gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/status" \
+              > /tmp/statuses.json; then
+              echo "unable to fetch commit statuses (attempt ${attempt}/180)" >&2
+              sleep 30
+              continue
+            fi
+            if python3 deploy/verify_release_candidate.py \
+              --version "${RELEASE_VERSION}" \
+              --source-root . \
+              --checks /tmp/check-runs.json \
+              --statuses /tmp/statuses.json \
+              --required-checks .github/release-required-checks.txt; then
+              exit 0
+            else
+              status=$?
+            fi
+            if [[ "${status}" -ne 2 ]]; then
+              exit "${status}"
+            fi
+            echo "required checks are still running (attempt ${attempt}/180)"
+            sleep 30
+          done
+          echo "timed out waiting for required checks" >&2
+          exit 1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify immutable container candidates
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: deploy/promote-release-images.sh verify "${RELEASE_VERSION}" "${GITHUB_SHA}"
+      - name: Build native assets from the candidate
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: deploy/package-native.sh dist "${RELEASE_VERSION}"
+      - name: Test native installation layout
+        run: deploy/tests/native_installer_smoke.sh dist
+      - name: Upload approved candidate assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: heartwood-release-${{ inputs.version }}
+          path: |
+            dist/heartwood-installer
+            dist/heartwood-native.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  prepare:
+    name: Prepare Editable Release Draft
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download approved candidate assets
+        uses: actions/download-artifact@v8
+        with:
+          name: heartwood-release-${{ inputs.version }}
+          path: dist
+      - name: Verify candidate remains current
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          if [[ "${main_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "main advanced before draft creation" >&2
+            exit 1
+          fi
+          if release_json="$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft,targetCommitish 2>/dev/null)"; then
+            if [[ "$(jq -r .isDraft <<<"${release_json}")" != "true" ]]; then
+              echo "published release already exists: ${RELEASE_VERSION}" >&2
+              exit 1
+            fi
+            if [[ "$(jq -r .targetCommitish <<<"${release_json}")" != "${GITHUB_SHA}" ]]; then
+              echo "existing draft targets a different commit" >&2
+              exit 1
+            fi
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "tag already exists: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+      - name: Attest native release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*
+      - name: Create draft GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft 2>/dev/null || true)" == "true" ]]; then
+            gh release delete "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --yes
+          fi
+          gh release create "${RELEASE_VERSION}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "${RELEASE_VERSION}" \
+            --generate-notes \
+            --draft
+
+  publish:
+    name: Approve And Publish Release
+    needs: prepare
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download approved candidate assets
+        uses: actions/download-artifact@v8
+        with:
+          name: heartwood-release-${{ inputs.version }}
+          path: dist
+      - name: Verify candidate, editable draft, and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          if [[ "${main_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "main advanced while the release waited for approval" >&2
+            exit 1
+          fi
+          release_json="$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets,isDraft,targetCommitish)"
+          if [[ "$(jq -r .isDraft <<<"${release_json}")" != "true" ]]; then
+            echo "editable release draft is unavailable" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r .targetCommitish <<<"${release_json}")" != "${GITHUB_SHA}" ]]; then
+            echo "release draft targets a different commit" >&2
+            exit 1
+          fi
+          actual_assets="$(jq -r '.assets[].name' <<<"${release_json}" | sort)"
+          expected_assets="$(printf '%s\n' SHA256SUMS heartwood-installer heartwood-native.tar.gz | sort)"
+          if [[ "${actual_assets}" != "${expected_assets}" ]]; then
+            echo "release draft assets differ from the verified candidate" >&2
+            exit 1
+          fi
+          mkdir -p /tmp/release-assets
+          gh release download "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --dir /tmp/release-assets
+          for asset in SHA256SUMS heartwood-installer heartwood-native.tar.gz; do
+            cmp "dist/${asset}" "/tmp/release-assets/${asset}"
+          done
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "tag already exists: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable release image tags
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: deploy/promote-release-images.sh promote "${RELEASE_VERSION}" "${GITHUB_SHA}"
+      - name: Publish immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: gh release edit "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false

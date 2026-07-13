@@ -165,7 +165,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
 
     assert notebook["nbformat"] == 4
     assert "Terra-Style Jupyter Demo" in sources[0]
-    assert "edge-terra`" in combined
+    assert "0.1.0-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
@@ -241,7 +241,7 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     runbook = _read("docs/terra-jupyter-demo.md")
 
-    assert "ghcr.io/schmiedmayerlab/heartwood:edge-terra" in runbook
+    assert "ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra" in runbook
     assert "contains no model weights" in runbook
     assert "Terra Jupyter Notebook base image" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
