@@ -89,6 +89,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | RAM | Random Access Memory | Volatile memory required to load local model weights, runtime buffers, and active sessions |
 | REST | Representational State Transfer | HTTP API style used by the session gateway |
 | SSE | Server-Sent Events | One-way streaming over HTTP (fallback for live agent output) |
+| SSH | Secure Shell | Encrypted remote terminal protocol used to access environments such as Carina |
 | WS | WebSocket | Bidirectional streaming over one TCP connection (primary transport for live agent sessions) |
 | PSC | Private Service Connect | GCP private connectivity to a service (no public internet) |
 | PE | Private Endpoint | Azure private network entry to a service (no public ingress) |
@@ -129,6 +130,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | PyPI | Python Package Index | Public Python package registry; unavailable when a deployment disables runtime network access |
 | JSON | JavaScript Object Notation | Lightweight structured-data format used for schemas and events |
 | JSONL | JSON Lines | One JSON object per line, used for scrubbed audit exports |
+| JIT | Just-In-Time | Compilation performed at runtime, including optional accelerator-kernel compilation |
 | TOML | Tom's Obvious Minimal Language | Configuration format used for Python project metadata and the skill bundle catalog |
 | YAML | YAML Ain't Markup Language | Human-readable configuration format used for workflows and metadata |
 | NDJSON | Newline-Delimited JSON | One JSON record per line; the FHIR bulk-export format |

@@ -26,7 +26,7 @@ Participant-level data must remain within an institution-approved deployment bou
 
 - OpenHands owns the agent loop, coding tools, action-risk analysis, action confirmation, conversation state, LiteLLM provider compatibility, and native `SKILL.md` loading.
 - Heartwood owns biomedical Skill curation, deployment route authorization, platform and dataset detection, audit and attestation records, and safe export controls.
-- The CLI and web UI provide the same conversation workflow: submit a task, inspect messages and actions, allow or reject a pending action, pause or resume, replay, and export the audit trail.
+- The CLI and web UI provide the same conversation workflow: submit a task, inspect messages and proposed action sets, allow or reject a pending OpenHands action set, pause or resume, replay, and export the audit trail.
 - Model connections discover provider, platform, and local catalogs; the selected entry becomes the existing non-secret OpenHands model profile. Secret values are read from environment variables, mounted files, managed identity, or a web-submitted token retained only by the running gateway.
 - Generic and Terra-derived images include an optional CPU llama.cpp runtime but no model weights. Local weights are explicitly downloaded to or mounted from persistent storage.
 - A model connection is not a compliance claim. The deploying institution remains responsible for business associate agreements, covered-service configuration, retention settings, identity, region, and network controls.
@@ -35,27 +35,27 @@ See [Architecture](design/03-architecture.md), [Security And Compliance](design/
 
 ## Capabilities And Limitations
 
-Heartwood provides an OpenHands SDK runtime, two researcher-selectable action-confirmation modes, model connections and advanced profiles, reviewed local-artifact downloads, repository-verified Skill loading, a CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, content-minimized audit export, a multi-platform generic image, and a Terra-derived image. Public examples and automated validation use synthetic data.
+Heartwood provides an OpenHands SDK runtime, two researcher-selectable action-confirmation modes, model connections and advanced profiles, reviewed local-artifact and multi-file snapshot downloads, repository-verified Skill loading, a CLI, notebook bridge, conversation-first web UI, gateway-owned session lifecycle, content-minimized audit export, a multi-platform generic image, and a Terra-derived image. Public examples and automated validation use synthetic data.
 
 The default runtime uses the generic platform policy and synthetic OMOP data-source fixture. File-backed sessions support one active writer, and the repository does not confer institutional approval for any deployment. Boundary and workflow labels require typed gateway evidence; absent evidence remains unknown rather than being inferred by the web UI.
 
 See [Platform Support](docs/platform-support.md) for platform-specific evidence and limitations. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are design targets rather than supported platforms.
 
-Tagged releases publish a verified native bundle for environments where a platform image is not appropriate. The [latest GitHub Release](https://github.com/SchmiedmayerLab/heartwood/releases/latest) contains the installer, checksum manifest, source bundle, generated notes, and attestations. Install the immutable `0.1.0` release with:
+Tagged releases publish a verified native bundle for environments where a platform image is not appropriate. The [latest GitHub Release](https://github.com/SchmiedmayerLab/heartwood/releases/latest) contains the installer, checksum manifest, source bundle, generated notes, and attestations. Install a selected immutable release with:
 
 ```bash
-HEARTWOOD_VERSION=0.1.0
+HEARTWOOD_VERSION=0.1.1
 curl --fail --location --remote-name \
   "https://github.com/SchmiedmayerLab/heartwood/releases/download/${HEARTWOOD_VERSION}/heartwood-installer"
 chmod +x heartwood-installer
 ./heartwood-installer --root /persistent/project/heartwood --version "${HEARTWOOD_VERSION}"
 export PATH="/persistent/project/heartwood/bin:${PATH}"
-heartwood launch --model-root /persistent/project/models/<reviewed-model>
+heartwood
 ```
 
-Maintainers create releases through the protected [release workflow](docs/releases.md). The workflow accepts Semantic Versioning without a `v` prefix and publishes only after all required checks pass for the exact `main` commit and the designated maintainer approves the protected environment.
+The bare `heartwood` command inspects the persisted setup and detected platform, then opens the next useful step: initial setup, Carina compute guidance, recovery guidance, or the interactive conversation. `heartwood doctor` remains available as a read-only diagnostic. Maintainers create releases through the protected [release workflow](docs/releases.md), which publishes only after all required checks pass for the exact `main` commit and the designated maintainer approves the protected environment.
 
-`heartwood launch --dry-run` reports the detected platform, storage, model, and compute plan without changing state. On Carina it asks before invoking Slurm; Terra and generic containers use their already-provisioned compute. See [Carina CLI Pilot](docs/carina-cli.md) for the synthetic native GPU workflow.
+`heartwood launch --dry-run` reports the detected platform, storage, model, and compute plan without changing state. On Carina it discovers an available GPU partition and asks before invoking Slurm; Terra and generic containers use their already-provisioned compute. See [Set Up Heartwood On Carina](docs/carina-cli.md) for the synthetic native GPU workflow and [Using Heartwood](docs/using-heartwood.md) for the shared interaction model.
 
 ## Researcher Experience
 
@@ -111,7 +111,7 @@ uv run heartwood actions
 uv run heartwood actions set auto-approve-low-risk
 ```
 
-**Auto-Approve Low Risk** delegates classification and confirmation to OpenHands: low-risk actions execute automatically, while medium-, high-, and unknown-risk actions still require **Allow once** or **Reject**. Managed deployment policy permits confirmation modes explicitly and defaults to `always-confirm`; Heartwood does not expose OpenHands `NeverConfirm` in researcher settings.
+**Auto-Approve Low Risk** delegates classification and confirmation to OpenHands: low-risk actions execute automatically, while medium-, high-, and unknown-risk action sets still require **Allow all once** or **Reject all**. OpenHands approves or rejects all actions from one confirmation stop as a set; Heartwood displays every member and does not claim unsupported per-action execution. Managed deployment policy permits confirmation modes explicitly and defaults to `always-confirm`; Heartwood does not expose OpenHands `NeverConfirm` in researcher settings.
 
 Repository-verified bundled Skills load automatically. To add a mounted community or experimental extension, inspect its permissions and approve one installation through the CLI or Skills panel:
 
@@ -125,14 +125,14 @@ Installation verifies metadata, allowed tools, network posture, entrypoint, path
 
 ## Container Runtime
 
-The immutable `0.1.0` generic image supports `linux/amd64` and `linux/arm64`. It contains no credentials and no model weights. The `edge` tag follows validated `main` builds and is intended for development rather than reproducible deployment.
+The immutable `0.1.1` generic image supports `linux/amd64` and `linux/arm64`. It contains no credentials and no model weights. The `edge` tag follows validated `main` builds and is intended for development rather than reproducible deployment.
 
 ```bash
-docker pull ghcr.io/schmiedmayerlab/heartwood:0.1.0
+docker pull ghcr.io/schmiedmayerlab/heartwood:0.1.1
 docker run --rm -p 127.0.0.1:8767:8767 \
   -v heartwood-state:/home/heartwood/.local/share/heartwood \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:0.1.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.1.1 \
   bash images/generic/scripts/start_demo_stack.sh
 ```
 
@@ -143,10 +143,10 @@ The image includes a pinned CPU `llama-server`. List and explicitly download rev
 ```bash
 docker run --rm \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:0.1.0 heartwood models artifacts
+  ghcr.io/schmiedmayerlab/heartwood:0.1.1 heartwood models artifacts
 docker run --rm \
   -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:0.1.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.1.1 \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
@@ -164,7 +164,7 @@ See [Container Images](docs/container-images.md) and [Getting Started With Local
 
 ## Terra
 
-Release `0.1.0` publishes `ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra`, a no-weight image derived from the pinned Terra Jupyter Python base. It preserves the Terra user, home, Jupyter entrypoint, kernel environment, and Leonardo route behavior while adding the same Heartwood application and Skills as the generic image. Terra requires this separate `linux/amd64` Docker schema-2 tag because Leonardo does not accept the generic multi-platform OCI index. The `edge-terra` tag remains the moving validated-main channel.
+Release `0.1.1` publishes `ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra`, a no-weight image derived from the pinned Terra Jupyter Python base. It preserves the Terra user, home, Jupyter entrypoint, kernel environment, and Leonardo route behavior while adding the same Heartwood application and Skills as the generic image. Terra requires this separate `linux/amd64` Docker schema-2 tag because Leonardo does not accept the generic multi-platform OCI index. The `edge-terra` tag remains the moving validated-main channel.
 
 Use the [Terra Jupyter Demo](docs/terra-jupyter-demo.md) for the synthetic end-to-end workflow and the [Platform Image Extension Guide](docs/platform-images.md) for adding another platform base.
 
@@ -222,10 +222,11 @@ Do not add protected health information, credentials, live-platform identifiers,
 | [Development](design/08-development.md) | Toolchain, CI, and supply chain |
 | [Delivery Roadmap](design/09-implementation-plan.md) | Current baseline, readiness gaps, priorities, and acceptance gates |
 | [Researcher Web Interface](docs/web-interface.md) | Shared session workflow, model setup, action review, audit, CLI parity, and notebook layout |
+| [Using Heartwood](docs/using-heartwood.md) | Terminal, web, and notebook interaction; action-set review; replay; audit; and persistence |
 | [Container Images](docs/container-images.md) | Tags, model storage, providers, and CI |
 | [Platform Image Extension Guide](docs/platform-images.md) | Thin platform image mechanism |
 | [Terra Jupyter Demo](docs/terra-jupyter-demo.md) | Synthetic Terra workflow |
-| [Carina CLI Pilot](docs/carina-cli.md) | Synthetic native GPU and Stanford AI API Gateway workflow |
+| [Set Up Heartwood On Carina](docs/carina-cli.md) | Synthetic native GPU and Stanford AI API Gateway workflow |
 
 ## Future Work
 

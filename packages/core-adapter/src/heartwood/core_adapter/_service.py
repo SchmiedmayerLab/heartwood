@@ -347,11 +347,7 @@ class SessionService:
                 ),
             )
         events: list[SessionEvent] = []
-        if (
-            approved
-            and len(pending_by_id) == 1
-            and self.backend.continuation_requires_model_authorization
-        ):
+        if approved and self.backend.continuation_requires_model_authorization:
             authorized, authorization_events = self._authorize_backend(
                 command,
                 purpose=f"approved action continuation through {self.backend.backend_id}",

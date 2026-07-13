@@ -519,11 +519,11 @@ describe("App", () => {
     await waitFor(() => expect(client.listCalls).toBe(initialListCalls + 1));
   });
 
-  it("renders pending OpenHands actions inline and sends allow once", async () => {
+  it("renders the pending OpenHands action set and sends one batch decision", async () => {
     const client = new PendingClient();
     render(<App client={client} initialSessionId="session-test" />);
 
-    const allow = await screen.findByLabelText("Allow session-test-toolcall-0");
+    const allow = await screen.findByLabelText("Allow all 1 action once");
     fireEvent.click(allow);
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));
@@ -759,9 +759,7 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(
-      await screen.findByLabelText("Reject session-test-toolcall-0"),
-    );
+    fireEvent.click(await screen.findByLabelText("Reject all 1 action"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("deny"));
     fireEvent.click(screen.getByLabelText("Pause agent"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("pause"));
@@ -804,6 +802,33 @@ describe("App", () => {
     expect(
       screen.queryByRole("heading", { name: "Settings" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("submits only one decision for a pending OpenHands action set", async () => {
+    const client = new PendingClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const allow = await screen.findByLabelText("Allow all 1 action once");
+    const reject = screen.getByLabelText("Reject all 1 action");
+    expect(
+      screen.getByText(
+        "OpenHands proposed these actions together. One decision applies to every action below.",
+      ),
+    ).toBeVisible();
+
+    fireEvent.click(allow);
+    fireEvent.click(reject);
+
+    await waitFor(() =>
+      expect(client.commands.map((command) => command.kind)).toEqual([
+        "approve",
+      ]),
+    );
   });
 
   it("inspects and explicitly approves a mounted Skill extension", async () => {

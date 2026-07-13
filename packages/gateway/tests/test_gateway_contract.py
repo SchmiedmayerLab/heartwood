@@ -16,7 +16,11 @@ from typing import cast
 import pytest
 
 from heartwood.gateway import (
+    ModelArtifact,
+    ModelArtifactCatalog,
     ModelCatalogService,
+    ModelSnapshot,
+    ModelSnapshotError,
     ProviderModel,
     RestGateway,
     RestRequest,
@@ -411,6 +415,9 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert selected.body["active_profile"] == "local"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
+    assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v1"
+    assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v1"
+    assert artifacts.body["snapshots"]
     assert removed.body["active_profile"] is None
     assert connected.body["active_profile"] == "local-openai-compatible"
     artifact_ids = {
@@ -513,6 +520,58 @@ def test_rest_starts_artifact_download_and_validates_payloads(
         ).status_code
         == 422
     )
+
+
+def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path / "sessions")
+    observed: list[tuple[str, str, Path]] = []
+
+    def artifact_download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+        artifact_id = artifact.artifact_id
+        observed.append(("artifact", artifact_id, cache_dir))
+        return cache_dir / artifact_id
+
+    def snapshot_download(snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
+        snapshot_id = snapshot.snapshot_id
+        observed.append(("snapshot", snapshot_id, cache_dir))
+        return cache_dir / snapshot_id
+
+    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", artifact_download)
+    monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
+
+    artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
+    snapshot_cache = tmp_path / "snapshot-cache"
+    snapshot = gateway.download_local_model_now(
+        "qwen25-7b-instruct-vllm",
+        cache_dir=snapshot_cache,
+    )
+
+    assert artifact == tmp_path / "models" / "llama-cpp-stories260k-ci"
+    assert snapshot == snapshot_cache / "qwen25-7b-instruct-vllm"
+    assert observed == [
+        ("artifact", "llama-cpp-stories260k-ci", tmp_path / "models"),
+        ("snapshot", "qwen25-7b-instruct-vllm", snapshot_cache),
+    ]
+    with pytest.raises(ModelSnapshotError, match="unknown reviewed local model: missing"):
+        gateway.download_local_model_now("missing")
+
+
+def test_gateway_does_not_mask_unexpected_artifact_catalog_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path / "sessions")
+
+    def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:
+        raise ValueError("artifact catalog validation failed")
+
+    monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
+
+    with pytest.raises(ValueError, match="artifact catalog validation failed"):
+        gateway.download_local_model_now("qwen25-7b-instruct-vllm")
 
 
 def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> None:

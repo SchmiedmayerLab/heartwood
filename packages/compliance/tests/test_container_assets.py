@@ -20,7 +20,10 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, ClassVar, cast
 
+import pytest
 from packaging.requirements import Requirement
+
+from heartwood.gateway import verify_model_snapshot
 
 
 def test_generic_image_packages_one_no_weight_runtime() -> None:
@@ -177,6 +180,8 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia"' in bake
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia"' in bake
     assert bake.count('HEARTWOOD_GPU_RUNTIME = "vllm"') == 2
+    assert "type=gha,scope=runtime-gpu-nvidia,mode=min" in bake
+    assert "type=gha,scope=terra-runtime-gpu-nvidia,mode=min" in bake
     assert 'output = ["type=registry,oci-mediatypes=false"]' in bake
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in bake
     assert "coder-7b" not in bake
@@ -188,6 +193,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     generic = _read("images/generic/Dockerfile")
     platform = _read("images/platform/Dockerfile")
     launcher = _read("images/gpu/start_vllm.sh")
+    verifier = _read("images/gpu/verify_runtime.sh")
     lock = _read("images/gpu/vllm-requirements.txt")
 
     for dockerfile in (generic, platform):
@@ -195,6 +201,16 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "uv pip sync --require-hashes" in dockerfile
         assert "images/gpu/vllm-requirements.txt" in dockerfile
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
+        assert "ffmpeg" in dockerfile
+        assert "AS gpu-ci-validate" in dockerfile
+        assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
+    assert generic.index("uv venv /opt/heartwood-vllm") < generic.index(
+        "COPY --chown=heartwood:heartwood packages"
+    )
+    assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
+        "COPY packages ./packages"
+    )
+    assert platform.count("UV_CACHE_DIR=/root/.cache/uv") == 2
     assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock
@@ -202,7 +218,69 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
+    assert "VLLM_USE_FLASHINFER_SAMPLER" in launcher
     assert "huggingface.co" not in launcher
+    assert "/opt/heartwood-vllm/bin/python" in verifier
+    assert "import torchcodec, vllm" in verifier
+    assert "-name '*.gguf' -o -name '*.safetensors'" in verifier
+    assert "-name '*.bin' -size +10M" in verifier
+    assert "compressed_tensors/transform/utils/hadamards.safetensors" in verifier
+    assert "verify_no_model_artifacts /opt /home" in verifier
+    assert "GPU runtime image contains a model artifact" in verifier
+    assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
+
+
+@pytest.mark.parametrize("filename", ["small.gguf", "small.safetensors"])
+def test_gpu_runtime_verifier_rejects_small_model_artifacts(tmp_path: Path, filename: str) -> None:
+    artifact = tmp_path / filename
+    artifact.write_bytes(b"synthetic-test-artifact")
+    verifier = _repo_root() / "images/gpu/verify_runtime.sh"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; verify_no_model_artifacts "$2"',
+            "heartwood-gpu-verifier-test",
+            str(verifier),
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 65
+    assert str(artifact) in completed.stderr
+
+
+def test_gpu_runtime_verifier_allows_hash_locked_dependency_tensor(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "heartwood-vllm"
+    runtime_asset = (
+        runtime_root
+        / "lib/python3.12/site-packages/compressed_tensors/transform/utils/hadamards.safetensors"
+    )
+    runtime_asset.parent.mkdir(parents=True)
+    runtime_asset.write_bytes(b"synthetic-hadamard-transform")
+    verifier = _repo_root() / "images/gpu/verify_runtime.sh"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; verify_no_model_artifacts "$2"',
+            "heartwood-gpu-verifier-test",
+            str(verifier),
+            str(runtime_root),
+        ],
+        check=False,
+        capture_output=True,
+        env={**os.environ, "HEARTWOOD_VLLM_ROOT": str(runtime_root)},
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
 
 
 def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
@@ -237,22 +315,28 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert denied.returncode == 64
 
 
-def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
+def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     bootstrap = _read("deploy/carina/bootstrap.sh")
-    launcher = _read("deploy/carina/launch-interactive.sh")
     launch_runtime = _read("packages/cli/src/heartwood/cli/_launch.py")
-    batch = _read("deploy/carina/interactive.sbatch")
     environment = _toml("images/generic/image-flavors.toml")
+    bootstrap_environment = _read("deploy/carina/environment.yml")
 
     assert "micromamba create" in bootstrap
     assert "micromamba install" in bootstrap
+    assert "module load" in bootstrap
+    assert "HEARTWOOD_MODULE_INIT" in bootstrap
+    assert "/usr/share/lmod/lmod/init/profile" in bootstrap
     assert '"${root}/bootstrap/conda-meta"' in bootstrap
     assert "images/gpu/vllm-requirements.txt" in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
-    assert "SLURM_JOB_ID" in launcher
-    assert "LOCAL_SCRATCH_JOB" in launcher
-    assert "--inside-allocation" in launcher
-    assert "HEARTWOOD_PLATFORM=carina" in launcher
+    assert "import torchcodec" in bootstrap
+    assert "import vllm" in bootstrap
+    assert "VLLM_USE_FLASHINFER_SAMPLER=0" in bootstrap
+    assert "ffmpeg=" in bootstrap_environment
+    assert "SLURM_JOB_ID" in launch_runtime
+    assert "LOCAL_SCRATCH_JOB" in launch_runtime
+    assert "--inside-allocation" in launch_runtime
+    assert "HEARTWOOD_PLATFORM=carina" in launch_runtime
     assert "verify_snapshot(options.model_root)" in launch_runtime
     assert 'env.get("LOCAL_SCRATCH_JOB"' in launch_runtime
     assert "allowed_names" in launch_runtime
@@ -260,9 +344,9 @@ def test_carina_launcher_requires_verified_synthetic_allocation() -> None:
     assert '"OPENAI_API_KEY"' not in launch_runtime
     assert '"--model-source"' in launch_runtime
     assert "127.0.0.1:8765/v1/models" in launch_runtime
-    assert "#SBATCH --partition=gpu" in batch
-    assert "#SBATCH --gres=gpu:1" in batch
-    assert "${script_dir}/launch-interactive.sh" in batch
+    assert '"sinfo", "--noheader", "--format=%P|%G|%a"' in launch_runtime
+    assert "_SLURM_EXPORTED_ENVIRONMENT" in launch_runtime
+    assert "--export=ALL" not in launch_runtime
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
 
 
@@ -273,24 +357,22 @@ def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) 
     weights.write_bytes(b"synthetic-weights")
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     (model / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
-    verifier = _repo_root() / "deploy/carina/verify_model_snapshot.py"
-    verifier_source = _read("packages/cli/src/heartwood/cli/_model_snapshot.py")
+    verifier_source = _read("packages/gateway/src/heartwood/gateway/_model_snapshots.py")
     assert "file.read(1024 * 1024)" in verifier_source
     assert "os.O_NOFOLLOW" in verifier_source
     assert ".read_bytes()" not in verifier_source
 
-    verified = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
-    assert verified.returncode == 0
+    verify_model_snapshot(model)
 
     (model / "unlisted.json").write_text("{}", encoding="utf-8")
-    unlisted = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
-    assert unlisted.returncode == 66
+    with pytest.raises(ValueError, match="unlisted"):
+        verify_model_snapshot(model)
     (model / "unlisted.json").unlink()
 
     weights.unlink()
     weights.symlink_to(model / "missing-weights")
-    linked = subprocess.run([sys.executable, str(verifier), str(model)], check=False)
-    assert linked.returncode == 66
+    with pytest.raises(ValueError, match="symbolic link"):
+        verify_model_snapshot(model)
 
 
 def test_native_release_assets_are_verified_before_installation() -> None:
@@ -309,6 +391,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
     assert "git archive --format=tar HEAD" in packager
+    assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow
@@ -338,12 +421,20 @@ def test_native_release_assets_are_verified_before_installation() -> None:
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
     dependency_review = _read(".github/workflows/dependency-review.yml")
+    pull_request_build = workflow.split("  pull-request-build:\n", maxsplit=1)[1].split(
+        "\n  build:\n", maxsplit=1
+    )[0]
+    main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
 
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in workflow
-    assert "attest=type=sbom,disabled=true" in workflow
-    assert "attest=type=provenance,disabled=true" in workflow
+    assert 'target=gpu-ci-validate"' in pull_request_build
+    assert 'output=type=cacheonly"' in pull_request_build
+    assert "output=type=docker" not in pull_request_build
+    assert "docker/setup-buildx-action@v4" in pull_request_build
+    assert "attest=type=sbom,disabled=true" in pull_request_build
+    assert "attest=type=provenance,disabled=true" in pull_request_build
     assert "Promote GPU Channel Tags" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
@@ -352,10 +443,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
     assert "observed media type:" in workflow
     assert "Linux platforms:" in workflow
-    assert "/opt/heartwood-vllm/bin/python" in workflow
-    assert "find" in workflow
-    assert "-size +10M" in workflow
-    assert "*.safetensors" in workflow
+    assert 'docker pull --platform linux/amd64 "${CANDIDATE}"' in main_build
+    assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in main_build
     assert "immutable GPU commit tag does not match" in workflow
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
     assert "promoted ${channel} digest does not match" in workflow
@@ -420,8 +509,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "cohort-summary.json" in smoke
     assert " allow " in smoke
     assert " reject " in smoke
-    assert "Action approved" in smoke
-    assert "Action denied" in smoke
+    assert "Action set approved" in smoke
+    assert "Action set denied" in smoke
     assert "audit export" in smoke
     assert "load_skills_from_dir" in smoke
     assert "start_agent_server" not in smoke

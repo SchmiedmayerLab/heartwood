@@ -128,10 +128,11 @@ Pull requests run:
 - fresh named-volume creation and cross-container recovery for state and model storage;
 - OpenHands native loading of every repository-verified Skill;
 - model connection, catalog, profile, and artifact integrity tests;
+- dedicated generic and Terra GPU validation stages that reuse the hash-locked vLLM dependency layer, keep uv archives in non-persistent BuildKit cache mounts, import TorchCodec and vLLM, and reject embedded model artifacts through a cache-only BuildKit output; the verifier permits only the exact Hadamard transform tensor installed by the hash-locked `compressed-tensors` dependency;
 - a no-weight Terra CI image built through the production platform Dockerfile;
 - Terra Jupyter contract, platform payload, inherited entrypoint, Leonardo route, and OpenHands loopback smokes.
 
-Main publication repeats the integration checks against untagged, content-addressed generic and real Terra-derived candidates. Public commit and moving tags are promotion outputs, not test inputs. The CI fixture validates orchestration, policy, audit, and interface wiring; it makes no model capability claim.
+The cache-only pull-request path executes every production filesystem instruction and the shared in-image GPU verifier without exporting the large candidate into the runner's Docker store. Main publication still pulls and runs that verifier against each exact untagged, content-addressed GPU candidate before immutable or moving tags are created. Main also repeats the integration checks against untagged, content-addressed generic and real Terra-derived CPU candidates. Public commit and moving tags are promotion outputs, not test inputs. The CI fixture validates orchestration, policy, audit, and interface wiring; it makes no model capability claim.
 
 ## Registry Maintenance
 

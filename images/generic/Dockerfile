@@ -18,7 +18,7 @@ COPY packages/webui ./
 
 RUN npm run build
 
-FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
+FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim AS heartwood-runtime-base
 
 ARG TARGETARCH
 ARG HEARTWOOD_IMAGE_FLAVOR=runtime
@@ -69,6 +69,9 @@ RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
       jq \
       libgomp1 \
       tmux \
+    && if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ffmpeg; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -90,18 +93,9 @@ ENV HF_HOME=/home/heartwood/.cache/heartwood/models/.huggingface
 
 WORKDIR /opt/heartwood
 
-COPY --chown=heartwood:heartwood pyproject.toml uv.lock ./
-COPY --chown=heartwood:heartwood packages ./packages
-COPY --chown=heartwood:heartwood fixtures ./fixtures
-COPY --chown=heartwood:heartwood skills ./skills
-COPY --chown=heartwood:heartwood evals ./evals
-COPY --chown=heartwood:heartwood images ./images
-COPY --from=webui-build --chown=heartwood:heartwood /src/packages/webui/dist ./packages/webui/dist
+COPY --chown=heartwood:heartwood images/gpu/vllm-requirements.txt ./images/gpu/vllm-requirements.txt
 
 USER heartwood
-
-RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
-    uv sync --locked --no-dev --all-extras
 
 RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
     if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
@@ -111,8 +105,25 @@ RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid
       echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
     fi
 
+COPY --chown=heartwood:heartwood pyproject.toml uv.lock ./
+COPY --chown=heartwood:heartwood packages ./packages
+COPY --chown=heartwood:heartwood fixtures ./fixtures
+COPY --chown=heartwood:heartwood skills ./skills
+COPY --chown=heartwood:heartwood evals ./evals
+COPY --chown=heartwood:heartwood images ./images
+COPY --from=webui-build --chown=heartwood:heartwood /src/packages/webui/dist ./packages/webui/dist
+
+RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
+    uv sync --locked --no-dev --all-extras
+
 COPY --chown=heartwood:heartwood README.md ACRONYMS.md ./
 COPY --chown=heartwood:heartwood docs ./docs
 COPY --chown=heartwood:heartwood design ./design
+
+FROM heartwood-runtime-base AS gpu-ci-validate
+
+RUN /opt/heartwood/images/gpu/verify_runtime.sh
+
+FROM heartwood-runtime-base AS runtime-image
 
 CMD ["heartwood", "--help"]

@@ -7,7 +7,7 @@
  */
 
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { syntheticEvents } from "../test/fixtures";
+import { event, syntheticEvents } from "../test/fixtures";
 import type { SessionSummary } from "../types";
 
 test.beforeEach(async ({ page }) => installGatewayRoutes(page));
@@ -45,13 +45,20 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(page.getByText("omop-cdm", { exact: true })).toBeVisible();
 
   const approval = page.getByRole("region", {
-    name: "Approval required for terminal",
+    name: "Approval required for OpenHands action set",
   });
+  await expect(
+    approval.getByText(
+      "OpenHands proposed these actions together. One decision applies to every action below.",
+    ),
+  ).toBeVisible();
   await expect(approval.getByText("low risk")).toBeVisible();
   await expect(
     approval.getByText("build the aggregate synthetic target-condition cohort"),
   ).toBeVisible();
-  await expect(page.getByLabel("Allow session-test-toolcall-0")).toBeVisible();
+  const allowActions = page.getByLabel("Allow all 1 action once");
+  await expect(allowActions).toBeVisible();
+  await allowActions.click();
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export audit" }).click();
@@ -148,6 +155,7 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
 });
 
 const installGatewayRoutes = async (page: Page): Promise<void> => {
+  let sessionEvents = syntheticEvents();
   let sessions: SessionSummary[] = [
     summary("session-test", "Synthetic cohort analysis", 7),
   ];
@@ -209,12 +217,23 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     const resource = parts[sessionsIndex + 2];
     if (resource === "events") {
       await json(route, {
-        events: sessionId === "session-test" ? syntheticEvents() : [],
+        events: sessionId === "session-test" ? sessionEvents : [],
       });
       return;
     }
     if (resource === "commands") {
-      await json(route, { events: [] });
+      const payload = request.postDataJSON() as { kind?: string };
+      const nextEvents =
+        sessionId === "session-test" && payload.kind === "approve" ?
+          [
+            event(sessionEvents.length, "confirmation.resolved", {
+              decision: "approved",
+              tool_call_id: "session-test-toolcall-0",
+            }),
+          ]
+        : [];
+      sessionEvents = [...sessionEvents, ...nextEvents];
+      await json(route, { events: nextEvents });
       return;
     }
     if (resource === "audit-export") {

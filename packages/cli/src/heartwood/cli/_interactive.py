@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -34,6 +35,17 @@ class InteractionResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PendingAction:
+    """One member of the current OpenHands confirmation batch."""
+
+    request_id: str
+    tool_call_id: str
+    tool_name: str
+    risk: str
+    summary: str
+
+
 class InteractiveSession:
     """Translate terminal input into the shared gateway command contract."""
 
@@ -44,6 +56,10 @@ class InteractiveSession:
     def replay(self) -> tuple[SessionEvent, ...]:
         """Return the persisted conversation."""
         return self.gateway.replay_events(session_id=self.session_id)
+
+    def pending_actions(self) -> tuple[PendingAction, ...]:
+        """Return the unresolved members of the current OpenHands action batch."""
+        return pending_actions(self.replay())
 
     def submit(self, line: str) -> InteractionResult:
         """Submit a prompt or slash command."""
@@ -59,12 +75,18 @@ class InteractiveSession:
         directive = parts[0]
         if directive in {"/quit", "/exit"} and len(parts) == 1:
             return InteractionResult(exit_requested=True)
-        if directive in {"/allow", "/reject"} and len(parts) == 2:
+        if directive in {"/allow", "/reject"} and len(parts) in {1, 2}:
+            target = self._decision_target(parts[1] if len(parts) == 2 else None)
+            if target is None:
+                return InteractionResult(
+                    message="No actions are awaiting review.",
+                    error=True,
+                )
             kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
             return InteractionResult(
                 events=self._handle(
                     kind,
-                    {"target_type": "tool-call", "target_id": parts[1]},
+                    {"target_type": "tool-call", "target_id": target},
                 )
             )
         if directive == "/pause" and len(parts) == 1:
@@ -83,6 +105,17 @@ class InteractiveSession:
         if directive == "/help" and len(parts) == 1:
             return InteractionResult(message=command_help())
         return InteractionResult(message=f"Unknown command: {directive}")
+
+    def _decision_target(self, requested_id: str | None) -> str | None:
+        actions = self.pending_actions()
+        if not actions:
+            return None
+        if requested_id is None:
+            return actions[0].tool_call_id
+        for action in actions:
+            if requested_id in {action.tool_call_id, action.request_id}:
+                return action.tool_call_id
+        return requested_id
 
     def _handle(
         self,
@@ -103,9 +136,33 @@ class InteractiveSession:
 
 def command_help() -> str:
     """Return the commands common to terminal clients."""
-    return (
-        "/allow <id>  /reject <id>  /pause  /resume  /status  /replay  /audit-export  /help  /exit"
-    )
+    return "/allow  /reject  /pause  /resume  /status  /replay  /audit-export  /help  /exit"
+
+
+def pending_actions(events: Sequence[SessionEvent]) -> tuple[PendingAction, ...]:
+    """Project unresolved confirmation requests from a persisted event stream."""
+    pending: dict[str, PendingAction] = {}
+    for event in events:
+        kind = str(event.kind)
+        if kind == EventKind.CONFIRMATION_REQUESTED.value:
+            request = event.payload.get("request")
+            if not isinstance(request, dict):
+                continue
+            tool_call_id = request.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id:
+                continue
+            pending[tool_call_id] = PendingAction(
+                request_id=str(request.get("request_id", "")),
+                tool_call_id=tool_call_id,
+                tool_name=str(request.get("tool_name", "unknown-tool")),
+                risk=str(request.get("risk", "unknown")),
+                summary=str(request.get("summary", request.get("tool_name", "action"))),
+            )
+        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
+            tool_call_id = event.payload.get("tool_call_id")
+            if isinstance(tool_call_id, str):
+                pending.pop(tool_call_id, None)
+    return tuple(pending.values())
 
 
 def format_model_status(gateway: SessionGateway) -> str:

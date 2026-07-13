@@ -35,6 +35,8 @@ group "default" {
 target "runtime-gpu-nvidia" {
   inherits = ["runtime"]
   platforms = ["linux/amd64"]
+  cache-from = ["type=gha,scope=runtime-gpu-nvidia"]
+  cache-to = ["type=gha,scope=runtime-gpu-nvidia,mode=min"]
   args = {
     HEARTWOOD_IMAGE_FLAVOR = "runtime-gpu-nvidia"
     HEARTWOOD_GPU_RUNTIME = "vllm"
@@ -94,8 +96,8 @@ target "terra-runtime" {
 
 target "terra-runtime-gpu-nvidia" {
   inherits = ["_terra_common"]
-  cache-from = ["type=gha"]
-  cache-to = ["type=gha,mode=min"]
+  cache-from = ["type=gha,scope=terra-runtime-gpu-nvidia"]
+  cache-to = ["type=gha,scope=terra-runtime-gpu-nvidia,mode=min"]
   output = ["type=registry,oci-mediatypes=false"]
   args = {
     HEARTWOOD_IMAGE_FLAVOR = "terra-runtime-gpu-nvidia"

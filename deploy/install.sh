@@ -14,6 +14,14 @@ platform="auto"
 bundle=""
 checksums=""
 dry_run="false"
+minimum_free_gib="${HEARTWOOD_INSTALL_MINIMUM_FREE_GIB:-8}"
+stage_number=0
+stage_count=7
+
+stage() {
+  stage_number=$((stage_number + 1))
+  printf '\n[%d/%d] %s\n' "${stage_number}" "${stage_count}" "$1"
+}
 
 usage() {
   cat <<'EOF'
@@ -63,6 +71,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ ! "${minimum_free_gib}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "HEARTWOOD_INSTALL_MINIMUM_FREE_GIB must be a positive integer" >&2
+  exit 64
+fi
+
+stage "Resolve and verify the release assets"
 if [[ -z "${bundle}" ]]; then
   if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to retrieve a GitHub Release" >&2
@@ -75,8 +89,8 @@ if [[ -z "${bundle}" ]]; then
   fi
   bundle="${workspace}/heartwood-native.tar.gz"
   checksums="${workspace}/SHA256SUMS"
-  curl --fail --location --silent --show-error "${release_root}/heartwood-native.tar.gz" --output "${bundle}"
-  curl --fail --location --silent --show-error "${release_root}/SHA256SUMS" --output "${checksums}"
+  curl --fail --location --show-error --progress-bar "${release_root}/heartwood-native.tar.gz" --output "${bundle}"
+  curl --fail --location --show-error --progress-bar "${release_root}/SHA256SUMS" --output "${checksums}"
 elif [[ -z "${checksums}" ]]; then
   echo "--checksums is required with --bundle" >&2
   exit 64
@@ -118,10 +132,46 @@ if [[ "${dry_run}" == "true" ]]; then
   exit 0
 fi
 
+stage "Check persistent storage"
+existing_parent="${root}"
+while [[ ! -e "${existing_parent}" && "${existing_parent}" != "/" ]]; do
+  existing_parent="$(dirname "${existing_parent}")"
+done
+available_kib="$(df -Pk "${existing_parent}" | awk 'NR == 2 {print $4}')"
+required_kib=$((minimum_free_gib * 1024 * 1024))
+if [[ -z "${available_kib}" || "${available_kib}" -lt "${required_kib}" ]]; then
+  echo "installation requires at least ${minimum_free_gib} GiB free under ${existing_parent}" >&2
+  exit 73
+fi
+printf 'Available: %d GiB; installation minimum: %d GiB\n' \
+  "$((available_kib / 1024 / 1024))" "${minimum_free_gib}"
+
 versions_root="${root}/versions"
 source_root="${versions_root}/${release_version}"
 runtime_root="${root}/runtimes/${release_version}"
-mkdir -p "${versions_root}" "${root}/runtimes" "${root}/bin"
+stage "Create the Heartwood-owned directory layout"
+mkdir -p \
+  "${versions_root}" \
+  "${root}/runtimes" \
+  "${root}/bin" \
+  "${root}/state/sessions" \
+  "${root}/state/workspaces" \
+  "${root}/state/runtime" \
+  "${root}/models" \
+  "${root}/cache" \
+  "${root}/logs"
+chmod 700 \
+  "${root}" \
+  "${root}/bin" \
+  "${root}/state" \
+  "${root}/state/sessions" \
+  "${root}/state/workspaces" \
+  "${root}/state/runtime" \
+  "${root}/models" \
+  "${root}/cache" \
+  "${root}/logs"
+
+stage "Install the immutable Heartwood source"
 if [[ ! -d "${source_root}" ]]; then
   installation_staging="$(mktemp -d "${versions_root}/.heartwood-${release_version}.XXXXXX")"
   tar -xzf "${workspace}/heartwood-native.tar.gz" -C "${installation_staging}" --strip-components=1
@@ -129,6 +179,7 @@ if [[ ! -d "${source_root}" ]]; then
   installation_staging=""
 fi
 
+stage "Install the locked application and inference runtimes; this can take several minutes"
 if [[ "${platform}" == "carina" ]]; then
   (
     cd "${source_root}"
@@ -145,14 +196,22 @@ else
   )
 fi
 
+stage "Publish and verify the Heartwood commands"
 ln -sfn "${source_root}" "${root}/current"
 command_path="${runtime_root}/heartwood/bin/heartwood"
 if [[ ! -x "${command_path}" ]]; then
   echo "installed heartwood command is unavailable" >&2
   exit 70
 fi
-printf '#!/usr/bin/env bash\nexport HEARTWOOD_INSTALL_ROOT=%q\nexport HEARTWOOD_NATIVE_ROOT=%q\nexport HEARTWOOD_NATIVE_VERSION=%q\nexport HEARTWOOD_VERSION=%q\nexport HEARTWOOD_HOME=%q\nexec %q "$@"\n' \
-  "${source_root}" "${root}" "${release_version}" "${release_version}" "${root}/state" "${command_path}" \
+printf '#!/usr/bin/env bash\nexport HEARTWOOD_INSTALL_ROOT=%q\nexport HEARTWOOD_NATIVE_ROOT=%q\nexport HEARTWOOD_NATIVE_VERSION=%q\nexport HEARTWOOD_VERSION=%q\nexport HEARTWOOD_HOME=%q\nexport HEARTWOOD_MODEL_CACHE=%q\nexport HF_HOME=%q\nexec %q "$@"\n' \
+  "${source_root}" "${root}" "${release_version}" "${release_version}" "${root}/state" \
+  "${root}/models" "${root}/cache/huggingface" "${command_path}" \
   >"${root}/bin/heartwood"
 chmod +x "${root}/bin/heartwood"
-printf '\nInstalled %s\nAdd %s to PATH.\n' "${release_version}" "${root}/bin"
+if [[ -x "${runtime_root}/vllm/bin/hf" ]]; then
+  ln -sfn "${runtime_root}/vllm/bin/hf" "${root}/bin/hf"
+fi
+
+stage "Installation complete"
+printf 'Installed %s in %d seconds.\n' "${release_version}" "${SECONDS}"
+printf 'Add %s to PATH, then run: heartwood doctor\n' "${root}/bin"

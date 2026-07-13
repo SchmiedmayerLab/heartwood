@@ -574,6 +574,22 @@ summary:focus-visible {
   font-size: 0.86rem;
 }
 
+.approval-batch-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.approval-batch-list li span,
+.approval-batch-list li small {
+  display: block;
+}
+
+.approval-batch-list li small {
+  color: var(--muted-foreground);
+}
+
 .approval-copy p {
   margin: 0;
   color: #5e5140;

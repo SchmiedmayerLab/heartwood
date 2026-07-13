@@ -21,7 +21,8 @@ These documents describe commands, images, interfaces, and validation paths impl
 - [Releases](releases.md) defines Semantic Versioning, automated release gates, approval, and published artifacts.
 - [Model Connections](model-connections.md) defines built-in, platform-provided, local, cloud, and custom model configuration.
 - [Researcher Web Interface](web-interface.md) documents the shared session workflow, model setup, action review, audit and CLI parity, notebook layout, and reproducible screenshots.
-- [Carina CLI Pilot](carina-cli.md) documents the synthetic-only native GPU and Stanford AI API Gateway validation path.
+- [Using Heartwood](using-heartwood.md) documents the shared conversation, action-set review, terminal commands, replay, audit, web, notebook, and persistence behavior.
+- [Set Up Heartwood On Carina](carina-cli.md) documents the synthetic-only native GPU and Stanford AI API Gateway workflow.
 - [Getting Started With Local And Offline Models](getting-started-offline.md) is the runnable generic-container and local-inference guide.
 - [Terra Jupyter Demo](terra-jupyter-demo.md) is the synthetic Terra validation runbook.
 - [Platform Image Extension Guide](platform-images.md) documents the implemented shared mechanism for maintaining or adding a platform-derived image.

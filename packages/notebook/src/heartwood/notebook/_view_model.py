@@ -56,13 +56,24 @@ class SkillProposal:
 
 
 @dataclass(frozen=True, slots=True)
+class ApprovalAction:
+    """One visible member of a pending OpenHands action set."""
+
+    target_id: str
+    tool_name: str
+    risk: str
+    summary: str
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalControl:
-    """Actionable approval control rendered from session events."""
+    """One actionable whole-set decision rendered from session events."""
 
     target_type: str
     target_id: str
     label: str
     decision: str | None = None
+    actions: tuple[ApprovalAction, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +170,7 @@ class NotebookSession:
         *,
         tool_call_id: str,
     ) -> NotebookViewModel:
-        """Allow the pending OpenHands action once."""
+        """Allow the complete pending OpenHands action set once."""
         return self._handle(
             CommandKind.APPROVE,
             {"target_type": "tool-call", "target_id": tool_call_id},
@@ -170,7 +181,7 @@ class NotebookSession:
         *,
         tool_call_id: str,
     ) -> NotebookViewModel:
-        """Reject the pending OpenHands action."""
+        """Reject the complete pending OpenHands action set."""
         return self._handle(
             CommandKind.DENY,
             {"target_type": "tool-call", "target_id": tool_call_id},
@@ -227,6 +238,7 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
     datasets: list[DatasetProposal] = []
     skills: list[SkillProposal] = []
     approvals: list[ApprovalControl] = []
+    pending_actions: dict[str, ApprovalAction] = {}
     policies: list[PolicyStatus] = []
     exports: list[ExportAction] = []
     paused = False
@@ -252,13 +264,12 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
             )
         elif kind == EventKind.CONFIRMATION_REQUESTED.value:
             request = _mapping_payload(event.payload["request"], "request")
-            _upsert_approval(
-                approvals,
-                ApprovalControl(
-                    target_type="tool-call",
-                    target_id=str(request["tool_call_id"]),
-                    label=f"Review {request['tool_name']}",
-                ),
+            target_id = str(request["tool_call_id"])
+            pending_actions[target_id] = ApprovalAction(
+                target_id=target_id,
+                tool_name=str(request.get("tool_name", "unknown-tool")),
+                risk=str(request.get("risk", "unknown")),
+                summary=str(request.get("summary", request.get("tool_name", "action"))),
             )
         elif kind == EventKind.APPROVAL_RECORDED.value:
             approval = _mapping_payload(event.payload["approval"], "approval")
@@ -290,6 +301,7 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
             )
         elif kind == EventKind.CONFIRMATION_RESOLVED.value:
             target_id = str(event.payload["tool_call_id"])
+            pending_actions.pop(target_id, None)
             _upsert_approval(
                 approvals,
                 ApprovalControl(
@@ -310,6 +322,17 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
             paused = True
         elif kind == EventKind.SESSION_RESUMED.value:
             paused = False
+    if pending_actions:
+        actions = tuple(pending_actions.values())
+        label = "action" if len(actions) == 1 else "actions"
+        approvals.append(
+            ApprovalControl(
+                target_type="tool-call",
+                target_id=actions[0].target_id,
+                label=f"Review complete action set ({len(actions)} {label})",
+                actions=actions,
+            )
+        )
     return NotebookViewModel(
         session_id=session_id,
         event_count=len(events),
