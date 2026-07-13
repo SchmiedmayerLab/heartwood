@@ -56,7 +56,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Reclaim runner space for local image verification
+      - name: Reclaim runner space for GPU build
         run: |
           df --human-readable /
           sudo rm -rf \
@@ -66,26 +66,18 @@ jobs:
             /usr/share/dotnet \
             /usr/share/swift
           df --human-readable /
-      - name: Build candidate locally
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build and validate candidate without image export
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          docker buildx bake --file docker-bake.hcl \
-            --set "${TARGET}.tags=heartwood-gpu-pr:${TARGET}" \
-            --set "${TARGET}.output=type=docker" \
+          docker buildx bake --progress=plain --file docker-bake.hcl \
+            --set "${TARGET}.target=gpu-ci-validate" \
+            --set "${TARGET}.output=type=cacheonly" \
             --set "${TARGET}.attest=type=sbom,disabled=true" \
             --set "${TARGET}.attest=type=provenance,disabled=true" \
             "${TARGET}"
-      - name: Verify candidate contents
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          image="heartwood-gpu-pr:${TARGET}"
-          docker run --rm --platform linux/amd64 --entrypoint /opt/heartwood-vllm/bin/python \
-            "${image}" -c 'import torchcodec, vllm; from importlib.metadata import version; print(version("torchcodec"), version("vllm"))'
-          test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${image}" \
-            /opt /home -type f -size +10M \
-            \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
 
   build:
     name: Build And Validate ${{ matrix.target }}
@@ -144,11 +136,8 @@ jobs:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}
         run: |
           docker pull --platform linux/amd64 "${CANDIDATE}"
-          docker run --rm --platform linux/amd64 --entrypoint /opt/heartwood-vllm/bin/python \
-            "${CANDIDATE}" -c 'import torchcodec, vllm; from importlib.metadata import version; print(version("torchcodec"), version("vllm"))'
-          test -z "$(docker run --rm --platform linux/amd64 --entrypoint find "${CANDIDATE}" \
-            /opt /home -type f -size +10M \
-            \( -name '*.gguf' -o -name '*.safetensors' -o -name '*.bin' \) -print)"
+          docker run --rm --platform linux/amd64 \
+            --entrypoint /opt/heartwood/images/gpu/verify_runtime.sh "${CANDIDATE}"
       - name: Create and verify immutable commit tag
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}

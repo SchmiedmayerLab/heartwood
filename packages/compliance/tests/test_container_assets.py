@@ -180,6 +180,8 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia"' in bake
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia"' in bake
     assert bake.count('HEARTWOOD_GPU_RUNTIME = "vllm"') == 2
+    assert "type=gha,scope=runtime-gpu-nvidia,mode=min" in bake
+    assert "type=gha,scope=terra-runtime-gpu-nvidia,mode=min" in bake
     assert 'output = ["type=registry,oci-mediatypes=false"]' in bake
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in bake
     assert "coder-7b" not in bake
@@ -191,6 +193,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     generic = _read("images/generic/Dockerfile")
     platform = _read("images/platform/Dockerfile")
     launcher = _read("images/gpu/start_vllm.sh")
+    verifier = _read("images/gpu/verify_runtime.sh")
     lock = _read("images/gpu/vllm-requirements.txt")
 
     for dockerfile in (generic, platform):
@@ -199,6 +202,14 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "images/gpu/vllm-requirements.txt" in dockerfile
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
         assert "ffmpeg" in dockerfile
+        assert "AS gpu-ci-validate" in dockerfile
+        assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
+    assert generic.index("uv venv /opt/heartwood-vllm") < generic.index(
+        "COPY --chown=heartwood:heartwood packages"
+    )
+    assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
+        "COPY packages ./packages"
+    )
     assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock
@@ -208,6 +219,12 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
     assert "VLLM_USE_FLASHINFER_SAMPLER" in launcher
     assert "huggingface.co" not in launcher
+    assert "/opt/heartwood-vllm/bin/python" in verifier
+    assert "import torchcodec, vllm" in verifier
+    assert "find /opt /home -type f -size +10M" in verifier
+    assert "*.safetensors" in verifier
+    assert "GPU runtime image contains a model artifact" in verifier
+    assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
 
 
 def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
@@ -348,12 +365,20 @@ def test_native_release_assets_are_verified_before_installation() -> None:
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
     dependency_review = _read(".github/workflows/dependency-review.yml")
+    pull_request_build = workflow.split("  pull-request-build:\n", maxsplit=1)[1].split(
+        "\n  build:\n", maxsplit=1
+    )[0]
+    main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
 
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in workflow
-    assert "attest=type=sbom,disabled=true" in workflow
-    assert "attest=type=provenance,disabled=true" in workflow
+    assert 'target=gpu-ci-validate"' in pull_request_build
+    assert 'output=type=cacheonly"' in pull_request_build
+    assert "output=type=docker" not in pull_request_build
+    assert "docker/setup-buildx-action@v4" in pull_request_build
+    assert "attest=type=sbom,disabled=true" in pull_request_build
+    assert "attest=type=provenance,disabled=true" in pull_request_build
     assert "Promote GPU Channel Tags" in workflow
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
@@ -362,10 +387,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
     assert "observed media type:" in workflow
     assert "Linux platforms:" in workflow
-    assert "/opt/heartwood-vllm/bin/python" in workflow
-    assert "find" in workflow
-    assert "-size +10M" in workflow
-    assert "*.safetensors" in workflow
+    assert 'docker pull --platform linux/amd64 "${CANDIDATE}"' in main_build
+    assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in main_build
     assert "immutable GPU commit tag does not match" in workflow
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
     assert "promoted ${channel} digest does not match" in workflow
