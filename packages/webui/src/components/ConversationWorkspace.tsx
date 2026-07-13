@@ -206,8 +206,9 @@ const ApprovalRequest = ({
   controls: ApprovalControl[];
   onDecision: (decision: "approve" | "deny", control: ApprovalControl) => void;
 }) => {
-  const target = controls[0];
-  if (!target) return null;
+  // The gateway resolves the complete OpenHands action set from any member identifier.
+  const setRepresentative = controls[0];
+  if (!setRepresentative) return null;
   const label = controls.length === 1 ? "action" : "actions";
   return (
     <section
@@ -244,7 +245,7 @@ const ApprovalRequest = ({
           aria-label={`Allow all ${controls.length} ${label} once`}
           disabled={busy}
           size="sm"
-          onClick={() => onDecision("approve", target)}
+          onClick={() => onDecision("approve", setRepresentative)}
         >
           <Check size={16} />
           Allow all once
@@ -254,7 +255,7 @@ const ApprovalRequest = ({
           disabled={busy}
           size="sm"
           variant="outline"
-          onClick={() => onDecision("deny", target)}
+          onClick={() => onDecision("deny", setRepresentative)}
         >
           <Ban size={16} />
           Reject all

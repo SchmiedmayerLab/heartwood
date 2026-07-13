@@ -129,8 +129,8 @@ def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None
     package = json.loads(_read("packages/webui/package.json"))
     assets = _repo_root() / "docs" / "assets"
 
-    assert "synthetic reference-analysis system test exercises" in web_interface
-    assert "production web build, gateway, OpenHands SDK adapter" in web_interface
+    assert "synthetic reference analysis demonstrates one shared conversation" in web_interface
+    assert "including action review and persisted evidence" in web_interface
     assert "not model quality or live Terra behavior" in web_interface
     assert "npm run screenshots:docs" in web_interface
     assert "responsive layout, not live Leonardo proxy" in terra
