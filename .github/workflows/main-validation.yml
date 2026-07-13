@@ -1,0 +1,86 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Main Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: main-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  codeql:
+    name: CodeQL
+    uses: ./.github/workflows/codeql.yml
+  containers:
+    name: Container Images
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/container-image.yml
+  container-smoke:
+    name: Container Smoke Tests
+    uses: ./.github/workflows/container-smoke.yml
+  gpu-containers:
+    name: GPU Container Images
+    uses: ./.github/workflows/gpu-container-image.yml
+  native-assets:
+    name: Native Release Assets
+    uses: ./.github/workflows/native-release.yml
+  python:
+    name: Python
+    uses: ./.github/workflows/python.yml
+  secrets:
+    name: Secret Scan
+    uses: ./.github/workflows/gitleaks.yml
+  validation:
+    name: Repository Validation
+    uses: ./.github/workflows/validate.yml
+  web-ui:
+    name: Web UI
+    uses: ./.github/workflows/web-ui.yml
+  release-ready:
+    name: Release Candidate Ready
+    if: ${{ always() }}
+    needs:
+      - codeql
+      - containers
+      - container-smoke
+      - gpu-containers
+      - native-assets
+      - python
+      - secrets
+      - validation
+      - web-ui
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every validation workflow
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          VALIDATION_RESULTS: ${{ toJson(needs) }}
+        run: |
+          jq --exit-status --arg event "${EVENT_NAME}" '
+            if $event == "pull_request" then
+              .containers.result == "skipped"
+              and (
+                to_entries
+                | map(select(
+                    .key != "containers"
+                  ))
+                | all(.value.result == "success")
+              )
+            else
+              to_entries | all(.value.result == "success")
+            end
+          ' <<<"${VALIDATION_RESULTS}"

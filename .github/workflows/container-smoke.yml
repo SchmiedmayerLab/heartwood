@@ -9,9 +9,13 @@
 name: Container Smoke Test
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_call:
+    inputs:
+      run_capable_model:
+        description: Run the resource-intensive 7B mounted-model acceptance job
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       run_capable_model:
@@ -24,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: container-smoke-${{ github.ref }}
+  group: container-smoke-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

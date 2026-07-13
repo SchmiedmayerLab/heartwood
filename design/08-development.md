@@ -19,7 +19,7 @@ SPDX-License-Identifier: MIT
 
 ## Repository Hygiene
 
-Use short-lived branches, reviewed pull requests, locked dependencies, synthetic fixtures, SPDX headers, and narrowly scoped changes. Organization community-health files and reusable validation workflows remain the canonical contribution layer. Required checks block merges and releases rather than live sessions.
+Use short-lived branches, reviewed pull requests, locked dependencies, synthetic fixtures, SPDX headers, and narrowly scoped changes. Organization community-health files and reusable validation workflows remain the canonical contribution layer. One dependency-based `Main Validation` workflow orchestrates reusable component workflows on pull requests and `main`; its final release-readiness job succeeds only when every event-appropriate component succeeds. Component workflows remain manually dispatchable for diagnostics. Required checks block merges and releases rather than live sessions.
 
 Dependencies are admitted only when they provide a maintained capability that is impractical to implement safely in the existing stack. Agent behavior must use the pinned OpenHands SDK and tools; provider compatibility must use LiteLLM; local artifact retrieval must use the Hugging Face client; notebook routing must use Jupyter infrastructure; and container publication must use standard Docker and OCI tooling. Dependency-specific behavior belongs behind one adapter with conformance tests so upgrades do not spread version assumptions through the product.
 

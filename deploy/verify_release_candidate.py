@@ -96,17 +96,6 @@ def check_status(
     return incomplete, failed
 
 
-def _required_checks(path: Path) -> list[str]:
-    checks = [
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    if not checks or len(checks) != len(set(checks)):
-        raise ValueError("required-check manifest must be non-empty and unique")
-    return checks
-
-
 def source_version_errors(root: Path, version: str) -> list[str]:
     """Return packaged components whose source metadata differs from version."""
     observed: dict[str, str] = {}
@@ -187,7 +176,7 @@ def main() -> int:
     parser.add_argument("--version-only", action="store_true")
     parser.add_argument("--checks", type=Path)
     parser.add_argument("--statuses", type=Path)
-    parser.add_argument("--required-checks", type=Path)
+    parser.add_argument("--required-check", action="append", default=[])
     parser.add_argument("--source-root", type=Path)
     args = parser.parse_args()
 
@@ -212,8 +201,8 @@ def main() -> int:
     if args.version_only:
         print("release version is valid")
         return 0
-    if args.checks is None or args.required_checks is None:
-        parser.error("--checks and --required-checks are required unless --version-only is used")
+    if args.checks is None or not args.required_check:
+        parser.error("--checks and --required-check are required unless --version-only is used")
     try:
         payload = json.loads(args.checks.read_text(encoding="utf-8"))
         status_payload = (
@@ -223,7 +212,7 @@ def main() -> int:
         )
         incomplete, failed = check_status(
             payload,
-            _required_checks(args.required_checks),
+            args.required_check,
             status_payload,
         )
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:

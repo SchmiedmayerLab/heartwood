@@ -65,6 +65,44 @@ def test_current_release_guides_match_declared_version() -> None:
     assert _release_verifier().source_version_errors(Path.cwd(), _declared_version()) == []
 
 
+def test_main_validation_owns_release_readiness_dependencies() -> None:
+    workflow = Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8")
+    called_workflows = {
+        "codeql": "codeql.yml",
+        "containers": "container-image.yml",
+        "container-smoke": "container-smoke.yml",
+        "secrets": "gitleaks.yml",
+        "gpu-containers": "gpu-container-image.yml",
+        "native-assets": "native-release.yml",
+        "python": "python.yml",
+        "validation": "validate.yml",
+        "web-ui": "web-ui.yml",
+    }
+    for called_workflow in called_workflows.values():
+        assert f"uses: ./.github/workflows/{called_workflow}" in workflow
+        component = Path(f".github/workflows/{called_workflow}").read_text(encoding="utf-8")
+        assert "  workflow_call:" in component
+        assert "  push:" not in component
+        assert "  pull_request:" not in component
+        if "concurrency:" in component:
+            assert "${{ github.workflow }}-${{ github.ref }}" in component
+    readiness = workflow.split("  release-ready:\n", maxsplit=1)[1]
+    assert "name: Release Candidate Ready" in readiness
+    for job_id in called_workflows:
+        assert f"      - {job_id}" in readiness
+    assert 'if $event == "pull_request" then' in readiness
+    assert '.containers.result == "skipped"' in readiness
+    assert 'to_entries | all(.value.result == "success")' in readiness
+
+
+def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
+    workflow = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
+    assert "--required-check 'Release Candidate Ready'" in workflow
+    assert "for attempt in" not in workflow
+    assert "sleep 30" not in workflow
+    assert "release-required-checks.txt" not in workflow
+
+
 def test_release_checks_require_latest_successful_run() -> None:
     verifier = _release_verifier()
     payload = {

@@ -9,8 +9,7 @@
 name: Container Image
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -18,7 +17,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: container-image-${{ github.ref }}
+  group: container-image-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
