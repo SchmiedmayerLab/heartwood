@@ -107,9 +107,7 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
 
 def test_documentation_is_validated_continuously_and_published_from_releases() -> None:
     documentation = Path(".github/workflows/documentation.yml").read_text(encoding="utf-8")
-    publication = Path(".github/workflows/publish-documentation.yml").read_text(
-        encoding="utf-8"
-    )
+    publication = Path(".github/workflows/publish-documentation.yml").read_text(encoding="utf-8")
     release = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
 
     assert "  workflow_call:" in documentation
