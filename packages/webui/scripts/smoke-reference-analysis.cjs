@@ -156,20 +156,17 @@ async function main() {
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     await runApprovedTask(page, task, {
-      callId: "call-heartwood-reference-analysis",
       finalMessage:
         "The synthetic target-condition cohort summary is ready for review.",
       prompt: cohortPrompt,
       summary: "build the aggregate synthetic target-condition cohort",
     });
     await runApprovedTask(page, task, {
-      callId: "call-heartwood-baseline-analysis",
       finalMessage: "The training-only age baseline is ready for review.",
       prompt: baselinePrompt,
       summary: "fit the training-only synthetic age baseline",
     });
     await runApprovedTask(page, task, {
-      callId: "call-heartwood-aggregate-export",
       finalMessage:
         "The count-floor-controlled aggregate export is ready for review.",
       prompt: exportPrompt,
@@ -177,7 +174,6 @@ async function main() {
     });
     await captureReferenceScreenshots(page);
     await runApprovedTask(page, task, {
-      callId: "call-heartwood-failing-action",
       finalMessage:
         "The requested tool action failed; review the terminal outcome before retrying.",
       prompt: failurePrompt,
@@ -321,14 +317,14 @@ async function runApprovedTask(page, task, taskSpec) {
   await task.fill(taskSpec.prompt);
   await task.press("Enter");
   const approval = page
-    .getByRole("region", { name: "Approval required for terminal" })
+    .getByRole("region", { name: "Approval required for OpenHands action set" })
     .last();
   await expect(approval).toBeVisible({ timeout: 60_000 });
   await expect(
     approval.getByText(taskSpec.summary, { exact: true }),
   ).toBeVisible();
   await approval
-    .getByRole("button", { name: `Allow ${taskSpec.callId}` })
+    .getByRole("button", { name: /^Allow all \d+ actions? once$/u })
     .click();
   await expect(
     page.getByText(taskSpec.finalMessage, { exact: true }),
