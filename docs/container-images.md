@@ -26,12 +26,16 @@ This document describes current image and publication behavior. [Platform Suppor
 | `sha-<git-sha>-gpu-nvidia` | `linux/amd64` | Immutable generic NVIDIA runtime. |
 | `edge-terra-gpu-nvidia` | `linux/amd64` | Moving Terra-derived NVIDIA runtime with isolated vLLM and no weights. |
 | `sha-<git-sha>-terra-gpu-nvidia` | `linux/amd64` | Immutable Terra-derived NVIDIA runtime. |
+| `<semver>` | `linux/amd64`, `linux/arm64` | Protected release of the verified generic runtime. |
+| `<semver>-terra` | `linux/amd64` | Protected release of the verified Terra-derived runtime. |
+| `<semver>-gpu-nvidia` | `linux/amd64` | Protected release of the verified generic NVIDIA runtime. |
+| `<semver>-terra-gpu-nvidia` | `linux/amd64` | Protected release of the verified Terra-derived NVIDIA runtime. |
 
 Do not publish `latest` before the first stable release. Model names, provider names, branch names, and architecture-helper suffixes are not public flavor tags.
 
-## Future Release Tags
+## Release Tags
 
-Stable `v<semver>` tags are not published yet. Their retention, signing, release notes, and compatibility policy must be implemented before the first stable release.
+The protected release workflow publishes strict Semantic Version tags without a `v` prefix only after every declared check passes on the exact current `main` commit and the designated maintainer approves publication. Version tags copy verified immutable commit manifests and refuse an existing tag with a different digest. Build metadata uses `_` instead of `+` only in the container tag because OCI tag syntax does not permit `+`. See [Releases](releases.md) for the gate and artifact contract. Image signing, retention automation, generated notices, and a formal compatibility and support policy remain release-assurance work.
 
 Main publication separates staging from promotion. The publication jobs run only for the `main` ref; pull requests continue to run CI validation without publishing candidates or tags. A build may push content-addressed candidate manifests by digest, but it does not create or move a public tag until the exact candidate has passed its required checks. The immutable commit tag is created first and verified; a rerun may reuse it only when its digest or normalized manifest matches and must fail rather than overwrite a different artifact. The moving `edge` tag is updated last from that verified commit tag. The promotion step checks the current `main` commit immediately before moving the channel and refuses promotion if the branch has already advanced. A staging or candidate-validation failure leaves the candidate untagged and the previous moving tag unchanged. A later freshness or promotion failure may leave the validated immutable commit tag publicly reachable, but it cannot expose an unvalidated candidate under a public tag.
 
@@ -79,7 +83,7 @@ The service starts without a secret or model. Configure a profile from the web s
 
 The state volume contains sessions, non-secret model and action settings, installed Skills, OpenHands state, workspaces, and audit data. The separate model volume allows large weights to use a different quota and retention policy and also owns Hugging Face transfer metadata through `HF_HOME`. Override `HEARTWOOD_MODEL_CACHE` and `HF_HOME` together when mounting a different model path. [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) tracks a canonical versioned root and one-volume default while preserving the split cache as an advanced option; the current two-volume layout remains the supported contract until that migration is implemented and restart-tested.
 
-Native environments use the same application and dependency locks through GitHub Release assets rather than a platform image. The release publishes `heartwood-installer`, `heartwood-native.tar.gz`, and `SHA256SUMS`; pull requests build and dry-run the same assets without publishing. Native installation contains no model weights or credentials and does not request compute. The installed `heartwood launch` command owns platform-aware compute planning and runtime startup.
+Native environments use the same application and dependency locks through GitHub Release assets rather than a platform image. The release publishes `heartwood-installer`, `heartwood-native.tar.gz`, and `SHA256SUMS`; pull requests and `main` build and dry-run the same assets without publishing. Native installation contains no model weights or credentials and does not request compute. The installed `heartwood launch` command owns platform-aware compute planning and runtime startup.
 
 Run an explicitly mounted local model in the same container:
 

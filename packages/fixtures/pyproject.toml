@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-fixtures"
-version = "0.0.0"
+version = "0.1.0"
 description = "Synthetic fixture linting for Heartwood tests and replay artifacts."
 readme = "README.md"
 requires-python = ">=3.11"

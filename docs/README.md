@@ -18,6 +18,7 @@ These documents describe commands, images, interfaces, and validation paths impl
 
 - [Platform Support](platform-support.md) records the current support and validation status for each platform.
 - [Container Images](container-images.md) defines published tags, image contents, runtime configuration, and continuous integration.
+- [Releases](releases.md) defines Semantic Versioning, automated release gates, approval, and published artifacts.
 - [Model Connections](model-connections.md) defines built-in, platform-provided, local, cloud, and custom model configuration.
 - [Researcher Web Interface](web-interface.md) documents the shared session workflow, model setup, action review, audit and CLI parity, notebook layout, and reproducible screenshots.
 - [Carina CLI Pilot](carina-cli.md) documents the synthetic-only native GPU and Stanford AI API Gateway validation path.

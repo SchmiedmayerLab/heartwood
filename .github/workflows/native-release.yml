@@ -8,14 +8,8 @@ name: Native Release Assets
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/native-release.yml"
-      - "deploy/**"
-      - "packages/**"
-      - "pyproject.toml"
-      - "uv.lock"
-  release:
-    types: [published]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -33,7 +27,7 @@ jobs:
           persist-credentials: false
       - name: Build native assets
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || github.sha }}
+          RELEASE_VERSION: ${{ github.sha }}
         run: deploy/package-native.sh dist "${RELEASE_VERSION}"
       - name: Verify local installer path
         run: >-
@@ -54,28 +48,3 @@ jobs:
             dist/heartwood-native.tar.gz
             dist/SHA256SUMS
           if-no-files-found: error
-
-  publish:
-    name: Publish Native Release Assets
-    if: github.event_name == 'release'
-    needs: package
-    runs-on: ubuntu-24.04
-    permissions:
-      attestations: write
-      contents: write
-      id-token: write
-    steps:
-      - name: Download native assets
-        uses: actions/download-artifact@v8
-        with:
-          name: heartwood-native-assets
-          path: dist
-      - name: Attest native assets
-        uses: actions/attest@v4
-        with:
-          subject-path: dist/*
-      - name: Publish release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "${RELEASE_TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"

@@ -19,10 +19,10 @@ The Terra image and its continuous-integration contracts are implemented. The li
 Use:
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:edge-terra
+ghcr.io/schmiedmayerlab/heartwood:0.1.0-terra
 ```
 
-For reproducibility, replace `edge-terra` with `sha-<git-sha>-terra` after selecting a tested build. Main publishes both tags automatically from the pinned Terra Jupyter Notebook base image.
+The Semantic Version tag is the reproducible release reference. Use `sha-<git-sha>-terra` to identify the exact validated source commit or `edge-terra` only to follow the moving validated-main channel. Every variant remains derived from the pinned Terra Jupyter Notebook base image.
 
 The Terra tag is a public, unauthenticated, `linux/amd64` Docker schema-2 image manifest with media type `application/vnd.docker.distribution.manifest.v2+json`. This is deliberate: Leonardo rejects an Open Container Initiative index during image auto-detection. `docker manifest inspect` alone is insufficient because it does not prove that the registry returns Leonardo’s accepted media type. Verify a published commit with:
 
