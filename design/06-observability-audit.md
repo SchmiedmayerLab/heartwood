@@ -41,11 +41,11 @@ The CLI, notebook, and web UI render the same plain-language sequence from the s
 
 Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, and pending action set. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
 
-## Improvement Export
+## Field Feedback Boundary
 
-Future field-feedback export must be researcher initiated and separately authorized. It may retain a reduced trajectory skeleton, decisions, timings, errors, recovery, and ratings only after deterministic scrubbing and human confirmation that the artifact contains no protected health information. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
+Heartwood does not export field-feedback trajectories. Any such export must be researcher initiated, separately authorized, deterministically scrubbed, and confirmed by a human to contain no protected health information; [Issue #49](https://github.com/SchmiedmayerLab/heartwood/issues/49) owns the privacy and purpose-limitation gates. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
 
-Validated synthetic or scrubbed trajectories can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; cryptographically signed Skill releases can join that path only after the distribution controls in [04](04-skills.md) are implemented.
+Validated synthetic fixtures can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; external Skill releases remain subject to the distribution boundary in [04](04-skills.md).
 
 ## Anti-Goals
 

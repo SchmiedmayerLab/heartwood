@@ -26,6 +26,8 @@ Every `main` commit runs the `Main Validation` workflow. Its dependency graph ca
 
 After automated verification, the workflow creates a draft with GitHub's automatically generated release notes and the verified native assets. The `Approve And Publish Release` job then waits in the protected `release` environment. Before approving, the designated maintainer can open the draft and refine its title or notes; release assets must remain unchanged. The maintainer may approve their own deployment. Approval authorizes only the already-verified commit, draft, and artifacts; it does not bypass a failed gate. Publication rechecks the draft assets and confirms that `main` still points to the approved commit, then stops if either changed while approval was pending.
 
+After the release is public, the same workflow checks out the exact published tag, rebuilds the canonical documentation strictly, and deploys it to [GitHub Pages](https://schmiedmayerlab.github.io/heartwood/) through the `github-pages` environment. Pull requests and `main` validate documentation changes but never deploy them, so the public site remains aligned with the latest published release rather than ongoing development.
+
 The publication job creates these immutable version tags from the verified commit images:
 
 - `ghcr.io/schmiedmayerlab/heartwood:<version>`
@@ -40,3 +42,11 @@ The workflow attests `heartwood-installer`, `heartwood-native.tar.gz`, and `SHA2
 Release-required workflows are declared as jobs in `.github/workflows/main-validation.yml` and as dependencies of its `release-ready` job. When a release requirement is added, removed, or renamed, update both parts of that dependency graph in the same pull request. `Main Validation` is the sole orchestrator on pull requests and `main`, so each component executes once and the same dependency graph governs merge and release readiness. Pull requests skip only main-only image publication while retaining container smoke and GPU candidate validation. Component workflows remain independently dispatchable for diagnostics. The main ruleset requires `Release Candidate Ready` plus the default CodeQL language analyses, CodeRabbit, and dependency review, which execute outside the graph; it does not duplicate internal component job names.
 
 The release workflow is intentionally serialized. If publication is interrupted after a versioned image tag is created, a rerun accepts that tag only when it resolves to the same verified digest. If an interruption leaves a draft release for the exact candidate commit, the approved publication job replaces that draft with freshly verified assets before publishing. A published release, a draft for another commit, or a version tag that points elsewhere is never overwritten.
+
+If only the Pages deployment fails after a release is public, rerun it from `main` without changing the release:
+
+```bash
+gh workflow run documentation.yml --ref main -f publish=true -f version=0.1.1
+```
+
+The recovery workflow verifies the canonical version, Git tag, release state, and target commit before it can update the site.

@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 Platform images are thin additions to an existing research-platform base. They must preserve the platform runtime and add the same Heartwood payload, model-profile contract, repository-verified Skills, and no-weight policy as the generic image.
 
-This guide documents the implemented shared extension mechanism. It does not make every declared or future platform a supported deployment; current status is recorded in [Platform Support](platform-support.md), and unimplemented platform work is recorded in the [Delivery Roadmap](../design/09-implementation-plan.md).
+This guide documents the implemented shared extension mechanism. It does not make every declared or future platform a supported deployment; current status is recorded in [Platform Support](platform-support.md), and planned platform work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 ## Source Of Truth
 

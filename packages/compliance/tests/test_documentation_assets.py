@@ -8,11 +8,15 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 
-def test_documentation_index_separates_current_design_and_delivery_work() -> None:
+def test_documentation_index_separates_current_design_and_project_tracking() -> None:
     index = _read("docs/README.md")
     readme = _read("README.md")
     development = _read("design/08-development.md")
@@ -20,7 +24,8 @@ def test_documentation_index_separates_current_design_and_delivery_work() -> Non
     for heading in (
         "## Current Operational Documentation",
         "## Design And Rationale",
-        "## Delivery Roadmap",
+        "## Project Planning",
+        "## Published Documentation",
         "## Status Terms",
     ):
         assert heading in index
@@ -36,6 +41,8 @@ def test_documentation_index_separates_current_design_and_delivery_work() -> Non
     assert "[Documentation](docs/README.md)" in readme
     assert "[Platform Support](docs/platform-support.md)" in readme
     assert "[documentation index](../docs/README.md)" in development
+    assert "https://github.com/SchmiedmayerLab/heartwood/issues" in index
+    assert "does not serve as a backlog or implementation diary" in index
 
 
 def test_platform_support_distinguishes_ci_from_live_validation() -> None:
@@ -54,36 +61,29 @@ def test_platform_support_distinguishes_ci_from_live_validation() -> None:
     assert "concurrent independent processes writing the same session" in support
 
 
-def test_delivery_roadmap_is_ordered_actionable_and_unambiguous() -> None:
-    roadmap = _read("design/09-implementation-plan.md")
-    ordered_headings = (
-        "## Non-Negotiable Requirements",
-        "## Current Baseline",
-        "## Material Readiness Gaps",
-        "## Priority 1 — Release-Candidate Runtime Contract",
-        "## Priority 2 — Researcher Web Experience",
-        "## Priority 3 — Live Terra Acceptance",
-        "## Priority 4 — Terra And OMOP Reference Workflow",
-        "## Priority 5 — Assurance And Stable Release Governance",
-        "## Priority 6 — Conditional Expansion",
-        "## Start Conditions For Deferred Capabilities",
-        "## Cross-Cutting Acceptance Rules",
+def test_planned_work_is_owned_by_github_tracking() -> None:
+    assert not (_repo_root() / "design" / "09-implementation-plan.md").exists()
+    for path in (
+        "README.md",
+        "AGENTS.md",
+        "docs/README.md",
+        "design/01-overview.md",
+        "design/02-platforms.md",
+        "design/03-architecture.md",
+        "design/07-testing-eval.md",
+        "design/08-development.md",
+    ):
+        content = _read(path)
+        assert "09-implementation-plan" not in content
+        assert "Delivery Roadmap" not in content
+    assert "GitHub Issues and Projects own planned implementation" in _read(
+        "design/08-development.md"
     )
-
-    assert roadmap.startswith("<!--")
-    assert "# 09 — Delivery Roadmap" in roadmap
-    assert [roadmap.index(heading) for heading in ordered_headings] == sorted(
-        roadmap.index(heading) for heading in ordered_headings
-    )
-    assert roadmap.count("**Objective:**") == 6
-    assert roadmap.count("### Deliverables") == 6
-    assert roadmap.count("### Exit Criteria") == 6
-    assert "- [ ]" in roadmap
-    assert "- [x]" not in roadmap
-    assert "LocalFilesystemDataSourceAdapter.synthetic_omop()" in roadmap
-    assert "OpenHands dependency-upgrade gate" in roadmap
-    assert "## Phase" not in roadmap
-    assert "This pass" not in roadmap
+    for documentation_path in _canonical_documentation_paths():
+        content = documentation_path.read_text(encoding="utf-8")
+        assert "Delivery Roadmap" not in content
+        assert "## Future " not in content
+        assert "in the roadmap" not in content.lower()
 
 
 def test_architecture_requires_upstream_reuse() -> None:
@@ -106,7 +106,7 @@ def test_architecture_requires_upstream_reuse() -> None:
 
 def test_web_experience_remains_a_gateway_projection() -> None:
     architecture = _read("design/03-architecture.md")
-    roadmap = _read("design/09-implementation-plan.md")
+    testing = _read("design/07-testing-eval.md")
     readme = _read("README.md")
 
     assert "browser storage is never the source of truth" in architecture
@@ -115,12 +115,40 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "Compliance evidence packages remain maintainer or reviewer tooling" in architecture
     assert "defines the presentation contract" in architecture
     assert "gateway-owned session metadata" in architecture
-    assert "## Priority 2 — Researcher Web Experience" in roadmap
-    assert "Represent absent evidence as unknown or unconfigured" in roadmap
-    assert "no model capability claim without benchmark evidence" in roadmap
-    assert "Do not place compliance evidence packages" in roadmap
+    assert "Unknown or unconfigured state is explicit" in architecture
+    assert "Endpoint validation or artifact integrity is not capability evidence" in testing
     assert "gateway-owned session lifecycle" in readme
     assert "Boundary and workflow labels require typed gateway evidence" in readme
+
+
+def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path) -> None:
+    stager = _documentation_stager()
+    destination = tmp_path / "documentation"
+
+    stager.stage_documentation(_repo_root(), destination)
+
+    assert (destination / "index.md").read_text(encoding="utf-8") == '--8<-- "README.md"\n'
+    assert (destination / "docs" / "README.md").is_file()
+    assert (destination / "docs" / "assets" / "web-reference-analysis.png").is_file()
+    assert (destination / "ACRONYMS.md").is_file()
+    assert (destination / "LICENSE").is_file()
+    assert (destination / "stylesheets" / "extra.css").is_file()
+    for index in range(1, 9):
+        assert tuple((destination / "design").glob(f"{index:02d}-*.md"))
+    assert not tuple((destination / "design").glob("09-*.md"))
+
+    readme = (destination / "README.md").read_text(encoding="utf-8")
+    assert f"tree/{stager.declared_version(_repo_root())}/packages/gateway" in readme
+    assert "](packages/gateway)" not in readme
+
+
+def test_documentation_stager_rejects_destructive_output_paths() -> None:
+    stager = _documentation_stager()
+
+    with pytest.raises(ValueError, match="must not replace"):
+        stager.stage_documentation(_repo_root(), _repo_root())
+    with pytest.raises(ValueError, match="must not replace"):
+        stager.stage_documentation(_repo_root(), _repo_root().parent)
 
 
 def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None:
@@ -209,7 +237,8 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     assert "checks the current `main` commit immediately before" in container
     assert "candidate-validation failure leaves the candidate untagged" in container
     assert "promotion failure may leave the validated immutable commit tag" in container
-    assert "reachability graph" in container
+    assert "Automated retention is not implemented" in container
+    assert "issues/47" in container
     assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
     assert "deterministic loopback model fixture" in local
     assert "allowed_model_catalog_endpoints" in local
@@ -299,10 +328,28 @@ def _read(path: str) -> str:
     return (_repo_root() / path).read_text(encoding="utf-8")
 
 
+def _documentation_stager() -> ModuleType:
+    path = _repo_root() / "deploy" / "stage_documentation.py"
+    spec = importlib.util.spec_from_file_location("stage_documentation", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _project_markdown_paths() -> tuple[Path, ...]:
     excluded = {".git", ".venv", ".uv-cache", "coverage", "node_modules"}
     return tuple(
         path for path in _repo_root().rglob("*.md") if not excluded.intersection(path.parts)
+    )
+
+
+def _canonical_documentation_paths() -> tuple[Path, ...]:
+    return (
+        _repo_root() / "README.md",
+        *tuple((_repo_root() / "docs").glob("*.md")),
+        *tuple((_repo_root() / "design").glob("*.md")),
     )
 
 

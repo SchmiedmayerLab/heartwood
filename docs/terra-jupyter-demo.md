@@ -78,7 +78,7 @@ gcloud storage cp \
   "${HEARTWOOD_STATE_ROOT}/workspaces/${HEARTWOOD_SESSION_ID}/input/condition_occurrence.csv"
 ```
 
-Terra data tables hold metadata and file references; they do not make files available inside the container automatically. The current release has no live Terra or BigQuery OMOP data-source adapter, so the commands above describe the platform localization pattern rather than a supported controlled-data workflow. Keep this validation synthetic until the adapter, deployment policy, data permissions, and institutional review gates in the roadmap are complete.
+Terra data tables hold metadata and file references; they do not make files available inside the container automatically. The current release has no live Terra or BigQuery OMOP data-source adapter, so the commands above describe the platform localization pattern rather than a supported controlled-data workflow. Keep this validation synthetic until the adapter and deployment gates in [Issue #43](https://github.com/SchmiedmayerLab/heartwood/issues/43) and the live-platform evidence in [Issue #42](https://github.com/SchmiedmayerLab/heartwood/issues/42) are complete.
 
 ## Configure A Model
 

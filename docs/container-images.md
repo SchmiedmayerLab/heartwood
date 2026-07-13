@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 Heartwood publishes one generic runtime and thin platform-derived runtimes. Every published image contains the same Heartwood application, OpenHands SDK adapter, repository-verified Skills, CLI, notebook bridge, web UI, policy controls, audit implementation, and optional `llama-server` runtime. Images never contain model weights or credentials.
 
-This document describes current image and publication behavior. [Platform Support](platform-support.md) records which paths are implemented, CI-validated, or still awaiting live-platform evidence. Future image and release work belongs in the [Delivery Roadmap](../design/09-implementation-plan.md).
+This document describes current image and publication behavior. [Platform Support](platform-support.md) records which paths are implemented, CI-validated, or still awaiting live-platform evidence. Planned image and release work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 ## Current Published Tags
 
@@ -136,6 +136,6 @@ The cache-only pull-request path executes every production filesystem instructio
 
 ## Registry Maintenance
 
-Protect moving tags, retained commit tags, stable release tags, generic attestations, and manifests referenced by a multi-platform index. The digest-based build does not create architecture helper tags. Failed candidates remain untagged and cannot replace a public tag. They are not deleted in the publishing run because GitHub Container Registry deletion operates on package versions and valid tagged indexes depend on untagged child and attestation manifests. Cleanup automation must begin in report-only mode, traverse every protected tag and referrer to build a reachability graph, preserve all reachable manifests and blobs, apply an age threshold to unreachable versions, and use narrowly scoped package deletion permissions only after the report is reviewed.
+Protect moving tags, retained commit tags, stable release tags, generic attestations, and manifests referenced by a multi-platform index. The digest-based build does not create architecture helper tags. Failed candidates remain untagged and cannot replace a public tag. Publication does not delete them because valid tagged indexes may depend on untagged child and attestation manifests. Automated retention is not implemented; [Issue #47](https://github.com/SchmiedmayerLab/heartwood/issues/47) owns graph-aware reporting and deletion safeguards.
 
 See the [Platform Image Extension Guide](platform-images.md) for adding another platform-derived runtime.

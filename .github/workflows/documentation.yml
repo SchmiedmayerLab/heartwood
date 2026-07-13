@@ -1,0 +1,114 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Documentation
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Deploy the documentation from an existing published release
+        required: false
+        default: false
+        type: boolean
+      version:
+        description: Published Semantic Version to deploy
+        required: false
+        default: ""
+        type: string
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Deploy an existing published release to GitHub Pages
+        required: true
+        default: false
+        type: boolean
+      version:
+        description: Published Semantic Version to deploy, for example 0.1.1
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Documentation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require a version for publication
+        if: inputs.publish && inputs.version == ''
+        run: |
+          echo "A published Semantic Version is required for deployment." >&2
+          exit 1
+      - name: Checkout documentation source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.publish && format('refs/tags/{0}', inputs.version) || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify published release source
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 deploy/verify_release_candidate.py \
+            --version "${RELEASE_VERSION}" \
+            --source-root . \
+            --version-only
+          test "$(git tag --points-at HEAD --list "${RELEASE_VERSION}")" = "${RELEASE_VERSION}"
+          release_json="$(gh release view "${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft,targetCommitish)"
+          test "$(jq -r .isDraft <<<"${release_json}")" = "false"
+          test "$(jq -r .targetCommitish <<<"${release_json}")" = "$(git rev-parse HEAD)"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+      - name: Install the pinned documentation toolchain
+        run: uv sync --locked --only-group docs
+      - name: Stage canonical documentation
+        run: uv run --no-sync python deploy/stage_documentation.py
+      - name: Build documentation strictly
+        run: uv run --no-sync zensical build --clean --strict
+      - name: Verify the static site
+        run: test -s site/index.html
+      - name: Upload GitHub Pages artifact
+        if: inputs.publish
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: Deploy Documentation
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Read GitHub Pages configuration
+        uses: actions/configure-pages@v6
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+      - name: Verify the deployed documentation
+        env:
+          DOCUMENTATION_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors \
+            --max-time 30 "${DOCUMENTATION_URL}" >/dev/null

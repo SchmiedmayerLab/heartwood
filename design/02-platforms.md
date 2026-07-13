@@ -10,16 +10,16 @@ SPDX-License-Identifier: MIT
 
 # 02 — Platforms
 
-This document records platform rationale, common deployment assumptions, and design targets. Current implementation and validation status is maintained separately in [Platform Support](../docs/platform-support.md); delivery priorities and acceptance gates are maintained in [09 — Delivery Roadmap](09-implementation-plan.md).
+This document records platform rationale, common deployment assumptions, and design targets. Current implementation and validation status is maintained separately in [Platform Support](../docs/platform-support.md); planned implementation and acceptance criteria are maintained in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 ## Shared Model
 
 Every target environment splits into a **control plane** (web app, data catalog, auth) and a **compute plane** (VMs that run code). The compute plane has two lanes, and Docker is the unit in both:
 
 - **Interactive lane** — a long-lived VM that boots a container used through Jupyter, RStudio, or a shell; state persists on an attached disk and may autopause when idle. Heartwood runs here: its session gateway, OpenHands SDK conversation, coding tools, and researcher web UI run inside this container and are reached through the platform's authenticated proxy; no nested Docker is required.
-- **Batch lane** — a workflow engine such as Cromwell, a CWL executor, or Nextflow runs an ephemeral container per task. Future Heartwood workflow emission targets this lane; the current runtime does not implement batch emission.
+- **Batch lane** — a workflow engine such as Cromwell, a CWL executor, or Nextflow runs an ephemeral container per task. Heartwood does not currently emit batch workflows; any such extension must reuse an established engine and satisfy [Issue #49](https://github.com/SchmiedmayerLab/heartwood/issues/49).
 
-## Current Implementation Boundary
+## Current Support Boundary
 
 The generic image and Terra-derived image are implemented and CI-validated. The Terra path still requires live synthetic workspace validation before it can be called live-validated. All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform remain design targets rather than current support claims.
 
@@ -96,9 +96,9 @@ Technical reachability is not permission. Platform adapters and deployment polic
 
 The target deployment keeps participant-level processing in boundary, uses platform network controls as the authoritative egress boundary, denies unallowlisted model routes in Heartwood, applies dataset-specific aggregate-export policy, and produces an egress attestation for review. The current repository demonstrates these application contracts with synthetic data; controlled-data enforcement and platform policy require separate live validation.
 
-## Future Batch Portability
+## Batch Portability Boundary
 
-Planned emitted pipelines target **Dockstore** over **GA4GH DRS/WES/TES/TRS**: a pinned-image CWL/WDL/Nextflow workflow reading inputs through DRS should run across platforms. This target shapes future output contracts; pipeline emission is not implemented.
+Heartwood does not emit batch pipelines. If the interactive workflow gains stable typed inputs and outputs, a portable batch extension must use a pinned image and established CWL, WDL, or Nextflow infrastructure, with Dockstore and GA4GH DRS/WES/TES/TRS as interoperability targets. [Issue #49](https://github.com/SchmiedmayerLab/heartwood/issues/49) owns the prerequisite evidence and delivery criteria.
 
 ## Platform Image Rationale
 

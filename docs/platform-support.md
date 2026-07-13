@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Platform Support
 
-This matrix records current repository implementation and validation status. Release `0.1.1` establishes the documented distribution baseline but does not complete live platform validation or confer institutional approval. Platform rationale and target-environment analysis belong in [02 — Platforms](../design/02-platforms.md); unimplemented work and release gates belong in the [Delivery Roadmap](../design/09-implementation-plan.md).
+This matrix records current repository implementation and validation status. Release `0.1.1` establishes the documented distribution baseline but does not complete live platform validation or confer institutional approval. Platform rationale and target-environment analysis belong in [02 — Platforms](../design/02-platforms.md); planned implementation and acceptance criteria are tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 ## Support Matrix
 
@@ -31,9 +31,9 @@ Explicit `edge-gpu-nvidia` and `edge-terra-gpu-nvidia` variants add an isolated 
 
 The Terra image is an implemented packaging and Jupyter integration target, not a complete Terra runtime adapter. Unless a deployment supplies an explicit policy and injected adapters, session construction uses `GenericPlatformAdapter` and the synthetic OMOP data-source fixture. Real Terra policy, identity, workspace-data detection, and OMOP access remain delivery requirements.
 
-Session and audit state are file-backed. Sequential CLI, notebook, and web access to the same workspace is implemented; concurrent independent processes writing the same session are not a supported deployment pattern until the single-writer gateway and recovery gate in the roadmap is complete.
+Session and audit state are file-backed. Sequential CLI, notebook, and web access to the same workspace is implemented; concurrent independent processes writing the same session are not a supported deployment pattern until the single-writer gateway and recovery work in [Issue #38](https://github.com/SchmiedmayerLab/heartwood/issues/38) is complete.
 
-The Terra image currently extends the pinned `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6` base declared in `images/platforms.toml`. Terra's official image catalog still lists that version, while Terra also offers the newer slim `terra-base:1.0.0`; migration to a different base is future work until the complete Jupyter, Leonardo, user, storage, proxy, and publication contract passes again.
+The Terra image currently extends the pinned `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6` base declared in `images/platforms.toml`. Terra's official image catalog still lists that version, while Terra also offers the newer slim `terra-base:1.0.0`. The supported base remains pinned until a candidate passes the complete Jupyter, Leonardo, user, storage, proxy, and publication contract in [Issue #42](https://github.com/SchmiedmayerLab/heartwood/issues/42).
 
 ## Support Claim Boundary
 

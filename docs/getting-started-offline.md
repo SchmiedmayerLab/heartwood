@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 This guide configures Heartwood with either an existing local OpenAI-compatible service or an explicitly downloaded reviewed artifact. Heartwood images contain the inference runtime and artifact metadata but no model weights.
 
-This is current operational documentation for the generic runtime. Current platform status is recorded in [Platform Support](platform-support.md), design rationale is recorded in [03 — Architecture](../design/03-architecture.md), and unimplemented work is recorded in the [Delivery Roadmap](../design/09-implementation-plan.md).
+This is current operational documentation for the generic runtime. Current platform status is recorded in [Platform Support](platform-support.md), design rationale is recorded in [03 — Architecture](../design/03-architecture.md), and planned implementation is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 ## Validate The No-Weight Integration
 

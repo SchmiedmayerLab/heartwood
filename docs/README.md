@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Documentation
 
-Heartwood documentation is organized by purpose so implemented behavior, design rationale, and future work cannot be mistaken for one another.
+Heartwood documentation is organized by purpose so current behavior, durable design rationale, and planned implementation cannot be mistaken for one another.
 
 ## Current Operational Documentation
 
@@ -31,7 +31,7 @@ Operational documentation describes repository behavior, not institutional appro
 
 ## Design And Rationale
 
-The [design set](../design) owns durable product and engineering decisions:
+The [design set](../design/01-overview.md) owns durable product and engineering decisions:
 
 - [Overview](../design/01-overview.md) defines scope, users, and the reference workflow.
 - [Platforms](../design/02-platforms.md) explains platform assumptions and target-environment rationale.
@@ -44,9 +44,23 @@ The [design set](../design) owns durable product and engineering decisions:
 
 Design documents explain why the system is shaped this way. Runnable commands and platform status belong in the operational documents instead.
 
-## Delivery Roadmap
+## Project Planning
 
-The [Delivery Roadmap](../design/09-implementation-plan.md) records the test-backed baseline, material readiness gaps, ordered delivery priorities, acceptance gates, and deferred work. Operational issue tracking may reference roadmap items, but it does not replace the architecture and acceptance criteria in the design record.
+[GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) own planned implementation, acceptance criteria, dependencies, and delivery status. Project documentation does not serve as a backlog or implementation diary. When a planned change alters a durable product, architecture, security, or testing decision, update the owning design document as part of that change.
+
+## Published Documentation
+
+The public [Heartwood documentation site](https://schmiedmayerlab.github.io/heartwood/) is built from the canonical `README.md`, `docs/`, `design/01` through `design/08`, and `ACRONYMS.md`; there is no second editable documentation copy. Pull requests and `main` build that source strictly, while the public site changes only when the protected release workflow publishes an existing Semantic Version tag. A manual recovery deployment accepts only an already-published release, so continued documentation work on `main` cannot alter the public release snapshot.
+
+Preview the current source locally:
+
+```bash
+uv sync --locked --only-group docs
+uv run --no-sync python deploy/stage_documentation.py
+uv run --no-sync zensical serve
+```
+
+Use `uv run --no-sync zensical build --clean --strict` to run the same strict static build as CI.
 
 ## Status Terms
 

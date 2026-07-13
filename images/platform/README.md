@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Platform-Derived Heartwood Runtime
 
-This directory defines the implemented platform-image mechanism and Terra target. Current platform and validation status is recorded in [Platform Support](../../docs/platform-support.md); future platform work is recorded in the [Delivery Roadmap](../../design/09-implementation-plan.md).
+This directory defines the implemented platform-image mechanism and Terra target. Current platform and validation status is recorded in [Platform Support](../../docs/platform-support.md); planned platform work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 The platform Dockerfile adds the same Heartwood application payload as the generic image to a controlled platform base while preserving the platform user, home, Jupyter runtime, entrypoint, service routes, and proxy behavior. The implemented target is Terra.
 
@@ -20,4 +20,4 @@ Terra tags are `linux/amd64` Docker schema-2 manifests because the selected Terr
 
 Pull requests use `images/platform/terra-ci-base.Dockerfile` only as a lightweight surrogate for the large upstream Terra base. Heartwood itself is still built through `images/platform/Dockerfile`, and the surrogate provides real Jupyter packages and Terra-style launch configuration. `images/platforms.toml` is the source of truth for platform contracts and evidence.
 
-The pinned `terra-jupyter-python:1.1.6` base remains listed by Terra. Terra's newer slim `terra-base:1.0.0` is a future migration candidate, not a drop-in documentation change; adopting it requires the complete image, Jupyter, Leonardo, proxy, storage, and publication contract to pass again.
+The pinned `terra-jupyter-python:1.1.6` base remains listed by Terra. The newer slim `terra-base:1.0.0` is not compatible by declaration alone; any base change must pass the complete image, Jupyter, Leonardo, proxy, storage, and publication contract tracked in [Issue #42](https://github.com/SchmiedmayerLab/heartwood/issues/42).

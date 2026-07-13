@@ -71,6 +71,7 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
         "codeql": "codeql.yml",
         "containers": "container-image.yml",
         "container-smoke": "container-smoke.yml",
+        "documentation": "documentation.yml",
         "secrets": "gitleaks.yml",
         "gpu-containers": "gpu-container-image.yml",
         "native-assets": "native-release.yml",
@@ -84,8 +85,9 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
         assert "  workflow_call:" in component
         assert "  push:" not in component
         assert "  pull_request:" not in component
-        if "concurrency:" in component:
-            assert "${{ github.workflow }}-${{ github.ref }}" in component
+        workflow_header = component.split("jobs:", maxsplit=1)[0]
+        if "concurrency:" in workflow_header:
+            assert "${{ github.workflow }}-${{ github.ref }}" in workflow_header
     readiness = workflow.split("  release-ready:\n", maxsplit=1)[1]
     assert "name: Release Candidate Ready" in readiness
     for job_id in called_workflows:
@@ -101,6 +103,30 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
     assert "for attempt in" not in workflow
     assert "sleep 30" not in workflow
     assert "release-required-checks.txt" not in workflow
+
+
+def test_documentation_is_validated_continuously_and_published_from_releases() -> None:
+    documentation = Path(".github/workflows/documentation.yml").read_text(encoding="utf-8")
+    release = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
+
+    assert "  workflow_call:" in documentation
+    assert "  workflow_dispatch:" in documentation
+    assert "  push:" not in documentation
+    assert "  pull_request:" not in documentation
+    assert "  release:" not in documentation
+    assert "refs/tags/{0}" in documentation
+    assert "gh release view" in documentation
+    assert "--version-only" in documentation
+    assert "zensical build --clean --strict" in documentation
+    assert "actions/upload-pages-artifact@v5" in documentation
+    assert "actions/deploy-pages@v5" in documentation
+    assert "Verify the deployed documentation" in documentation
+    assert '"${DOCUMENTATION_URL}"' in documentation
+    assert "name: github-pages" in documentation
+    assert "group: github-pages" in documentation
+    assert "needs: publish" in release
+    assert "uses: ./.github/workflows/documentation.yml" in release
+    assert "publish: true" in release
 
 
 def test_release_checks_require_latest_successful_run() -> None:

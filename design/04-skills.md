@@ -31,13 +31,13 @@ metadata:
 
 ## Auto-Detection
 
-Detection is a fast, auditable, offline-testable pipeline that reports evidence and confidence without executing code, changing installed Skills, or asserting an unsupported dataset identity. Repository-verified bundled Skills remain available to OpenHands; detection will eventually narrow and rank that bundle for the active platform and dataset.
+Detection is a fast, auditable, offline-testable pipeline that reports evidence and confidence without executing code, changing installed Skills, or asserting an unsupported dataset identity. Repository-verified bundled Skills remain available to OpenHands; the current runtime does not narrow that bundle by platform or dataset.
 
 1. **Platform** — env-var / file probes (`WORKSPACE_*`/`GOOGLE_PROJECT` → Terra; `DX_*` → DNAnexus; SB config → Seven Bridges; else generic). Pure code, no tokens.
 2. **Dataset** — the current integration fixture produces a deterministic synthetic OMOP fingerprint. A normal unconfigured runtime must report no detected dataset until a real data-source adapter supplies schema or format evidence such as OMOP table-name sets in `INFORMATION_SCHEMA`, VCF/BAM/DICOM magic bytes, or FHIR NDJSON structure.
-3. **Selection target** — the dispatcher maps `(platform, dataset) → Skills` and emits a visible, logged proposal with a researcher correction path. This dispatcher is not implemented; the runtime currently makes the small checked-in bundle available to OpenHands without dataset filtering. Community or experimental Skills require installation-time approval before they can enter the runtime Skill directory.
+3. **Selection boundary** — the runtime currently makes the small checked-in bundle available to OpenHands without dataset filtering. A dataset-aware selector must emit a visible, logged proposal with a researcher correction path and cannot bypass installation-time approval for community or experimental Skills.
 
-Detection uses no model call. OpenHands receives repository-verified Skill metadata at startup and loads full bodies on activation through native progressive disclosure. Dataset-aware narrowing remains future work and must not bypass the extension trust gate.
+Detection uses no model call. OpenHands receives repository-verified Skill metadata at startup and loads full bodies on activation through native progressive disclosure. Dataset-aware narrowing is not implemented and must not bypass the extension trust gate; [Issue #43](https://github.com/SchmiedmayerLab/heartwood/issues/43) owns its reference-workflow integration.
 
 ## Current Packaging And Trust
 
@@ -52,6 +52,6 @@ Detection uses no model call. OpenHands receives repository-verified Skill metad
 
 The gateway gives OpenHands both the read-only bundled directory and the persistent installed directory. OpenHands performs native progressive disclosure across both. Automatic user, public-marketplace, and project-workspace Skill loading is disabled so a workspace cannot bypass installation review or override a repository-verified Skill. Installed Skills do not create a second activation protocol and do not trigger repeated conversational approval.
 
-## Future Distribution
+## External Distribution Boundary
 
-External imports require a build-time workflow that resolves an immutable source, verifies content digests and real signatures, records review provenance, vendors the result, and tests the final image. Release channels, cross-publication, dataset-aware selection, and sub-agent bundles remain future work until those controls exist.
+Remote Skill acquisition, release channels, and cross-publication are unavailable. [Issue #46](https://github.com/SchmiedmayerLab/heartwood/issues/46) owns immutable source resolution, digest and signature verification, review provenance, revocation, and compatibility evidence. Sub-agent bundles remain outside the current single-agent contract.

@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Generic Heartwood Runtime
 
-This directory defines the implemented generic runtime. Current platform and validation status is recorded in [Platform Support](../../docs/platform-support.md); future image work is recorded in the [Delivery Roadmap](../../design/09-implementation-plan.md).
+This directory defines the implemented generic runtime. Current platform and validation status is recorded in [Platform Support](../../docs/platform-support.md); planned image work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
 
 The generic image packages the Heartwood CLI, gateway, notebook bridge, web UI, OpenHands SDK and tools, repository-verified Skills, policy and audit stack, synthetic fixtures, reviewed local-artifact metadata, and pinned `llama-server` binaries for `linux/amd64` and `linux/arm64`.
 

@@ -31,7 +31,7 @@ Participant-level data must remain within an institution-approved deployment bou
 - Generic and Terra-derived images include an optional CPU llama.cpp runtime but no model weights. Local weights are explicitly downloaded to or mounted from persistent storage.
 - A model connection is not a compliance claim. The deploying institution remains responsible for business associate agreements, covered-service configuration, retention settings, identity, region, and network controls.
 
-See [Architecture](design/03-architecture.md), [Security And Compliance](design/05-security-compliance.md), and the [Delivery Roadmap](design/09-implementation-plan.md) for the complete contract.
+See [Architecture](design/03-architecture.md), [Security And Compliance](design/05-security-compliance.md), and [Platform Support](docs/platform-support.md) for the complete contract and current evidence.
 
 ## Capabilities And Limitations
 
@@ -170,7 +170,7 @@ Use the [Terra Jupyter Demo](docs/terra-jupyter-demo.md) for the synthetic end-t
 
 ## Repository Structure
 
-- [`design`](design) contains the product, architecture, security, testing, and implementation record.
+- [`design`](design) contains durable product, architecture, security, testing, and development decisions.
 - [`docs`](docs) contains runnable setup and platform guides.
 - [`packages/gateway`](packages/gateway) contains the OpenHands adapter, model profile and artifact settings, and shared HTTP/event gateway.
 - [`packages/core-adapter`](packages/core-adapter) contains auditable session orchestration and the agent-backend contract.
@@ -206,11 +206,12 @@ Do not add protected health information, credentials, live-platform identifiers,
 
 ## Documentation Structure
 
-[Documentation](docs/README.md) defines the authority boundary between current operational guides, design rationale, and future work.
+[Documentation](docs/README.md) defines the authority boundary between current operational guides, durable design rationale, and project planning.
 
 | Document | Contents |
 |---|---|
-| [Documentation Index](docs/README.md) | Current operations, design rationale, future work, and status vocabulary |
+| [Documentation Index](docs/README.md) | Current operations, design rationale, publication, and status vocabulary |
+| [Published Documentation](https://schmiedmayerlab.github.io/heartwood/) | Operational and design documentation from the latest published release |
 | [Platform Support](docs/platform-support.md) | Current implementation, image, CI, and live-validation status |
 | [Overview](design/01-overview.md) | Scope, users, and reference workflow |
 | [Platforms](design/02-platforms.md) | Deployment boundaries and platform assumptions |
@@ -220,7 +221,6 @@ Do not add protected health information, credentials, live-platform identifiers,
 | [Observability And Audit](design/06-observability-audit.md) | Audit trail and tamper evidence |
 | [Testing And Evaluation](design/07-testing-eval.md) | Replay, integration, and capability gates |
 | [Development](design/08-development.md) | Toolchain, CI, and supply chain |
-| [Delivery Roadmap](design/09-implementation-plan.md) | Current baseline, readiness gaps, priorities, and acceptance gates |
 | [Researcher Web Interface](docs/web-interface.md) | Shared session workflow, model setup, action review, audit, CLI parity, and notebook layout |
 | [Using Heartwood](docs/using-heartwood.md) | Terminal, web, and notebook interaction; action-set review; replay; audit; and persistence |
 | [Container Images](docs/container-images.md) | Tags, model storage, providers, and CI |
@@ -228,9 +228,9 @@ Do not add protected health information, credentials, live-platform identifiers,
 | [Terra Jupyter Demo](docs/terra-jupyter-demo.md) | Synthetic Terra workflow |
 | [Set Up Heartwood On Carina](docs/carina-cli.md) | Synthetic native GPU and Stanford AI API Gateway workflow |
 
-## Future Work
+## Project Planning
 
-Future implementation is tracked in the [Delivery Roadmap](design/09-implementation-plan.md). Work is ordered around six focused priorities: the release-candidate runtime contract; the researcher web experience; live Terra acceptance; a real Terra and OMOP reference workflow; assurance and stable-release governance; and only then conditional platform or scale expansion. Planned work is not a current feature or support claim.
+Planned implementation, acceptance criteria, dependencies, and delivery status are tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues). Published documentation describes current behavior and durable design decisions; an open issue is not a capability or support claim.
 
 ## Contributing
 

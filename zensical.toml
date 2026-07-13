@@ -1,0 +1,113 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+[project]
+site_name = "Heartwood"
+site_description = "Auditable agentic coding for biomedical research environments"
+site_url = "https://schmiedmayerlab.github.io/heartwood/"
+repo_url = "https://github.com/SchmiedmayerLab/heartwood"
+repo_name = "SchmiedmayerLab/heartwood"
+docs_dir = "build/documentation"
+site_dir = "site"
+copyright = "Copyright Stanford University and the Heartwood project authors"
+extra_css = ["stylesheets/extra.css"]
+nav = [
+    { "Home" = "index.md" },
+    { "Get Started" = [
+        { "Using Heartwood" = "docs/using-heartwood.md" },
+        { "Model Connections" = "docs/model-connections.md" },
+        { "Local And Offline Models" = "docs/getting-started-offline.md" },
+        { "Researcher Web Interface" = "docs/web-interface.md" },
+    ] },
+    { "Platforms" = [
+        { "Support Matrix" = "docs/platform-support.md" },
+        { "Carina" = "docs/carina-cli.md" },
+        { "Terra" = "docs/terra-jupyter-demo.md" },
+        { "Platform Images" = "docs/platform-images.md" },
+    ] },
+    { "Deployment" = [
+        { "Container Images" = "docs/container-images.md" },
+        { "Releases" = "docs/releases.md" },
+    ] },
+    { "Design" = [
+        { "Overview" = "design/01-overview.md" },
+        { "Platforms" = "design/02-platforms.md" },
+        { "Architecture" = "design/03-architecture.md" },
+        { "Skills And Auto-Detection" = "design/04-skills.md" },
+        { "Security And Compliance" = "design/05-security-compliance.md" },
+        { "Observability And Audit" = "design/06-observability-audit.md" },
+        { "Testing And Evaluation" = "design/07-testing-eval.md" },
+        { "Development Practices" = "design/08-development.md" },
+    ] },
+    { "Reference" = [
+        { "Documentation Guide" = "docs/README.md" },
+        { "Acronyms" = "ACRONYMS.md" },
+    ] },
+]
+
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true
+unresolved_references = true
+unresolved_footnotes = true
+
+[project.theme]
+features = [
+    "content.code.copy",
+    "navigation.indexes",
+    "navigation.sections",
+    "navigation.tabs",
+    "navigation.tabs.sticky",
+    "navigation.top",
+    "search.highlight",
+]
+
+[project.theme.icon]
+logo = "lucide/trees"
+repo = "fontawesome/brands/github"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Use light appearance"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Use dark appearance"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Follow system appearance"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+
+[project.markdown_extensions.toc]
+permalink = true
+
+[project.markdown_extensions.pymdownx.details]
+
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+
+[project.markdown_extensions.pymdownx.inlinehilite]
+
+[project.markdown_extensions.pymdownx.snippets]
+
+[project.markdown_extensions.pymdownx.superfences]
