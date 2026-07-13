@@ -32,6 +32,7 @@ from heartwood.gateway._action_settings import (
 )
 from heartwood.gateway._model_artifacts import (
     ModelArtifactCatalog,
+    ModelArtifactError,
     ModelArtifactManager,
     load_model_artifact_catalog,
 )
@@ -538,7 +539,7 @@ class SessionGateway:
         destination = self.model_cache_dir if cache_dir is None else cache_dir
         try:
             artifact = self.artifact_catalog.artifact(model_id)
-        except ValueError:
+        except ModelArtifactError:
             snapshot = self.snapshot_catalog.snapshot(model_id)
             return download_model_snapshot(snapshot, cache_dir=destination)
         return download_artifact(artifact, cache_dir=destination)

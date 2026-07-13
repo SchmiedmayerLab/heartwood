@@ -17,6 +17,7 @@ import pytest
 
 from heartwood.gateway import (
     ModelArtifact,
+    ModelArtifactCatalog,
     ModelCatalogService,
     ModelSnapshot,
     ProviderModel,
@@ -553,6 +554,21 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
         ("artifact", "llama-cpp-stories260k-ci", tmp_path / "models"),
         ("snapshot", "qwen25-7b-instruct-vllm", snapshot_cache),
     ]
+
+
+def test_gateway_does_not_mask_unexpected_artifact_catalog_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path / "sessions")
+
+    def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:
+        raise ValueError("artifact catalog validation failed")
+
+    monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
+
+    with pytest.raises(ValueError, match="artifact catalog validation failed"):
+        gateway.download_local_model_now("qwen25-7b-instruct-vllm")
 
 
 def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> None:
