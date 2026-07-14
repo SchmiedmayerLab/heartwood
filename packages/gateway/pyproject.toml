@@ -21,7 +21,7 @@ dependencies = [
     "heartwood-schemas",
     "heartwood-session",
     "heartwood-skills",
-    "huggingface-hub==1.22.0",
+    "huggingface-hub==1.23.0",
     "openai==2.44.0",
 ]
 
