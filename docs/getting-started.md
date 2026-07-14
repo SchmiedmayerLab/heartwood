@@ -26,7 +26,7 @@ Follow [Run Heartwood in a Container](container-images.md#start-a-project) to st
 
 Use the native installation when Docker is unavailable or Heartwood must run directly inside an existing managed environment. It installs the `heartwood` command directly in that environment. This is the normal path for Stanford Carina and a useful path for contributors.
 
-Install the current release with the [native installer](https://github.com/SchmiedmayerLab/heartwood/releases/latest), then follow any platform-specific instructions. The [Carina guide](carina-cli.md) provides the complete managed-environment example.
+Choose a published version from [Heartwood Releases](https://github.com/SchmiedmayerLab/heartwood/releases) and use the native installer attached to that release, then follow any platform-specific instructions. The [Carina guide](carina-cli.md) provides the complete managed-environment example.
 
 ### Use a Platform Image
 
