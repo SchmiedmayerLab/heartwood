@@ -18,8 +18,10 @@ import type {
   ModelArtifacts,
   ModelDownload,
   ModelProfile,
+  ModelSource,
   ModelSettings,
   ModelValidation,
+  ProjectReadiness,
   SessionCommand,
   SessionEvent,
   SessionList,
@@ -35,6 +37,7 @@ export interface SessionEventResponse {
 }
 
 export interface HeartwoodClient {
+  getProjectReadiness(): Promise<ProjectReadiness>;
   listSessions(): Promise<SessionList>;
   createSession(title?: string): Promise<SessionSummary>;
   getSession(sessionId: string): Promise<SessionSummary>;
@@ -55,18 +58,15 @@ export interface HeartwoodClient {
     mode: ActionConfirmationMode,
   ): Promise<ActionSettings>;
   getModelSettings(): Promise<ModelSettings>;
+  configureModelSource(sourceId: ModelSource): Promise<ModelSettings>;
   discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog>;
   connectModel(request: ModelConnectRequest): Promise<ModelSettings>;
-  connectModelProvider(
-    presetId: string,
-    modelName: string,
-  ): Promise<ModelSettings>;
   saveModelProfile(profile: ModelProfile): Promise<ModelSettings>;
   selectModelProfile(profileId: string): Promise<ModelSettings>;
   removeModelProfile(profileId: string): Promise<ModelSettings>;
   validateModelProfile(profileId?: string): Promise<ModelValidation>;
   getModelArtifacts(): Promise<ModelArtifacts>;
-  downloadModelArtifact(artifactId: string): Promise<ModelDownload>;
+  downloadLocalModel(modelId: string): Promise<ModelDownload>;
   getSkillSettings(): Promise<SkillSettings>;
   inspectSkill(source: string): Promise<SkillSummary>;
   installSkill(source: string): Promise<SkillSettings>;
@@ -90,6 +90,12 @@ export const createCommand = (
 
 export class GatewayClient implements HeartwoodClient {
   constructor(private readonly basePath = gatewayBasePath()) {}
+
+  async getProjectReadiness(): Promise<ProjectReadiness> {
+    return parseJsonResponse<ProjectReadiness>(
+      await fetch(this.url("/project/readiness")),
+    );
+  }
 
   async listSessions(): Promise<SessionList> {
     return parseJsonResponse<SessionList>(await fetch(this.url("/sessions")));
@@ -179,6 +185,16 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
+  async configureModelSource(sourceId: ModelSource): Promise<ModelSettings> {
+    return parseJsonResponse<ModelSettings>(
+      await fetch(this.url("/settings/models/source"), {
+        body: JSON.stringify({ source_id: sourceId }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      }),
+    );
+  }
+
   async discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog> {
     return parseJsonResponse<ModelCatalog>(
       await fetch(this.url("/settings/models/catalog"), {
@@ -193,19 +209,6 @@ export class GatewayClient implements HeartwoodClient {
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models/connect"), {
         body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
-    );
-  }
-
-  async connectModelProvider(
-    presetId: string,
-    modelName: string,
-  ): Promise<ModelSettings> {
-    return parseJsonResponse<ModelSettings>(
-      await fetch(this.url("/settings/models/connect"), {
-        body: JSON.stringify({ model_name: modelName, preset_id: presetId }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
@@ -257,10 +260,10 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async downloadModelArtifact(artifactId: string): Promise<ModelDownload> {
+  async downloadLocalModel(modelId: string): Promise<ModelDownload> {
     return parseJsonResponse<ModelDownload>(
       await fetch(this.url("/settings/models/downloads"), {
-        body: JSON.stringify({ artifact_id: artifactId }),
+        body: JSON.stringify({ model_id: modelId }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),

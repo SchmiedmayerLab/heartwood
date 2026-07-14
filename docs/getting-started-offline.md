@@ -45,7 +45,9 @@ heartwood launch --dry-run
 heartwood launch
 ```
 
-The download is written under `.heartwood/models/` and the selection is saved in `.heartwood/config.toml`. Heartwood pins the upstream revision, reports native download progress, validates the expected byte size and SHA-256 digest, and publishes the artifact only after verification succeeds. `heartwood launch` reads the saved selection, so no model or cache path is required on later commands.
+The browser provides the same operation. Start `heartwood serve`, open **Settings**, and choose a model under **On this device**. The browser identifies whether the model runs on CPU or requires an NVIDIA GPU, displays transferred and expected bytes, and changes the project status only after verification succeeds.
+
+The download is written under `.heartwood/models/`, and the model, runtime, and standard local profile are saved in `.heartwood/config.toml`. Heartwood pins the upstream revision, validates the expected content, and publishes the artifact or snapshot only after verification succeeds. `heartwood launch` reads the saved selection, so no model, runtime, or cache path is required on later commands.
 
 The reviewed `qwen25-7b-instruct-q4_k_m` artifact is a quantized GGUF demonstration model for the packaged CPU llama.cpp runtime. `qwen25-coder-7b-instruct-q4_k_m` is available for coding-output experiments. The Carina workflow uses the reviewed `qwen25-7b-instruct-vllm` snapshot with the packaged GPU vLLM runtime. Check `heartwood models artifacts` for the recorded size and minimum resources before downloading.
 
@@ -80,7 +82,7 @@ heartwood doctor
 heartwood launch --dry-run
 ```
 
-`compute-required` means the reviewed local artifact is ready but its server is not running. `recovery-required` means a configuration, artifact, runtime, or platform check failed. Runtime startup details remain inside the project at `.heartwood/logs/local-model.log`.
+`compute-required` means the reviewed local artifact is ready but its server is not running. The browser reports this as **Model runtime needed**, keeps the conversation unavailable, and points to `heartwood launch --web`. `recovery-required` means a configuration, artifact, runtime, or platform check failed. Runtime startup details remain inside the project at `.heartwood/logs/local-model.log`.
 
 ## Run the Container
 

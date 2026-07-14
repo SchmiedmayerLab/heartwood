@@ -241,33 +241,6 @@ describe("GatewayClient", () => {
     );
   });
 
-  it("configures a provider through the simplified settings route", async () => {
-    const settings = {
-      schema_version: "heartwood.model-settings.v1",
-      active_profile: "openai",
-      profiles: [],
-      presets: [],
-    };
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(settings)));
-    vi.stubGlobal("fetch", fetch);
-    const client = new GatewayClient("/proxy/8767");
-
-    await client.connectModelProvider("openai", "configured-model");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/proxy/8767/settings/models/connect",
-      expect.objectContaining({
-        body: JSON.stringify({
-          model_name: "configured-model",
-          preset_id: "openai",
-        }),
-        method: "POST",
-      }),
-    );
-  });
-
   it("discovers and selects a model through the shared connection routes", async () => {
     const connection = {
       connection_id: "openai",
@@ -359,11 +332,13 @@ describe("GatewayClient", () => {
   it("lists and starts reviewed model downloads", async () => {
     const artifacts = {
       schema_version: "heartwood.local-model-catalog.v1",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v1",
       artifacts: [],
+      snapshots: [],
       downloads: [],
     };
     const download = {
-      artifact_id: "reviewed-model",
+      model_id: "reviewed-model",
       status: "downloading",
       bytes_downloaded: 0,
       bytes_total: 1024,
@@ -378,7 +353,7 @@ describe("GatewayClient", () => {
     const client = new GatewayClient("/proxy/8767");
 
     await client.getModelArtifacts();
-    await client.downloadModelArtifact("reviewed-model");
+    await client.downloadLocalModel("reviewed-model");
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -388,8 +363,47 @@ describe("GatewayClient", () => {
       2,
       "/proxy/8767/settings/models/downloads",
       expect.objectContaining({
-        body: JSON.stringify({ artifact_id: "reviewed-model" }),
+        body: JSON.stringify({ model_id: "reviewed-model" }),
         method: "POST",
+      }),
+    );
+  });
+
+  it("reads project readiness and prepares a shared model source", async () => {
+    const readiness = {
+      state: "setup-required",
+      platform_id: "generic",
+      project_root: "/projects/analysis",
+      state_root: "/projects/analysis/.heartwood",
+      evidence: [],
+      checks: [],
+    };
+    const settings = {
+      schema_version: "heartwood.model-settings.v1",
+      active_profile: null,
+      model_source: "stanford-ai-api-gateway",
+      profiles: [],
+      connections: [],
+      presets: [],
+      source_options: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(readiness)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.getProjectReadiness();
+    await client.configureModelSource("stanford-ai-api-gateway");
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/project/readiness");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/source",
+      expect.objectContaining({
+        body: JSON.stringify({ source_id: "stanford-ai-api-gateway" }),
+        method: "PUT",
       }),
     );
   });

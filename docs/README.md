@@ -17,7 +17,7 @@ Start with [Use Heartwood](using-heartwood.md). It explains the project-director
 - [Use Heartwood](using-heartwood.md) explains projects, setup, conversations, action review, resume, and audit export.
 - [Choose a Model](model-connections.md) explains the choices shown during model setup and how credentials are handled.
 - [Local and Offline Models](getting-started-offline.md) explains existing local services, reviewed downloads, managed runtime launch, and no-network validation.
-- [Use Heartwood in a Browser](web-interface.md) explains the browser workflow and its relationship to the terminal and notebook interfaces.
+- [Work with Heartwood in a Browser](web-interface.md) explains first-run setup, shared project state, local-model preparation, conversations, and the relationship to terminal and notebook interfaces.
 
 ## Platforms
 

@@ -119,6 +119,34 @@ def test_project_config_selects_model_source_and_settings_atomically(tmp_path: P
     assert store.load() == configured
 
 
+def test_project_config_selects_local_model_and_profile_atomically(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    model = project.models_dir / "reviewed" / "model.gguf"
+    model.parent.mkdir()
+    model.write_bytes(b"synthetic")
+    store = ProjectConfigStore(project, _default_config(project))
+    profile = ModelProfile(
+        profile_id="local",
+        model="openai/heartwood-local-model",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
+    )
+    settings = ModelSettings(active_profile="local", profiles=(profile,))
+
+    configured = store.select_local_model(
+        artifact_id="reviewed",
+        path=model,
+        settings=settings,
+    )
+
+    assert configured.model_source == "local"
+    assert configured.local_model is not None
+    assert configured.model_settings == settings
+    assert store.load() == configured
+
+
 def test_project_config_rejects_absolute_local_model_path(tmp_path: Path) -> None:
     project = ProjectContext(tmp_path)
     config = _default_config(project)

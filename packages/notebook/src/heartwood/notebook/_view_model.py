@@ -144,6 +144,14 @@ class NotebookSession:
         """Return non-secret model profiles and presets."""
         return self.gateway.model_settings()
 
+    def project_readiness(self) -> dict[str, object]:
+        """Return the shared project setup and compute readiness report."""
+        return self.gateway.project_readiness()
+
+    def configure_model_source(self, source_id: str) -> dict[str, object]:
+        """Prepare the same project model source used by terminal and browser clients."""
+        return self.gateway.configure_model_source(source_id)
+
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or update one non-secret model profile."""
         return self.gateway.save_model_profile(profile)
@@ -159,6 +167,18 @@ class NotebookSession:
     def model_artifacts(self) -> dict[str, object]:
         """Return reviewed optional local-model artifacts."""
         return self.gateway.model_artifacts()
+
+    def download_local_model(self, model_id: str) -> dict[str, object]:
+        """Start a reviewed project-local model download."""
+        return self.gateway.download_local_model(model_id)
+
+    def action_settings(self) -> dict[str, object]:
+        """Return the shared action-confirmation settings."""
+        return self.gateway.action_settings()
+
+    def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
+        """Select a deployment-allowed action-confirmation mode."""
+        return self.gateway.select_action_confirmation_mode(mode)
 
     def web_proxy_url(self, *, port: int = 8767) -> str:
         """Return the proxied web UI URL for Jupyter-style environments."""

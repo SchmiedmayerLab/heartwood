@@ -8,9 +8,9 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Use Heartwood in a Browser
+# Work with Heartwood in a Browser
 
-The browser interface provides the same conversations, model selection, action review, Skills, and audit history as the `heartwood` terminal command. Start it from the directory you want Heartwood to treat as the project. Configuration and progress remain with that project in `.heartwood/`.
+The browser and terminal are two views of the same Heartwood project. They use the same conversations, model selection, action review, Skills, and audit history. Both interfaces also report the same project readiness checks. Start either interface from the directory Heartwood should treat as the project; its private configuration and progress remain in `.heartwood/`.
 
 ## Open the Interface
 
@@ -23,22 +23,31 @@ uv run --project /path/to/heartwood heartwood serve
 
 Open `http://127.0.0.1:8767/`. The [container guide](container-images.md) provides the shortest setup when Heartwood is not installed locally. On Terra, use the authenticated Jupyter proxy route described in [Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly.
 
-When Heartwood is managing a downloaded local model, start both services together:
+## Set Up the Project
+
+When a project has no active model, Heartwood opens **Set up Heartwood** automatically. The **This project** summary shows the same readiness result as `heartwood doctor`:
+
+- **Setup needed** means a model or credential still needs to be selected.
+- **Model runtime needed** means a reviewed local model is ready but its server has not started.
+- **Ready** means the selected model, credential binding, route policy, and action settings agree.
+- **Needs attention** means the expanded project checks identify configuration that must be corrected.
+
+Choose where the model will run, then choose one of the models reported by that source:
+
+- **On this device** connects to a running local service or downloads a reviewed CPU or NVIDIA GPU model into this project.
+- **Research environment** shows connections supplied by the platform, including every model available to the current identity.
+- **OpenAI** and **Anthropic** ask for a token for the current server process and request the model list directly from the provider.
+- **Custom API** connects to another service that implements the OpenAI API format.
+
+Heartwood stores the selected model and a non-secret credential binding. A token entered in the browser remains only in the running gateway process. The project policy must authorize both model discovery and model use before a connection succeeds. Switching sources keeps saved profiles but clears the active choice until a model from the new source is selected. See [Choose a Model](model-connections.md) for deployment and credential details.
+
+Reviewed local models show their expected storage and compute requirement. The browser reports download progress, verifies the completed content, and selects the standard local profile. When the status changes to **Model runtime needed**, stop a standalone `heartwood serve` process and start the model and browser together:
 
 ```bash
 heartwood launch --web
 ```
 
-## Choose a Model
-
-Open **Settings**, choose where the model runs, and select one of the models reported by that service:
-
-- **Local** shows a running local service and reviewed models downloaded for this project.
-- **Research environment** shows connections supplied by the platform, including every model available to the current identity.
-- **OpenAI** and **Anthropic** ask for a token for the current server process and request the model list directly from the provider.
-- **Custom API** connects to another service that implements the OpenAI API format.
-
-Heartwood stores the selected model and a non-secret credential binding. A token entered in the browser remains only in the running gateway process. The project policy must authorize both model discovery and model use before a connection succeeds. See [Choose a Model](model-connections.md) for deployment and credential details.
+Runtime startup and scheduler allocation remain terminal operations because they may replace the current server process or request platform compute. The browser keeps the conversation unavailable until that launch completes instead of attempting a request against a stopped model.
 
 ## Work with the Agent
 
@@ -50,16 +59,16 @@ When an action needs confirmation, review every member of the displayed set. **A
 
 The synthetic reference workflow in [Heartwood on Terra](terra-jupyter-demo.md#run-the-synthetic-workflow) demonstrates cohort creation, aggregate checks, approval, replay, and audit export without controlled data.
 
-## Resume from Another Interface
+## Continue from Another Interface
 
-The session identifier is shared by the browser, terminal, and notebook bridge. From the same project directory:
+Model and action settings are persisted as soon as they change. The browser refreshes shared project state when **Settings** opens, when the window regains focus, and while a local-model download is active. The session identifier is also shared by the browser, terminal, and notebook bridge. From the same project directory:
 
 ```bash
 heartwood --session-id <session-id> replay
 heartwood --session-id <session-id> chat
 ```
 
-Use one active writer for a session. Wait for the current agent turn to become idle before opening that session from another interface.
+Use one active writer for a session. Wait for the current agent turn to become idle before opening that session from another interface. A fresh interface process reconstructs the same configuration and events from `.heartwood/`; browser storage is not the source of truth.
 
 In a notebook process whose current directory is the project:
 

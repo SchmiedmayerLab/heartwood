@@ -417,15 +417,15 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     )
     artifacts = rest.handle(RestRequest(method="GET", path="/settings/models/artifacts"))
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/local"))
-    connected = rest.handle(
-        RestRequest(
-            method="POST",
-            path="/settings/models/connect",
-            body=json.dumps({"preset_id": "local-openai-compatible", "model_name": "local-model"}),
-        )
-    )
-
     assert initial.status_code == 200
+    assert initial.body["model_source"] is None
+    source_options = cast(list[dict[str, JsonValue]], initial.body["source_options"])
+    assert [option["source_id"] for option in source_options] == [
+        "local",
+        "openai",
+        "anthropic",
+        "stanford-ai-api-gateway",
+    ]
     connections = cast(list[dict[str, JsonValue]], initial.body["connections"])
     assert [connection["connection_id"] for connection in connections] == [
         "local",
@@ -444,7 +444,6 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v1"
     assert artifacts.body["snapshots"]
     assert removed.body["active_profile"] is None
-    assert connected.body["active_profile"] == "local-openai-compatible"
     artifact_ids = {
         artifact["artifact_id"]
         for artifact in cast(list[dict[str, JsonValue]], artifacts.body["artifacts"])
@@ -509,9 +508,71 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
     restarted = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
     assert restarted.model_settings()["active_profile"] == "local"
     assert restarted.config_store.load().model_source == "local"
+    switched = RestGateway(restarted).handle(
+        RestRequest(
+            method="PUT",
+            path="/settings/models/source",
+            body=json.dumps({"source_id": "openai"}),
+        )
+    )
+    assert switched.status_code == 200
+    assert switched.body["active_profile"] is None
+    assert switched.body["model_source"] == "openai"
+    assert restarted.project_readiness()["state"] == "setup-required"
+    assert any(
+        profile["profile_id"] == "local"
+        for profile in cast(list[dict[str, JsonValue]], switched.body["profiles"])
+    )
 
 
-def test_rest_starts_artifact_download_and_validates_payloads(
+def test_rest_shares_project_readiness_and_model_source_setup(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+
+    initial = rest.handle(RestRequest(method="GET", path="/project/readiness"))
+    configured = rest.handle(
+        RestRequest(
+            method="PUT",
+            path="/settings/models/source",
+            body=json.dumps({"source_id": "stanford-ai-api-gateway"}),
+        )
+    )
+    readiness = rest.handle(RestRequest(method="GET", path="/project/readiness"))
+
+    assert initial.status_code == 200
+    assert initial.body["state"] == "setup-required"
+    assert initial.body["project_root"] == str(tmp_path)
+    assert configured.status_code == 200
+    assert configured.body["model_source"] == "stanford-ai-api-gateway"
+    connections = cast(list[dict[str, JsonValue]], configured.body["connections"])
+    assert any(
+        connection["connection_id"] == "stanford-ai-api-gateway" for connection in connections
+    )
+    assert readiness.body["state"] == "setup-required"
+    assert gateway.config_store.load().policy.policy_id == ("generic-stanford-ai-api-gateway")
+    assert (
+        rest.handle(
+            RestRequest(
+                method="PUT",
+                path="/settings/models/source",
+                body=json.dumps({"source_id": "unknown"}),
+            )
+        ).status_code
+        == 422
+    )
+    assert (
+        rest.handle(
+            RestRequest(
+                method="PUT",
+                path="/settings/models/source",
+                body=json.dumps({"source_id": "local", "extra": True}),
+            )
+        ).status_code
+        == 422
+    )
+
+
+def test_rest_starts_local_model_download_and_validates_payloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -519,9 +580,9 @@ def test_rest_starts_artifact_download_and_validates_payloads(
     rest = RestGateway(gateway)
     monkeypatch.setattr(
         gateway,
-        "download_model_artifact",
-        lambda artifact_id: {
-            "artifact_id": artifact_id,
+        "download_local_model",
+        lambda model_id: {
+            "model_id": model_id,
             "status": "downloading",
             "bytes_downloaded": 0,
             "bytes_total": 1,
@@ -532,11 +593,12 @@ def test_rest_starts_artifact_download_and_validates_payloads(
         RestRequest(
             method="POST",
             path="/settings/models/downloads",
-            body=json.dumps({"artifact_id": "llama-cpp-stories260k-ci"}),
+            body=json.dumps({"model_id": "llama-cpp-stories260k-ci"}),
         )
     )
 
     assert response.status_code == 202
+    assert response.body["model_id"] == "llama-cpp-stories260k-ci"
     assert response.body["status"] == "downloading"
     assert (
         rest.handle(
@@ -547,6 +609,16 @@ def test_rest_starts_artifact_download_and_validates_payloads(
     assert (
         rest.handle(
             RestRequest(method="POST", path="/settings/models/downloads", body="{}")
+        ).status_code
+        == 422
+    )
+    assert (
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/downloads",
+                body=json.dumps({"model_id": "model", "token": "forbidden"}),
+            )
         ).status_code
         == 422
     )
@@ -562,12 +634,16 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
     def artifact_download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
         artifact_id = artifact.artifact_id
         observed.append(("artifact", artifact_id, cache_dir))
-        return cache_dir / artifact_id
+        path = cache_dir / artifact_id
+        path.mkdir(parents=True)
+        return path
 
     def snapshot_download(snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
         snapshot_id = snapshot.snapshot_id
         observed.append(("snapshot", snapshot_id, cache_dir))
-        return cache_dir / snapshot_id
+        path = cache_dir / snapshot_id
+        path.mkdir(parents=True)
+        return path
 
     monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", artifact_download)
     monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
@@ -582,6 +658,15 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
         ("artifact", "llama-cpp-stories260k-ci", model_cache),
         ("snapshot", "qwen25-7b-instruct-vllm", model_cache),
     ]
+    config = gateway.config_store.load()
+    assert config.model_source == "local"
+    assert config.local_model is not None
+    assert config.local_model.artifact_id == "qwen25-7b-instruct-vllm"
+    assert config.model_settings.active_profile == "local"
+    assert config.model_settings.profile().model == "openai/heartwood-local-model"
+    restarted = _gateway(tmp_path)
+    assert restarted.model_settings()["active_profile"] == "local"
+    assert restarted.project_readiness()["state"] == "compute-required"
     with pytest.raises(ModelSnapshotError, match="unknown reviewed local model: missing"):
         gateway.download_local_model_now("missing")
 

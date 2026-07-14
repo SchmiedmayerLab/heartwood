@@ -203,8 +203,9 @@ class ProjectConfigStore:
         path: Path,
         runtime: str = "auto",
         model_id: str = "heartwood-local-model",
+        settings: ModelSettings | None = None,
     ) -> ProjectConfig:
-        """Persist one verified project-local model selection."""
+        """Persist one verified project-local model and optional active profile."""
         resolved = path.resolve()
         if self.project.models_dir not in resolved.parents:
             raise ProjectConfigError("downloaded model must be stored under .heartwood/models")
@@ -215,6 +216,8 @@ class ProjectConfigStore:
             model_id=model_id,
         )
         updated = replace(self.load(), model_source="local", local_model=selection)
+        if settings is not None:
+            updated = updated.with_model_settings(settings)
         self.save(updated)
         return updated
 

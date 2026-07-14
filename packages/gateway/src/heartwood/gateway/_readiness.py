@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Literal, assert_never
 
@@ -39,6 +39,48 @@ class ReadinessCheck:
     check_id: str
     status: Literal["pass", "warning", "fail"]
     summary: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSourceOption:
+    """One approachable setup choice backed by a gateway model connection."""
+
+    source_id: ModelSource
+    connection_id: str
+    label: str
+    description: str
+
+    def safe_dict(self, *, selected: bool) -> dict[str, object]:
+        """Return the non-secret setup representation shared by all interfaces."""
+        return {**asdict(self), "selected": selected}
+
+
+MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
+    ModelSourceOption(
+        source_id="local",
+        connection_id="local",
+        label="On this device",
+        description="Use a reviewed download or an existing model service.",
+    ),
+    ModelSourceOption(
+        source_id="openai",
+        connection_id="openai",
+        label="OpenAI",
+        description="Use the models available to an OpenAI token.",
+    ),
+    ModelSourceOption(
+        source_id="anthropic",
+        connection_id="anthropic",
+        label="Anthropic",
+        description="Use the models available to an Anthropic token.",
+    ),
+    ModelSourceOption(
+        source_id="stanford-ai-api-gateway",
+        connection_id="stanford-ai-api-gateway",
+        label="Stanford AI API Gateway",
+        description="Use models authorized through Stanford's managed gateway.",
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +279,9 @@ def persist_deployment_profile(
     )
     current = store.load()
     additional_connections = current.additional_connections
+    model_settings = current.model_settings
+    if current.model_source != model_source:
+        model_settings = replace(model_settings, active_profile=None)
     if model_source == "stanford-ai-api-gateway":
         all_connections = model_connections_from_mapping(_stanford_connection_manifest())
         additional_connections = tuple(
@@ -268,7 +313,7 @@ def persist_deployment_profile(
             platform_id=adapter.adapter_id,
             model_source=model_source,
             action_settings=current.action_settings,
-            model_settings=current.model_settings,
+            model_settings=model_settings,
             additional_connections=additional_connections,
             policy=policy,
             local_model=current.local_model,

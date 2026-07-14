@@ -37,6 +37,8 @@ from heartwood.gateway import (
     ProjectConfigStore,
     ProjectContext,
     ProviderModel,
+    RestGateway,
+    RestRequest,
 )
 from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
@@ -641,6 +643,65 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     assert 'confirmation_mode = "confirm-risky"' in contents
     assert "Profile: local-test" in output
     assert "Auto-Approve Low Risk" in output
+
+
+def test_cli_and_browser_gateway_observe_the_same_project_configuration(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    catalog = _local_catalog()
+
+    assert _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"]) == 0
+    capsys.readouterr()
+
+    gateway = RealSessionGateway(
+        project=ProjectContext(project),
+        env={},
+        backend_id="deterministic",
+        model_catalog_service=catalog,
+    )
+    browser = RestGateway(gateway)
+    action_settings = browser.handle(RestRequest(method="GET", path="/settings/actions"))
+    assert action_settings.body["confirmation_mode"] == "confirm-risky"
+    assert (
+        browser.handle(
+            RestRequest(
+                method="PUT",
+                path="/settings/actions/confirmation",
+                body=json.dumps({"mode": "always-confirm"}),
+            )
+        ).status_code
+        == 200
+    )
+    assert (
+        browser.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/catalog",
+                body=json.dumps({"connection_id": "local", "refresh": True}),
+            )
+        ).status_code
+        == 200
+    )
+    assert (
+        browser.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/connect",
+                body=json.dumps({"connection_id": "local", "model_id": "local-model"}),
+            )
+        ).status_code
+        == 200
+    )
+
+    _install_deterministic_gateway(monkeypatch, model_catalog_service=catalog)
+    assert _run(project, monkeypatch, ["actions"]) == 0
+    assert _run(project, monkeypatch, ["models", "list"]) == 0
+    output = capsys.readouterr().out
+    assert "* Ask Every Time" in output
+    assert "* local  openai/local-model" in output
 
 
 def test_models_list_select_remove_and_artifacts_use_one_configuration(

@@ -7,7 +7,7 @@
 schema_version = "1"
 artifact_id = "qwen25-7b-instruct-q4_k_m"
 runtime_profile = "llama-cpp-cpu"
-purpose = "Optional reviewed local model for synthetic OpenHands tool-use demonstrations; not a biomedical or production-quality model claim."
+purpose = "Local model for synthetic tool-use demonstrations; not reviewed for biomedical use."
 source_repository = "bartowski/Qwen2.5-7B-Instruct-GGUF"
 source_path = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
 source_revision = "8911e8a47f92bac19d6f5c64a2e2095bd2f7d031"

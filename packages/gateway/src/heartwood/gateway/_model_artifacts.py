@@ -18,8 +18,16 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, Protocol, cast
 
+from heartwood.gateway._model_snapshots import (
+    ModelSnapshot,
+    ModelSnapshotCatalog,
+    ModelSnapshotError,
+    download_model_snapshot,
+)
+
 type DownloadStatus = Literal["downloading", "error", "ready"]
 type ProgressCallback = Callable[[int, int], None]
+type DownloadReadyCallback = Callable[[str, Path, str], None]
 
 
 class _DownloadProgress:
@@ -156,7 +164,7 @@ class ModelArtifactCatalog:
 class ModelDownload:
     """Background download status without secret or prompt content."""
 
-    artifact_id: str
+    model_id: str
     status: DownloadStatus
     bytes_downloaded: int
     bytes_total: int
@@ -168,34 +176,43 @@ class ModelDownload:
         return asdict(self)
 
 
-class ModelArtifactManager:
-    """Download reviewed artifacts in background for the web settings panel."""
+class LocalModelDownloadManager:
+    """Download, verify, and select reviewed local models in the background."""
 
-    def __init__(self, *, catalog: ModelArtifactCatalog, cache_dir: Path) -> None:
-        self.catalog = catalog
+    def __init__(
+        self,
+        *,
+        artifact_catalog: ModelArtifactCatalog,
+        snapshot_catalog: ModelSnapshotCatalog,
+        cache_dir: Path,
+        on_ready: DownloadReadyCallback,
+    ) -> None:
+        self.artifact_catalog = artifact_catalog
+        self.snapshot_catalog = snapshot_catalog
         self.cache_dir = cache_dir
+        self.on_ready = on_ready
         self._downloads: dict[str, ModelDownload] = {}
         self._lock = threading.Lock()
 
-    def start(self, artifact_id: str) -> ModelDownload:
-        """Start or return the current download for an artifact."""
-        artifact = self.catalog.artifact(artifact_id)
+    def start(self, model_id: str) -> ModelDownload:
+        """Start or return one reviewed artifact or snapshot download."""
+        model, total = self._model(model_id)
         with self._lock:
-            current = self._downloads.get(artifact_id)
+            current = self._downloads.get(model_id)
             if current is not None and current.status in {"downloading", "ready"}:
                 return current
             download = ModelDownload(
-                artifact_id=artifact_id,
+                model_id=model_id,
                 status="downloading",
                 bytes_downloaded=0,
-                bytes_total=artifact.artifact_size_bytes,
+                bytes_total=total,
             )
-            self._downloads[artifact_id] = download
+            self._downloads[model_id] = download
         thread = threading.Thread(
             target=self._download,
-            args=(artifact,),
+            args=(model,),
             daemon=True,
-            name=f"heartwood-model-{artifact_id}",
+            name=f"heartwood-model-{model_id}",
         )
         thread.start()
         return download
@@ -205,47 +222,84 @@ class ModelArtifactManager:
         with self._lock:
             return tuple(self._downloads.values())
 
-    def _download(self, artifact: ModelArtifact) -> None:
+    def _download(self, model: ModelArtifact | ModelSnapshot) -> None:
+        model_id, total, runtime_profile = self._metadata(model)
         try:
-            path = download_model_artifact(
-                artifact,
-                cache_dir=self.cache_dir,
-                progress_callback=lambda downloaded, _total: self._record_progress(
-                    artifact, downloaded
-                ),
-            )
+            if isinstance(model, ModelArtifact):
+                path = download_model_artifact(
+                    model,
+                    cache_dir=self.cache_dir,
+                    progress_callback=lambda downloaded, _total: self._record_progress(
+                        model_id, downloaded, total
+                    ),
+                )
+            else:
+                path = download_model_snapshot(
+                    model,
+                    cache_dir=self.cache_dir,
+                    progress_callback=lambda downloaded, _total: self._record_progress(
+                        model_id, downloaded, total
+                    ),
+                )
+            self.on_ready(model_id, path, runtime_profile)
             result = ModelDownload(
-                artifact_id=artifact.artifact_id,
+                model_id=model_id,
                 status="ready",
-                bytes_downloaded=artifact.artifact_size_bytes,
-                bytes_total=artifact.artifact_size_bytes,
+                bytes_downloaded=total,
+                bytes_total=total,
                 path=str(path),
             )
         except Exception as error:  # pragma: no cover - network failures vary by environment
             with self._lock:
-                downloaded = self._downloads[artifact.artifact_id].bytes_downloaded
-                self._downloads[artifact.artifact_id] = ModelDownload(
-                    artifact_id=artifact.artifact_id,
+                downloaded = self._downloads[model_id].bytes_downloaded
+                self._downloads[model_id] = ModelDownload(
+                    model_id=model_id,
                     status="error",
                     bytes_downloaded=downloaded,
-                    bytes_total=artifact.artifact_size_bytes,
-                    error=f"{type(error).__name__}: artifact download failed",
+                    bytes_total=total,
+                    error=_safe_download_error(error),
                 )
             return
         with self._lock:
-            self._downloads[artifact.artifact_id] = result
+            self._downloads[model_id] = result
 
-    def _record_progress(self, artifact: ModelArtifact, downloaded: int) -> None:
+    def _record_progress(self, model_id: str, downloaded: int, total: int) -> None:
         with self._lock:
-            current = self._downloads.get(artifact.artifact_id)
+            current = self._downloads.get(model_id)
             if current is None or current.status != "downloading":
                 return
-            self._downloads[artifact.artifact_id] = ModelDownload(
-                artifact_id=artifact.artifact_id,
+            self._downloads[model_id] = ModelDownload(
+                model_id=model_id,
                 status="downloading",
-                bytes_downloaded=min(max(downloaded, 0), artifact.artifact_size_bytes),
-                bytes_total=artifact.artifact_size_bytes,
+                bytes_downloaded=min(max(downloaded, current.bytes_downloaded, 0), total),
+                bytes_total=total,
             )
+
+    def _model(self, model_id: str) -> tuple[ModelArtifact | ModelSnapshot, int]:
+        try:
+            artifact = self.artifact_catalog.artifact(model_id)
+        except ModelArtifactError:
+            try:
+                snapshot = self.snapshot_catalog.snapshot(model_id)
+            except ModelSnapshotError as error:
+                raise ModelArtifactError(f"unknown reviewed local model: {model_id}") from error
+            return snapshot, snapshot.expected_size_bytes
+        return artifact, artifact.artifact_size_bytes
+
+    @staticmethod
+    def _metadata(model: ModelArtifact | ModelSnapshot) -> tuple[str, int, str]:
+        if isinstance(model, ModelArtifact):
+            return model.artifact_id, model.artifact_size_bytes, model.runtime_profile
+        return model.snapshot_id, model.expected_size_bytes, model.runtime_profile
+
+
+def _safe_download_error(error: Exception) -> str:
+    if isinstance(error, (ModelArtifactError, ModelSnapshotError)):
+        return str(error)
+    if isinstance(error, OSError):
+        detail = error.strerror or "project storage operation failed"
+        return f"{type(error).__name__}: {detail}"
+    return "Download failed. Check network access and available project storage, then try again."
 
 
 def load_model_artifact_catalog(path: Path) -> ModelArtifactCatalog:

@@ -31,9 +31,10 @@ from heartwood.gateway._action_settings import (
     ActionSettingsError,
 )
 from heartwood.gateway._model_artifacts import (
+    LocalModelDownloadManager,
     ModelArtifactCatalog,
     ModelArtifactError,
-    ModelArtifactManager,
+    ModelDownload,
     load_model_artifact_catalog,
 )
 from heartwood.gateway._model_artifacts import (
@@ -66,8 +67,14 @@ from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._project_config import (
     ProjectActionSettingsStore,
     ProjectConfig,
+    ProjectConfigError,
     ProjectConfigStore,
     ProjectModelSettingsStore,
+)
+from heartwood.gateway._readiness import (
+    MODEL_SOURCE_OPTIONS,
+    inspect_deployment,
+    persist_deployment_profile,
 )
 from heartwood.gateway._session_catalog import SessionCatalog, SessionCatalogError
 from heartwood.gateway._skill_settings import SkillManager
@@ -213,21 +220,14 @@ class SessionGateway:
         self.action_settings_store = action_settings_store or ProjectActionSettingsStore(
             self.config_store
         )
-        configured_connections = self.config_store.load().additional_connections
-        loaded_connections = (
+        self._base_model_connections = (
             tuple(model_connections)
             if model_connections is not None
-            else (*load_model_connections(None), *configured_connections)
+            else load_model_connections(None)
         )
-        for connection in loaded_connections:
-            connection.validate(configurable=connection.connection_id == "custom-api")
-        connection_ids = [connection.connection_id for connection in loaded_connections]
-        if len(connection_ids) != len(set(connection_ids)):
-            raise ModelCatalogError("model connection ids must be unique")
-        self._model_connections = {
-            connection.connection_id: connection for connection in loaded_connections
-        }
         self.model_catalog_service = model_catalog_service or ModelCatalogService()
+        self._model_connections: dict[str, ModelConnection] = {}
+        self._reload_model_connections()
         self._runtime_credentials: dict[str, str] = {}
         repository_root = _repository_root()
         catalog_path = (
@@ -241,9 +241,11 @@ class SessionGateway:
             snapshot_catalog_path
         )
         self.model_cache_dir = self.project.models_dir
-        self.artifact_manager = ModelArtifactManager(
-            catalog=self.artifact_catalog,
+        self.local_model_manager = LocalModelDownloadManager(
+            artifact_catalog=self.artifact_catalog,
+            snapshot_catalog=self.snapshot_catalog,
             cache_dir=self.model_cache_dir,
+            on_ready=self._select_downloaded_local_model,
         )
         bundled_skills_dir = repository_root / "skills" / "verified"
         self.installed_skills_dir = self.project.skills_dir
@@ -334,15 +336,49 @@ class SessionGateway:
     def model_settings(self) -> dict[str, object]:
         """Return API-safe settings, connections, and advanced presets."""
         settings = self.settings_store.load()
+        config = self.config_store.load()
         credential_env = self._credential_environment()
         return {
             **settings.safe_dict(credential_env),
+            "model_source": config.model_source,
+            "source_options": [
+                option.safe_dict(selected=option.source_id == config.model_source)
+                for option in MODEL_SOURCE_OPTIONS
+            ],
             "connections": [
                 connection.safe_dict(credential_env)
                 for connection in self._model_connections.values()
             ],
             "presets": [preset.safe_dict() for preset in MODEL_PRESETS],
         }
+
+    def project_readiness(self) -> dict[str, object]:
+        """Return the same content-free project diagnostics used by the CLI."""
+        return inspect_deployment(
+            self.project,
+            self._credential_environment(),
+        ).safe_dict()
+
+    def configure_model_source(self, model_source: str) -> dict[str, object]:
+        """Prepare one shared model source and its deployment policy."""
+        option = next(
+            (
+                candidate
+                for candidate in MODEL_SOURCE_OPTIONS
+                if candidate.source_id == model_source
+            ),
+            None,
+        )
+        if option is None:
+            raise ProjectConfigError(f"unsupported model source: {model_source}")
+        persist_deployment_profile(
+            self.project,
+            model_source=option.source_id,
+            env=self.env,
+        )
+        self._reload_model_connections()
+        self._reset_services()
+        return self.model_settings()
 
     def discover_models(
         self,
@@ -469,14 +505,6 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
-    def connect_model_provider(self, preset_id: str, model_name: str) -> dict[str, object]:
-        """Configure and select a provider using gateway-owned preset defaults."""
-        profile = model_profile_from_preset(preset_id, model_name)
-        settings = self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
-        self._save_model_selection(preset_id, settings)
-        self._reset_services()
-        return self.model_settings()
-
     def select_model_profile(self, profile_id: str) -> dict[str, object]:
         """Select a profile and reset active services."""
         settings = self.settings_store.load().selecting(profile_id)
@@ -515,30 +543,29 @@ class SessionGateway:
     def model_artifacts(self) -> dict[str, object]:
         """Return reviewed artifacts and background download status."""
         snapshot_catalog = self.snapshot_catalog.safe_dict()
+        statuses = {status.model_id: status for status in self.local_model_manager.statuses()}
+        selected = self.config_store.load().local_model
+        if selected is not None and selected.artifact_id not in statuses:
+            path = selected.resolved_path(self.project)
+            if path.exists():
+                size = self._local_model_size(selected.artifact_id)
+                statuses[selected.artifact_id] = ModelDownload(
+                    model_id=selected.artifact_id,
+                    status="ready",
+                    bytes_downloaded=size,
+                    bytes_total=size,
+                    path=str(path),
+                )
         return {
             **self.artifact_catalog.safe_dict(),
             "snapshot_schema_version": snapshot_catalog["schema_version"],
             "snapshots": snapshot_catalog["snapshots"],
-            "downloads": [status.safe_dict() for status in self.artifact_manager.statuses()],
+            "downloads": [status.safe_dict() for status in statuses.values()],
         }
 
-    def download_model_artifact(self, artifact_id: str) -> dict[str, object]:
-        """Start a reviewed artifact download into the configured cache."""
-        return self.artifact_manager.start(artifact_id).safe_dict()
-
-    def download_model_artifact_now(
-        self,
-        artifact_id: str,
-    ) -> Path:
-        """Download, verify, and select an artifact for this project."""
-        artifact = self.artifact_catalog.artifact(artifact_id)
-        path = download_artifact(artifact, cache_dir=self.model_cache_dir)
-        self.config_store.select_local_model(
-            artifact_id=artifact_id,
-            path=path,
-            runtime=_runtime_kind(artifact.runtime_profile),
-        )
-        return path
+    def download_local_model(self, model_id: str) -> dict[str, object]:
+        """Start a reviewed local-model download into project storage."""
+        return self.local_model_manager.start(model_id).safe_dict()
 
     def download_local_model_now(
         self,
@@ -553,15 +580,11 @@ class SessionGateway:
             except ModelSnapshotError as error:
                 raise ModelSnapshotError(f"unknown reviewed local model: {model_id}") from error
             path = download_model_snapshot(snapshot, cache_dir=self.model_cache_dir)
-            runtime = _runtime_kind(snapshot.runtime_profile)
+            runtime_profile = snapshot.runtime_profile
         else:
             path = download_artifact(artifact, cache_dir=self.model_cache_dir)
-            runtime = _runtime_kind(artifact.runtime_profile)
-        self.config_store.select_local_model(
-            artifact_id=model_id,
-            path=path,
-            runtime=runtime,
-        )
+            runtime_profile = artifact.runtime_profile
+        self._select_downloaded_local_model(model_id, path, runtime_profile)
         return path
 
     def skill_settings(self) -> dict[str, object]:
@@ -756,6 +779,54 @@ class SessionGateway:
             return
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
+
+    def _reload_model_connections(self) -> None:
+        configured = self.config_store.load().additional_connections
+        loaded = (*self._base_model_connections, *configured)
+        for connection in loaded:
+            connection.validate(configurable=connection.connection_id == "custom-api")
+        connection_ids = [connection.connection_id for connection in loaded]
+        if len(connection_ids) != len(set(connection_ids)):
+            raise ModelCatalogError("model connection ids must be unique")
+        previous_ids = set(self._model_connections)
+        self._model_connections = {connection.connection_id: connection for connection in loaded}
+        for connection_id in previous_ids | set(self._model_connections):
+            self.model_catalog_service.invalidate(connection_id)
+
+    def _select_downloaded_local_model(
+        self,
+        model_id: str,
+        path: Path,
+        runtime_profile: str,
+    ) -> None:
+        execution_model = "heartwood-local-model"
+        profile = replace(
+            model_profile_from_preset("local-openai-compatible", execution_model),
+            profile_id="local",
+            description="Heartwood-managed local model",
+        )
+        settings = (
+            self.config_store.load()
+            .model_settings.with_profile(profile)
+            .selecting(profile.profile_id)
+        )
+        self.config_store.select_local_model(
+            artifact_id=model_id,
+            path=path,
+            runtime=_runtime_kind(runtime_profile),
+            model_id=execution_model,
+            settings=settings,
+        )
+        self._reset_services()
+
+    def _local_model_size(self, model_id: str) -> int:
+        try:
+            return self.artifact_catalog.artifact(model_id).artifact_size_bytes
+        except ModelArtifactError:
+            try:
+                return self.snapshot_catalog.snapshot(model_id).expected_size_bytes
+            except ModelSnapshotError as error:
+                raise ModelArtifactError(f"unknown reviewed local model: {model_id}") from error
 
 
 def _repository_root() -> Path:

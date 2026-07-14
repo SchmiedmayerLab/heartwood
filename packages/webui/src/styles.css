@@ -702,6 +702,110 @@ summary:focus-visible {
   font-size: 0.8rem;
 }
 
+.project-readiness {
+  gap: 7px;
+}
+
+.project-readiness-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-readiness-heading > div,
+.project-readiness details {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.project-readiness strong {
+  color: #1f3026;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.project-readiness > span,
+.project-readiness small,
+.project-readiness summary {
+  color: #68756d;
+  font-size: 0.73rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.project-readiness summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.project-detail-content {
+  display: grid;
+  gap: 3px;
+  padding-top: 3px;
+}
+
+.project-next-step {
+  display: grid;
+  gap: 3px;
+  margin-top: 3px;
+  padding: 10px;
+  border-left: 3px solid #517a63;
+  background: #f1f6f2;
+}
+
+.project-next-step strong {
+  font-size: 0.76rem;
+}
+
+.project-next-step span {
+  color: #46584d;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.project-next-step code {
+  color: #26392d;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.readiness-checks {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness-checks li {
+  position: relative;
+  padding-left: 13px;
+  color: #617067;
+  font-size: 0.71rem;
+  line-height: 1.4;
+}
+
+.readiness-checks li::before {
+  position: absolute;
+  top: 0.45em;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4e765e;
+  content: "";
+}
+
+.readiness-checks li[data-status="warning"]::before {
+  background: #9a6b22;
+}
+
+.readiness-checks li[data-status="fail"]::before {
+  background: #a43f3a;
+}
+
 .model-connections,
 .connection-group,
 .connection-form,

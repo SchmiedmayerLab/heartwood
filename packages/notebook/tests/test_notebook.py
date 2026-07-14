@@ -165,6 +165,29 @@ def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -
     }.issubset(artifact_ids)
 
 
+def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    session = NotebookSession(
+        project=project,
+        session_id="notebook-shared-state",
+        gateway=SessionGateway(project=project, env={}, backend_id="deterministic"),
+    )
+
+    configured = session.configure_model_source("local")
+    action_settings = session.select_action_confirmation_mode("confirm-risky")
+
+    reopened = NotebookSession(
+        project=project,
+        session_id="notebook-shared-state",
+        gateway=SessionGateway(project=project, env={}, backend_id="deterministic"),
+    )
+    assert configured["model_source"] == "local"
+    assert action_settings["confirmation_mode"] == "confirm-risky"
+    assert reopened.model_settings()["model_source"] == "local"
+    assert reopened.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert reopened.project_readiness()["project_root"] == str(tmp_path)
+
+
 def test_jupyter_proxy_url_uses_service_prefix() -> None:
     assert (
         jupyter_proxy_url(

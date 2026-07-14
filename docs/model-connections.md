@@ -19,12 +19,12 @@ The web interface groups connections by the decision a researcher needs to make:
 | Choice | What You Provide | What Heartwood Discovers |
 |---|---|---|
 | Research environment | Usually only a model selection | Models exposed by the platform-managed service or identity |
-| Local | Nothing for an active loopback service, or an explicit reviewed download | Models reported by the local service and reviewed artifacts available for download |
+| On this device | Nothing for an active loopback service, or one reviewed download choice | Models reported by the local service and reviewed CPU or NVIDIA GPU models available to this project |
 | OpenAI | A provider token | Models returned by the official OpenAI model-list operation |
 | Anthropic | A provider token | Models returned by the official Anthropic model-list operation |
 | Custom API | An OpenAI-compatible base URL, optional token, and model selection | Models returned by the service's `/models` route |
 
-The interface keeps provider prefixes, profile identifiers, policy endpoints, and credential-storage details under advanced controls. A platform may preconfigure a connection so the researcher never sees or supplies a token.
+The interface keeps provider prefixes, profile identifiers, policy endpoints, and credential-storage details under advanced controls. A platform may preconfigure a connection so the researcher never sees or supplies a token. Choosing a different source preserves saved profiles but leaves the active model empty until a model from that source is selected; this is normal setup, not a recovery condition.
 
 ## Configure the Terminal
 
@@ -35,7 +35,7 @@ cd /path/to/project
 heartwood
 ```
 
-The advanced model commands use the same gateway operations as the browser. They are useful when a local service is already running or the deployment has already supplied a credential binding:
+The advanced model commands use the same gateway operations and `.heartwood/config.toml` state as the browser. They are useful when a local service is already running or the deployment has already supplied a credential binding:
 
 ```bash
 heartwood models list
@@ -53,7 +53,7 @@ heartwood models refresh local
 heartwood models connect local <model-id>
 ```
 
-Use [Local and Offline Models](getting-started-offline.md) when Heartwood should download and manage the local runtime as well.
+Use [Local and Offline Models](getting-started-offline.md) when Heartwood should download and manage the local runtime as well. A completed reviewed download selects the standard local profile in both interfaces; `heartwood launch` then starts the required runtime.
 
 ## Understand Credentials
 

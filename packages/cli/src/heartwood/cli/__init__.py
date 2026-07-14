@@ -21,7 +21,6 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
 
 import uvicorn
 
@@ -34,6 +33,7 @@ from heartwood.cli._interactive import (
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
+    MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
     DeploymentReadiness,
     GatewayAsgiApp,
@@ -46,7 +46,6 @@ from heartwood.gateway import (
     SessionGateway,
     SkillSettingsError,
     inspect_deployment,
-    persist_deployment_profile,
 )
 from heartwood.session import (
     CommandKind,
@@ -78,18 +77,8 @@ _ACTION_MODE_ARGUMENTS = {
     "ask-every-time": "always-confirm",
     "auto-approve-low-risk": "confirm-risky",
 }
-_MODEL_SOURCE_OPTIONS = (
-    "local",
-    "openai",
-    "anthropic",
-    "stanford-ai-api-gateway",
-)
-_MODEL_SOURCE_LABELS = {
-    "local": "Local model service",
-    "openai": "OpenAI",
-    "anthropic": "Anthropic",
-    "stanford-ai-api-gateway": "Stanford AI API Gateway",
-}
+_MODEL_SOURCE_IDS = tuple(option.source_id for option in MODEL_SOURCE_OPTIONS)
+_MODEL_SOURCE_LABELS = {option.source_id: option.label for option in MODEL_SOURCE_OPTIONS}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -132,7 +121,7 @@ def _build_parser() -> argparse.ArgumentParser:
     setup = subparsers.add_parser("setup", help="Configure a model route and conservative policy.")
     setup.add_argument(
         "--model-source",
-        choices=_MODEL_SOURCE_OPTIONS,
+        choices=_MODEL_SOURCE_IDS,
         help="Model service to configure.",
     )
     setup.add_argument("--model-id", help="Exact model identifier reported by the service.")
@@ -505,17 +494,17 @@ def _configure_setup(
             parser.error("--model-source is required with --non-interactive")
         print(_format_readiness(readiness))
         print("\nModel access:")
-        for index, option in enumerate(_MODEL_SOURCE_OPTIONS, start=1):
+        for index, option in enumerate(_MODEL_SOURCE_IDS, start=1):
             print(f"  {index}. {_MODEL_SOURCE_LABELS[option]}")
         try:
-            choice = input(f"Select [1-{len(_MODEL_SOURCE_OPTIONS)}]: ").strip()
+            choice = input(f"Select [1-{len(_MODEL_SOURCE_IDS)}]: ").strip()
         except EOFError:
             print("\nSetup cancelled because input closed.")
             return 1, None
-        if not choice.isdigit() or not 1 <= int(choice) <= len(_MODEL_SOURCE_OPTIONS):
+        if not choice.isdigit() or not 1 <= int(choice) <= len(_MODEL_SOURCE_IDS):
             print("Setup cancelled because no valid model source was selected.")
             return 1, None
-        source = _MODEL_SOURCE_OPTIONS[int(choice) - 1]
+        source = _MODEL_SOURCE_IDS[int(choice) - 1]
     if (
         readiness.platform_id == "carina"
         and source == "local"
@@ -553,13 +542,9 @@ def _configure_setup(
     snapshot = _snapshot_setup_file(project)
     gateway: SessionGateway | None = None
     try:
-        if not resume_existing:
-            model_source = cast(
-                Literal["anthropic", "local", "openai", "stanford-ai-api-gateway"],
-                source,
-            )
-            persist_deployment_profile(project, model_source=model_source)
         gateway = SessionGateway(project=project)
+        if not resume_existing:
+            gateway.configure_model_source(source)
         gateway.start()
         if not resume_existing:
             gateway.select_action_confirmation_mode("always-confirm")

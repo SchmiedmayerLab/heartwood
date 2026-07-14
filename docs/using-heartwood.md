@@ -91,7 +91,9 @@ Start the shared gateway and web application from the project directory:
 heartwood serve
 ```
 
-Open `http://127.0.0.1:8767/`. The browser uses the same project configuration, sessions, action settings, model profiles, Skills, and audit store as the terminal. See [Use Heartwood in a Browser](web-interface.md) for model setup and notebook-proxy use.
+Open `http://127.0.0.1:8767/`. The browser uses the same project configuration, sessions, action settings, model profiles, Skills, and audit store as the terminal. See [Work with Heartwood in a Browser](web-interface.md) for model setup and notebook-proxy use.
+
+An unconfigured project opens the shared setup view automatically. Changes made through the browser are visible to the next terminal or notebook command, and opening **Settings** refreshes changes made by another interface. A downloaded local model still needs the terminal-owned `heartwood launch --web` lifecycle before the browser can submit a task.
 
 ## Use a Notebook
 

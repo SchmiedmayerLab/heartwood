@@ -36,8 +36,10 @@ import type {
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelProfile,
+  ModelSource,
   ModelSettings,
   ModelValidation,
+  ProjectReadiness,
   SessionEvent,
   SessionSummary,
   SkillSettings,
@@ -99,6 +101,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [modelArtifacts, setModelArtifacts] = useState<ModelArtifacts | null>(
     null,
   );
+  const [projectReadiness, setProjectReadiness] =
+    useState<ProjectReadiness | null>(null);
   const [profileDraft, setProfileDraft] = useState<ModelProfile>(emptyProfile);
   const [validation, setValidation] = useState<ModelValidation | null>(null);
   const [validationFailureKey, setValidationFailureKey] = useState<
@@ -116,11 +120,40 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const selectionGeneration = useRef(0);
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
   const commandInFlight = useRef(false);
+  const setupOpened = useRef(false);
 
   const refreshSessions = useCallback(async () => {
     const response = await resolvedClient.listSessions();
     setSessions(response.sessions);
     return response.sessions;
+  }, [resolvedClient]);
+
+  const loadProjectState = useCallback(async () => {
+    const [actions, models, artifacts, skills, readiness] = await Promise.all([
+      resolvedClient.getActionSettings(),
+      resolvedClient.getModelSettings(),
+      resolvedClient.getModelArtifacts(),
+      resolvedClient.getSkillSettings(),
+      resolvedClient.getProjectReadiness(),
+    ]);
+    return { actions, models, artifacts, skills, readiness };
+  }, [resolvedClient]);
+
+  const refreshProjectState = useCallback(async () => {
+    const state = await loadProjectState();
+    const { actions, models, artifacts, skills, readiness } = state;
+    setActionSettings(actions);
+    setModelSettings(models);
+    setModelArtifacts(artifacts);
+    setSkillSettings(skills);
+    setProjectReadiness(readiness);
+    return { models, readiness };
+  }, [loadProjectState]);
+
+  const refreshReadiness = useCallback(async () => {
+    const readiness = await resolvedClient.getProjectReadiness();
+    setProjectReadiness(readiness);
+    return readiness;
   }, [resolvedClient]);
 
   useEffect(() => {
@@ -186,20 +219,47 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   }, [refreshSessions, resolvedClient, sessionId]);
 
   useEffect(() => {
-    void Promise.all([
-      resolvedClient.getActionSettings(),
-      resolvedClient.getModelSettings(),
-      resolvedClient.getModelArtifacts(),
-      resolvedClient.getSkillSettings(),
-    ])
-      .then(([actions, models, artifacts, skills]) => {
+    let active = true;
+    void loadProjectState()
+      .then(({ actions, models, artifacts, skills, readiness }) => {
+        if (!active) return;
         setActionSettings(actions);
         setModelSettings(models);
         setModelArtifacts(artifacts);
         setSkillSettings(skills);
+        setProjectReadiness(readiness);
+        if (
+          !setupOpened.current &&
+          readiness.state === "setup-required" &&
+          models.active_profile === null
+        ) {
+          setupOpened.current = true;
+          setPanel("settings");
+        }
       })
-      .catch((caught: unknown) => setError(errorMessage(caught)));
-  }, [resolvedClient]);
+      .catch((caught: unknown) => {
+        if (active) setError(errorMessage(caught));
+      });
+    return () => {
+      active = false;
+    };
+  }, [loadProjectState]);
+
+  useEffect(() => {
+    const refresh = (): void => {
+      if (document.visibilityState === "visible") {
+        void refreshProjectState().catch((caught: unknown) =>
+          setError(errorMessage(caught)),
+        );
+      }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [refreshProjectState]);
 
   const modelDownloadActive =
     modelArtifacts?.downloads.some(
@@ -217,6 +277,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         setModelArtifacts(artifacts);
         if (artifacts.downloads.some((item) => item.status === "downloading")) {
           timer = window.setTimeout(() => void poll(), 500);
+        } else {
+          void refreshProjectState().catch((caught: unknown) =>
+            setError(errorMessage(caught)),
+          );
         }
       } catch (caught) {
         if (active) setError(errorMessage(caught));
@@ -227,7 +291,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       active = false;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [modelDownloadActive, resolvedClient]);
+  }, [modelDownloadActive, refreshProjectState, resolvedClient]);
 
   const viewModel = useMemo(() => buildViewModel(events), [events]);
   const selectedSession = useMemo(
@@ -256,10 +320,22 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       modelValidationKey(activeProfile, actionSettings?.confirmation_mode)
     );
   const modelStatus = useMemo(() => {
-    if (modelSettings === null) {
+    if (modelSettings === null || projectReadiness === null) {
       return {
         kind: "checking" as const,
-        message: "Loading model settings.",
+        message: "Checking project setup.",
+      };
+    }
+    if (projectReadiness.state === "recovery-required") {
+      return {
+        kind: "denied" as const,
+        message: "Resolve the project setup issues shown in Settings.",
+      };
+    }
+    if (projectReadiness.state === "compute-required") {
+      return {
+        kind: "setup" as const,
+        message: "Start the selected model with heartwood launch --web.",
       };
     }
     if (activeProfile === null) {
@@ -272,6 +348,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       return {
         kind: "setup" as const,
         message: "Add the credential required by the selected model.",
+      };
+    }
+    if (projectReadiness.state === "setup-required") {
+      return {
+        kind: "setup" as const,
+        message: "Complete this project's model setup in Settings.",
       };
     }
     if (activeValidation === null) {
@@ -298,6 +380,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     activeValidation,
     activeValidationKey,
     modelSettings,
+    projectReadiness,
     validationFailureKey,
   ]);
   const modelReady = modelStatus.kind === "ready";
@@ -454,6 +537,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       : null;
     setPanel(nextPanel);
     setMobileSessionsOpen(false);
+    if (nextPanel !== "activity") {
+      void refreshProjectState().catch((caught: unknown) =>
+        setError(errorMessage(caught)),
+      );
+    }
   };
 
   const decideAction = (
@@ -465,27 +553,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       target_type: "tool-call",
     });
 
-  const refreshSettings = async () => {
-    try {
-      const [actions, settings, artifacts] = await Promise.all([
-        resolvedClient.getActionSettings(),
-        resolvedClient.getModelSettings(),
-        resolvedClient.getModelArtifacts(),
-      ]);
-      setActionSettings(actions);
-      setModelSettings(settings);
-      setModelArtifacts(artifacts);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
-
   const selectActionMode = async (mode: ActionConfirmationMode) => {
     try {
       setActionSettings(
         await resolvedClient.selectActionConfirmationMode(mode),
       );
       setValidation(null);
+      await refreshReadiness();
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -494,6 +568,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const saveProfile = async () => {
     try {
       setModelSettings(await resolvedClient.saveModelProfile(profileDraft));
+      await refreshReadiness();
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -503,6 +578,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     try {
       const settings = await resolvedClient.connectModel(request);
       setModelSettings(settings);
+      await refreshReadiness();
     } catch (caught) {
       setError(errorMessage(caught));
       throw caught;
@@ -512,9 +588,22 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const discoverModels = (request: ModelCatalogRequest) =>
     resolvedClient.discoverModels(request);
 
+  const configureModelSource = async (sourceId: ModelSource) => {
+    try {
+      const settings = await resolvedClient.configureModelSource(sourceId);
+      setModelSettings(settings);
+      await refreshReadiness();
+      return settings;
+    } catch (caught) {
+      setError(errorMessage(caught));
+      throw caught;
+    }
+  };
+
   const selectProfile = async (profileId: string) => {
     try {
       setModelSettings(await resolvedClient.selectModelProfile(profileId));
+      await refreshReadiness();
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -632,6 +721,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           events={events}
           panel={panel}
           profileDraft={profileDraft}
+          projectReadiness={projectReadiness}
           settings={modelSettings}
           skillApproved={skillApproved}
           skillCandidate={skillCandidate}
@@ -640,10 +730,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           validation={activeValidation}
           onClose={() => setPanel(null)}
           onConnectModel={connectModel}
+          onConfigureModelSource={configureModelSource}
           onDiscoverModels={discoverModels}
-          onDownload={(artifactId) =>
+          onDownload={(modelId) =>
             void resolvedClient
-              .downloadModelArtifact(artifactId)
+              .downloadLocalModel(modelId)
               .then((download) =>
                 setModelArtifacts((current) =>
                   current === null ? current : (
@@ -651,7 +742,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                       ...current,
                       downloads: [
                         ...current.downloads.filter(
-                          (item) => item.artifact_id !== artifactId,
+                          (item) => item.model_id !== modelId,
                         ),
                         download,
                       ],
@@ -691,12 +782,19 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 .catch((caught: unknown) => setError(errorMessage(caught)))
             )
           }
-          onRefreshSettings={() => void refreshSettings()}
+          onRefreshSettings={() =>
+            void refreshProjectState().catch((caught: unknown) =>
+              setError(errorMessage(caught)),
+            )
+          }
           onRestoreFocus={() => utilityTriggerRef.current?.focus()}
           onRemoveProfile={(profileId) =>
             void resolvedClient
               .removeModelProfile(profileId)
-              .then(setModelSettings)
+              .then((settings) => {
+                setModelSettings(settings);
+                return refreshReadiness();
+              })
               .catch((caught: unknown) => setError(errorMessage(caught)))
           }
           onRemoveSkill={(name) =>

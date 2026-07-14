@@ -7,7 +7,7 @@
 schema_version = "1"
 artifact_id = "qwen25-coder-7b-instruct-q4_k_m"
 runtime_profile = "llama-cpp-cpu"
-purpose = "Optional reviewed local coding-model download for synthetic demos; not a biomedical or production-quality model claim."
+purpose = "Local coding model for synthetic demonstrations; not reviewed for biomedical use."
 source_repository = "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF"
 source_path = "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"
 source_revision = "0ecf11859560b2bf42e703207f9371186d02245f"

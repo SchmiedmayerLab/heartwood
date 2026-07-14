@@ -83,7 +83,7 @@ The first run guides you to a model connection. Later runs reopen the same proje
 Heartwood does not ship model weights. The model setup presents only information needed for the selected connection:
 
 - **Research environment:** choose a model made available by the platform administrator; credentials may already be managed by the environment.
-- **Local:** use an existing OpenAI-compatible service or explicitly download a reviewed artifact into the project.
+- **On this device:** use an existing OpenAI-compatible service or explicitly download a reviewed CPU or NVIDIA GPU model into the project.
 - **OpenAI or Anthropic:** enter a token through the hidden terminal prompt or running web interface and choose a model returned by the provider's own catalog. Whether that provider may receive controlled data is a separate institutional decision.
 - **Custom API:** provide the base URL, optional token, and a model exposed by an OpenAI-compatible service.
 
@@ -110,7 +110,7 @@ OpenHands terminal commands run with the permissions of the Heartwood process. H
 ## Documentation
 
 - [Use Heartwood](docs/using-heartwood.md) is the first-use guide.
-- [Use Heartwood in a Browser](docs/web-interface.md) covers the browser workflow.
+- [Work with Heartwood in a Browser](docs/web-interface.md) covers first-run setup, shared project state, model preparation, and conversations.
 - [Local and Offline Models](docs/getting-started-offline.md) explains downloads, runtimes, and no-network validation.
 - [Platform Support](docs/platform-support.md) records what is implemented and how it has been validated.
 - [System Architecture](design/03-architecture.md) and [Security and Compliance](design/05-security-compliance.md) define the technical and security contracts.

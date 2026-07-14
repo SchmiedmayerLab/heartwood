@@ -19,10 +19,10 @@ from heartwood.gateway._action_settings import (
 from heartwood.gateway._asgi import GatewayAsgiApp
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._model_artifacts import (
+    LocalModelDownloadManager,
     ModelArtifact,
     ModelArtifactCatalog,
     ModelArtifactError,
-    ModelArtifactManager,
     ModelDownload,
     download_model_artifact,
     load_model_artifact_catalog,
@@ -67,7 +67,9 @@ from heartwood.gateway._project_config import (
     ProjectConfigStore,
 )
 from heartwood.gateway._readiness import (
+    MODEL_SOURCE_OPTIONS,
     DeploymentReadiness,
+    ModelSourceOption,
     ReadinessCheck,
     inspect_deployment,
     persist_deployment_profile,
@@ -90,6 +92,7 @@ __all__ = [
     "ACTION_MODE_OPTIONS",
     "BUILT_IN_MODEL_CONNECTIONS",
     "MODEL_PRESETS",
+    "MODEL_SOURCE_OPTIONS",
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",
@@ -97,11 +100,11 @@ __all__ = [
     "DeploymentReadiness",
     "GatewayAsgiApp",
     "GatewayEventStream",
+    "LocalModelDownloadManager",
     "LocalModelSelection",
     "ModelArtifact",
     "ModelArtifactCatalog",
     "ModelArtifactError",
-    "ModelArtifactManager",
     "ModelCatalog",
     "ModelCatalogEntry",
     "ModelCatalogError",
@@ -116,6 +119,7 @@ __all__ = [
     "ModelSnapshot",
     "ModelSnapshotCatalog",
     "ModelSnapshotError",
+    "ModelSourceOption",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
     "ProjectConfig",
