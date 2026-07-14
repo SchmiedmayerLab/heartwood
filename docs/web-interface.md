@@ -8,20 +8,22 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Work with Heartwood in a Browser
+# Use the Browser and Notebooks
 
 The browser and terminal are two views of the same Heartwood project. They use the same conversations, model selection, action review, Skills, and audit history. Both interfaces also report the same project readiness checks. Start either interface from the directory Heartwood should treat as the project; its private configuration and progress remain in `.heartwood/`.
 
 ## Open the Interface
 
-From a source checkout with the web assets built:
+Start the browser interface from the project directory:
 
 ```bash
 cd /path/to/analysis
-uv run --project /path/to/heartwood heartwood serve
+heartwood serve
 ```
 
-Open `http://127.0.0.1:8767/`. The [container guide](container-images.md) provides the shortest setup when Heartwood is not installed locally. On Terra, use the authenticated Jupyter proxy route described in [Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly.
+Open `http://127.0.0.1:8767/`. Use `heartwood launch --web` instead when Heartwood should start a downloaded local model and keep its inference server running with the browser.
+
+The [container guide](container-images.md) is the shortest browser setup when Heartwood is not installed directly on the machine. On Terra, use the authenticated Jupyter proxy route described in [Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly.
 
 ## Set Up the Project
 
@@ -39,7 +41,7 @@ Choose where the model will run, then choose one of the models reported by that 
 - **OpenAI** and **Anthropic** ask for a token for the current server process and request the model list directly from the provider.
 - **Custom API** connects to another service that implements the OpenAI API format.
 
-Heartwood stores the selected model and a non-secret credential binding. A token entered in the browser remains only in the running gateway process. The project policy must authorize both model discovery and model use before a connection succeeds. Switching sources keeps saved profiles but clears the active choice until a model from the new source is selected. See [Choose a Model](model-connections.md) for deployment and credential details.
+Heartwood stores the selected model and a non-secret credential binding. A token entered in the browser remains only in the running gateway process. The project policy must authorize both model discovery and model use before a connection succeeds. Switching sources keeps saved profiles but clears the active choice until a model from the new source is selected. See [Connect a Model](model-connections.md) for deployment and credential details.
 
 Under **Local models**, each recommendation shows whether it uses CPU or an NVIDIA GPU, its download size, and approximate resource guidance. Expand **Other model** to enter a Hugging Face identifier. Heartwood inspects the repository without downloading it, selects a supported representation for the available runtime, and displays the immutable source, expected size, compute guidance, and source-reported license posture. Unsupported or ambiguous repositories return a not-yet-supported message and a link to report the model.
 

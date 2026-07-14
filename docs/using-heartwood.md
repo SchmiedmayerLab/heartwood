@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Use Heartwood
+# Work with the Agent
 
 Heartwood works on one project at a time. The project is exactly the directory where you start the command, and approved agent actions may modify files in that directory or its subdirectories.
 
@@ -41,7 +41,7 @@ Enter a specific task at the `heartwood>` prompt. State the inputs, expected out
 Inspect the CSV files in input, summarize missing values by column, and write the aggregate result to missingness-summary.csv. Do not include row-level values.
 ```
 
-Heartwood passes the request to OpenHands together with the reviewed Skills available to the project. OpenHands decides which coding tools to use. Heartwood records the resulting messages, proposed actions, decisions, and tool outcomes in the project session.
+Heartwood sends the request to the selected model together with the reviewed Skills available to the project. The agent may respond directly or propose coding actions. Heartwood records the messages, proposed actions, decisions, and tool outcomes in the project session.
 
 For automation or a basic terminal, submit one task without opening the full-screen interface:
 
@@ -81,9 +81,9 @@ heartwood --session-id cohort-review
 heartwood --session-id manuscript-review
 ```
 
-Return to a session by starting Heartwood with the same identifier. The web interface lists sessions recorded in the current project.
+Return to a session by starting Heartwood with the same identifier. The browser interface lists sessions recorded in the current project.
 
-## Use the Web Interface
+## Use the Browser Interface
 
 Start the shared gateway and web application from the project directory:
 
@@ -91,7 +91,7 @@ Start the shared gateway and web application from the project directory:
 heartwood serve
 ```
 
-Open `http://127.0.0.1:8767/`. The browser uses the same project configuration, sessions, action settings, model profiles, Skills, and audit store as the terminal. See [Work with Heartwood in a Browser](web-interface.md) for model setup and notebook-proxy use.
+Open `http://127.0.0.1:8767/`. The browser uses the same project configuration, sessions, action settings, model profiles, Skills, and audit store as the terminal. See [Use the Browser and Notebooks](web-interface.md) for model setup and notebook-proxy use.
 
 An unconfigured project opens the shared setup view automatically. Changes made through the browser are visible to the next terminal or notebook command, and opening **Settings** refreshes changes made by another interface. A downloaded local model still needs the terminal-owned `heartwood launch --web` lifecycle before the browser can submit a task.
 
@@ -109,26 +109,11 @@ print(view.event_count)
 
 Run terminal, web, and notebook writes to the same session sequentially. File-backed sessions protect one process at a time; independently running writers are not a supported coordination mechanism.
 
-## Understand Project State
+## Preserve the Project
 
-Heartwood creates this private directory inside the project:
+Heartwood stores configuration, conversations, downloaded models, Skills, logs, and audit data in `.heartwood/` inside the project. Keep that directory with the project, do not commit it, and do not ask the agent to inspect or modify it.
 
-```text
-.heartwood/
-├── config.toml
-├── state.json
-├── sessions/
-├── models/
-├── skills/
-├── audit/
-├── runtime/
-├── logs/
-└── cache/
-```
-
-The directory is ignored as a unit by the Git rule Heartwood places inside it. It contains no inline provider tokens, but it may contain in-boundary conversation content and operational metadata. Keep it on storage appropriate for the project, do not commit it, and do not ask the agent to inspect or modify it.
-
-To move a project, move its files and `.heartwood/` together while Heartwood is stopped. To start cleanly, use a new empty directory. Heartwood intentionally rejects an unknown or obsolete `.heartwood/` layout instead of guessing how to reinterpret it.
+[Project Files and State](project-state.md) explains the complete layout, persistence behavior, interface sharing, and project migration.
 
 ## Export an Audit Record
 

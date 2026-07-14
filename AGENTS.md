@@ -24,6 +24,11 @@ When project direction changes, update the relevant design document first, then 
 |---|---|
 | Product summary and documentation index | [README.md](README.md) |
 | Documentation roles and status vocabulary | [docs/README.md](docs/README.md) |
+| First-use installation, project, model, and interface flow | [docs/getting-started.md](docs/getting-started.md) |
+| Workstation, Terra, Carina, and managed-environment selection | [docs/platforms.md](docs/platforms.md) |
+| Project boundary, persistence, and `.heartwood/` layout | [docs/project-state.md](docs/project-state.md) |
+| Local model selection, download, runtime, and offline workflow | [docs/getting-started-offline.md](docs/getting-started-offline.md) |
+| Deployment artifact, persistence, model-route, and validation responsibilities | [docs/deployment.md](docs/deployment.md) |
 | Current platform implementation and validation status | [docs/platform-support.md](docs/platform-support.md) |
 | Browser workflow, model setup, actions, audit, CLI parity, and notebook layout | [docs/web-interface.md](docs/web-interface.md) |
 | Project scope, users, and reference workflow | [design/01-overview.md](design/01-overview.md) |
@@ -58,7 +63,7 @@ When project direction changes, update the relevant design document first, then 
 ## Documentation Rules
 
 - Documentation should be standalone project material, not conversational or version-relative narrative.
-- Keep current operational instructions in `docs/`, durable rationale in `design/01` through `design/08`, and planned implementation, acceptance criteria, dependencies, and delivery status in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
+- Keep current operational instructions in `docs/`, durable rationale in the numbered `design/` documents, and planned implementation, acceptance criteria, dependencies, and delivery status in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
 - Use the status terms defined in [docs/README.md](docs/README.md); do not present implemented or CI-validated behavior as live-validated or institution-approved.
 - Avoid meta-commentary about how the document was created.
 - Keep Markdown prose and list items on single logical lines; do not hard-wrap sentences.

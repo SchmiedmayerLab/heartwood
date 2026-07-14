@@ -694,7 +694,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert offline_guide.count("-v heartwood-project:/workspace") == 2
-    assert "download is written under `.heartwood/models/`" in offline_guide
+    assert "remains in the current project's `.heartwood/models/` directory" in offline_guide
     assert "not 1 <= len(terminal_executions) <= 3" in capable_model
     assert "not 1 <= len(tool_executions) <= 3" in capable_model
     assert "&& cat cohort-summary.json" in capable_model

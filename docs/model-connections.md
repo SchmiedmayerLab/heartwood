@@ -8,34 +8,57 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Choose a Model
+# Connect a Model
 
-A model connection tells Heartwood where models are available and how the deployment authorizes that route. The researcher chooses a model returned by the service; Heartwood does not maintain a handwritten list of current OpenAI, Anthropic, or research-platform model identifiers.
+Heartwood needs a language model to understand requests and decide which coding actions to propose. A model connection tells Heartwood where that model runs and how the current deployment is allowed to reach it.
 
-## Choose the Simplest Connection
+Heartwood asks the selected service for its available models whenever possible. It does not maintain a handwritten list of current OpenAI, Anthropic, or research-platform model identifiers.
 
-The web interface groups connections by the decision a researcher needs to make:
+## Choose the Simplest Source
 
-| Choice | What You Provide | What Heartwood Discovers |
+| Choose | Best when | You provide |
 |---|---|---|
-| Research environment | Usually only a model selection | Models exposed by the platform-managed service or identity |
-| On this device | Nothing for an active loopback service, one recommended choice, or another Hugging Face `owner/model` identifier | Models reported by the local service, a small central recommendation set, and a supported CPU or NVIDIA GPU plan for the repository you provide |
-| OpenAI | A provider token | Models returned by the official OpenAI model-list operation |
-| Anthropic | A provider token | Models returned by the official Anthropic model-list operation |
-| Custom API | An OpenAI-compatible base URL, optional token, and model selection | Models returned by the service's `/models` route |
+| **Research environment** | Your platform or institution already provides an approved model service | Usually only a model choice |
+| **On this device** | A model should run on the same machine or an existing local service is available | A recommended model, another Hugging Face `owner/model` identifier, or a model reported by the running service |
+| **OpenAI** | Your project is authorized to use an OpenAI service | A provider token, then a model returned by OpenAI |
+| **Anthropic** | Your project is authorized to use an Anthropic service | A provider token, then a model returned by Anthropic |
+| **Custom API** | Another service follows the OpenAI API format | Its base URL, optional token, and model choice |
 
-The interface keeps provider prefixes, profile identifiers, policy endpoints, and credential-storage details under advanced controls. A platform may preconfigure a connection so the researcher never sees or supplies a token. Choosing a different source preserves saved profiles but leaves the active model empty until a model from that source is selected; this is normal setup, not a recovery condition.
+Use the research-environment option when it is available. It can hide credentials and endpoint details that the platform already manages. Use **On this device** when prompts must remain on the current machine or network boundary. A hosted-provider choice is appropriate only when the exact route is authorized for the project data.
 
-## Configure the Terminal
+## Use Guided Setup
 
-Run bare `heartwood` for the guided flow. Choose **On this device**, OpenAI, Anthropic, or a platform-provided research service. A service connection lists the models returned by that service. Local setup lists only the current Heartwood recommendations, an **Other Hugging Face model** choice, and models reported by an already running local service. When a provider token is needed, Heartwood reads it through a hidden prompt and keeps it only for the current process.
+Start Heartwood from the project directory:
 
 ```bash
 cd /path/to/project
 heartwood
 ```
 
-The advanced model commands use the same gateway operations and `.heartwood/config.toml` state as the browser. They are useful when a local service is already running or the deployment has already supplied a credential binding:
+An unconfigured project opens model setup automatically. Choose a source and then choose one of the models returned by that source. The browser presents the same choices under **Settings**.
+
+For local inference, setup shows:
+
+- models reported by an already running local service;
+- a short, centrally maintained recommendation list;
+- **Other Hugging Face model**, which accepts an `owner/model` identifier and prepares a compatible plan when possible.
+
+After a local model download, run `heartwood launch` to start its inference server before opening the conversation. [Run a Model Locally](getting-started-offline.md) explains that complete lifecycle.
+
+## Keep Credentials Out of Project State
+
+Heartwood never stores provider token values in `.heartwood/config.toml`, command arguments, session events, logs, or audit exports.
+
+- A token entered in the terminal or browser remains only in the running Heartwood process. Enter it again after restart unless the deployment supplies an approved persistent secret binding.
+- A managed research environment may provide a platform identity, mounted secret, or other credential that the user never handles directly.
+- A private or gated Hugging Face repository uses the standard credential store created by `hf auth login`; Heartwood does not copy that token into project state.
+- The CLI has no token command-line argument because shell history and process listings are inappropriate places for secrets.
+
+Heartwood supplies the selected credential to the OpenHands model client after authorizing the route. It removes configured environment-backed provider keys from OpenHands terminal subprocess environments, but this is not a complete same-user process sandbox. A deployment that must isolate model credentials from tools needs a supported OpenHands remote workspace or platform-native boundary.
+
+## Use Advanced Terminal Commands
+
+The guided setup is the normal path. These commands expose the same shared gateway operations for automation and troubleshooting:
 
 ```bash
 heartwood models list
@@ -44,48 +67,34 @@ heartwood models connect <connection-id> <model-id>
 heartwood models validate
 ```
 
-`refresh` performs policy authorization before contacting a catalog. `connect` stores the selected non-secret profile in the current project's `.heartwood/config.toml`. `validate` checks credential availability and the exact completion route without printing a secret.
+`refresh` authorizes the catalog route before contacting it. `connect` saves the selected non-secret profile in the current project's `.heartwood/config.toml`. `validate` checks that the credential binding and model route are available without printing a secret.
 
-For a loopback service using the standard local endpoint:
+For a model service already running on the standard loopback endpoint:
 
 ```bash
 heartwood models refresh local
 heartwood models connect local <model-id>
 ```
 
-Use [Local and Offline Models](getting-started-offline.md) when Heartwood should download and manage the local runtime as well. The CLI and browser obtain recommendations and user-selected model plans from the same gateway catalog. A completed verified download selects the standard local profile in both interfaces; `heartwood launch` then starts the required runtime.
-
-## Understand Credentials
-
-Heartwood never stores provider token values in `.heartwood/config.toml`, command arguments, session events, logs, or audit exports.
-
-- A token entered in the terminal or web interface remains only in the running gateway process. Restarting that process requires the token again unless the deployment provides a durable secret binding.
-- A managed research environment may use an identity or mounted secret that is already available to the Heartwood process.
-- Private or gated Hugging Face repositories use the standard Hugging Face client credential store established with `hf auth login`; Heartwood does not copy that token into project state.
-- A deployment adapter may resolve an environment-backed secret internally, but researchers do not need to pass state paths or use environment variables as normal Heartwood configuration.
-- The CLI deliberately has no token command-line argument because shell history and process listings are inappropriate secret transports.
-
-OpenHands receives the selected credential for model requests. Heartwood removes configured environment-referenced provider keys from OpenHands terminal subprocess environments, but this is not a complete same-user process sandbox. A deployment that must make model credentials inaccessible to agent tools needs a platform boundary or a supported OpenHands remote workspace.
+The local connection works with Ollama, vLLM, SGLang, llama.cpp, and other services that expose compatible OpenAI model-list and chat-completion routes. Use [Run a Model Locally](getting-started-offline.md) when Heartwood should download the model and supervise the server as well.
 
 ## Use a Research Environment Connection
 
-A platform connection may expose one model or a catalog of models. Heartwood stores its non-secret endpoint, credential reference, provider options, and policy in project configuration so the CLI, web interface, and notebook bridge see the same choice.
+A research platform may expose one model or a full catalog through an identity it already manages. Heartwood normalizes these deployments through the `heartwood.model-connections.v1` connection contract so the terminal, browser, and notebook bridge see the same choices.
 
-Stanford Carina includes a guided Stanford AI API Gateway choice. Start Heartwood and select it, or request that source explicitly:
+Stanford Carina includes a guided **Stanford AI API Gateway** choice. Start Heartwood and select it, or request that source explicitly:
 
 ```bash
 heartwood setup --model-source stanford-ai-api-gateway
 ```
 
-The setup discovers model aliases from the gateway rather than embedding them in Heartwood. The applicable Stanford agreement, service configuration, Data Risk Assessment, project approval, and platform controls determine which data classifications may use a selected route.
-
-Other platform integrations provide validated `heartwood.model-connections.v1` connection records through the gateway deployment adapter. Researchers should not hand-edit `.heartwood/config.toml`; operators validate platform defaults before making them available.
+Heartwood obtains current model aliases from the service rather than embedding them in the application. The Stanford service agreement, project review, data classification, and platform controls determine which route may receive particular data.
 
 ## Use a Custom API
 
-The Custom API path accepts an absolute HTTPS base URL, or loopback HTTP for a service on the same machine. The base URL and policy endpoint must share an origin, and remote services require a token or managed platform credential.
+The Custom API path accepts an absolute HTTPS base URL, or loopback HTTP for a service on the same machine. Remote services require a token or managed platform credential, and the configured policy endpoint must use the same origin as the model service.
 
-If the service implements `/models`, Heartwood displays the exact returned identifiers. If that route is unavailable, the web interface permits a manual identifier and the CLI provides the equivalent advanced form:
+When the service provides a `/models` route, Heartwood shows the exact identifiers it returns. If it cannot list models, the browser permits a manual identifier and the CLI provides the equivalent advanced command:
 
 ```bash
 heartwood models connect custom-api <model-id> \
@@ -93,10 +102,10 @@ heartwood models connect custom-api <model-id> \
   --manual
 ```
 
-Provider-specific request construction and tool-call formatting remain owned by OpenHands and LiteLLM. Heartwood does not implement a parallel provider client.
+OpenHands and LiteLLM remain responsible for provider-specific requests and tool-call formatting. Heartwood does not implement a second provider client.
 
-## Route Policy
+## Understand Route Authorization
 
-Catalog discovery and model completion are separate policy decisions. A deployment policy identifies exact allowed catalog endpoints, exact completion endpoints, capability tiers, action-confirmation modes, and non-secret credential references. Heartwood records allow or deny decisions, while platform network controls remain authoritative for actual egress.
+Finding a model and sending project content to that model are separate decisions. Heartwood authorizes the catalog route before discovery and authorizes the completion route before each initial, approved, or resumed model turn.
 
-Seeing a provider or model in Heartwood is not a compliance claim. Before controlled data is used, the deploying institution must verify the business associate agreement or equivalent contract, covered service and features, identity, region, retention, training use, logging, and network path.
+A successful connection means the software can use the configured route. It does not establish a business associate agreement, Health Insurance Portability and Accountability Act eligibility, dataset authorization, acceptable retention, regional controls, or institutional approval. The deployment owner must verify those conditions for the exact service and project.

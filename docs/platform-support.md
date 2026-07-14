@@ -8,35 +8,59 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Platform Support
+# Platform Support and Validation
 
-This matrix records the implementation and validation evidence available for release `0.2.0`. A repository feature, automated test, or published image is not evidence of institutional approval. Platform rationale and deployment assumptions are documented in [Platforms](../design/02-platforms.md).
+This page records the evidence available for release `0.2.0`. Start with [Choose Where to Run Heartwood](platforms.md) when deciding which setup to use; this page is the detailed reference for operators and reviewers.
 
-## Support Matrix
+An implemented feature, automated test, or published artifact is not evidence of institutional approval. The [Documentation Guide](README.md#documentation-status) defines each status term, and [Platform Architecture](../design/02-platforms.md) explains the underlying deployment assumptions.
 
-| Platform path | Repository status | Published image | Automated evidence | Live-platform status |
-|---|---|---|---|---|
-| Generic Linux or Jupyter environment | Implemented | `0.2.0`, `edge`, and `sha-<git-sha>` for `linux/amd64` and `linux/arm64` | Native architecture builds; exact-digest no-weight, recommendation and arbitrary-model contracts, real OpenHands loopback, grouped action confirmation, mounted llama.cpp, one-project-volume recovery, browser workflow, audit, CLI replay, responsive Chromium, and notebook-proxy contracts | Self-hosted deployments must validate their own identity, storage, network, and data controls. |
-| Terra Jupyter | Implemented platform-derived image | `0.2.0-terra`, `edge-terra`, and `sha-<git-sha>-terra` for `linux/amd64` as Docker schema 2 | Real pinned Terra base on `main`; exact-digest Jupyter environment, Heartwood kernel, inherited entrypoint, `/notebooks/...` route, Leonardo-compatible manifest, arbitrary current-directory project isolation and restart persistence, Heartwood UI and readiness API through Jupyter Server Proxy, shared local-model contract, OpenHands reference workflow, mounted llama.cpp, CLI, notebook, and audit checks before promotion | Real Terra workspace validation remains required before a supported or institution-approved deployment claim. |
-| Stanford Carina CLI | Implemented native installation and launch contracts | `0.2.0` native release bundle; no Carina-specific image is published | Release-bundle and installer-layout verification; process-level Slurm handoff; exact project-directory preservation; runtime supervision, setup, session, shutdown, and scratch cleanup; Micromamba activation; pinned FFmpeg bootstrap; locked Heartwood and vLLM environments; recommended and arbitrary snapshot planning; verified model download; GPU-partition discovery; explicit compute consent; grouped OpenHands action confirmation; narrow-terminal interaction; Stanford gateway connection; and both confirmation modes | Release `0.2.0` has not completed the documented synthetic workflow from its published artifact on Carina. The supported presentation is the terminal; no browser-proxy route or controlled-data approval is claimed. |
+## Current Status
 
-## Current Image Contracts
+| Platform path | Available artifact | Current claim | Required deployment work |
+|---|---|---|---|
+| Generic Linux or Jupyter environment | Generic release container for AMD64 and ARM64 | Implemented and CI-validated | Validate the host's identity, storage, network, model, and data controls |
+| Terra Jupyter | Terra-derived release image for AMD64 | Implemented and CI-validated | Complete the synthetic workflow in a real Terra workspace, then obtain any required institutional review |
+| Stanford Carina | Native release installer and bundle | Implemented and CI-validated | Complete the synthetic workflow from the published release on Carina, then obtain any required institutional review |
 
-The generic and Terra images contain the same Heartwood application, OpenHands SDK adapter, model-connection catalog, local recommendation catalog, best-effort Hugging Face planner, repository-verified Skills, CLI, notebook bridge, web UI, policy layer, audit implementation, and optional CPU llama.cpp runtime. They contain no model weights or provider credentials. Both interfaces discover and select local, cloud, custom, and platform-provided research models through the same gateway contract; platform connections are deployment configuration rather than image variants.
+No listed path is automatically approved for protected health information or another controlled dataset.
 
-Explicit `edge-gpu-nvidia` and `edge-terra-gpu-nvidia` variants add an isolated pinned vLLM environment without changing the Heartwood payload or embedding weights. The portable tags remain the default. GPU execution requires compatible NVIDIA drivers and separate native or live-platform validation.
+## Validation Evidence
 
-The Terra image is an implemented packaging and Jupyter integration target. It detects the Terra process environment and uses the conservative Terra route policy, but it does not infer authorization for workspace data, BigQuery, or a hosted model. A deployment must provide and validate those platform-specific identities, routes, and data adapters before making a broader support claim.
+### Generic Container
 
-Session and audit state are file-backed under the current project's `.heartwood/` directory. Sequential CLI, notebook, and web access to the same project is implemented; concurrent independent processes writing the same session are not supported.
+The published tags are `0.2.0`, `edge`, and immutable `sha-<git-sha>` tags. Continuous integration builds native AMD64 and ARM64 artifacts and checks the no-weight image contract, centrally recommended and user-selected model planning, OpenHands loopback conversation, grouped action confirmation, mounted llama.cpp inference, one-project-volume recovery, browser workflow, audit export, CLI replay, responsive browser layout, and notebook-proxy behavior.
 
-The Terra image extends the pinned `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6` base declared in `images/platforms.toml`. No Heartwood support claim applies to another Terra base unless its Jupyter, Leonardo, user, storage, proxy, and publication contracts have been validated independently.
+These checks use synthetic fixtures. A self-hosted deployment must still validate the exact host, identity, storage, network, provider, model, and data-use controls.
+
+### Terra
+
+The published tags are `0.2.0-terra`, `edge-terra`, and immutable `sha-<git-sha>-terra` tags. Terra tags use the single-platform Docker schema-2 format required by Leonardo.
+
+Continuous integration builds from the real pinned Terra base on `main` and checks the Jupyter environment, Heartwood kernel, inherited entrypoint, notebook route, Leonardo-compatible manifest, arbitrary current-directory project isolation, restart persistence, Heartwood browser and readiness routes through Jupyter Server Proxy, shared local-model contract, OpenHands synthetic workflow, mounted llama.cpp inference, CLI, notebook bridge, and audit export.
+
+Real Terra workspace validation remains required before a supported or institution-approved deployment claim. The image detects Terra and applies its conservative route policy, but it does not infer authorization for workspace data, BigQuery, a hosted model, or exports.
+
+### Stanford Carina
+
+Release `0.2.0` provides the native installation bundle; no Carina-specific container image is published. Continuous integration verifies the installer layout, locked Heartwood and vLLM environments, Micromamba and FFmpeg bootstrap, Slurm handoff, exact current-directory project preservation, runtime supervision, setup, session lifecycle, shutdown, scratch cleanup, recommended and user-selected model planning, verified download, GPU-partition discovery, explicit compute consent, grouped OpenHands confirmation, narrow-terminal interaction, Stanford AI API Gateway connection, and both permitted confirmation modes.
+
+The published release has not completed the documented synthetic workflow on Carina. The current supported presentation is the terminal; no authenticated browser-proxy route or controlled-data approval is claimed.
+
+## Shared Image Contract
+
+The generic and Terra images contain the same Heartwood application, OpenHands SDK adapter, model connections, local recommendations, Hugging Face planner, repository-verified Skills, CLI, notebook bridge, browser interface, policy layer, and audit implementation. The portable images also contain the supported CPU llama.cpp runtime. They contain no model weights or provider credentials.
+
+Explicit `edge-gpu-nvidia` and `edge-terra-gpu-nvidia` variants add the pinned vLLM environment without changing the Heartwood application or embedding weights. The portable tags remain the default. GPU execution requires compatible NVIDIA drivers, a suitable model, enough accelerator memory, and deployment-specific validation.
+
+Session and audit state remain under the current project's `.heartwood/` directory. Sequential CLI, notebook, and browser access to one project is implemented; concurrent independent processes writing the same session are not supported.
+
+The Terra image extends `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`. No support claim applies to another Terra base until its Jupyter, Leonardo, user, storage, proxy, and publication contracts have been validated independently.
 
 ## Support Claim Boundary
 
 Repository continuous integration demonstrates software integration with synthetic fixtures. It does not establish a business associate agreement, Health Insurance Portability and Accountability Act eligibility, dataset authorization, private networking, identity binding, retention policy, clinical validity, or institutional approval.
 
-A platform moves from CI-validated to live-validated only after the published immutable image passes the documented synthetic workflow in the real control plane, including startup, proxy routing, persistent storage, autopause and resume, model-catalog discovery, profile authorization, action confirmation, Skills, replay, and scrubbed audit export. The [Terra Jupyter Demo](terra-jupyter-demo.md) defines that evidence for Terra.
+A path becomes live-validated only after an immutable published artifact completes the documented synthetic workflow in the real control plane, including startup, routing, persistent storage, pause and resume, model discovery, profile authorization, action confirmation, Skills, replay, and scrubbed audit export. The [Terra guide](terra-jupyter-demo.md) and [Carina guide](carina-cli.md) define the current platform workflows.
 
 ## Authoritative Platform References
 

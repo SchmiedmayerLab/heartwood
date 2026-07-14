@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 05 — Security and Compliance
+# Security and Compliance
 
 ## Threat Model
 

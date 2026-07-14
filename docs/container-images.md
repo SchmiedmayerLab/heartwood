@@ -137,4 +137,4 @@ Pull requests build and validate the generic AMD64 and ARM64 images, Terra-compa
 
 Publication builds candidates by digest, tests the exact staged descriptors, creates immutable commit tags, and moves `edge` only after validation. Release promotion copies those verified descriptors to the Semantic Version tags. Generic architecture manifests include supply-chain attestations. Terra disables index-producing attestations to preserve Leonardo's required single-manifest format.
 
-See [Platform Images](platform-images.md) for the extension contract and [Platform Support](platform-support.md) for the distinction between implementation, continuous-integration validation, live validation, and institutional approval.
+See [Build a Platform-Specific Image](platform-images.md) for the extension contract and [Platform Support and Validation](platform-support.md) for the distinction between implementation, continuous-integration validation, live validation, and institutional approval.

@@ -152,8 +152,8 @@ def source_version_errors(root: Path, version: str) -> list[str]:
         return ["no packaged component versions were found"]
     errors = [f"{path}: {found}" for path, found in observed.items() if found != version]
     expected_references = {
-        "README.md": [
-            f"heartwood:{version}",
+        "docs/container-images.md": [f"heartwood:{version}"],
+        "docs/carina-cli.md": [
             f"releases/download/{version}/heartwood-installer",
             f"--version {version}",
         ],

@@ -10,17 +10,23 @@ SPDX-License-Identifier: MIT
 
 # Heartwood on Terra
 
-The Terra image adds Heartwood to Terra's Jupyter environment without replacing its user, home directory, notebook server, kernel setup, or Leonardo proxy behavior. The image, responsive browser, Jupyter route, and proxy contracts are CI-validated; the complete workflow has not yet been live-validated in Terra. Use this guide only in a synthetic workspace while collecting that evidence and before any institution reviews the image for controlled data.
+Use the Terra image when an analysis already lives in a Terra workspace and Heartwood should be available beside its notebooks and files. The image preserves Terra's normal Jupyter environment and adds the Heartwood terminal command, browser interface, notebook kernel, and local-model support.
 
-## Select the Image
+The complete release workflow has not yet been live-validated in Terra. Follow this guide in a synthetic workspace containing no protected health information while collecting that evidence.
+
+## Before You Begin
+
+You need permission to create a Terra Cloud Environment with a custom image and a persistent disk large enough for the project. A hosted model needs an authorized route and credential. A local model also needs storage and enough CPU or GPU capacity for the resource guidance Heartwood displays.
+
+Terra keeps `/home/jupyter` on the persistent disk. Create a separate analysis directory there; that directory, rather than all of `/home/jupyter`, becomes the Heartwood project.
+
+## Start the Terra Environment
 
 Use the immutable release image:
 
 ```text
 ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra
 ```
-
-The tag is a public `linux/amd64` Docker schema-2 manifest with media type `application/vnd.docker.distribution.manifest.v2+json`. Terra Leonardo requires this single-platform form and rejects an Open Container Initiative index during image auto-detection. `edge-terra` follows the latest validated `main` build and is appropriate only for development testing.
 
 Create a Terra workspace containing no protected health information, select the custom image, and start Jupyter. Confirm that:
 
@@ -29,7 +35,7 @@ Create a Terra workspace containing no protected health information, select the 
 - the notebook survives the expected Leonardo route prefix;
 - `/home/jupyter` is backed by the persistent disk selected for the environment.
 
-The release pins the Terra Jupyter Python base recorded in `images/platforms.toml`. Record both the Heartwood image digest and the inherited base digest when collecting deployment evidence.
+If the file browser does not open normally, stop before model or project setup and record the Cloud Environment error. Do not install Heartwood again inside the image.
 
 ## Create a Synthetic Project
 
@@ -56,7 +62,7 @@ The image contains no model weights and no provider credentials. Choose one path
 
 ### Research Environment or Hosted Model
 
-Open the Heartwood web interface and select a platform-provided research service, OpenAI, Anthropic, or Custom API. The interface asks only for values required by that connection and lists models returned by the service itself. The deploying institution must authorize the exact provider, route, identity, retention settings, and data classification. For controlled data, the route must be covered by an institution-approved business associate agreement when one is required.
+Open the Heartwood browser interface and select a platform-provided research service, OpenAI, Anthropic, or Custom API. The interface asks only for values required by that connection and lists models returned by the service itself. The deploying institution must authorize the exact provider, route, identity, retention settings, and data classification. For controlled data, the route must be covered by an institution-approved business associate agreement when one is required.
 
 The CLI exposes the same model catalog:
 
@@ -79,11 +85,11 @@ heartwood models download <owner/model>
 heartwood launch --web
 ```
 
-The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and web interface. First inference on CPU can be slow, and attaching a GPU does not accelerate this portable image's llama.cpp path.
+The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and browser interface. First inference on CPU can be slow, and attaching a GPU does not accelerate this portable image's llama.cpp path.
 
 The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. In that image, Heartwood prefers a supported standard Hugging Face snapshot and reports approximate GPU-memory requirements. GPU selection, model suitability, and live platform validation must match the deployment evidence before it replaces the CPU path.
 
-## Open the Web Interface
+## Open the Browser Interface
 
 For a hosted or already running model, start the interface from the project directory:
 
@@ -138,7 +144,7 @@ print(view.event_count)
 print(jupyter_proxy_url(port=8767))
 ```
 
-The CLI, notebook bridge, and web interface read the same project session and must report the same persisted events. Use them sequentially; independently running writers to one file-backed session are not a supported coordination pattern.
+The terminal, notebook bridge, and browser interface read the same project session and must report the same persisted events. Use them sequentially; independently running writers to one file-backed session are not a supported coordination pattern.
 
 ## Record Live-Validation Evidence
 
@@ -153,6 +159,14 @@ Record only synthetic evidence:
 - matching web, CLI, and notebook replay results;
 - scrubbed audit export location;
 - observed platform identity and network controls.
+
+## Understand the Image Contract
+
+The release extends the pinned Terra Jupyter Python base recorded in `images/platforms.toml`. It preserves the `jupyter` user, persistent home, notebook server, kernel registration, entrypoint, and Leonardo proxy behavior.
+
+The public tag is a `linux/amd64` Docker schema-2 manifest with media type `application/vnd.docker.distribution.manifest.v2+json`. Terra Leonardo image auto-detection rejects an Open Container Initiative index, so the Terra tag intentionally differs from the generic multi-platform tag. `edge-terra` follows the latest validated `main` build and is appropriate only for development testing.
+
+Record both the Heartwood image and Terra base image digests when collecting deployment evidence. Passing the image and proxy checks establishes software compatibility, not authorization for workspace data, a model provider, or controlled-data use.
 
 A real Terra workspace validation is still distinct from institutional approval. Do not introduce controlled data until the exact image, model route, credentials, project storage, network path, and intended use have passed institutional review.
 

@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 07 — Testing and Evaluation
+# Testing and Evaluation
 
 Verification runs only on synthetic data in public development and continuous integration. Merge and release gates must not add latency or hidden model calls to a researcher’s live session.
 

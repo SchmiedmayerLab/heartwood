@@ -10,7 +10,9 @@ SPDX-License-Identifier: MIT
 
 # Heartwood on Stanford Carina
 
-This guide installs Heartwood on Carina and runs a synthetic local-model validation. Use an isolated directory containing no protected health information. Do not inspect unrelated project directories, environment contents, or cluster data as part of validation.
+Use the Carina workflow when Heartwood should run directly in a Carina terminal and request GPU compute through Slurm. This guide installs the command, prepares one synthetic project, downloads a local model, requests an explicitly reviewed allocation, and verifies one bounded agent action.
+
+Use an isolated directory containing no protected health information. Do not inspect unrelated project directories, environment contents, or cluster data as part of validation. Carina currently uses the interactive terminal interface; no authenticated Heartwood browser route is claimed.
 
 Heartwood uses two locations with separate purposes:
 
@@ -139,6 +141,6 @@ Heartwood stores only the selected alias and a non-secret credential binding. A 
 
 The Stanford service agreement, GenAI Evaluation Matrix, Data Risk Assessment, project authorization, and Carina controls determine whether a route may receive a particular data classification. A successful connection does not authorize agent tools or data export.
 
-See [Use Heartwood](using-heartwood.md) for terminal controls and [Platform Support](platform-support.md) for the distinction between CI validation, live validation, and institutional approval.
+See [Work with the Agent](using-heartwood.md) for terminal controls and [Platform Support and Validation](platform-support.md) for the distinction between CI validation, live validation, and institutional approval.
 
 Carina currently has no documented authenticated browser-proxy integration for Heartwood. Use the interactive terminal interface on Carina; the browser is the local and Terra presentation surface until a platform route is implemented and live-validated.

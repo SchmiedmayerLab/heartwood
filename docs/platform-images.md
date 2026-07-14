@@ -8,11 +8,11 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Extend Heartwood to a Platform Image
+# Build a Platform-Specific Image
 
 Platform images are thin additions to an existing research-platform base. They must preserve the platform runtime and add the same Heartwood payload, model-profile contract, repository-verified Skills, and no-weight policy as the generic image.
 
-This guide documents the shared extension mechanism for a reviewed platform integration. An entry in a design document or manifest does not make a platform supported; current evidence is recorded in [Platform Support](platform-support.md).
+This guide documents the shared extension mechanism for a reviewed platform integration. An entry in a technical document or manifest does not make a platform supported; current evidence is recorded in [Platform Support and Validation](platform-support.md).
 
 ## Source of Truth
 

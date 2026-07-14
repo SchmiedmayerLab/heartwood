@@ -8,24 +8,138 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Local and Offline Models
+# Run a Model Locally
 
-Heartwood can use a model without sending prompts to a hosted provider. Heartwood deployment images include a supported local-inference runtime, while a source-only installation uses a compatible runtime already installed on the machine. Neither distribution includes model weights. You choose and acquire model artifacts separately so their source, license, storage, and resource requirements remain explicit.
+A local model processes Heartwood requests inside the current machine or research environment instead of sending them to a hosted provider. This can support offline work and deployment-owned data boundaries, but it also requires enough storage and compute to run the selected model.
+
+Heartwood images and native runtime bundles contain inference software, not model weights. A model is downloaded only after an explicit user request and remains in the current project's `.heartwood/models/` directory.
+
+## Understand the Three Parts
+
+Local inference involves three distinct parts:
+
+1. **Model files** contain the learned weights and model configuration. They can be several gigabytes and remain on persistent project storage.
+2. **The inference server** loads those files into memory and exposes a private model API on the local machine. Heartwood uses llama.cpp for its portable CPU path and vLLM for supported NVIDIA GPU paths.
+3. **Heartwood and OpenHands** send the conversation to that private API, interpret the response, and propose coding actions for review.
+
+```mermaid
+flowchart LR
+    FILES["Model files\n.heartwood/models"] --> SERVER["Local inference server\nllama.cpp or vLLM"]
+    HW["Heartwood + OpenHands"] --> SERVER
+    SERVER --> HW
+    HW --> TOOLS["Reviewed project actions"]
+```
+
+Downloading a model prepares the files but does not leave a server running. `heartwood launch` starts the server, waits until the selected model is ready, opens the terminal or browser, and stops the server when the session ends. The downloaded files remain available for the next launch.
 
 ## Choose a Local Setup
 
-Use one of these paths:
+| Setup | Use it when | Heartwood manages |
+|---|---|---|
+| Existing OpenAI-compatible service | Ollama, vLLM, SGLang, llama.cpp, or another compatible server is already running | Connection, route authorization, and model selection |
+| Portable CPU model | Docker or a supported portable image is available and slower local inference is acceptable | Model selection, download, verification, llama.cpp startup, and shutdown |
+| NVIDIA GPU model | The explicit GPU image or Carina runtime is available with enough GPU memory | Model selection, download, verification, vLLM startup, and shutdown |
 
-1. **Existing service:** connect to an Ollama, vLLM, SGLang, llama.cpp, or other OpenAI-compatible server that is already running.
-2. **Recommended model:** choose one of the few CPU or NVIDIA GPU models maintained in Heartwood's central recommendation catalog.
-3. **Other Hugging Face model:** enter an `owner/model` identifier and let Heartwood choose a supported representation and runtime for the current deployment.
-4. **Platform-managed runtime:** on Carina, let `heartwood launch` request a GPU allocation and supervise the packaged vLLM runtime.
+An existing service avoids another model download when the model is already managed elsewhere. The portable CPU path is the most widely compatible demonstration. The GPU path starts faster inference but requires a compatible NVIDIA environment and usually much more storage and accelerator memory.
 
-An existing service is the smallest download and storage commitment. A recommended model is the most reproducible demonstration. A recommendation means that Heartwood maintains its download and runtime metadata; it does not mean that the model is suitable for biomedical work, production use, a particular dataset, or an institution's requirements.
+## Check the Requirements First
 
-## Use an Existing Service
+Run the guided local-model catalog from the project directory:
 
-Start the service according to its own documentation. The built-in Local connection expects an OpenAI-compatible server on loopback port `8765` with `/v1/models` and `/v1/chat/completions` routes.
+```bash
+heartwood models local
+```
+
+Each recommendation shows its download size, expected storage, memory, processor, and runtime. These are conservative planning estimates derived from the model artifact, not performance guarantees.
+
+Current recommendations include a quantized Qwen2.5 7B demonstration model for CPU use, a coding-oriented CPU alternative, and a Qwen2.5 7B snapshot for supported NVIDIA deployments. The installed release's catalog is authoritative because recommendations may change between releases.
+
+A recommended model is one for which Heartwood maintains reproducible source and runtime metadata. It does not mean that the model is appropriate for biomedical work, production use, a particular dataset, or an institution's requirements.
+
+## Let Heartwood Prepare a Model
+
+The easiest path is to run `heartwood`, choose **On this device**, and select a recommendation. The browser offers the same choices under **Settings** and reports download progress.
+
+The equivalent terminal flow is:
+
+```bash
+heartwood models local
+heartwood models download qwen25-7b-instruct-q4_k_m
+heartwood launch --dry-run
+heartwood launch
+```
+
+Heartwood performs the following work:
+
+1. resolves the model source to an immutable revision;
+2. selects a representation supported by the available CPU or GPU runtime;
+3. reports the expected transfer, free-space, memory, and processor requirements;
+4. downloads into a temporary project-local location and reports progress;
+5. verifies source and content metadata before making the artifact active;
+6. saves the non-secret model and runtime selection for the project;
+7. starts the local server only when `heartwood launch` is requested.
+
+The dry run changes no external state. It shows which project, model, runtime, and compute request a real launch would use.
+
+## Use Another Hugging Face Model
+
+Choose **Other Hugging Face model** in guided setup or provide the repository identifier directly:
+
+```bash
+heartwood models inspect <owner/model>
+heartwood models download <owner/model>
+```
+
+`inspect` does not download model weights. It resolves the repository, chooses one supported plan, and displays the exact artifact and resources Heartwood would use. `download` repeats that resolution, transfers and verifies the content, and selects it for the project. Supply `--revision <branch-tag-or-commit>` only when the repository's default revision is not appropriate.
+
+The CPU runtime accepts a repository with one complete GGUF file and source digest metadata. When several files exist, Heartwood prefers a uniquely identifiable balanced quantization such as Q4_K_M and rejects an ambiguous choice. A supported NVIDIA deployment accepts a standard snapshot with `config.json` and safetensors or PyTorch weights for vLLM.
+
+Split GGUF files, custom model code, incomplete metadata, unsupported weight formats, and repositories without a representation for the installed runtime fail before transfer. The error links to the GitHub issue chooser so support can be evaluated without silently guessing.
+
+Public repositories need no credential. For a private or gated repository, run `hf auth login` before Heartwood. The standard Hugging Face credential store owns that token; Heartwood does not write it into project configuration, events, logs, or audit exports.
+
+## Start and Stop the Local Server
+
+Start the terminal experience with:
+
+```bash
+heartwood launch
+```
+
+Start the model and browser together with:
+
+```bash
+heartwood launch --web
+```
+
+During launch, Heartwood reports each stage while it verifies the model, checks the runtime, starts the loopback server, waits for model readiness, validates the shared project setup, and opens the selected interface. Large models can take several minutes to load. Heartwood reports elapsed time every 15 seconds and writes runtime details to `.heartwood/logs/local-model.log`.
+
+Leave the launch command running while using the terminal or browser. Press `Ctrl+C` or exit the interface to stop the server. The model files and project state remain on disk.
+
+Run these diagnostics when the next step is unclear:
+
+```bash
+heartwood doctor
+heartwood launch --dry-run
+```
+
+`compute-required` means the model is verified but its local server is not running. This is the expected state between launches. `recovery-required` means configuration, artifact, runtime, or platform evidence needs attention.
+
+## Understand CPU and GPU Behavior
+
+| Environment | Runtime | Model representation | Notes |
+|---|---|---|---|
+| Generic portable image | llama.cpp on CPU | Single-file GGUF | Works on supported AMD64 and ARM64 hosts; an attached GPU does not accelerate this baseline path |
+| Generic NVIDIA image | vLLM on NVIDIA GPU | Standard Hugging Face snapshot | AMD64 and compatible NVIDIA drivers required |
+| Terra portable image | llama.cpp on CPU | Single-file GGUF | Retains Terra's Jupyter and persistent-disk behavior |
+| Terra NVIDIA image | vLLM on NVIDIA GPU | Standard Hugging Face snapshot | Requires a compatible Terra GPU environment and live validation |
+| Stanford Carina native installation | vLLM on an allocated NVIDIA GPU | Standard Hugging Face snapshot | `heartwood launch` requests explicit scheduler consent and stages the model to job-local storage |
+
+Heartwood chooses only among runtimes installed and declared by the current deployment. It does not claim that every Hugging Face model can run in every environment.
+
+## Connect an Existing Local Service
+
+When a compatible model server is already running on loopback port `8765`, ask it for available models and choose one:
 
 ```bash
 heartwood models refresh local
@@ -33,73 +147,11 @@ heartwood models connect local <model-id>
 heartwood
 ```
 
-For another URL, use Custom API in the web setup or the CLI `--base-url` option. Heartwood reuses the OpenHands and LiteLLM provider path after selection; it does not proxy or reimplement the inference server.
+For another address, use **Custom API** in the browser or the CLI `--base-url` option. In this mode, the external service owns model loading and process lifecycle; do not run `heartwood launch` for that connection.
 
-## Let Heartwood Prepare a Model
+## Run the Container Offline
 
-The guided path is the simplest option. Run `heartwood` from the project, choose **On this device**, and select a recommendation or **Other Hugging Face model**. Heartwood shows whether the result uses CPU or an NVIDIA GPU and displays approximate storage, memory, and GPU requirements before downloading it into the project.
-
-The same choices are available as focused commands:
-
-```bash
-heartwood models local
-heartwood models download qwen25-7b-instruct-q4_k_m
-heartwood models inspect <owner/model>
-heartwood models download <owner/model>
-heartwood launch --dry-run
-heartwood launch
-```
-
-`heartwood models local` lists the current recommendations and their runtime and resource guidance. `inspect` does not download weights: it resolves the repository to an immutable commit, chooses one supported plan for this deployment, and reports the exact representation. `download` repeats that resolution, transfers and verifies the result, and selects it for the project. Use `--revision <branch-tag-or-commit>` only when the default repository revision is not appropriate.
-
-Public repositories require no credential. For a private or gated repository, run `hf auth login` in the deployment before starting Heartwood. Heartwood relies on the standard Hugging Face credential store for repository access and never writes that token into `.heartwood/config.toml`, session events, logs, or audit exports.
-
-The browser provides the same gateway operations. Start `heartwood serve`, open **Settings**, and use **Local models**. Recommended choices appear directly; **Other model** accepts a Hugging Face identifier, shows the automatic plan, and starts the transfer only after you select **Download model**. The browser reports transferred and expected bytes and changes project status only after verification succeeds.
-
-The portable image can prepare a repository that exposes one complete GGUF file with source digest metadata. When several GGUF files exist, Heartwood selects a uniquely identifiable balanced quantization such as Q4_K_M; it refuses an ambiguous choice. An NVIDIA GPU deployment can prepare a standard repository snapshot with `config.json` and safetensors or PyTorch weights for vLLM. When both are present, the GPU deployment prefers the full snapshot and the CPU deployment prefers GGUF. Split GGUF files, custom model code, incomplete metadata, unsupported weight formats, and a model that has no representation for the installed runtime produce a not-yet-supported error with a link to the GitHub issue chooser.
-
-Resource values are conservative estimates derived from download size, not hardware benchmarks. Check the model card and deployment limits before committing storage or compute. Heartwood records the source-reported license information but does not approve its terms.
-
-The recommended `qwen25-7b-instruct-q4_k_m` model is a quantized GGUF demonstration choice for the packaged CPU llama.cpp runtime. `qwen25-coder-7b-instruct-q4_k_m` is available for coding-output experiments. The Carina workflow recommends `qwen25-7b-instruct-vllm` for the packaged NVIDIA GPU vLLM runtime. The recommendation set is intentionally short and may change between releases; `heartwood models local` is authoritative for the installed release.
-
-Every download is written under `.heartwood/models/`. Heartwood saves the immutable source, representation, integrity metadata, resource plan, runtime, and standard local profile in `.heartwood/config.toml`. `heartwood launch` reads that selection, so later commands require no model, runtime, or cache path.
-
-On a generic machine or in the generic container, `heartwood launch` uses the verified project artifact directly. On Carina, it verifies the snapshot again, copies it to job-local scratch, starts vLLM on loopback, waits for the selected model to appear in the runtime catalog, and removes the staged copy when the session exits.
-
-Use the web interface instead of the terminal while Heartwood supervises the same local runtime:
-
-```bash
-heartwood launch --web
-```
-
-The command keeps the model process alive until the web server stops. On a notebook platform, open the proxy for port `8767`.
-
-## Know What to Expect
-
-A managed download belongs to the current project. Heartwood places the verified files in `.heartwood/models/<model-id>/`, records the selection in `.heartwood/config.toml`, and reuses both on later launches. Stopping Heartwood removes the model server process, not the downloaded files.
-
-During `heartwood launch`, Heartwood reports each stage as it:
-
-1. verifies the saved artifact and selects its packaged runtime;
-2. checks that the local server can start on the current machine;
-3. starts the server on loopback and waits for the selected model to become ready;
-4. connects the shared Heartwood model profile;
-5. opens the terminal conversation, or the browser when `--web` is present.
-
-Large models can take several minutes to load, and the first CPU response can take longer than a hosted response. Heartwood reports elapsed startup time every 15 seconds. Leave the command running while the terminal or browser is in use; press `Ctrl+C` to stop both the interface and its supervised model server.
-
-Use these commands when the next step is unclear:
-
-```bash
-heartwood doctor
-heartwood launch --dry-run
-```
-
-`compute-required` means the verified local model is ready but its server is not running. The browser reports this as **Model runtime needed**, keeps the conversation unavailable, and points to `heartwood launch --web`. `recovery-required` means a configuration, artifact, runtime, or platform check failed. Runtime startup details remain inside the project at `.heartwood/logs/local-model.log`.
-
-## Run the Container
-
-Use one persistent project mount for configuration, sessions, models, logs, and analysis files:
+Use one persistent project mount for analysis files, configuration, sessions, models, logs, and audit data. First download while network access is available:
 
 ```bash
 docker volume create heartwood-project
@@ -108,31 +160,35 @@ docker run --rm -it \
   -v heartwood-project:/workspace \
   ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
   heartwood models download qwen25-7b-instruct-q4_k_m
+```
 
+Then start a terminal session with container networking disabled:
+
+```bash
 docker run --rm -it \
   --network none \
   -v heartwood-project:/workspace \
   ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
-  heartwood launch
+  heartwood launch --plain
 ```
 
-The first command needs network access to retrieve the pinned artifact. The second command can run with Docker networking disabled because inference and the agent-model connection remain on loopback. The agent can still read and modify files in the mounted project; network isolation does not remove the need to review actions. To use `launch --web`, publish port `8767` and enforce the deployment's reviewed egress policy instead of Docker's `none` network, which intentionally prevents host access to the web port.
+The inference server and model connection remain on loopback. The agent can still read and modify files in the mounted project, so network isolation does not replace action review. For browser use, publish port `8767` and apply the deployment's reviewed egress controls rather than Docker's `none` network.
 
-For a host directory instead of a named volume, mount the current directory at `/workspace`. The directory must be writable by container user `10001`; see [Container Images](container-images.md) for deployment details.
+A host directory can replace the named volume when it is writable by container user `10001`. [Container Images](container-images.md) explains user mapping, GPU access, tags, and deployment controls.
 
-## Prepare an Air-Gapped Deployment
+## Prepare an Air-Gapped Environment
 
-An air-gapped run requires all inputs to be present before network access is removed:
+An air-gapped deployment must receive all required inputs through an authorized transfer process before network access is removed:
 
 - the exact Heartwood image or native release bundle;
-- the verified recommended or user-selected model and its provenance metadata;
-- the project and any required data;
-- the deployment policy and platform controls;
-- any additional Skills that have already passed review.
+- the verified model and its provenance and integrity metadata;
+- the project and required data;
+- deployment policy and platform configuration;
+- any additional Skills that already passed review.
 
-Import the model through an authorized transfer process into the project's `.heartwood/models/<artifact-id>/` location. Preserve the exact `SHA256SUMS` and provenance files produced by Heartwood. Run `heartwood doctor` and `heartwood launch --dry-run` before opening the session.
+Keep the model under the project's `.heartwood/models/` layout and preserve its exact integrity and provenance files. Run `heartwood doctor` and `heartwood launch --dry-run` before opening a session.
 
-No-internet validation has two distinct purposes. The deterministic loopback model fixture exercises OpenHands orchestration, policy, grouped confirmation, Skills, audit, CLI, web, and notebook contracts on every pull request without claiming inference quality. A separately triggered capable-model acceptance uses a pinned recommended model, requires a real OpenHands tool call and successful terminal execution, checks the expected synthetic artifact, and runs with container networking disabled.
+Repository continuous integration uses a deterministic loopback model fixture to validate OpenHands orchestration, policy, grouped confirmation, Skills, audit, CLI, browser, and notebook contracts without claiming model quality. A separately triggered capable-model acceptance downloads a pinned recommendation, requires a real OpenHands tool call, verifies the resulting synthetic artifact, and runs with container networking disabled.
 
 From a repository checkout, run the deterministic gate with:
 
@@ -140,16 +196,16 @@ From a repository checkout, run the deterministic gate with:
 docker compose -f images/generic/compose.yaml run --rm --build heartwood
 ```
 
-The resource-intensive capable-model workflow is available as the `run_capable_model` option on the Container Smoke Test workflow. It is not a substitute for evaluating model quality on the intended research tasks.
+The resource-intensive capable-model workflow is available through the `run_capable_model` option on the Container Smoke Test workflow. It does not replace model-quality evaluation for the intended research tasks.
 
-## Confirm Actions and Audit
+## Review Actions and Audit Activity
 
-Local inference changes where model requests are processed; it does not change the agent's authority. Heartwood still defaults to OpenHands `AlwaysConfirm`, displays each pending action set, and records the allow or reject result. When platform policy permits **Auto-Approve Low Risk**, OpenHands may execute low-risk actions automatically while all other risk levels continue to require grouped review.
+Local inference changes where the model runs, not what the agent may do. Heartwood still defaults to OpenHands `AlwaysConfirm`, displays the complete pending action set, and records whether it was allowed or rejected. A platform may permit **Auto-Approve Low Risk**, but medium-, high-, and unknown-risk action sets still require review.
 
-Export the scrubbed record after a synthetic validation:
+Export the scrubbed activity record after validation:
 
 ```bash
 heartwood audit export
 ```
 
-The audit export excludes prompts, model responses, tool arguments, filesystem paths, row values, and credentials. Review it before moving it outside the deployment boundary.
+The export omits prompts, model responses, action details, paths, row values, and credentials. Review it before moving it outside the deployment boundary.

@@ -22,12 +22,15 @@ def test_documentation_index_uses_progressive_disclosure_and_project_tracking() 
     index = _read("docs/README.md")
     readme = _read("README.md")
     development = _read("design/08-development.md")
+    site = tomllib.loads(_read("zensical.toml"))
 
     for heading in (
-        "## Get Started",
+        "## Start Here",
+        "## Models",
         "## Platforms",
         "## Deployment",
-        "## Technical Foundations",
+        "## How Heartwood Works",
+        "## Reference",
         "## Documentation Status",
         "## Project Planning",
         "## Published Documentation",
@@ -41,21 +44,31 @@ def test_documentation_index_uses_progressive_disclosure_and_project_tracking() 
         "Release-ready",
     ):
         assert term in index
-    assert "[Documentation](docs/README.md)" in readme
-    assert "[Use Heartwood](docs/using-heartwood.md)" in readme
-    assert "[Platform Support](docs/platform-support.md)" in readme
+    assert "[Documentation Guide](docs/README.md)" in readme
+    assert "[Get Started](docs/getting-started.md)" in readme
+    assert "[Work with the Agent](docs/using-heartwood.md)" in readme
+    assert "[Platform Support and Validation](docs/platform-support.md)" in readme
     assert "[documentation index](../docs/README.md)" in development
     assert "https://github.com/SchmiedmayerLab/heartwood/issues" in index
     assert "https://github.com/orgs/SchmiedmayerLab/projects/2" in index
     assert "does not serve as a backlog, implementation diary, or decision transcript" in index
+    superfences = site["project"]["markdown_extensions"]["pymdownx"]["superfences"]
+    assert superfences["custom_fences"] == [
+        {
+            "name": "mermaid",
+            "class": "mermaid",
+            "format": "pymdownx.superfences.fence_code_format",
+        }
+    ]
 
 
 def test_platform_support_distinguishes_ci_from_live_validation() -> None:
     support = _read("docs/platform-support.md")
 
-    assert "## Support Matrix" in support
-    assert "Generic Linux or Jupyter environment | Implemented" in support
-    assert "Terra Jupyter | Implemented platform-derived image" in support
+    assert "## Current Status" in support
+    assert "## Validation Evidence" in support
+    assert "Generic Linux or Jupyter environment | Generic release container" in support
+    assert "Terra Jupyter | Terra-derived release image" in support
     assert "Design target only" not in support
     assert "Real Terra workspace validation remains required" in support
     assert "does not establish a business associate agreement" in support
@@ -123,8 +136,8 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "gateway-owned session metadata" in architecture
     assert "Unknown or unconfigured state is explicit" in architecture
     assert "Endpoint validation or artifact integrity is not capability evidence" in testing
-    assert "interactive terminal, a web interface, or a notebook" in readme
-    assert "private `.heartwood/` directory inside the project" in readme
+    assert "terminal, browser, or notebook" in readme
+    assert "keeps its setup and conversation history with that project" in readme
 
 
 def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path) -> None:
@@ -135,6 +148,13 @@ def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path)
 
     assert (destination / "index.md").read_text(encoding="utf-8") == '--8<-- "README.md"\n'
     assert (destination / "docs" / "README.md").is_file()
+    for filename in (
+        "getting-started.md",
+        "platforms.md",
+        "deployment.md",
+        "project-state.md",
+    ):
+        assert (destination / "docs" / filename).is_file()
     assert (destination / "docs" / "assets" / "web-reference-analysis.png").is_file()
     for filename in (
         "ACRONYMS.md",
@@ -150,10 +170,14 @@ def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path)
     assert not tuple((destination / "design").glob("09-*.md"))
 
     readme = (destination / "README.md").read_text(encoding="utf-8")
+    container = (destination / "docs" / "container-images.md").read_text(encoding="utf-8")
+    carina = (destination / "docs" / "carina-cli.md").read_text(encoding="utf-8")
     contributing = (destination / "CONTRIBUTING.md").read_text(encoding="utf-8")
     version = stager.declared_version(_repo_root())
-    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}" in readme
-    assert f"releases/download/{version}/heartwood-installer" in readme
+    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}" not in readme
+    assert f"releases/download/{version}/heartwood-installer" not in readme
+    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}" in container
+    assert f"releases/download/{version}/heartwood-installer" in carina
     assert f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}/AGENTS.md" in contributing
 
 
@@ -260,12 +284,15 @@ def test_readme_and_model_guides_define_project_and_no_weight_runtime_paths() ->
 
     for document in (readme, container, local):
         assert "model weights" in document.lower()
+    for document in (container, local):
         assert "OpenHands" in document
         assert ".heartwood" in document
-    assert "current directory as the project" in readme
+    assert "OpenHands" not in readme
+    assert ".heartwood" not in readme
+    assert "directory where it starts as the project" in readme
     assert "heartwood models download" not in readme
-    assert "enter a token through the hidden terminal prompt" in readme
-    assert "business associate agreement" in readme
+    assert "enter a token for the current Heartwood process" in readme
+    assert "model-provider agreements" in readme
     assert "easiest way to use the complete CLI and browser interface" in container
     assert "one project mount" in container.lower()
     assert "Semantic Version tags" in container
@@ -287,14 +314,39 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
     assert "heartwood.model-connections.v1" in guide
     assert "heartwood models refresh <connection-id>" in guide
     assert "heartwood models connect <connection-id> <model-id>" in guide
-    assert "official OpenAI model-list operation" in guide
-    assert "official Anthropic model-list operation" in guide
+    assert "asks the selected service for its available models" in guide
+    assert "**OpenAI**" in guide
+    assert "**Anthropic**" in guide
     assert "current project's `.heartwood/config.toml`" in guide
-    assert "A token entered in the terminal or web interface remains only" in guide
+    assert "A token entered in the terminal or browser remains only" in guide
     assert "managed research environment" in guide
     assert "absolute HTTPS base URL" in guide
-    assert "CLI deliberately has no token command-line argument" in guide
+    assert "CLI has no token command-line argument" in guide
     assert "HEARTWOOD_MODEL_CONNECTIONS" not in guide
+
+
+def test_beginner_guides_explain_one_project_and_local_server_lifecycle() -> None:
+    getting_started = _read("docs/getting-started.md")
+    platforms = _read("docs/platforms.md")
+    project = _read("docs/project-state.md")
+    local = _read("docs/getting-started-offline.md")
+    deployment = _read("docs/deployment.md")
+
+    assert "recommended first-use path" in getting_started
+    assert "do not need both a container and a native installation" in getting_started
+    assert (
+        "Starting Heartwood from a different directory opens a different project" in getting_started
+    )
+    assert "Platform home directories and container mount points" in platforms
+    assert (
+        "directory where the Heartwood command, web server, or notebook process starts" in project
+    )
+    assert "## Understand the Three Parts" in local
+    assert "**Model files**" in local
+    assert "**The inference server**" in local
+    assert "**Heartwood and OpenHands**" in local
+    assert "Downloading a model prepares the files but does not leave a server running" in local
+    assert "Researchers should not need deployment-specific workspace" in deployment
 
 
 def test_carina_runbook_uses_project_local_release_workflow() -> None:

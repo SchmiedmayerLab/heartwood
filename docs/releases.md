@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Releases
+# Release Heartwood
 
 Heartwood releases use Semantic Versioning without a `v` prefix. Examples include `0.2.0`, `1.0.0`, and `1.2.0-rc.1`. The Git tag, GitHub Release, native installer version, and primary container tag use the same version. Because Open Container Initiative tag syntax does not permit `+`, build metadata uses `_` only in container tags; for example, Git release `1.2.0+build.3` maps to image tag `1.2.0_build.3`.
 

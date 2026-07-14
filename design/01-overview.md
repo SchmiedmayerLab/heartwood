@@ -8,7 +8,9 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 01 — Overview
+# Product Scope
+
+This document defines what Heartwood is responsible for, who it serves, and which claims remain outside the product boundary. Operational instructions are maintained in [Get Started with Heartwood](../docs/getting-started.md), while implementation details begin in [System Architecture](03-architecture.md).
 
 ## Mission
 
@@ -56,7 +58,7 @@ Platform network, identity, storage, and data-access controls remain authoritati
 
 The repository implements the OpenHands conversation and workspace tools, equivalent CLI and web interaction over one session contract, notebook projection, configurable local or institution-authorized model profiles, centrally configured local recommendations, best-effort Hugging Face model preparation, platform detection, repository-verified Skill loading, explicit extension installation, two OpenHands confirmation modes, content-minimized audit records, generic images, and a Terra-derived image. Public tests, examples, and evidence use synthetic data only.
 
-The runtime selects the detected generic, Terra, or Carina platform policy, but it does not include a real biomedical data-source adapter. Its default `SessionService` uses a synthetic OMOP fingerprint, so detection and reference-workflow results are integration fixtures rather than claims about project data. [Platform Support](../docs/platform-support.md) records the precise validation status.
+The runtime selects the detected generic, Terra, or Carina platform policy, but it does not include a real biomedical data-source adapter. Its default `SessionService` uses a synthetic OMOP fingerprint, so detection and reference-workflow results are integration fixtures rather than claims about project data. [Platform Support and Validation](../docs/platform-support.md) records the precise validation status.
 
 ## Reference Workflow
 

@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 04 — Skills and Auto-Detection
+# Skills and Extensions
 
 ## Format: `SKILL.md`
 

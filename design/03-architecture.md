@@ -8,7 +8,9 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 03 — System Architecture
+# System Architecture
+
+This document defines the technical ownership and runtime contracts behind the user-facing guides. Begin with [Runtime Shape](#runtime-shape) and [Project and State Contract](#project-and-state-contract) for the system model. Model integration, action confirmation, interfaces, adapters, and audit behavior follow in progressively greater detail.
 
 ## Principles
 

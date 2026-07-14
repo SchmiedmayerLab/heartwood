@@ -16,35 +16,41 @@ copyright = "Copyright Stanford University and the Heartwood project authors"
 extra_css = ["stylesheets/extra.css"]
 nav = [
     { "Home" = "index.md" },
-    { "Get Started" = [
-        { "Use Heartwood" = "docs/using-heartwood.md" },
-        { "Choose a Model" = "docs/model-connections.md" },
-        { "Local and Offline Models" = "docs/getting-started-offline.md" },
-        { "Browser Interface" = "docs/web-interface.md" },
+    { "Start Here" = [
+        { "Get Started" = "docs/getting-started.md" },
+        { "Work with the Agent" = "docs/using-heartwood.md" },
+        { "Browser and Notebooks" = "docs/web-interface.md" },
+    ] },
+    { "Models" = [
+        { "Connect a Model" = "docs/model-connections.md" },
+        { "Run a Model Locally" = "docs/getting-started-offline.md" },
     ] },
     { "Platforms" = [
-        { "Support Matrix" = "docs/platform-support.md" },
-        { "Carina" = "docs/carina-cli.md" },
+        { "Choose an Environment" = "docs/platforms.md" },
         { "Terra" = "docs/terra-jupyter-demo.md" },
-        { "Platform Images" = "docs/platform-images.md" },
+        { "Stanford Carina" = "docs/carina-cli.md" },
     ] },
     { "Deployment" = [
+        { "Deployment Overview" = "docs/deployment.md" },
         { "Container Images" = "docs/container-images.md" },
-        { "Releases" = "docs/releases.md" },
+        { "Platform-Specific Images" = "docs/platform-images.md" },
+        { "Support and Validation" = "docs/platform-support.md" },
+        { "Release Heartwood" = "docs/releases.md" },
     ] },
-    { "Technical Foundations" = [
-        { "Overview" = "design/01-overview.md" },
-        { "Platforms" = "design/02-platforms.md" },
+    { "How Heartwood Works" = [
+        { "Product Scope" = "design/01-overview.md" },
         { "System Architecture" = "design/03-architecture.md" },
-        { "Skills and Auto-Detection" = "design/04-skills.md" },
         { "Security and Compliance" = "design/05-security-compliance.md" },
-        { "Observability and Audit" = "design/06-observability-audit.md" },
+        { "Skills and Extensions" = "design/04-skills.md" },
+        { "Audit and Reproducibility" = "design/06-observability-audit.md" },
+        { "Platform Architecture" = "design/02-platforms.md" },
         { "Testing and Evaluation" = "design/07-testing-eval.md" },
-        { "Development Practices" = "design/08-development.md" },
+        { "Engineering and Releases" = "design/08-development.md" },
     ] },
     { "Reference" = [
+        { "Project Files and State" = "docs/project-state.md" },
+        { "Glossary and Acronyms" = "ACRONYMS.md" },
         { "Documentation Guide" = "docs/README.md" },
-        { "Acronyms" = "ACRONYMS.md" },
         { "Contributing" = "CONTRIBUTING.md" },
         { "License" = "LICENSE" },
     ] },
@@ -113,3 +119,6 @@ anchor_linenums = true
 [project.markdown_extensions.pymdownx.snippets]
 
 [project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+    { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]

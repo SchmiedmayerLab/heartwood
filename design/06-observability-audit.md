@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 06 — Observability, Audit, and Feedback
+# Audit and Reproducibility
 
 ## Two Records
 
@@ -45,7 +45,7 @@ Heartwood event replay reconstructs the complete researcher-facing transcript, a
 
 Heartwood does not export field-feedback trajectories. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
 
-Validated synthetic fixtures can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; external Skill releases remain subject to the distribution boundary in [04](04-skills.md).
+Validated synthetic fixtures can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; external Skill releases remain subject to the distribution boundary in [Skills and Extensions](04-skills.md).
 
 ## Anti-Goals
 
