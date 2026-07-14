@@ -87,8 +87,9 @@ def test_asgi_http_keeps_the_event_loop_responsive_during_blocking_gateway_work(
         await asyncio.sleep(0.05)
         elapsed = time.monotonic() - started
         release.set()
-        await request
+        response = await request
         fallback_release.cancel()
+        assert response[0]["status"] == 200
         return elapsed
 
     assert asyncio.run(scenario()) < 0.25
