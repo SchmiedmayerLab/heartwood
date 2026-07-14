@@ -165,12 +165,33 @@ class NotebookSession:
         return self.gateway.validate_model_profile(profile_id)
 
     def model_artifacts(self) -> dict[str, object]:
-        """Return reviewed optional local-model artifacts."""
+        """Return default and user-selected local-model choices."""
         return self.gateway.model_artifacts()
 
+    def inspect_model_repository(
+        self,
+        repository: str,
+        *,
+        revision: str | None = None,
+    ) -> dict[str, object]:
+        """Inspect supported candidates from one Hugging Face model repository."""
+        return self.gateway.inspect_model_repository(repository, revision=revision)
+
     def download_local_model(self, model_id: str) -> dict[str, object]:
-        """Start a reviewed project-local model download."""
+        """Start a recommended project-local model download."""
         return self.gateway.download_local_model(model_id)
+
+    def download_custom_local_model(
+        self,
+        repository: str,
+        *,
+        revision: str | None = None,
+    ) -> dict[str, object]:
+        """Start one inspected user-selected local-model download."""
+        return self.gateway.download_custom_local_model(
+            repository,
+            revision=revision,
+        )
 
     def action_settings(self) -> dict[str, object]:
         """Return the shared action-confirmation settings."""

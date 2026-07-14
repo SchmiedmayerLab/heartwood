@@ -19,7 +19,7 @@ The web interface groups connections by the decision a researcher needs to make:
 | Choice | What You Provide | What Heartwood Discovers |
 |---|---|---|
 | Research environment | Usually only a model selection | Models exposed by the platform-managed service or identity |
-| On this device | Nothing for an active loopback service, or one reviewed download choice | Models reported by the local service and reviewed CPU or NVIDIA GPU models available to this project |
+| On this device | Nothing for an active loopback service, one recommended choice, or another Hugging Face `owner/model` identifier | Models reported by the local service, a small central recommendation set, and a supported CPU or NVIDIA GPU plan for the repository you provide |
 | OpenAI | A provider token | Models returned by the official OpenAI model-list operation |
 | Anthropic | A provider token | Models returned by the official Anthropic model-list operation |
 | Custom API | An OpenAI-compatible base URL, optional token, and model selection | Models returned by the service's `/models` route |
@@ -28,7 +28,7 @@ The interface keeps provider prefixes, profile identifiers, policy endpoints, an
 
 ## Configure the Terminal
 
-Run bare `heartwood` for the guided flow. Choose Local, OpenAI, Anthropic, or a platform-provided research service, then select one of the models returned by that service. When a provider token is needed, Heartwood reads it through a hidden prompt and keeps it only for the current process.
+Run bare `heartwood` for the guided flow. Choose **On this device**, OpenAI, Anthropic, or a platform-provided research service. A service connection lists the models returned by that service. Local setup lists only the current Heartwood recommendations, an **Other Hugging Face model** choice, and models reported by an already running local service. When a provider token is needed, Heartwood reads it through a hidden prompt and keeps it only for the current process.
 
 ```bash
 cd /path/to/project
@@ -53,7 +53,7 @@ heartwood models refresh local
 heartwood models connect local <model-id>
 ```
 
-Use [Local and Offline Models](getting-started-offline.md) when Heartwood should download and manage the local runtime as well. A completed reviewed download selects the standard local profile in both interfaces; `heartwood launch` then starts the required runtime.
+Use [Local and Offline Models](getting-started-offline.md) when Heartwood should download and manage the local runtime as well. The CLI and browser obtain recommendations and user-selected model plans from the same gateway catalog. A completed verified download selects the standard local profile in both interfaces; `heartwood launch` then starts the required runtime.
 
 ## Understand Credentials
 
@@ -61,6 +61,7 @@ Heartwood never stores provider token values in `.heartwood/config.toml`, comman
 
 - A token entered in the terminal or web interface remains only in the running gateway process. Restarting that process requires the token again unless the deployment provides a durable secret binding.
 - A managed research environment may use an identity or mounted secret that is already available to the Heartwood process.
+- Private or gated Hugging Face repositories use the standard Hugging Face client credential store established with `hf auth login`; Heartwood does not copy that token into project state.
 - A deployment adapter may resolve an environment-backed secret internally, but researchers do not need to pass state paths or use environment variables as normal Heartwood configuration.
 - The CLI deliberately has no token command-line argument because shell history and process listings are inappropriate secret transports.
 

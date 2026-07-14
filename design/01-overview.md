@@ -21,14 +21,15 @@ Platform network, identity, storage, and data-access controls remain authoritati
 1. **Run in boundary.** Execute the agent, tools, biomedical Skills, and analysis code inside the researcher workspace; use platform controls as the authoritative data and network boundary.
 2. **Remain approachable.** Present one conversation-first workflow through equivalent CLI and web interfaces, with the notebook acting as a launch and status bridge rather than a separate product.
 3. **Make decisions inspectable.** Record model-route authorization, action confirmation, Skill identity, tool outcomes, and exports in a content-minimized, tamper-evident audit trail.
-4. **Support deployment-owned models.** Connect to local or institution-authorized OpenAI-compatible endpoints without embedding model weights or credentials in images or Heartwood settings.
+4. **Make deployment-owned models practical.** Connect to local or institution-authorized endpoints, offer a small centrally maintained set of local recommendations, and prepare a user-selected Hugging Face model from its `owner/model` identifier when the available runtime supports its format. Images and Heartwood settings contain neither model weights nor credential values.
 5. **Make biomedical practice reusable.** Bundle repository-verified biomedical Skills, load them through OpenHands native Skill support, and keep extension installation explicit and auditable.
 6. **Stay portable.** Isolate platform, data-source, policy, and image differences behind tested adapters and declarative platform-image contracts.
 7. **Minimize owned infrastructure.** Reuse OpenHands for the agent loop, tools, confirmation, risk analysis, conversation persistence, and native Skills; reuse LiteLLM for providers; reuse platform proxies, identity, storage, and workflow engines.
 
 ## Success Criteria
 
-- A researcher can configure a local or institution-authorized model route without storing a secret in Heartwood state, then use the same persisted session through the CLI, web UI, and notebook bridge.
+- A researcher can configure a local or institution-authorized model route without storing a secret in Heartwood state, choose a compatible local recommendation or provide a Hugging Face identifier, and then use the same persisted selection and session through the CLI, web UI, and notebook bridge.
+- The gateway resolves a user-selected Hugging Face repository to an immutable revision, chooses a supported CPU or NVIDIA GPU representation for the deployment, reports download and resource estimates before transfer, verifies downloaded content, and rejects unsupported or ambiguous repositories with a direct issue-report path.
 - Deployment policy denies an unauthorized endpoint, capability tier, credential reference, or action-confirmation mode before initial task submission and before an approved or resumed continuation that may call the model; each decision is recorded without prompt, response, row, or secret content.
 - OpenHands proposes and executes terminal and file actions under the selected upstream confirmation policy; Heartwood projects those events consistently into every interface and the audit record.
 - Repository-verified Skills load through the OpenHands native loader, and an external Skill cannot enter persistent runtime storage without validation and an explicit installation decision.
@@ -41,6 +42,7 @@ Platform network, identity, storage, and data-access controls remain authoritati
 - Heartwood does not implement another agent framework, provider client, tool protocol, confirmation engine, risk classifier, or conversation store.
 - Heartwood does not provide a general-purpose Skill registry. It curates a bounded biomedical bundle and supports validated installation from mounted sources.
 - Heartwood does not authorize external processing of controlled participant-level data. Provider use is governed by deployment policy, platform controls, dataset terms, and institutional approval.
+- A recommended or successfully prepared local model is not a capability, biomedical-suitability, license-approval, production-readiness, or institutional-approval claim. User-selected repositories remain the researcher's and deployment's responsibility.
 - Heartwood does not implement a workflow engine. Any batch export belongs in established CWL, WDL, or Nextflow execution infrastructure rather than the interactive agent runtime.
 - Heartwood's web UI is a thin researcher-facing projection of the shared session contract, not a parallel implementation of OpenHands agent behavior.
 
@@ -52,7 +54,7 @@ Platform network, identity, storage, and data-access controls remain authoritati
 
 ## Current Product Boundary
 
-The repository implements the OpenHands conversation and workspace tools, equivalent CLI and web interaction over one session contract, notebook projection, configurable local or institution-authorized model profiles, platform detection, repository-verified Skill loading, explicit extension installation, two OpenHands confirmation modes, content-minimized audit records, generic images, and a Terra-derived image. Public tests, examples, and evidence use synthetic data only.
+The repository implements the OpenHands conversation and workspace tools, equivalent CLI and web interaction over one session contract, notebook projection, configurable local or institution-authorized model profiles, centrally configured local recommendations, best-effort Hugging Face model preparation, platform detection, repository-verified Skill loading, explicit extension installation, two OpenHands confirmation modes, content-minimized audit records, generic images, and a Terra-derived image. Public tests, examples, and evidence use synthetic data only.
 
 The runtime selects the detected generic, Terra, or Carina platform policy, but it does not include a real biomedical data-source adapter. Its default `SessionService` uses a synthetic OMOP fingerprint, so detection and reference-workflow results are integration fixtures rather than claims about project data. [Platform Support](../docs/platform-support.md) records the precise validation status.
 

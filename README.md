@@ -23,7 +23,7 @@ Heartwood is designed to run close to the data. It does not make a laptop, conta
 - Provides a conversational coding agent that can inspect, create, and modify project files after the required review.
 - Loads reviewed biomedical Skills that give the agent domain-specific procedures.
 - Lets you review an OpenHands action set before it runs, or automatically allow only actions OpenHands classifies as low risk when deployment policy permits that mode.
-- Connects to approved research services, common hosted providers, an existing local model service, or a reviewed local model download.
+- Connects to approved research services, common hosted providers, an existing local model service, a recommended local model, or another supported Hugging Face model you identify.
 - Preserves conversations and project settings across restarts.
 - Produces a content-minimized, tamper-evident audit export.
 
@@ -46,7 +46,7 @@ docker run --rm -it \
   heartwood serve --host 0.0.0.0
 ```
 
-Open `http://127.0.0.1:8767/`, configure an authorized model, and start a conversation. The mounted directory is the project, so approved agent changes appear directly in `heartwood-demo`. See [Container Images](docs/container-images.md) for Linux file-permission guidance, persistent named volumes, and hardened deployment options.
+Open `http://127.0.0.1:8767/`, configure an authorized model, and start a conversation. The mounted directory is the project, so approved agent changes appear directly in `heartwood-demo`. If you download a local model in the browser, Heartwood shows its progress and then tells you to restart the container with `heartwood launch --web` so it can supervise both the model and interface. See [Container Images](docs/container-images.md) for that command, Linux file-permission guidance, persistent named volumes, and hardened deployment options.
 
 ### Install the Command
 
@@ -74,7 +74,7 @@ The first run guides you to a model connection. Later runs reopen the same proje
 
 ### Use a Research Platform
 
-- [Stanford Carina](docs/carina-cli.md) uses the native installer and lets `heartwood launch` request reviewed Slurm compute for a local model.
+- [Stanford Carina](docs/carina-cli.md) uses the native installer and lets `heartwood launch` request an explicitly confirmed Slurm allocation for a local model.
 - [Terra](docs/terra-jupyter-demo.md) uses the Terra-derived image so Jupyter and Leonardo routing continue to work normally.
 - [Platform Support](docs/platform-support.md) distinguishes repository implementation, CI validation, live validation, and institutional approval.
 
@@ -83,9 +83,11 @@ The first run guides you to a model connection. Later runs reopen the same proje
 Heartwood does not ship model weights. The model setup presents only information needed for the selected connection:
 
 - **Research environment:** choose a model made available by the platform administrator; credentials may already be managed by the environment.
-- **On this device:** use an existing OpenAI-compatible service or explicitly download a reviewed CPU or NVIDIA GPU model into the project.
+- **On this device:** use an existing OpenAI-compatible service, choose from a short centrally maintained recommendation list, or enter another Hugging Face `owner/model` identifier. Heartwood inspects the repository, selects a supported CPU or NVIDIA GPU representation for the current deployment, and shows storage and compute guidance before download.
 - **OpenAI or Anthropic:** enter a token through the hidden terminal prompt or running web interface and choose a model returned by the provider's own catalog. Whether that provider may receive controlled data is a separate institutional decision.
 - **Custom API:** provide the base URL, optional token, and a model exposed by an OpenAI-compatible service.
+
+Recommended means that Heartwood maintains reproducible download and runtime metadata for an approachable default; it is not a model-quality, biomedical-use, license-approval, or institutional-approval claim. User-selected repositories are supported on a best-effort basis. Unsupported or ambiguous formats fail before download and link to the GitHub issue chooser.
 
 For a fully local setup, see [Local and Offline Models](docs/getting-started-offline.md). For provider, platform, and credential behavior, see [Choose a Model](docs/model-connections.md).
 

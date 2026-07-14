@@ -27,7 +27,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 
-from heartwood.gateway import ProjectContext
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
 GATEWAY_HOST = "127.0.0.1"
@@ -74,6 +73,7 @@ def main() -> int:
     for filename in ("person.csv", "condition_occurrence.csv"):
         source = fixture_root / filename
         shutil.copy2(source, input_root / source.name)
+    os.chdir(PROJECT_ROOT)
     subprocess.run(
         (
             "heartwood",
@@ -240,6 +240,11 @@ def _verify_web_ui(external_base: str) -> None:
 
 
 def _verify_gateway_session(external_base: str) -> None:
+    _trace("reading project readiness")
+    readiness = _request_json(urllib.parse.urljoin(external_base, "project/readiness"))
+    if Path(str(readiness.get("project_root"))).resolve() != PROJECT_ROOT.resolve():
+        raise AssertionError("gateway proxy did not preserve the current-directory project")
+
     _trace("reading action settings")
     actions = _request_json(urllib.parse.urljoin(external_base, "settings/actions"))
     if actions.get("confirmation_mode") != "always-confirm":
@@ -329,10 +334,9 @@ def _verify_notebook_api() -> None:
     if jupyter_proxy_url(port=GATEWAY_PORT, env=env) != expected_proxy_url:
         raise AssertionError("notebook proxy URL did not match Terra-style service prefix")
 
-    session = NotebookSession(
-        project=ProjectContext(PROJECT_ROOT),
-        session_id=f"{SESSION_ID}-notebook",
-    )
+    session = NotebookSession(session_id=f"{SESSION_ID}-notebook")
+    if session.project.root != PROJECT_ROOT.resolve():
+        raise AssertionError("notebook API did not preserve the current-directory project")
     view_model = session.detect()
     if not any(item.kind == "detection.proposed" for item in view_model.activity):
         raise AssertionError("notebook API did not project detection events")

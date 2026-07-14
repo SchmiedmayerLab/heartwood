@@ -78,12 +78,31 @@ if not argv or "/opt/heartwood/.venv/bin/python" not in argv[0]:
 '
 
 "${heartwood_python}" - <<'PY'
+from pathlib import Path
+
+from heartwood.gateway import ProjectContext
+
+assert ProjectContext.current().root == Path.cwd().resolve()
+PY
+
+project_root="$(mktemp -d "${platform_home}/heartwood-contract.XXXXXX")"
+cd "${project_root}"
+
+"${heartwood_python}" - <<'PY'
+from pathlib import Path
+
+from heartwood.gateway import ProjectContext
 from heartwood.notebook import NotebookSession
 
 session = NotebookSession(session_id="terra-jupyter-contract")
+assert session.project.root == Path.cwd().resolve()
+assert ProjectContext.current().state_root == Path.cwd() / ".heartwood"
 view = session.detect()
 assert view.session_id == "terra-jupyter-contract"
 PY
+
+test -f "${project_root}/.heartwood/state.json"
+test ! -e "${platform_home}/.heartwood/state.json"
 
 grep -q "NotebookApp.port = 8000" "${jupyter_home}/jupyter_notebook_config.py"
 grep -q 'NotebookApp.base_url = "/notebooks"' "${jupyter_home}/jupyter_notebook_config.py" \

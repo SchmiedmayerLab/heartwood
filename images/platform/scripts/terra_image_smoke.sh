@@ -11,8 +11,12 @@ runtime_root="${HEARTWOOD_RUNTIME_ROOT:-/opt/heartwood}"
 platform_home="${HEARTWOOD_PLATFORM_HOME:-/home/jupyter}"
 jupyter_prefix="${HEARTWOOD_JUPYTER_PREFIX:-/opt/conda}"
 heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
+project_root="$(pwd)"
 
-cd "${runtime_root}"
+if [ "${project_root}" = "${runtime_root}" ] || [ "${project_root}" = "${platform_home}" ]; then
+  echo "run the Terra image smoke from a dedicated project directory" >&2
+  exit 1
+fi
 
 test -x "${runtime_root}/.venv/bin/heartwood"
 test -x "${runtime_root}/.venv/bin/python"
@@ -25,12 +29,26 @@ heartwood serve --help >/dev/null
 test -d "${platform_home}"
 
 heartwood --version
-"${heartwood_python}" - <<'PY'
-from heartwood.gateway import ProjectContext
+HEARTWOOD_EXPECTED_PROJECT="${project_root}" "${heartwood_python}" - <<'PY'
+import os
+from pathlib import Path
+
+from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
+expected = Path(os.environ["HEARTWOOD_EXPECTED_PROJECT"]).resolve()
 project = ProjectContext.current()
-session = NotebookSession(project=project, session_id="terra-image-smoke")
+assert project.root == expected
+project.initialize()
+assert project.state_root == expected / ".heartwood"
+assert project.state_path.is_file()
+
+gateway = SessionGateway()
+assert gateway.project.root == expected
+assert gateway.project_readiness()["project_root"] == str(expected)
+
+session = NotebookSession(session_id="terra-image-smoke")
+assert session.project.root == expected
 view = session.detect()
 assert view.session_id == "terra-image-smoke"
 assert jupyter_proxy_url(port=8767).endswith("/proxy/8767/")

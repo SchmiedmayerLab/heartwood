@@ -163,29 +163,38 @@ jobs:
       - name: Run Terra platform image smoke
         run: >-
           docker run --rm --platform linux/amd64 --network none
-          --workdir /opt/heartwood --entrypoint bash
+          --entrypoint bash
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
-          images/platform/scripts/terra_image_smoke.sh
+          -c 'mkdir -p /home/jupyter/synthetic-analysis &&
+          cd /home/jupyter/synthetic-analysis &&
+          exec /opt/heartwood/images/platform/scripts/terra_image_smoke.sh'
+      - name: Run Terra current-directory persistence smoke
+        run: >-
+          bash images/platform/scripts/terra_project_persistence_smoke.sh
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
       - name: Run Terra OpenHands smoke
         run: >-
           docker run --rm --platform linux/amd64 --network none
-          --workdir /opt/heartwood --entrypoint bash
+          --entrypoint bash
+          --env HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis
+          --env HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
-          images/generic/scripts/offline_stack_smoke.sh
+          /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
       - name: Download and verify Terra CI-only model fixture
         run: >-
           docker run --rm --platform linux/amd64
-          --entrypoint heartwood
-          --workdir /home/jupyter/heartwood-project
-          --volume heartwood-terra-ci-project:/home/jupyter/heartwood-project
+          --entrypoint bash
+          --volume heartwood-terra-ci-project:/home/jupyter
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
-          models download llama-cpp-stories260k-ci
+          -c 'mkdir -p /home/jupyter/model-analysis &&
+          cd /home/jupyter/model-analysis &&
+          exec heartwood models download llama-cpp-stories260k-ci'
       - name: Run Terra mounted local inference without network
         run: >-
           docker run --rm --platform linux/amd64 --network none
-          --workdir /home/jupyter/heartwood-project --entrypoint bash
-          --volume heartwood-terra-ci-project:/home/jupyter/heartwood-project
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/heartwood-project/.heartwood/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
+          --workdir /home/jupyter/model-analysis --entrypoint bash
+          --volume heartwood-terra-ci-project:/home/jupyter
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/model-analysis/.heartwood/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           /opt/heartwood/images/generic/scripts/local_inference_smoke.sh
       - name: Run Terra Jupyter launch smoke

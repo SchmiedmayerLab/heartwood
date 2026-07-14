@@ -109,7 +109,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
     assert "ipykernel install" in platform
     assert "heartwood-workspace" not in platform
-    assert 'mkdir -p "${HEARTWOOD_PLATFORM_HOME}/heartwood-project"' in platform
+    assert "heartwood-project" not in platform
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
     assert "WORKDIR ${HEARTWOOD_PLATFORM_HOME}" in platform
     for legacy_setting in (
@@ -543,6 +543,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         "images/platform/scripts/terra_image_smoke.sh",
         "images/platform/scripts/terra_jupyter_contract_smoke.sh",
         "images/platform/scripts/terra_jupyter_launch_smoke.sh",
+        "images/platform/scripts/terra_project_persistence_smoke.sh",
     )
     for script in scripts:
         completed = subprocess.run(
@@ -565,6 +566,20 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert '"approve"' in jupyter_smoke
     assert '"confirmation.requested"' in jupyter_smoke
     assert '"tool.execution.recorded"' in jupyter_smoke
+    assert "os.chdir(PROJECT_ROOT)" in jupyter_smoke
+    assert "NotebookSession(session_id=" in jupyter_smoke
+    assert '"project/readiness"' in jupyter_smoke
+
+    terra_launch = _read("images/platform/scripts/terra_jupyter_launch_smoke.sh")
+    assert "heartwood serve --host 0.0.0.0" in terra_launch
+    assert "project/readiness" in terra_launch
+    assert "proxy/${gateway_port}/" in terra_launch
+
+    terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
+    assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
+    assert terra_persistence.count("terra_image_smoke.sh") == 2
+    assert "terra-project-persistence replay" in terra_persistence
+    assert "test ! -e /home/jupyter/.heartwood" in terra_persistence
 
 
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
@@ -621,6 +636,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
         "Promote generic moving tag"
     )
     assert publish.index("Build and stage Terra image by digest") < publish.index(
+        "Run staged Terra current-directory persistence smoke"
+    )
+    assert publish.index("Run staged Terra current-directory persistence smoke") < publish.index(
         "Run staged Terra OpenHands smoke"
     )
     assert publish.index("Run staged Terra local inference smoke") < publish.index(
@@ -639,14 +657,18 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "runtime runtime-gpu-nvidia" in smoke
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
+    assert "Run Terra current-directory persistence smoke" in smoke
+    assert "terra_project_persistence_smoke.sh" in smoke
     assert "images/generic/scripts/offline_stack_smoke.sh" in smoke
+    assert "HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis" in smoke
+    assert "HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis" in smoke
     assert "container_persistence_smoke.sh" in smoke
     assert "Download and verify CI-only model fixture" in smoke
     assert "heartwood models download llama-cpp-stories260k-ci" in smoke
     assert "--volume heartwood-ci-project:/workspace" in smoke
-    assert "--volume heartwood-terra-ci-project:/home/jupyter/heartwood-project" in smoke
+    assert "--volume heartwood-terra-ci-project:/home/jupyter" in smoke
     assert "/workspace/.heartwood/models/llama-cpp-stories260k-ci" in smoke
-    assert "/home/jupyter/heartwood-project/.heartwood/models/llama-cpp-stories260k-ci" in smoke
+    assert "/home/jupyter/model-analysis/.heartwood/models/llama-cpp-stories260k-ci" in smoke
     assert smoke.count("local_inference_smoke.sh") == 2
     assert 'f"http://127.0.0.1:{port}/health"' in _read(
         "images/generic/scripts/local_inference_smoke.sh"

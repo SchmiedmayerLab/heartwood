@@ -44,6 +44,8 @@ docker run --rm -it \
 
 Open `http://127.0.0.1:8767/`. Heartwood treats `/workspace` as the project and creates `/workspace/.heartwood/`. One project mount therefore preserves source files, configuration, sessions, downloaded models, Skills, logs, and audit records across replacement containers.
 
+`/workspace` is the image's default mount target and working directory, not a separate Heartwood workspace setting. Mounting another directory and selecting it with Docker's `--workdir` changes the project in exactly the same way as changing directories before running the native CLI. Platform images such as Terra use their platform's persistent home directory instead of imposing this generic mount convention.
+
 The image runs as non-root user `10001:10001`. On Linux, make the mounted project writable by that identity or run the container with a reviewed user mapping that can write the project. Do not make the application root writable merely to avoid a host-permission problem.
 
 The same project can use the terminal interface instead:
@@ -65,13 +67,13 @@ For production automation, provide credentials through a platform secret facilit
 
 ## Download and Run a Local Model
 
-List the reviewed artifacts, then explicitly download one into the project's `.heartwood/models/` directory:
+List the current recommendations, then download one into the project's `.heartwood/models/` directory:
 
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
   ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
-  heartwood models artifacts
+  heartwood models local
 
 docker run --rm -it \
   -v "$PWD:/workspace" \
@@ -79,7 +81,21 @@ docker run --rm -it \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
-The download requires network access and sufficient project storage. Heartwood shows transfer progress, verifies the pinned revision and digest, and records the selected runtime without copying the model into an image layer.
+You can instead inspect and prepare another Hugging Face model. The image chooses CPU llama.cpp for a supported single-file GGUF repository; the NVIDIA image chooses vLLM for a supported standard snapshot:
+
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood models inspect <owner/model>
+
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood models download <owner/model>
+```
+
+The download requires network access and sufficient project storage. Heartwood reports the automatic runtime and resource plan, shows transfer progress, verifies the immutable source and content, and records the selection without copying the model into an image layer. Unsupported or ambiguous repositories fail before transfer and link to the issue chooser.
 
 Start the model and browser together:
 
@@ -101,7 +117,7 @@ docker run --rm -it \
   heartwood launch --plain
 ```
 
-The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant, download the reviewed `qwen25-7b-instruct-vllm` snapshot with that image, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. The image supplies vLLM but still downloads model weights only after that explicit project-level command.
+The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant, inspect or download the recommended `qwen25-7b-instruct-vllm` snapshot with that image, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. The image supplies vLLM but still downloads model weights only after that explicit project-level command.
 
 ## Runtime Security Controls
 

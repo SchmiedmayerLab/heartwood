@@ -80,6 +80,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | GPU | Graphics Processing Unit | Accelerator for ML / heavy compute |
 | UID | User Identifier | Numeric Unix user id used to run containers as a stable non-root user |
 | vCPU | virtual CPU | A virtual processor core on a VM |
+| VRAM | Video Random Access Memory | Accelerator memory used to load model weights and inference buffers on a GPU |
 | OS | Operating System | e.g. Linux / Ubuntu |
 | CDN | Content Delivery Network | External static-asset hosting, forbidden for the runtime web UI |
 | DNS | Domain Name System | Resolves hostnames to network addresses |

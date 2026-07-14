@@ -4,11 +4,14 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Reviewed local-model artifacts downloaded to mounted runtime storage."""
+"""Recommended local-model artifacts downloaded to mounted runtime storage."""
 
 from __future__ import annotations
 
 import hashlib
+import re
+import shutil
+import tempfile
 import threading
 import tomllib
 from collections.abc import Callable
@@ -17,6 +20,8 @@ from importlib import import_module
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, Protocol, cast
+
+from filelock import FileLock
 
 from heartwood.gateway._model_snapshots import (
     ModelSnapshot,
@@ -28,6 +33,9 @@ from heartwood.gateway._model_snapshots import (
 type DownloadStatus = Literal["downloading", "error", "ready"]
 type ProgressCallback = Callable[[int, int], None]
 type DownloadReadyCallback = Callable[[str, Path, str], None]
+
+_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_REVISION = re.compile(r"^[0-9a-f]{7,64}$")
 
 
 class _DownloadProgress:
@@ -99,18 +107,20 @@ class ModelArtifact:
     source_revision: str
     artifact_format: str
     artifact_size_bytes: int
+    minimum_free_bytes: int
     artifact_sha256: str
     license_posture: str
     model_alias: str
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
+    recommended: bool = False
 
     def validate(self) -> None:
         """Validate pinned identity and integrity metadata."""
         if not self.artifact_id or "/" in self.artifact_id or ".." in self.artifact_id:
             msg = "artifact_id must be a safe cache directory name"
             raise ModelArtifactError(msg)
-        if not self.source_repository or "/" not in self.source_repository:
+        if _REPOSITORY.fullmatch(self.source_repository) is None:
             msg = "source_repository must be a Hugging Face owner/repository id"
             raise ModelArtifactError(msg)
         if (
@@ -120,11 +130,11 @@ class ModelArtifact:
         ):
             msg = "source_path must be a safe repository-relative path"
             raise ModelArtifactError(msg)
-        if not self.source_revision or self.source_revision in {"main", "master", "latest"}:
+        if _REVISION.fullmatch(self.source_revision) is None:
             msg = "source_revision must be an immutable revision"
             raise ModelArtifactError(msg)
-        if self.artifact_size_bytes <= 0:
-            msg = "artifact_size_bytes must be positive"
+        if self.artifact_size_bytes <= 0 or self.minimum_free_bytes < self.artifact_size_bytes:
+            msg = "artifact storage metadata is invalid"
             raise ModelArtifactError(msg)
         if len(self.artifact_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.artifact_sha256
@@ -139,13 +149,13 @@ class ModelArtifact:
 
 @dataclass(frozen=True, slots=True)
 class ModelArtifactCatalog:
-    """Reviewed downloadable artifacts keyed by stable id."""
+    """Recommended downloadable artifacts keyed by stable id."""
 
     schema_version: str
     artifacts: tuple[ModelArtifact, ...]
 
     def artifact(self, artifact_id: str) -> ModelArtifact:
-        """Return one reviewed artifact."""
+        """Return one artifact from the repository recommendation catalog."""
         for artifact in self.artifacts:
             if artifact.artifact_id == artifact_id:
                 return artifact
@@ -177,7 +187,7 @@ class ModelDownload:
 
 
 class LocalModelDownloadManager:
-    """Download, verify, and select reviewed local models in the background."""
+    """Download, verify, and select local models in the background."""
 
     def __init__(
         self,
@@ -195,8 +205,14 @@ class LocalModelDownloadManager:
         self._lock = threading.Lock()
 
     def start(self, model_id: str) -> ModelDownload:
-        """Start or return one reviewed artifact or snapshot download."""
-        model, total = self._model(model_id)
+        """Start or return one recommended artifact or snapshot download."""
+        model, _total = self._model(model_id)
+        return self.start_model(model)
+
+    def start_model(self, model: ModelArtifact | ModelSnapshot) -> ModelDownload:
+        """Start or return one validated model supplied by the gateway catalog."""
+        model.validate()
+        model_id, total, _runtime_profile = self._metadata(model)
         with self._lock:
             current = self._downloads.get(model_id)
             if current is not None and current.status in {"downloading", "ready"}:
@@ -282,7 +298,7 @@ class LocalModelDownloadManager:
             try:
                 snapshot = self.snapshot_catalog.snapshot(model_id)
             except ModelSnapshotError as error:
-                raise ModelArtifactError(f"unknown reviewed local model: {model_id}") from error
+                raise ModelArtifactError(f"unknown recommended local model: {model_id}") from error
             return snapshot, snapshot.expected_size_bytes
         return artifact, artifact.artifact_size_bytes
 
@@ -337,42 +353,76 @@ def download_model_artifact(
     downloader: ArtifactDownloader | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> Path:
-    """Download one pinned artifact and verify size and SHA-256."""
+    """Download one pinned artifact atomically and verify size and SHA-256."""
     artifact.validate()
-    destination = (cache_dir / artifact.artifact_id).resolve()
     cache_root = cache_dir.resolve()
+    destination = (cache_root / artifact.artifact_id).resolve()
     if cache_root != destination and cache_root not in destination.parents:
         msg = "model artifact cache path escapes configured cache directory"
         raise ModelArtifactError(msg)
-    destination.mkdir(parents=True, exist_ok=True)
-    if downloader is None:
-        downloader = cast(
-            ArtifactDownloader,
-            import_module("huggingface_hub").hf_hub_download,
-        )
-    if progress_callback is None:
-        downloaded_value = downloader(
-            repo_id=artifact.source_repository,
-            filename=artifact.source_path,
-            revision=artifact.source_revision,
-            local_dir=destination,
-        )
-    else:
-        downloaded_value = downloader(
-            repo_id=artifact.source_repository,
-            filename=artifact.source_path,
-            revision=artifact.source_revision,
-            local_dir=destination,
-            tqdm_class=_progress_class(progress_callback, artifact.artifact_size_bytes),
-        )
-    downloaded = Path(downloaded_value).resolve()
-    if destination != downloaded and destination not in downloaded.parents:
-        msg = "downloaded model path escapes artifact cache directory"
-        raise ModelArtifactError(msg)
-    _verify_artifact(downloaded, artifact)
-    if progress_callback is not None:
-        progress_callback(artifact.artifact_size_bytes, artifact.artifact_size_bytes)
-    return downloaded
+    cache_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with FileLock(cache_root / f".{artifact.artifact_id}.lock", mode=0o600):
+        installed = destination / artifact.source_path
+        if destination.exists():
+            try:
+                _verify_artifact(installed, artifact)
+            except (OSError, ValueError) as error:
+                raise ModelArtifactError(
+                    f"existing model artifact is incomplete or modified: {destination}: {error}"
+                ) from error
+            if progress_callback is not None:
+                progress_callback(artifact.artifact_size_bytes, artifact.artifact_size_bytes)
+            return installed
+        available = shutil.disk_usage(cache_root).free
+        if available < artifact.minimum_free_bytes:
+            required_gib = artifact.minimum_free_bytes / (1024**3)
+            available_gib = available / (1024**3)
+            raise ModelArtifactError(
+                f"artifact requires at least {required_gib:.1f} GiB free; "
+                f"{available_gib:.1f} GiB is available under {cache_root}"
+            )
+        if downloader is None:
+            downloader = cast(
+                ArtifactDownloader,
+                import_module("huggingface_hub").hf_hub_download,
+            )
+        staging = Path(tempfile.mkdtemp(prefix=f".{artifact.artifact_id}.", dir=cache_root))
+        try:
+            if progress_callback is None:
+                downloaded_value = downloader(
+                    repo_id=artifact.source_repository,
+                    filename=artifact.source_path,
+                    revision=artifact.source_revision,
+                    local_dir=staging,
+                )
+            else:
+                downloaded_value = downloader(
+                    repo_id=artifact.source_repository,
+                    filename=artifact.source_path,
+                    revision=artifact.source_revision,
+                    local_dir=staging,
+                    tqdm_class=_progress_class(
+                        progress_callback,
+                        artifact.artifact_size_bytes,
+                    ),
+                )
+            downloaded = Path(downloaded_value).resolve()
+            expected = (staging / artifact.source_path).resolve()
+            if downloaded.is_symlink() or not downloaded.is_file():
+                raise ModelArtifactError(f"downloaded model artifact is missing: {downloaded}")
+            if staging != downloaded and staging not in downloaded.parents:
+                raise ModelArtifactError("downloaded model path escapes artifact staging directory")
+            if downloaded != expected:
+                raise ModelArtifactError("downloaded model path does not match its pinned source")
+            _verify_artifact(downloaded, artifact)
+            shutil.rmtree(staging / ".cache", ignore_errors=True)
+            staging.replace(destination)
+            installed = destination / artifact.source_path
+            if progress_callback is not None:
+                progress_callback(artifact.artifact_size_bytes, artifact.artifact_size_bytes)
+            return installed
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def _progress_class(
@@ -404,29 +454,31 @@ def _load_artifact(path: Path) -> ModelArtifact:
         source_revision=_string(data, "source_revision"),
         artifact_format=_string(data, "artifact_format"),
         artifact_size_bytes=_positive_int(data, "artifact_size_bytes"),
+        minimum_free_bytes=_positive_int(data, "minimum_free_bytes"),
         artifact_sha256=_string(data, "artifact_sha256"),
         license_posture=_string(data, "license_posture"),
         model_alias=_string(data, "model_alias"),
         minimum_resource_envelope=_optional_string(data, "minimum_resource_envelope"),
         recommended_resource_envelope=_optional_string(data, "recommended_resource_envelope"),
+        recommended=_optional_bool(data, "recommended", default=False),
     )
     artifact.validate()
     return artifact
 
 
 def _verify_artifact(path: Path, artifact: ModelArtifact) -> None:
-    if not path.is_file():
+    if path.is_symlink() or not path.is_file():
         msg = f"downloaded model artifact is missing: {path}"
         raise ModelArtifactError(msg)
     if path.stat().st_size != artifact.artifact_size_bytes:
-        msg = "downloaded model artifact size does not match its reviewed manifest"
+        msg = "downloaded model artifact size does not match its pinned manifest"
         raise ModelArtifactError(msg)
     digest = hashlib.sha256()
     with path.open("rb") as file:
         for block in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(block)
     if digest.hexdigest() != artifact.artifact_sha256:
-        msg = "downloaded model artifact checksum does not match its reviewed manifest"
+        msg = "downloaded model artifact checksum does not match its pinned manifest"
         raise ModelArtifactError(msg)
 
 
@@ -450,4 +502,11 @@ def _positive_int(data: dict[str, Any], key: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         msg = f"{key} must be a positive integer"
         raise ModelArtifactError(msg)
+    return value
+
+
+def _optional_bool(data: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ModelArtifactError(f"{key} must be a boolean")
     return value

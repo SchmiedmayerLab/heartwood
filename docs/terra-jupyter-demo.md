@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Heartwood on Terra
 
-The Terra image adds Heartwood to Terra's Jupyter environment without replacing its user, home directory, notebook server, kernel setup, or Leonardo proxy behavior. Use this guide in a synthetic workspace before any institution reviews the image for controlled data.
+The Terra image adds Heartwood to Terra's Jupyter environment without replacing its user, home directory, notebook server, kernel setup, or Leonardo proxy behavior. The image, responsive browser, Jupyter route, and proxy contracts are CI-validated; the complete workflow has not yet been live-validated in Terra. Use this guide only in a synthetic workspace while collecting that evidence and before any institution reviews the image for controlled data.
 
 ## Select the Image
 
@@ -33,10 +33,12 @@ The release pins the Terra Jupyter Python base recorded in `images/platforms.tom
 
 ## Create a Synthetic Project
 
-In a Jupyter terminal:
+Terra opens terminals and notebooks on its persistent `/home/jupyter` disk. Create one directory for the analysis, place the notebook and localized inputs there, and open that copy of the notebook from the Jupyter file browser:
 
 ```bash
 mkdir -p /home/jupyter/heartwood-demo/input
+cp /opt/heartwood/docs/terra-jupyter-demo.ipynb \
+  /home/jupyter/heartwood-demo/
 cp /opt/heartwood/fixtures/synthetic/omop-like/*.csv \
   /home/jupyter/heartwood-demo/input/
 cd /home/jupyter/heartwood-demo
@@ -44,7 +46,7 @@ heartwood detect
 heartwood doctor
 ```
 
-The current directory is the project and the agent works on files there. Heartwood creates `/home/jupyter/heartwood-demo/.heartwood/` for configuration, sessions, models, Skills, logs, and audit data. Both project files and Heartwood state survive a container restart when the Terra persistent disk is retained.
+`heartwood-demo` is only the tutorial's project name. Heartwood has no fixed Terra workspace path: the directory containing the terminal command, notebook, or web-server process is the project, and the agent works only on that directory and its descendants. Heartwood creates `.heartwood/` inside that project for configuration, sessions, models, Skills, logs, and audit data. Both project files and Heartwood state survive a container restart when the Terra persistent disk is retained.
 
 The fixture contains 24 synthetic people, 39 condition-occurrence rows, and 20 people with condition concept `201826`. It contains no protected health information. Terra workspace buckets and data tables are separate storage; files must be localized into the project before the agent can use them.
 
@@ -64,19 +66,22 @@ heartwood models refresh <connection-id>
 heartwood models connect <connection-id> <model-id>
 ```
 
-### Local CPU Model
+### Local Model
 
-Choose a machine and persistent-disk size that meet the artifact metadata shown by `heartwood models artifacts`, then run:
+Choose a machine and persistent-disk size that meet the guidance shown by `heartwood models local`, then select a recommendation or another supported Hugging Face model:
 
 ```bash
-heartwood models artifacts
+heartwood models local
 heartwood models download qwen25-7b-instruct-q4_k_m
+# Or inspect and download another repository:
+heartwood models inspect <owner/model>
+heartwood models download <owner/model>
 heartwood launch --web
 ```
 
-The first command downloads the reviewed GGUF artifact into the current project's `.heartwood/models/` directory. The launcher starts the packaged CPU llama.cpp server, configures the reported local model, supervises its lifecycle, and starts the web interface. First inference on CPU can be slow. A GPU does not accelerate this baseline image's llama.cpp runtime.
+The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and web interface. First inference on CPU can be slow, and attaching a GPU does not accelerate this portable image's llama.cpp path.
 
-The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. GPU selection, model suitability, and platform validation must match the deployment evidence before it replaces the CPU path.
+The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. In that image, Heartwood prefers a supported standard Hugging Face snapshot and reports approximate GPU-memory requirements. GPU selection, model suitability, and live platform validation must match the deployment evidence before it replaces the CPU path.
 
 ## Open the Web Interface
 
@@ -87,7 +92,7 @@ cd /home/jupyter/heartwood-demo
 heartwood serve
 ```
 
-For a Heartwood-managed local model, use `heartwood launch --web` instead so the model remains supervised. Open the Jupyter proxy route for port `8767`; it normally ends in `/proxy/8767/`.
+For a Heartwood-managed local model, use `heartwood launch --web` instead so the model remains supervised. Open the authenticated Jupyter proxy route for port `8767`; it normally ends in `/proxy/8767/`. Treat this as a synthetic validation workflow until the exact release image completes the route, persistence, and resume checks in a real Terra control plane.
 
 ![Heartwood synthetic reference analysis at a narrow notebook viewport](assets/web-notebook-viewport.png)
 
@@ -118,18 +123,17 @@ heartwood --session-id terra-demo audit export \
   --output terra-demo-audit.jsonl
 ```
 
-In the Heartwood notebook kernel, set the project as the notebook process's current directory and use the same session identifier:
+Open the copied notebook from the project directory with the Heartwood kernel. Its process starts in the notebook directory, so the notebook bridge resolves the same project without another path setting:
 
 ```python
 from pathlib import Path
-import os
-
-os.chdir(Path("/home/jupyter/heartwood-demo"))
 
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
+project_root = Path.cwd().resolve()
 session = NotebookSession(session_id="terra-demo")
 view = session.replay()
+assert session.project.root == project_root
 print(view.event_count)
 print(jupyter_proxy_url(port=8767))
 ```

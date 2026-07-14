@@ -40,6 +40,7 @@ from heartwood.gateway import (
     ModelArtifactError,
     ModelCatalogError,
     ModelProfile,
+    ModelRepositoryError,
     ModelSettingsError,
     ModelSnapshotError,
     ProjectContext,
@@ -222,7 +223,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use a Custom API model identifier when its server cannot list models.",
     )
-    model_subparsers.add_parser("artifacts", help="List reviewed local-model artifacts.")
+    model_subparsers.add_parser("local", help="List available local model choices.")
+    inspect_models = model_subparsers.add_parser(
+        "inspect", help="Inspect supported models in a Hugging Face repository."
+    )
+    inspect_models.add_argument("repository", help="Hugging Face owner/model identifier.")
+    inspect_models.add_argument("--revision", help="Branch, tag, or commit to inspect.")
     add = model_subparsers.add_parser(
         "add", help="Advanced: add or update a non-secret model profile."
     )
@@ -260,9 +266,13 @@ def _build_parser() -> argparse.ArgumentParser:
     remove = model_subparsers.add_parser("remove", help="Remove a profile.")
     remove.add_argument("profile_id")
     download = model_subparsers.add_parser(
-        "download", help="Download and verify a reviewed local model."
+        "download", help="Download a recommended or inspected Hugging Face model."
     )
-    download.add_argument("model_id")
+    download.add_argument("model", help="Default model id or Hugging Face owner/model identifier.")
+    download.add_argument(
+        "--revision",
+        help="Advanced: repository branch, tag, or commit for an owner/model identifier.",
+    )
 
     skills = subparsers.add_parser("skills", help="Inspect bundled Skills and extensions.")
     skill_subparsers = skills.add_subparsers(dest="skills_command", metavar="<skills-command>")
@@ -454,7 +464,11 @@ def _handle_setup(
     if gateway is not None:
         gateway.stop()
     if code == 0:
-        print("Run `heartwood` to start the conversation.")
+        readiness = inspect_deployment(project)
+        if readiness.state == "compute-required":
+            print("Run `heartwood launch` to start the selected model and conversation.")
+        else:
+            print("Run `heartwood` to start the conversation.")
     return code
 
 
@@ -505,17 +519,6 @@ def _configure_setup(
             print("Setup cancelled because no valid model source was selected.")
             return 1, None
         source = _MODEL_SOURCE_IDS[int(choice) - 1]
-    if (
-        readiness.platform_id == "carina"
-        and source == "local"
-        and not os.environ.get("SLURM_JOB_ID")
-    ):
-        print(
-            "Local model setup runs automatically after Carina compute starts. "
-            "Download a reviewed model with `heartwood models download <model-id>`, "
-            "then run `heartwood launch`."
-        )
-        return 1, None
     if non_interactive and model_id is None:
         parser.error("--model-id is required with --non-interactive")
     print("\nConfiguration")
@@ -548,6 +551,14 @@ def _configure_setup(
         gateway.start()
         if not resume_existing:
             gateway.select_action_confirmation_mode("always-confirm")
+        if source == "local":
+            _configure_local_model(
+                gateway,
+                model_id=model_id,
+                non_interactive=non_interactive,
+            )
+            print("Setup complete.")
+            return 0, gateway
         connection_id = "local" if source == "local" else source
         token = _prompt_for_provider_token(
             gateway,
@@ -580,17 +591,23 @@ def _configure_setup(
             else:
                 model_id = selected
         gateway.connect_model(connection_id, model_id)
-    except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
+    except (
+        ActionSettingsError,
+        ModelArtifactError,
+        ModelCatalogError,
+        ModelRepositoryError,
+        ModelSettingsError,
+        ModelSnapshotError,
+    ) as error:
         if gateway is not None:
             gateway.stop()
         _restore_setup_file(project, snapshot)
         if source == "local":
-            print("Setup did not find a usable local model service.")
+            print("Setup did not prepare a usable local model.")
             print(f"Details: {error}")
             print(
-                "Start an existing OpenAI-compatible service, or run "
-                "`heartwood models artifacts` and "
-                "`heartwood models download <model-id>`."
+                "Run `heartwood setup` to choose a recommended model or Other Hugging Face "
+                "model, or start an existing OpenAI-compatible service."
             )
             print("Then run `heartwood launch`.")
         else:
@@ -603,6 +620,100 @@ def _configure_setup(
         raise
     print("Setup complete.")
     return 0, gateway
+
+
+def _configure_local_model(
+    gateway: SessionGateway,
+    *,
+    model_id: str | None,
+    non_interactive: bool,
+) -> None:
+    local_catalog = gateway.model_artifacts()
+    raw_recommendations = local_catalog.get("models", [])
+    recommendations = (
+        [
+            item
+            for item in raw_recommendations
+            if isinstance(item, dict) and item.get("available") is True
+        ]
+        if isinstance(raw_recommendations, list)
+        else []
+    )
+    service_models: list[str] = []
+    try:
+        service_catalog = gateway.discover_models("local", refresh=True)
+    except ModelCatalogError:
+        pass
+    else:
+        raw_service_models = service_catalog.get("models", [])
+        if isinstance(raw_service_models, list):
+            service_models = [
+                str(item["model_id"])
+                for item in raw_service_models
+                if isinstance(item, dict)
+                and isinstance(item.get("model_id"), str)
+                and item.get("availability") != "unsupported"
+            ]
+
+    if model_id is None:
+        print("\nRecommended models:")
+        choices: list[tuple[str, str]] = []
+        for item in recommendations:
+            recommendation_id = str(item.get("model_id"))
+            label = str(item.get("label"))
+            runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
+            choices.append((recommendation_id, f"{label} ({runtime})"))
+        choices.append(("other", "Other Hugging Face model"))
+        choices.extend((model, f"{model} (already running)") for model in service_models)
+        for index, (_value, label) in enumerate(choices, start=1):
+            print(f"  {index}. {label}")
+        try:
+            selected = input("Select a model by number or enter owner/model: ").strip()
+        except EOFError as error:
+            raise ModelRepositoryError(
+                "local model selection was cancelled because input closed"
+            ) from error
+        if selected.isdigit() and 1 <= int(selected) <= len(choices):
+            model_id = choices[int(selected) - 1][0]
+        else:
+            model_id = selected
+        if model_id == "other":
+            try:
+                model_id = input("Hugging Face model (owner/model): ").strip()
+            except EOFError as error:
+                raise ModelRepositoryError(
+                    "local model selection was cancelled because input closed"
+                ) from error
+    if not model_id.strip():
+        raise ModelRepositoryError("a local model must be selected")
+
+    recommended_ids = {
+        str(item.get("model_id")): item for item in recommendations if item.get("model_id")
+    }
+    if model_id in recommended_ids:
+        item = recommended_ids[model_id]
+        print("\nSelected local model")
+        print(f"  {item.get('label')}")
+        if resources := item.get("recommended_resource_envelope"):
+            print(f"  {resources}")
+        print("Downloading and verifying the model. Large models may take several minutes.")
+        gateway.download_local_model_now(model_id)
+        return
+    if model_id in service_models:
+        gateway.connect_model("local", model_id)
+        return
+    if "/" in model_id:
+        plan = gateway.inspect_model_repository(model_id)
+        print()
+        print(_format_model_repository(plan))
+        print("\nDownloading and verifying the model. Large models may take several minutes.")
+        gateway.download_custom_local_model_now(model_id)
+        return
+    qualifier = " in non-interactive setup" if non_interactive else ""
+    raise ModelRepositoryError(
+        f"unknown local model{qualifier}: {model_id}; choose a recommended id, "
+        "an owner/model identifier, or a model reported by the local service"
+    )
 
 
 def _prompt_for_provider_token(
@@ -665,8 +776,18 @@ def _handle_models(
         if command == "list":
             print(_format_model_settings(gateway.model_settings()))
             return 0
-        if command == "artifacts":
+        if command == "local":
             print(_format_model_artifacts(gateway.model_artifacts()))
+            return 0
+        if command == "inspect":
+            print(
+                _format_model_repository(
+                    gateway.inspect_model_repository(
+                        args.repository,
+                        revision=args.revision,
+                    )
+                )
+            )
             return 0
         if command == "refresh":
             catalog = gateway.discover_models(
@@ -723,11 +844,25 @@ def _handle_models(
             print(_format_model_settings(gateway.remove_model_profile(args.profile_id)))
             return 0
         if command == "download":
-            path = gateway.download_local_model_now(args.model_id)
+            if "/" not in args.model:
+                if args.revision is not None:
+                    parser.error("--revision requires a Hugging Face owner/model identifier")
+                path = gateway.download_local_model_now(args.model)
+            else:
+                path = gateway.download_custom_local_model_now(
+                    args.model,
+                    revision=args.revision,
+                )
             print(f"Local model: {path}")
             print("Run `heartwood launch` to start the model and open Heartwood.")
             return 0
-    except (ModelArtifactError, ModelCatalogError, ModelSettingsError, ModelSnapshotError) as error:
+    except (
+        ModelArtifactError,
+        ModelCatalogError,
+        ModelRepositoryError,
+        ModelSettingsError,
+        ModelSnapshotError,
+    ) as error:
         parser.error(str(error))
     parser.parse_args(["models", "--help"])
     return 0
@@ -833,25 +968,63 @@ def _format_model_validation(validation: dict[str, object]) -> str:
 
 
 def _format_model_artifacts(catalog: dict[str, object]) -> str:
-    lines = ["Heartwood local-model artifacts", ""]
-    artifacts = catalog.get("artifacts", [])
-    if isinstance(artifacts, list):
-        for item in artifacts:
+    lines = ["Heartwood local models", ""]
+    models = catalog.get("models", [])
+    if isinstance(models, list):
+        for item in models:
             if not isinstance(item, dict):
                 continue
-            size = item.get("artifact_size_bytes")
+            size = item.get("size_bytes")
             size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
-            lines.append(f"{item.get('artifact_id')}  {size_gib:.2f} GiB")
-            lines.append(f"    {item.get('purpose')}")
-    snapshots = catalog.get("snapshots", [])
-    if isinstance(snapshots, list):
-        for item in snapshots:
-            if not isinstance(item, dict):
-                continue
-            size = item.get("expected_size_bytes")
-            size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
-            lines.append(f"{item.get('snapshot_id')}  {size_gib:.2f} GiB")
-            lines.append(f"    {item.get('purpose')}")
+            runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
+            review = (
+                "Recommended" if item.get("catalog_source") == "recommended" else "User selected"
+            )
+            lines.append(f"{item.get('model_id')}  {runtime}  {size_gib:.2f} GiB  {review}")
+            lines.append(f"    {item.get('label')}: {item.get('purpose')}")
+            lines.append(f"    {item.get('availability_reason')}")
+            resources = item.get("recommended_resource_envelope")
+            if isinstance(resources, str):
+                lines.append(f"    {resources}")
+    lines.extend(
+        (
+            "",
+            "Other Hugging Face model:",
+            "  heartwood models inspect <owner/model>",
+            "  heartwood models download <owner/model>",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _format_model_repository(inspection: dict[str, object]) -> str:
+    model = inspection.get("model", {})
+    if not isinstance(model, dict):
+        return "Hugging Face model\n\nHeartwood returned an invalid model plan."
+    size = model.get("size_bytes")
+    size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
+    runtime = "CPU" if model.get("runtime") == "llama-cpp" else "NVIDIA GPU"
+    lines = [
+        "Heartwood model plan",
+        "",
+        f"Model: {model.get('label')}",
+        f"Repository: {model.get('source_repository')}",
+        f"Revision: {model.get('source_revision')}",
+        f"Runtime: {runtime}",
+        f"Download: {size_gib:.2f} GiB",
+        f"Selection: {inspection.get('selection_reason')}",
+        f"License: {model.get('license_posture')}",
+        "",
+        str(model.get("minimum_resource_envelope") or "Resource estimate unavailable."),
+        str(model.get("recommended_resource_envelope") or ""),
+    ]
+    lines.extend(
+        (
+            "",
+            "These models are user selected. Heartwood verifies source integrity but does not "
+            "review capability, license, or suitability.",
+        )
+    )
     return "\n".join(lines)
 
 

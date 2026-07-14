@@ -10,17 +10,20 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from heartwood.gateway import (
+    LocalModelChoice,
+    LocalModelDownloadPlan,
     ModelArtifact,
     ModelArtifactCatalog,
     ModelCatalogService,
+    ModelRepositoryError,
     ModelSnapshot,
-    ModelSnapshotError,
     ProjectContext,
     ProviderModel,
     RestGateway,
@@ -455,6 +458,55 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     }
 
 
+def test_local_model_availability_reflects_installed_runtime_executables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    real_is_file = Path.is_file
+
+    def without_packaged_runtimes(path: Path) -> bool:
+        if path in {
+            Path("/opt/heartwood-vllm/bin/vllm"),
+            Path("/opt/llama.cpp/llama-server"),
+        }:
+            return False
+        return real_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", without_packaged_runtimes)
+    monkeypatch.setattr("heartwood.gateway._gateway.shutil.which", lambda *_args, **_kwargs: None)
+
+    unavailable = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    assert not any(model["available"] for model in unavailable)
+    rejected = RestGateway(gateway).handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/downloads",
+            body=json.dumps({"model_id": "qwen25-7b-instruct-q4_k_m"}),
+        )
+    )
+    assert rejected.status_code == 422
+    assert "portable CPU runtime" in str(rejected.body["error"])
+
+    monkeypatch.setattr(
+        "heartwood.gateway._gateway.shutil.which",
+        lambda executable, **_kwargs: (
+            "/runtime/llama-server" if executable == "llama-server" else None
+        ),
+    )
+    gateway.env["PATH"] = "/runtime"
+    available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    assert all(model["available"] is (model["runtime"] == "llama-cpp") for model in available)
+
+    monkeypatch.setattr(
+        "heartwood.gateway._gateway.shutil.which",
+        lambda executable, **_kwargs: f"/runtime/{executable}",
+    )
+    gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
+    fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    assert all(model["available"] for model in fully_available)
+
+
 def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) -> None:
     service = ModelCatalogService(
         openai_lister=lambda _connection, _api_key: (ProviderModel("local-coder", "Local Coder"),),
@@ -624,11 +676,133 @@ def test_rest_starts_local_model_download_and_validates_payloads(
     )
 
 
-def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interface(
+def test_rest_plans_and_starts_automatic_repository_downloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+    plan = {
+        "model": {"model_id": "hf-model"},
+        "selection_reason": "Selected automatically",
+    }
+    monkeypatch.setattr(gateway, "inspect_model_repository", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(
+        gateway,
+        "download_custom_local_model",
+        lambda repository, **_kwargs: {
+            "model_id": f"download-{repository.replace('/', '-')}",
+            "status": "downloading",
+            "bytes_downloaded": 0,
+            "bytes_total": 1,
+        },
+    )
+
+    inspected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/repository",
+            body=json.dumps({"repository": "example/model"}),
+        )
+    )
+    downloaded = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/downloads/custom",
+            body=json.dumps({"repository": "example/model", "revision": "1" * 40}),
+        )
+    )
+
+    assert inspected.status_code == 200
+    assert inspected.body["selection_reason"] == "Selected automatically"
+    assert downloaded.status_code == 202
+    assert downloaded.body["model_id"] == "download-example-model"
+    assert (
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/downloads/custom",
+                body=json.dumps({"repository": "example/model", "runtime": "vllm"}),
+            )
+        ).status_code
+        == 422
+    )
+
+
+def test_user_selected_model_plan_persists_across_gateway_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    choice = LocalModelChoice(
+        model_id="hf-research-model-123456789abc",
+        label="Research Model Q4_K_M",
+        purpose="User-selected Hugging Face model.",
+        runtime="llama-cpp",
+        source_repository="example/research-model-gguf",
+        source_revision="1" * 40,
+        source_path="model-q4_k_m.gguf",
+        size_bytes=7,
+        minimum_free_bytes=7,
+        license_posture="Source model card reports apache-2.0.",
+        catalog_source="user-selected",
+        artifact_sha256="a" * 64,
+        minimum_resource_envelope="Estimated minimum resources",
+        recommended_resource_envelope="Recommended resources",
+    )
+
+    @dataclass
+    class Repository:
+        calls: int = 0
+
+        def plan(self, *_args: object, **_kwargs: object) -> LocalModelDownloadPlan:
+            self.calls += 1
+            return LocalModelDownloadPlan(choice, "Selected automatically")
+
+    repository = Repository()
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        model_repository=cast(Any, repository),
+    )
+
+    def download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+        destination = cache_dir / artifact.artifact_id / artifact.source_path
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"content")
+        return destination
+
+    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", download)
+
+    plan = gateway.inspect_model_repository("example/research-model-gguf")
+    path = gateway.download_custom_local_model_now(
+        choice.source_repository,
+        revision=choice.source_revision,
+    )
+
+    assert repository.calls == 1
+    model = cast(dict[str, object], plan["model"])
+    assert model["runtime"] == "llama-cpp"
+    assert path.is_file()
+    restarted = _gateway(tmp_path)
+    catalog = restarted.model_artifacts()
+    models = cast(list[dict[str, object]], catalog["models"])
+    selected = next(model for model in models if model["model_id"] == choice.model_id)
+    assert selected["source_repository"] == choice.source_repository
+    assert selected["catalog_source"] == "user-selected"
+    assert selected["license_posture"] == choice.license_posture
+    assert selected["minimum_resource_envelope"] == choice.minimum_resource_envelope
+    assert selected["recommended_resource_envelope"] == choice.recommended_resource_envelope
+    assert selected["artifact_sha256"] == choice.artifact_sha256
+    assert restarted.config_store.load().local_model is not None
+
+
+def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_interface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
     observed: list[tuple[str, str, Path]] = []
 
     def artifact_download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
@@ -667,7 +841,7 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
     restarted = _gateway(tmp_path)
     assert restarted.model_settings()["active_profile"] == "local"
     assert restarted.project_readiness()["state"] == "compute-required"
-    with pytest.raises(ModelSnapshotError, match="unknown reviewed local model: missing"):
+    with pytest.raises(ModelRepositoryError, match="unknown recommended local model: missing"):
         gateway.download_local_model_now("missing")
 
 
@@ -676,6 +850,7 @@ def test_gateway_does_not_mask_unexpected_artifact_catalog_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _gateway(tmp_path / "sessions")
+    monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
 
     def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:
         raise ValueError("artifact catalog validation failed")

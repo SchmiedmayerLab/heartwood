@@ -117,7 +117,12 @@ test("supports the researcher conversation and session workflow", async ({
   ).toBeVisible();
   await approvalsTab.press("ArrowLeft");
   await expect(modelsTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("No reviewed models available")).toBeVisible();
+  await expect(page.getByText("No recommended models available")).toBeVisible();
+  await page.getByText("Other model", { exact: true }).click();
+  await page.getByLabel("Model repository").fill("example/research-model-gguf");
+  await page.getByRole("button", { name: "Check model" }).click();
+  await expect(page.getByText("Research Model Q4_K_M")).toBeVisible();
+  await expect(page.getByText(/balanced single-file GGUF/u)).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeHidden();
   await expect(modelPolicyButton).toBeFocused();
@@ -332,6 +337,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       snapshot_schema_version: "heartwood.model-snapshot-catalog.v1",
       artifacts: [],
       snapshots: [],
+      models: [],
       downloads: [],
     }),
   );
@@ -349,6 +355,32 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     };
     await json(route, modelSettings);
   });
+  await page.route("**/settings/models/repository", (route) =>
+    json(route, {
+      model: {
+        model_id: "hf-research-model-123456789abc",
+        label: "Research Model Q4_K_M",
+        purpose: "User-selected Hugging Face model.",
+        runtime: "llama-cpp",
+        source_repository: "example/research-model-gguf",
+        source_revision: "1".repeat(40),
+        source_path: "research-model-q4_k_m.gguf",
+        size_bytes: 4 * 1024 * 1024 * 1024,
+        minimum_free_bytes: 4 * 1024 * 1024 * 1024,
+        license_posture: "Source model card reports apache-2.0.",
+        catalog_source: "user-selected",
+        artifact_sha256: "a".repeat(64),
+        minimum_resource_envelope:
+          "Estimated minimum: 4 CPU cores and 12 GB RAM.",
+        recommended_resource_envelope:
+          "Recommended: 8 CPU cores and 16 GB RAM.",
+        available: true,
+        availability_reason: "Available on this deployment",
+      },
+      selection_reason:
+        "Selected a balanced single-file GGUF variant for the CPU runtime.",
+    }),
+  );
   await page.route("**/settings/models/catalog", (route) =>
     json(route, {
       schema_version: "heartwood.model-catalog.v1",

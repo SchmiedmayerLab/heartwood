@@ -10,7 +10,7 @@ moving_channel = "edge"
 commit_tag_pattern = "sha-<git-sha>"
 release_tag_pattern = "<semver>"
 latest_policy = "Publish latest only after the first stable release; do not use latest for unreleased main-branch builds."
-model_weight_policy = "No Heartwood image contains model weights. Download reviewed artifacts into mounted storage or connect a policy-authorized provider at runtime."
+model_weight_policy = "No Heartwood image contains model weights. Download a recommended or supported user-selected model into mounted storage, or connect a policy-authorized provider at runtime."
 
 [flavors.runtime]
 target = "runtime"

@@ -23,7 +23,7 @@ heartwood
 
 Heartwood does not search parent directories or require a workspace option. Starting it from a nested directory creates a separate project there. Run `pwd` first when the boundary matters.
 
-On the first run, Heartwood guides you to a model connection. A configured project opens the interactive conversation directly. A local model that needs managed compute directs you to `heartwood launch`.
+On the first run, Heartwood guides you to a model connection. Local setup offers a small recommendation list and an **Other Hugging Face model** choice; Heartwood determines the supported runtime and shows resource guidance. A configured project opens the interactive conversation directly. A downloaded local model that needs managed compute directs you to `heartwood launch`.
 
 Use the read-only diagnostic at any time:
 

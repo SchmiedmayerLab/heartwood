@@ -217,7 +217,8 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert "NotebookSession" in combined
     assert "jupyter_proxy_url(port=8767)" in combined
     assert "heartwood serve" in combined
-    assert "os.chdir(project_root)" in combined
+    assert "project_root = Path.cwd().resolve()" in combined
+    assert "os.chdir(project_root)" not in combined
     assert "--workspace" not in combined
     assert "HEARTWOOD_WORKSPACE" not in combined
     assert "session.detect()" in combined
@@ -252,7 +253,7 @@ def test_readme_and_model_guides_define_project_and_no_weight_runtime_paths() ->
     assert "Semantic Version tags" in container
     assert "HEARTWOOD_LOCAL_MODEL_PATH" not in container
     assert "deterministic loopback model fixture" in local
-    assert "reviewed download" in local
+    assert "recommended model" in local
     assert "one persistent project mount" in local
     assert "`run_capable_model` option" in local
     assert "`AlwaysConfirm`" in local

@@ -60,7 +60,9 @@ MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
         source_id="local",
         connection_id="local",
         label="On this device",
-        description="Use a reviewed download or an existing model service.",
+        description=(
+            "Use a recommended model, another supported Hugging Face model, or an existing service."
+        ),
     ),
     ModelSourceOption(
         source_id="openai",
@@ -460,7 +462,7 @@ def _carina_compute_checks(
     scratch_ready = bool(
         scratch_path and scratch_path.is_dir() and os.access(scratch_path, os.W_OK)
     )
-    gpu = _gpu_visible(env)
+    gpu = gpu_visible(env)
     return (
         (
             ReadinessCheck("slurm-allocation", "pass", "Active Slurm allocation detected"),
@@ -491,7 +493,8 @@ def _carina_compute_checks(
     )
 
 
-def _gpu_visible(env: Mapping[str, str]) -> bool:
+def gpu_visible(env: Mapping[str, str]) -> bool:
+    """Return whether the current process has evidence of an attached NVIDIA GPU."""
     visible = env.get("NVIDIA_VISIBLE_DEVICES") or env.get("CUDA_VISIBLE_DEVICES")
     configured = bool(visible and visible.lower() not in {"none", "void", "-1"})
     return configured or Path("/dev/nvidia0").exists()

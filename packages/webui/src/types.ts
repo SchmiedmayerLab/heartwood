@@ -289,6 +289,7 @@ export interface ModelArtifact {
   model_alias: string;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
+  recommended: boolean;
 }
 
 export interface ModelDownload {
@@ -298,6 +299,42 @@ export interface ModelDownload {
   bytes_total: number;
   path: string | null;
   error: string | null;
+}
+
+export type LocalModelRuntime = "llama-cpp" | "vllm";
+
+export interface LocalModelChoice {
+  model_id: string;
+  label: string;
+  purpose: string;
+  runtime: LocalModelRuntime;
+  source_repository: string;
+  source_revision: string;
+  source_path: string | null;
+  size_bytes: number;
+  minimum_free_bytes: number;
+  license_posture: string;
+  catalog_source: "recommended" | "user-selected";
+  artifact_sha256: string | null;
+  minimum_resource_envelope: string | null;
+  recommended_resource_envelope: string | null;
+  available: boolean;
+  availability_reason: string;
+}
+
+export interface ModelRepositoryPlan {
+  model: LocalModelChoice;
+  selection_reason: string;
+}
+
+export interface ModelRepositoryRequest {
+  repository: string;
+  revision?: string;
+}
+
+export interface CustomLocalModelDownloadRequest {
+  repository: string;
+  revision?: string;
 }
 
 export interface ModelSnapshot {
@@ -310,6 +347,9 @@ export interface ModelSnapshot {
   minimum_free_bytes: number;
   license_posture: string;
   model_alias: string;
+  minimum_resource_envelope: string | null;
+  recommended_resource_envelope: string | null;
+  recommended: boolean;
 }
 
 export interface ModelArtifacts {
@@ -317,6 +357,7 @@ export interface ModelArtifacts {
   snapshot_schema_version: "heartwood.model-snapshot-catalog.v1";
   artifacts: ModelArtifact[];
   snapshots: ModelSnapshot[];
+  models: LocalModelChoice[];
   downloads: ModelDownload[];
 }
 

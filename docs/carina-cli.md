@@ -19,7 +19,7 @@ Heartwood uses two locations with separate purposes:
 
 ## Prepare Private Storage
 
-Choose a writable group project with sufficient quota. The reviewed GPU snapshot is approximately 15.2 GB, and Carina also needs enough job-local scratch to stage it.
+Choose a writable group project with sufficient quota. The current recommended GPU snapshot is approximately 15.2 GB, and Carina also needs enough job-local scratch to stage it. Another model may require substantially different storage, RAM, or GPU memory; inspect its Heartwood plan before downloading it.
 
 ```bash
 INSTALL_ROOT=/projects/<group>/<user>/heartwood-installation
@@ -58,16 +58,25 @@ heartwood doctor
 
 Before setup, `heartwood doctor` reports `setup-required`. This is expected.
 
-## Download the Reviewed GPU Model
+## Prepare a Local GPU Model
 
-From the synthetic project directory:
+From the synthetic project directory, run `heartwood`, choose **On this device**, and select the recommended GPU model. The same operation is available as explicit commands:
 
 ```bash
-heartwood models artifacts
+heartwood models local
 heartwood models download qwen25-7b-instruct-vllm
 ```
 
 Heartwood downloads the pinned Hugging Face snapshot into `.heartwood/models/`, displays transfer progress, removes transient transfer metadata, writes provenance and an exact `SHA256SUMS`, verifies every file, and saves the selected model in `.heartwood/config.toml`.
+
+To use another Hugging Face repository, inspect it first:
+
+```bash
+heartwood models inspect <owner/model>
+heartwood models download <owner/model>
+```
+
+Carina includes the vLLM runtime, so Heartwood accepts a standard repository snapshot with `config.json` and safetensors or PyTorch weights, resolves it to an immutable revision, and reports approximate download, disk, RAM, and GPU-memory requirements. Custom model code and unsupported formats fail before download and link to the issue chooser. A successful plan establishes packaging compatibility, not model quality, biomedical suitability, license approval, or authorization for Carina data.
 
 Review the project-local selection without requesting compute:
 
@@ -131,3 +140,5 @@ Heartwood stores only the selected alias and a non-secret credential binding. A 
 The Stanford service agreement, GenAI Evaluation Matrix, Data Risk Assessment, project authorization, and Carina controls determine whether a route may receive a particular data classification. A successful connection does not authorize agent tools or data export.
 
 See [Use Heartwood](using-heartwood.md) for terminal controls and [Platform Support](platform-support.md) for the distinction between CI validation, live validation, and institutional approval.
+
+Carina currently has no documented authenticated browser-proxy integration for Heartwood. Use the interactive terminal interface on Carina; the browser is the local and Terra presentation surface until a platform route is implemented and live-validated.

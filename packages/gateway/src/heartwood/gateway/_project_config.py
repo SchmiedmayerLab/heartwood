@@ -41,6 +41,9 @@ from heartwood.schemas import PolicyProfile
 
 _CONFIG_SCHEMA_VERSION = "heartwood.project-config.v1"
 _SAFE_SOURCE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SAFE_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_IMMUTABLE_REVISION = re.compile(r"^[0-9a-f]{7,64}$")
+_RESOLVED_REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 _TOP_LEVEL_FIELDS = {
     "action",
     "connections",
@@ -65,6 +68,17 @@ class LocalModelSelection:
     path: str
     runtime: str = "auto"
     model_id: str = "heartwood-local-model"
+    display_name: str | None = None
+    source_repository: str | None = None
+    source_revision: str | None = None
+    source_path: str | None = None
+    size_bytes: int | None = None
+    minimum_free_bytes: int | None = None
+    license_posture: str | None = None
+    artifact_sha256: str | None = None
+    minimum_resource_envelope: str | None = None
+    recommended_resource_envelope: str | None = None
+    catalog_source: str = "recommended"
 
     def validate(self, project: ProjectContext) -> None:
         """Validate identifiers and keep the selected artifact under the model root."""
@@ -72,6 +86,70 @@ class LocalModelSelection:
             raise ProjectConfigError("local model identifiers must not be empty")
         if self.runtime not in {"auto", "llama-cpp", "vllm"}:
             raise ProjectConfigError(f"unsupported local model runtime: {self.runtime}")
+        if self.catalog_source not in {"recommended", "user-selected"}:
+            raise ProjectConfigError("unsupported local model catalog source")
+        if self.display_name is not None and not self.display_name.strip():
+            raise ProjectConfigError("local model display_name must not be empty")
+        if (
+            self.source_repository is not None
+            and _SAFE_REPOSITORY.fullmatch(self.source_repository) is None
+        ):
+            raise ProjectConfigError("local model source_repository must use owner/model format")
+        if (
+            self.source_revision is not None
+            and _IMMUTABLE_REVISION.fullmatch(self.source_revision) is None
+        ):
+            raise ProjectConfigError("local model source_revision must be immutable")
+        if (
+            self.catalog_source == "user-selected"
+            and self.source_revision is not None
+            and _RESOLVED_REVISION.fullmatch(self.source_revision) is None
+        ):
+            raise ProjectConfigError(
+                "user-selected local model source_revision must be a resolved commit"
+            )
+        if self.source_path is not None:
+            source_path = Path(self.source_path)
+            if source_path.is_absolute() or ".." in source_path.parts:
+                raise ProjectConfigError("local model source_path must be repository-relative")
+        if self.size_bytes is not None and self.size_bytes <= 0:
+            raise ProjectConfigError("local model size_bytes must be positive")
+        if self.minimum_free_bytes is not None and (
+            self.size_bytes is None or self.minimum_free_bytes < self.size_bytes
+        ):
+            raise ProjectConfigError("local model minimum_free_bytes must cover its size")
+        for field_name, value in (
+            ("license_posture", self.license_posture),
+            ("minimum_resource_envelope", self.minimum_resource_envelope),
+            ("recommended_resource_envelope", self.recommended_resource_envelope),
+        ):
+            if value is not None and not value.strip():
+                raise ProjectConfigError(f"local model {field_name} must not be empty")
+        if (
+            self.artifact_sha256 is not None
+            and re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256) is None
+        ):
+            raise ProjectConfigError("local model artifact_sha256 must be a SHA-256 digest")
+        if self.catalog_source == "user-selected" and any(
+            value is None
+            for value in (
+                self.display_name,
+                self.source_repository,
+                self.source_revision,
+                self.size_bytes,
+                self.minimum_free_bytes,
+                self.license_posture,
+                self.minimum_resource_envelope,
+                self.recommended_resource_envelope,
+            )
+        ):
+            raise ProjectConfigError("user-selected local model provenance is incomplete")
+        if (
+            self.catalog_source == "user-selected"
+            and self.source_path is not None
+            and self.artifact_sha256 is None
+        ):
+            raise ProjectConfigError("user-selected GGUF model integrity metadata is incomplete")
         configured = Path(self.path)
         if configured.is_absolute():
             raise ProjectConfigError("local model path must be relative to the project")
@@ -203,6 +281,17 @@ class ProjectConfigStore:
         path: Path,
         runtime: str = "auto",
         model_id: str = "heartwood-local-model",
+        display_name: str | None = None,
+        source_repository: str | None = None,
+        source_revision: str | None = None,
+        source_path: str | None = None,
+        size_bytes: int | None = None,
+        minimum_free_bytes: int | None = None,
+        license_posture: str | None = None,
+        artifact_sha256: str | None = None,
+        minimum_resource_envelope: str | None = None,
+        recommended_resource_envelope: str | None = None,
+        catalog_source: str = "recommended",
         settings: ModelSettings | None = None,
     ) -> ProjectConfig:
         """Persist one verified project-local model and optional active profile."""
@@ -214,6 +303,17 @@ class ProjectConfigStore:
             path=str(resolved.relative_to(self.project.root)),
             runtime=runtime,
             model_id=model_id,
+            display_name=display_name,
+            source_repository=source_repository,
+            source_revision=source_revision,
+            source_path=source_path,
+            size_bytes=size_bytes,
+            minimum_free_bytes=minimum_free_bytes,
+            license_posture=license_posture,
+            artifact_sha256=artifact_sha256,
+            minimum_resource_envelope=minimum_resource_envelope,
+            recommended_resource_envelope=recommended_resource_envelope,
+            catalog_source=catalog_source,
         )
         updated = replace(self.load(), model_source="local", local_model=selection)
         if settings is not None:
@@ -347,14 +447,33 @@ def _config_mapping(config: ProjectConfig) -> dict[str, object]:
             raise ProjectConfigError("invalid generated model configuration")
         models["active_profile"] = config.model_settings.active_profile
     if config.local_model is not None:
-        result["local_model"] = asdict(config.local_model)
+        result["local_model"] = _without_none(asdict(config.local_model))
     return result
 
 
 def _local_model_from_mapping(value: object) -> LocalModelSelection:
     if not isinstance(value, dict):
         raise ProjectConfigError("local_model must be a table")
-    unknown = sorted(set(value) - {"artifact_id", "model_id", "path", "runtime"})
+    unknown = sorted(
+        set(value)
+        - {
+            "artifact_id",
+            "artifact_sha256",
+            "display_name",
+            "license_posture",
+            "minimum_free_bytes",
+            "minimum_resource_envelope",
+            "model_id",
+            "path",
+            "recommended_resource_envelope",
+            "catalog_source",
+            "runtime",
+            "size_bytes",
+            "source_path",
+            "source_repository",
+            "source_revision",
+        }
+    )
     if unknown:
         raise ProjectConfigError(f"local_model contains unsupported fields: {', '.join(unknown)}")
     return LocalModelSelection(
@@ -362,6 +481,24 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
         path=_required_string(value, "path"),
         runtime=_required_string(value, "runtime"),
         model_id=_required_string(value, "model_id"),
+        display_name=_optional_string(value.get("display_name"), "display_name"),
+        source_repository=_optional_string(value.get("source_repository"), "source_repository"),
+        source_revision=_optional_string(value.get("source_revision"), "source_revision"),
+        source_path=_optional_string(value.get("source_path"), "source_path"),
+        size_bytes=_optional_positive_int(value.get("size_bytes"), "size_bytes"),
+        minimum_free_bytes=_optional_positive_int(
+            value.get("minimum_free_bytes"), "minimum_free_bytes"
+        ),
+        license_posture=_optional_string(value.get("license_posture"), "license_posture"),
+        artifact_sha256=_optional_string(value.get("artifact_sha256"), "artifact_sha256"),
+        minimum_resource_envelope=_optional_string(
+            value.get("minimum_resource_envelope"), "minimum_resource_envelope"
+        ),
+        recommended_resource_envelope=_optional_string(
+            value.get("recommended_resource_envelope"), "recommended_resource_envelope"
+        ),
+        catalog_source=_optional_string(value.get("catalog_source"), "catalog_source")
+        or "recommended",
     )
 
 
@@ -381,4 +518,12 @@ def _optional_string(value: object, name: str) -> str | None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise ProjectConfigError(f"{name} must be a non-empty string when provided")
+    return value
+
+
+def _optional_positive_int(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ProjectConfigError(f"{name} must be a positive integer when provided")
     return value

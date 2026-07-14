@@ -11,6 +11,7 @@ import type {
   ActionSettings,
   AuditExport,
   CommandKind,
+  CustomLocalModelDownloadRequest,
   JsonValue,
   ModelCatalog,
   ModelCatalogRequest,
@@ -18,6 +19,8 @@ import type {
   ModelArtifacts,
   ModelDownload,
   ModelProfile,
+  ModelRepositoryPlan,
+  ModelRepositoryRequest,
   ModelSource,
   ModelSettings,
   ModelValidation,
@@ -66,7 +69,13 @@ export interface HeartwoodClient {
   removeModelProfile(profileId: string): Promise<ModelSettings>;
   validateModelProfile(profileId?: string): Promise<ModelValidation>;
   getModelArtifacts(): Promise<ModelArtifacts>;
+  inspectModelRepository(
+    request: ModelRepositoryRequest,
+  ): Promise<ModelRepositoryPlan>;
   downloadLocalModel(modelId: string): Promise<ModelDownload>;
+  downloadCustomLocalModel(
+    request: CustomLocalModelDownloadRequest,
+  ): Promise<ModelDownload>;
   getSkillSettings(): Promise<SkillSettings>;
   inspectSkill(source: string): Promise<SkillSummary>;
   installSkill(source: string): Promise<SkillSettings>;
@@ -260,10 +269,34 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
+  async inspectModelRepository(
+    request: ModelRepositoryRequest,
+  ): Promise<ModelRepositoryPlan> {
+    return parseJsonResponse<ModelRepositoryPlan>(
+      await fetch(this.url("/settings/models/repository"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
   async downloadLocalModel(modelId: string): Promise<ModelDownload> {
     return parseJsonResponse<ModelDownload>(
       await fetch(this.url("/settings/models/downloads"), {
         body: JSON.stringify({ model_id: modelId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async downloadCustomLocalModel(
+    request: CustomLocalModelDownloadRequest,
+  ): Promise<ModelDownload> {
+    return parseJsonResponse<ModelDownload>(
+      await fetch(this.url("/settings/models/downloads/custom"), {
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),

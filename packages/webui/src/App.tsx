@@ -752,7 +752,14 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               )
               .catch((caught: unknown) => setError(errorMessage(caught)))
           }
+          onDownloadCustom={async (request) => {
+            await resolvedClient.downloadCustomLocalModel(request);
+            setModelArtifacts(await resolvedClient.getModelArtifacts());
+          }}
           onExportAudit={() => void exportAudit()}
+          onInspectModelRepository={(request) =>
+            resolvedClient.inspectModelRepository(request)
+          }
           onInspectSkill={() =>
             void resolvedClient
               .inspectSkill(skillSource.trim())

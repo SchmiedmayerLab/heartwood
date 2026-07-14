@@ -147,6 +147,39 @@ def test_project_config_selects_local_model_and_profile_atomically(tmp_path: Pat
     assert store.load() == configured
 
 
+def test_project_config_persists_user_selected_model_provenance(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    model = project.models_dir / "hf-model" / "model-q4_k_m.gguf"
+    model.parent.mkdir()
+    model.write_bytes(b"synthetic")
+    store = ProjectConfigStore(project, _default_config(project))
+
+    configured = store.select_local_model(
+        artifact_id="hf-model",
+        path=model,
+        runtime="llama-cpp",
+        display_name="Research Model Q4_K_M",
+        source_repository="example/research-model-gguf",
+        source_revision="1" * 40,
+        source_path="model-q4_k_m.gguf",
+        size_bytes=9,
+        minimum_free_bytes=9,
+        license_posture="Source model card reports apache-2.0.",
+        artifact_sha256="a" * 64,
+        minimum_resource_envelope="Estimated minimum resources",
+        recommended_resource_envelope="Recommended resources",
+        catalog_source="user-selected",
+    )
+
+    assert configured.local_model is not None
+    assert configured.local_model.catalog_source == "user-selected"
+    assert configured.local_model.source_repository == "example/research-model-gguf"
+    assert configured.local_model.artifact_sha256 == "a" * 64
+    assert configured.local_model.recommended_resource_envelope == "Recommended resources"
+    assert store.load().local_model == configured.local_model
+
+
 def test_project_config_rejects_absolute_local_model_path(tmp_path: Path) -> None:
     project = ProjectContext(tmp_path)
     config = _default_config(project)

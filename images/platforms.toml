@@ -66,11 +66,11 @@ JUPYTER_PATH = ["/opt/conda/share/jupyter"]
 
 [[platforms.terra.required_evidence]]
 name = "local-ci-smoke"
-description = "Build the no-weight Terra CI image through the production platform Dockerfile, verify the inherited Jupyter contract and both notebook launch routes, and run the OpenHands loopback smoke with Docker networking disabled."
+description = "Build the no-weight Terra CI image through the production platform Dockerfile; verify arbitrary current-directory project isolation and restart persistence; exercise the inherited Jupyter contract, Heartwood UI, readiness API, and both notebook proxy routes; and run the OpenHands loopback smoke with Docker networking disabled."
 
 [[platforms.terra.required_evidence]]
 name = "main-publish-real-terra"
-description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run Jupyter, Leonardo, OpenHands, and mounted local-inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."
+description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run current-directory persistence, Jupyter, Leonardo, Heartwood proxy, OpenHands, and mounted local-inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."
 
 [[platforms.terra.required_evidence]]
 name = "live-terra-smoke"

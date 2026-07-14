@@ -28,20 +28,22 @@ Open `http://127.0.0.1:8767/`. The [container guide](container-images.md) provid
 When a project has no active model, Heartwood opens **Set up Heartwood** automatically. The **This project** summary shows the same readiness result as `heartwood doctor`:
 
 - **Setup needed** means a model or credential still needs to be selected.
-- **Model runtime needed** means a reviewed local model is ready but its server has not started.
+- **Model runtime needed** means a verified local model is ready but its server has not started.
 - **Ready** means the selected model, credential binding, route policy, and action settings agree.
 - **Needs attention** means the expanded project checks identify configuration that must be corrected.
 
 Choose where the model will run, then choose one of the models reported by that source:
 
-- **On this device** connects to a running local service or downloads a reviewed CPU or NVIDIA GPU model into this project.
+- **On this device** connects to a running local service, offers a short list of recommended models, or prepares another supported Hugging Face model from its `owner/model` identifier.
 - **Research environment** shows connections supplied by the platform, including every model available to the current identity.
 - **OpenAI** and **Anthropic** ask for a token for the current server process and request the model list directly from the provider.
 - **Custom API** connects to another service that implements the OpenAI API format.
 
 Heartwood stores the selected model and a non-secret credential binding. A token entered in the browser remains only in the running gateway process. The project policy must authorize both model discovery and model use before a connection succeeds. Switching sources keeps saved profiles but clears the active choice until a model from the new source is selected. See [Choose a Model](model-connections.md) for deployment and credential details.
 
-Reviewed local models show their expected storage and compute requirement. The browser reports download progress, verifies the completed content, and selects the standard local profile. When the status changes to **Model runtime needed**, stop a standalone `heartwood serve` process and start the model and browser together:
+Under **Local models**, each recommendation shows whether it uses CPU or an NVIDIA GPU, its download size, and approximate resource guidance. Expand **Other model** to enter a Hugging Face identifier. Heartwood inspects the repository without downloading it, selects a supported representation for the available runtime, and displays the immutable source, expected size, compute guidance, and source-reported license posture. Unsupported or ambiguous repositories return a not-yet-supported message and a link to report the model.
+
+Selecting **Download model** starts a project-local transfer. The browser reports progress, verifies the completed content, persists the same selection used by the CLI, and then reports **Model runtime needed**. Stop a standalone `heartwood serve` process and start the model and browser together:
 
 ```bash
 heartwood launch --web

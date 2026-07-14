@@ -294,14 +294,22 @@ jobs:
           --entrypoint bash
           "${CANDIDATE_REFERENCE}"
           /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
+      - name: Run staged Terra current-directory persistence smoke
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+        run: >-
+          bash images/platform/scripts/terra_project_persistence_smoke.sh
+          "${CANDIDATE_REFERENCE}"
       - name: Run staged Terra OpenHands smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
           docker run --rm --platform linux/amd64 --network none
-          --workdir /opt/heartwood --entrypoint bash
+          --entrypoint bash
+          --env HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis
+          --env HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis
           "${CANDIDATE_REFERENCE}"
-          images/generic/scripts/offline_stack_smoke.sh
+          /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
       - name: Download and verify CI-only model fixture
         run: |
           mkdir -p /tmp/heartwood-model

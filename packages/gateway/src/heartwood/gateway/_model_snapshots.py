@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Reviewed multi-file model snapshots for native inference runtimes."""
+"""Recommended multi-file model snapshots for native inference runtimes."""
 
 from __future__ import annotations
 
@@ -62,6 +62,9 @@ class ModelSnapshot:
     minimum_free_bytes: int
     license_posture: str
     model_alias: str
+    minimum_resource_envelope: str | None = None
+    recommended_resource_envelope: str | None = None
+    recommended: bool = False
 
     def validate(self) -> None:
         """Validate identity, source, and storage metadata."""
@@ -89,13 +92,13 @@ class ModelSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class ModelSnapshotCatalog:
-    """Reviewed multi-file snapshots keyed by stable id."""
+    """Recommended multi-file snapshots keyed by stable id."""
 
     schema_version: str
     snapshots: tuple[ModelSnapshot, ...]
 
     def snapshot(self, snapshot_id: str) -> ModelSnapshot:
-        """Return one reviewed snapshot."""
+        """Return one snapshot from the repository recommendation catalog."""
         for snapshot in self.snapshots:
             if snapshot.snapshot_id == snapshot_id:
                 return snapshot
@@ -110,7 +113,7 @@ class ModelSnapshotCatalog:
 
 
 def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
-    """Load reviewed snapshot metadata from the repository catalog."""
+    """Load recommended snapshot metadata from the repository catalog."""
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
@@ -137,6 +140,9 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             minimum_free_bytes=_positive_int(item, "minimum_free_bytes"),
             license_posture=_string(item, "license_posture"),
             model_alias=_string(item, "model_alias"),
+            minimum_resource_envelope=_optional_string(item, "minimum_resource_envelope"),
+            recommended_resource_envelope=_optional_string(item, "recommended_resource_envelope"),
+            recommended=_optional_bool(item, "recommended", default=False),
         )
         snapshot.validate()
         snapshots.append(snapshot)
@@ -363,4 +369,18 @@ def _positive_int(data: dict[str, Any], key: str) -> int:
     value = data.get(key)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ModelSnapshotError(f"{key} must be a positive integer")
+    return value
+
+
+def _optional_string(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ModelSnapshotError(f"{key} must be a non-empty string when provided")
+    return value
+
+
+def _optional_bool(data: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ModelSnapshotError(f"{key} must be a boolean")
     return value

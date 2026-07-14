@@ -969,6 +969,13 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.artifact-row strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .skill-row,
 .artifact-row,
 .profile-row {
@@ -1056,6 +1063,48 @@ summary:focus-visible {
   display: grid;
   gap: 13px;
   padding: 0 0 20px;
+}
+
+.local-model-form > button,
+.local-model-plan > button {
+  justify-self: start;
+}
+
+.local-model-plan {
+  display: grid;
+  gap: 5px;
+  padding: 12px 0 2px;
+  border-top: 1px solid #dce2dd;
+}
+
+.local-model-plan span,
+.local-model-plan small {
+  color: #68756d;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.model-plan-source {
+  margin: 2px 0;
+}
+
+.model-plan-source summary {
+  color: #536159;
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.model-plan-source > div {
+  display: grid;
+  gap: 3px;
+  padding: 6px 0 1px;
+}
+
+.local-model-form .connection-error a {
+  color: #7a2420;
+  font-size: 0.75rem;
+  font-weight: 650;
 }
 
 .advanced-section-content label,

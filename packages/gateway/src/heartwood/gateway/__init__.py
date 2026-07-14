@@ -18,6 +18,15 @@ from heartwood.gateway._action_settings import (
 )
 from heartwood.gateway._asgi import GatewayAsgiApp
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._local_models import (
+    HuggingFaceModelRepository,
+    LocalModelChoice,
+    LocalModelDownloadPlan,
+    LocalModelRuntime,
+    ModelRepositoryError,
+    ModelRepositoryInspection,
+    recommended_model_choices,
+)
 from heartwood.gateway._model_artifacts import (
     LocalModelDownloadManager,
     ModelArtifact,
@@ -100,7 +109,11 @@ __all__ = [
     "DeploymentReadiness",
     "GatewayAsgiApp",
     "GatewayEventStream",
+    "HuggingFaceModelRepository",
+    "LocalModelChoice",
     "LocalModelDownloadManager",
+    "LocalModelDownloadPlan",
+    "LocalModelRuntime",
     "LocalModelSelection",
     "ModelArtifact",
     "ModelArtifactCatalog",
@@ -113,6 +126,8 @@ __all__ = [
     "ModelDownload",
     "ModelPreset",
     "ModelProfile",
+    "ModelRepositoryError",
+    "ModelRepositoryInspection",
     "ModelSettings",
     "ModelSettingsError",
     "ModelSettingsStore",
@@ -153,5 +168,6 @@ __all__ = [
     "model_profile_from_preset",
     "model_settings_from_mapping",
     "persist_deployment_profile",
+    "recommended_model_choices",
     "verify_model_snapshot",
 ]

@@ -329,12 +329,13 @@ describe("GatewayClient", () => {
     );
   });
 
-  it("lists and starts reviewed model downloads", async () => {
+  it("lists and starts recommended model downloads", async () => {
     const artifacts = {
       schema_version: "heartwood.local-model-catalog.v1",
       snapshot_schema_version: "heartwood.model-snapshot-catalog.v1",
       artifacts: [],
       snapshots: [],
+      models: [],
       downloads: [],
     };
     const download = {
@@ -364,6 +365,70 @@ describe("GatewayClient", () => {
       "/proxy/8767/settings/models/downloads",
       expect.objectContaining({
         body: JSON.stringify({ model_id: "reviewed-model" }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("plans and starts a gateway-selected Hugging Face model download", async () => {
+    const plan = {
+      model: {
+        model_id: "hf-model-123456789abc",
+        label: "Model Q4_K_M",
+        purpose: "User-selected model",
+        runtime: "llama-cpp",
+        source_repository: "example/model-gguf",
+        source_revision: "1".repeat(40),
+        source_path: "model-q4_k_m.gguf",
+        size_bytes: 1024,
+        minimum_free_bytes: 1024,
+        license_posture: "Review source terms",
+        catalog_source: "user-selected",
+        artifact_sha256: "a".repeat(64),
+        minimum_resource_envelope: "Estimated minimum",
+        recommended_resource_envelope: "Recommended resources",
+        available: true,
+        availability_reason: "Available on this deployment",
+      },
+      selection_reason: "Selected a balanced GGUF model.",
+    };
+    const download = {
+      model_id: plan.model.model_id,
+      status: "downloading",
+      bytes_downloaded: 0,
+      bytes_total: 1024,
+      path: null,
+      error: null,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(download)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.inspectModelRepository({ repository: "example/model-gguf" });
+    await client.downloadCustomLocalModel({
+      repository: "example/model-gguf",
+      revision: "1".repeat(40),
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/repository",
+      expect.objectContaining({
+        body: JSON.stringify({ repository: "example/model-gguf" }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/downloads/custom",
+      expect.objectContaining({
+        body: JSON.stringify({
+          repository: "example/model-gguf",
+          revision: "1".repeat(40),
+        }),
         method: "POST",
       }),
     );

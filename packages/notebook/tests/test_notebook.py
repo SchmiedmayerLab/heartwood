@@ -46,6 +46,25 @@ class _CountingGateway:
         return SessionResult(events=())
 
 
+class _ModelGateway(_CountingGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inspected: tuple[str, str | None] | None = None
+        self.downloaded: tuple[str, str | None] | None = None
+
+    def inspect_model_repository(
+        self, repository: str, *, revision: str | None = None
+    ) -> dict[str, object]:
+        self.inspected = (repository, revision)
+        return {"model": {"source_repository": repository}, "selection_reason": "automatic"}
+
+    def download_custom_local_model(
+        self, repository: str, *, revision: str | None = None
+    ) -> dict[str, object]:
+        self.downloaded = (repository, revision)
+        return {"model_id": "hf-model", "status": "downloading"}
+
+
 def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path, "notebook-session")
 
@@ -163,6 +182,23 @@ def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -
         "llama-cpp-stories260k-ci",
         "qwen25-7b-instruct-q4_k_m",
     }.issubset(artifact_ids)
+
+
+def test_notebook_reuses_gateway_model_inspection_and_download_contract(tmp_path: Path) -> None:
+    gateway = _ModelGateway()
+    session = NotebookSession(
+        project=ProjectContext(tmp_path),
+        session_id="notebook-model-download",
+        gateway=cast(SessionGateway, gateway),
+    )
+
+    plan = session.inspect_model_repository("example/model", revision="main")
+    download = session.download_custom_local_model("example/model", revision="1" * 40)
+
+    assert gateway.inspected == ("example/model", "main")
+    assert gateway.downloaded == ("example/model", "1" * 40)
+    assert cast(dict[str, object], plan["model"])["source_repository"] == "example/model"
+    assert download["status"] == "downloading"
 
 
 def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Path) -> None:

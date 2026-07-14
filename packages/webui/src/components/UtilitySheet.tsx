@@ -40,6 +40,7 @@ import {
   Download,
   HardDrive,
   RotateCcw,
+  Search,
   Server,
   ShieldCheck,
   Trash2,
@@ -51,12 +52,16 @@ import type {
   ActionSettings,
   CredentialKind,
   CredentialStatus,
+  CustomLocalModelDownloadRequest,
+  LocalModelChoice,
   ModelArtifacts,
   ModelCatalog,
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelConnection,
   ModelProfile,
+  ModelRepositoryPlan,
+  ModelRepositoryRequest,
   ModelSource,
   ModelSettings,
   ModelValidation,
@@ -86,8 +91,12 @@ interface UtilitySheetProps {
   onConfigureModelSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscoverModels: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
   onDownload: (modelId: string) => void;
+  onDownloadCustom: (request: CustomLocalModelDownloadRequest) => Promise<void>;
   onExportAudit: () => void;
   onInspectSkill: () => void;
+  onInspectModelRepository: (
+    request: ModelRepositoryRequest,
+  ) => Promise<ModelRepositoryPlan>;
   onInstallSkill: () => void;
   onProfileDraft: (profile: ModelProfile) => void;
   onRefreshActivity: () => void;
@@ -280,7 +289,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
     onConnectModel,
     onConfigureModelSource,
     onDownload,
+    onDownloadCustom,
     onDiscoverModels,
+    onInspectModelRepository,
     onProfileDraft,
     onRefreshSettings,
     onRemoveProfile,
@@ -407,20 +418,30 @@ const SettingsContent = (props: UtilitySheetProps) => {
           : null}
 
           <section className="panel-section artifact-list">
-            <h3>On this device</h3>
+            <h3>Local models</h3>
             {artifacts && localModels.length ?
               localModels.map((model) => {
                 const download = artifacts.downloads.find(
-                  (item) => item.model_id === model.modelId,
+                  (item) => item.model_id === model.model_id,
                 );
                 return (
-                  <div className="artifact-row" key={model.modelId}>
+                  <div className="artifact-row" key={model.model_id}>
                     <div>
-                      <strong>{model.label}</strong>
+                      <strong>
+                        {model.label}
+                        {model.catalog_source === "recommended" ?
+                          <Badge variant="outline">Recommended</Badge>
+                        : null}
+                      </strong>
                       <span>
-                        {model.compute} · {formatBytes(model.size)}
+                        {localComputeLabel(model.runtime)} ·{" "}
+                        {formatBytes(model.size_bytes)}
                       </span>
                       <small>{model.purpose}</small>
+                      <small>{model.availability_reason}</small>
+                      {model.recommended_resource_envelope ?
+                        <small>{model.recommended_resource_envelope}</small>
+                      : null}
                       <ArtifactDownloadStatus
                         alias={model.label}
                         download={download}
@@ -436,13 +457,14 @@ const SettingsContent = (props: UtilitySheetProps) => {
                       <Button
                         aria-label={`Download ${model.label}`}
                         disabled={
+                          !model.available ||
                           download?.status === "downloading" ||
                           download?.status === "ready"
                         }
                         isPending={download?.status === "downloading"}
                         size="sm"
                         variant="outline"
-                        onClick={() => onDownload(model.modelId)}
+                        onClick={() => onDownload(model.model_id)}
                       >
                         {download?.status === "ready" ?
                           <Check size={15} />
@@ -452,8 +474,14 @@ const SettingsContent = (props: UtilitySheetProps) => {
                   </div>
                 );
               })
-            : <p className="panel-empty">No reviewed models available</p>}
+            : <p className="panel-empty">No recommended models available</p>}
           </section>
+
+          <CustomLocalModelSetup
+            downloads={artifacts?.downloads ?? []}
+            onDownload={onDownloadCustom}
+            onInspect={onInspectModelRepository}
+          />
 
           <ModelConnectionSetup
             settings={settings}
@@ -600,33 +628,155 @@ const projectName = (root: string): string => {
   return parts.at(-1) ?? root;
 };
 
-interface LocalModelOption {
-  compute: string;
-  label: string;
-  modelId: string;
-  purpose: string;
-  size: number;
-}
+const localModelOptions = (catalog: ModelArtifacts): LocalModelChoice[] =>
+  catalog.models;
 
-const localModelOptions = (catalog: ModelArtifacts): LocalModelOption[] => [
-  ...catalog.artifacts.map((artifact) => ({
-    compute: localComputeLabel(artifact.runtime_profile),
-    label: artifact.model_alias,
-    modelId: artifact.artifact_id,
-    purpose: artifact.purpose,
-    size: artifact.artifact_size_bytes,
-  })),
-  ...catalog.snapshots.map((snapshot) => ({
-    compute: localComputeLabel(snapshot.runtime_profile),
-    label: snapshot.model_alias,
-    modelId: snapshot.snapshot_id,
-    purpose: snapshot.purpose,
-    size: snapshot.expected_size_bytes,
-  })),
-];
+const localComputeLabel = (runtime: LocalModelChoice["runtime"]): string =>
+  runtime === "vllm" ? "Requires an NVIDIA GPU" : "Runs on CPU";
 
-const localComputeLabel = (runtimeProfile: string): string =>
-  runtimeProfile.startsWith("vllm") ? "Requires an NVIDIA GPU" : "Runs on CPU";
+const CustomLocalModelSetup = ({
+  downloads,
+  onDownload,
+  onInspect,
+}: {
+  downloads: ModelArtifacts["downloads"];
+  onDownload: (request: CustomLocalModelDownloadRequest) => Promise<void>;
+  onInspect: (request: ModelRepositoryRequest) => Promise<ModelRepositoryPlan>;
+}) => {
+  const modelIssueUrl =
+    "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose";
+  const [repository, setRepository] = useState("");
+  const [plan, setPlan] = useState<ModelRepositoryPlan | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const modelDownload =
+    plan === null ? undefined : (
+      downloads.find((item) => item.model_id === plan.model.model_id)
+    );
+
+  const inspect = async () => {
+    if (!repository.trim()) return;
+    setPending(true);
+    setError(null);
+    setPlan(null);
+    try {
+      setPlan(await onInspect({ repository: repository.trim() }));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const download = async () => {
+    if (!plan) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onDownload({
+        repository: plan.model.source_repository,
+        revision: plan.model.source_revision,
+      });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <details className="advanced-section local-model-import">
+      <summary>Other model</summary>
+      <div className="advanced-section-content local-model-form">
+        <p className="panel-empty">
+          Enter a public or authorized Hugging Face model identifier. Heartwood
+          will select a supported runtime and model file for this deployment.
+        </p>
+        <label>
+          Model repository
+          <Input
+            autoComplete="off"
+            placeholder="owner/model"
+            value={repository}
+            onChange={(event) => {
+              setRepository(event.target.value);
+              setPlan(null);
+              setError(null);
+            }}
+          />
+        </label>
+        <Button
+          disabled={pending || !repository.trim()}
+          isPending={pending && plan === null}
+          variant="outline"
+          onClick={() => void inspect()}
+        >
+          <Search size={15} />
+          Check model
+        </Button>
+        {plan ?
+          <div className="local-model-plan" role="status">
+            <strong>{plan.model.label}</strong>
+            <span>
+              {localComputeLabel(plan.model.runtime)} ·{" "}
+              {formatBytes(plan.model.size_bytes)}
+            </span>
+            <small>{plan.selection_reason}</small>
+            <small>{plan.model.purpose}</small>
+            {plan.model.minimum_resource_envelope ?
+              <small>{plan.model.minimum_resource_envelope}</small>
+            : null}
+            {plan.model.recommended_resource_envelope ?
+              <small>{plan.model.recommended_resource_envelope}</small>
+            : null}
+            <small>{plan.model.license_posture}</small>
+            <details className="model-plan-source">
+              <summary>Source details</summary>
+              <div>
+                <small>Repository: {plan.model.source_repository}</small>
+                <small>Revision: {plan.model.source_revision}</small>
+                <small>
+                  Representation:{" "}
+                  {plan.model.source_path ?? "Complete repository snapshot"}
+                </small>
+              </div>
+            </details>
+            <ArtifactDownloadStatus
+              alias={plan.model.label}
+              download={modelDownload}
+            />
+            <Button
+              disabled={
+                pending ||
+                modelDownload?.status === "downloading" ||
+                modelDownload?.status === "ready"
+              }
+              isPending={pending || modelDownload?.status === "downloading"}
+              onClick={() => void download()}
+            >
+              {modelDownload?.status === "ready" ?
+                <Check size={15} />
+              : <Download size={15} />}
+              {modelDownload?.status === "ready" ?
+                "Downloaded"
+              : "Download model"}
+            </Button>
+          </div>
+        : null}
+        {error ?
+          <div className="connection-error" role="alert">
+            <span>{error}</span>
+            {error.includes(modelIssueUrl) ?
+              <a href={modelIssueUrl} rel="noreferrer" target="_blank">
+                Report an unsupported model
+              </a>
+            : null}
+          </div>
+        : null}
+      </div>
+    </details>
+  );
+};
 
 const ModelConnectionSetup = ({
   settings,

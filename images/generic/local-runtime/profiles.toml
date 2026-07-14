@@ -40,7 +40,7 @@ port = 8765
 supported_platforms = ["linux/amd64", "linux/arm64"]
 startup = "Run heartwood models download <artifact-id>, then heartwood launch from the project directory."
 artifact_cache = "The selected project's .heartwood/models directory, backed by the project volume or platform-persistent storage."
-runtime_resolution = "Load only the path selected by the operator; reviewed catalog downloads verify immutable revision, byte size, and SHA-256 before use."
+runtime_resolution = "Load only the path selected by the operator; recommended and user-selected downloads verify immutable provenance and content before use."
 ci_scope = "CI tests the OpenHands integration with a deterministic loopback fixture and tests artifact verification separately; CI never embeds weights in images."
 
 [profiles.llama-cpp-cuda]

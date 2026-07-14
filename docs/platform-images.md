@@ -43,12 +43,14 @@ Platform images must expose:
 - `heartwood` and the Heartwood Python executable;
 - the packaged web UI and notebook bridge;
 - the OpenHands SDK and coding tools behind the Heartwood backend adapter;
-- the same non-secret model settings and reviewed artifact catalog;
+- the same non-secret model settings, recommendation catalog, and arbitrary Hugging Face planning contract;
 - verified bundled Skills loaded through the OpenHands native loader;
 - route policy, event persistence, action confirmation, replay, and scrubbed audit export;
 - a durable current-directory project whose `.heartwood/` directory contains sessions, settings, OpenHands state, and optional model artifacts.
 
 Do not add a platform-specific agent loop, provider client, model settings format, web contract, or Skill loader. Platform-specific behavior belongs in base-image preservation, identity, route policy, storage, proxy, and deployment adapters.
+
+The platform home and image workdir are starting locations, not Heartwood workspace settings. A user selects a project by starting the CLI, browser server, or notebook kernel from that directory. Platform images must not create or redirect Heartwood to a specially named project directory.
 
 ## Continuous Integration
 
@@ -61,6 +63,7 @@ The pull-request platform target must test:
 - Heartwood kernel registration;
 - a writable project and complete private `.heartwood/` layout that survive container replacement;
 - inherited and control-plane-specific Jupyter launch routes;
+- the packaged Heartwood UI and project-readiness API through the real Jupyter Server Proxy route;
 - packaged web assets and notebook API;
 - model-profile validation and a real OpenHands conversation against the no-network loopback fixture;
 - repository-verified Skill loading and scrubbed audit export.

@@ -11,7 +11,7 @@ import json
 import shutil
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -21,6 +21,7 @@ from heartwood.cli import (
     _format_action_settings,
     _format_model_artifacts,
     _format_model_catalog,
+    _format_model_repository,
     _format_model_settings,
     _format_model_validation,
     _format_skill_settings,
@@ -31,6 +32,9 @@ from heartwood.cli import (
 )
 from heartwood.cli._interactive import InteractionResult, InteractiveSession
 from heartwood.gateway import (
+    LocalModelChoice,
+    LocalModelDownloadPlan,
+    ModelArtifact,
     ModelCatalogService,
     ModelConnection,
     ProjectConfig,
@@ -61,6 +65,7 @@ def _install_deterministic_gateway(
     *,
     model_catalog_service: ModelCatalogService | None = None,
     env: dict[str, str] | None = None,
+    model_repository: object | None = None,
 ) -> None:
     def factory(**kwargs: object) -> RealSessionGateway:
         project = kwargs.get("project")
@@ -70,6 +75,7 @@ def _install_deterministic_gateway(
             env={} if env is None else env,
             backend_id="deterministic",
             model_catalog_service=model_catalog_service,
+            model_repository=cast(Any, model_repository),
         )
 
     monkeypatch.setattr("heartwood.cli.SessionGateway", factory)
@@ -236,6 +242,71 @@ def test_non_interactive_setup_persists_one_configuration_and_model(
     assert "Setup complete" in capsys.readouterr().out
 
 
+def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    choice = LocalModelChoice(
+        model_id="hf-research-model-123456789abc",
+        label="Research Model Q4_K_M",
+        purpose="User-selected Hugging Face model.",
+        runtime="llama-cpp",
+        source_repository="example/research-model-gguf",
+        source_revision="1" * 40,
+        source_path="model-q4_k_m.gguf",
+        size_bytes=7,
+        minimum_free_bytes=7,
+        license_posture="Source model card reports apache-2.0.",
+        catalog_source="user-selected",
+        artifact_sha256="a" * 64,
+        minimum_resource_envelope="Estimated minimum: 4 CPU cores.",
+        recommended_resource_envelope="Recommended: 8 CPU cores.",
+    )
+
+    class Repository:
+        def plan(self, *_args: object, **_kwargs: object) -> LocalModelDownloadPlan:
+            return LocalModelDownloadPlan(choice, "Selected a balanced GGUF model.")
+
+    def download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+        destination = cache_dir / artifact.artifact_id / artifact.source_path
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"content")
+        return destination
+
+    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", download)
+    _install_deterministic_gateway(
+        monkeypatch,
+        model_catalog_service=_local_catalog(fail=True),
+        model_repository=Repository(),
+    )
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "setup",
+                "--model-source",
+                "local",
+                "--model-id",
+                "example/research-model-gguf",
+                "--non-interactive",
+                "--yes",
+            ],
+        )
+        == 0
+    )
+
+    config = RealSessionGateway(project=ProjectContext(project), env={}).config_store.load()
+    assert config.local_model is not None
+    assert config.local_model.source_repository == "example/research-model-gguf"
+    output = capsys.readouterr().out
+    assert "Heartwood model plan" in output
+    assert "Run `heartwood launch`" in output
+
+
 def test_bare_command_configures_session_token_and_opens_conversation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -322,10 +393,10 @@ def test_failed_reconfiguration_restores_previous_toml(
     assert _run(project, monkeypatch, setup) == 1
 
     assert config_path.read_bytes() == previous
-    assert "did not find a usable local model service" in capsys.readouterr().out
+    assert "did not prepare a usable local model" in capsys.readouterr().out
 
 
-def test_unavailable_local_service_points_to_reviewed_download(
+def test_unavailable_local_service_points_to_shared_model_setup(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -354,11 +425,54 @@ def test_unavailable_local_service_points_to_reviewed_download(
     )
 
     output = capsys.readouterr().out
-    assert "did not find a usable local model service" in output
-    assert "heartwood models artifacts" in output
-    assert "heartwood models download <model-id>" in output
+    assert "did not prepare a usable local model" in output
+    assert "recommended model or Other Hugging Face model" in output
     assert "heartwood launch" in output
     assert not (project / ".heartwood" / "config.toml").exists()
+
+
+def test_local_setup_keeps_slash_model_ids_on_an_existing_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    service_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    service = ModelCatalogService(
+        openai_lister=lambda _connection, _token: (ProviderModel(service_model),),
+        compatibility=lambda _connection, _model: ("available", "verified", 32_768, True),
+    )
+
+    class UnexpectedRepository:
+        def plan(self, *_args: object, **_kwargs: object) -> LocalModelDownloadPlan:
+            raise AssertionError("existing service model must not be inspected as a repository")
+
+    _install_deterministic_gateway(
+        monkeypatch,
+        model_catalog_service=service,
+        model_repository=UnexpectedRepository(),
+    )
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "setup",
+                "--model-source",
+                "local",
+                "--model-id",
+                service_model,
+                "--non-interactive",
+                "--yes",
+            ],
+        )
+        == 0
+    )
+    config = RealSessionGateway(
+        project=ProjectContext(project), env={}, backend_id="deterministic"
+    ).config_store.load()
+    assert config.model_source == "local"
+    assert config.model_settings.profile().model == f"openai/{service_model}"
 
 
 def test_non_interactive_setup_requires_explicit_inputs(
@@ -483,7 +597,7 @@ def test_setup_rolls_back_when_model_or_credential_input_closes(
     assert not (token_project / ".heartwood" / "config.toml").exists()
 
 
-def test_carina_local_setup_defers_to_launch_without_creating_state(
+def test_carina_local_setup_rejects_an_unknown_model_without_saving_configuration(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -507,8 +621,10 @@ def test_carina_local_setup_defers_to_launch_without_creating_state(
         )
         == 1
     )
-    assert "runs automatically after Carina compute starts" in capsys.readouterr().out
-    assert not (project / ".heartwood").exists()
+    output = capsys.readouterr().out
+    assert "unknown local model in non-interactive setup" in output
+    assert "recommended model or Other Hugging Face model" in output
+    assert not (project / ".heartwood" / "config.toml").exists()
 
 
 def test_invalid_session_and_launch_resources_are_argument_errors(
@@ -741,13 +857,70 @@ def test_models_list_select_remove_and_artifacts_use_one_configuration(
     assert _run(project, monkeypatch, second) == 0
     assert _run(project, monkeypatch, ["models", "select", "second"]) == 0
     assert _run(project, monkeypatch, ["models", "list"]) == 0
-    assert _run(project, monkeypatch, ["models", "artifacts"]) == 0
+    assert _run(project, monkeypatch, ["models", "local"]) == 0
     assert _run(project, monkeypatch, ["models", "remove", "second"]) == 0
 
     output = capsys.readouterr().out
     assert "* second" in output
-    assert "Heartwood local-model artifacts" in output
+    assert "Heartwood local models" in output
     assert "No model profiles configured" not in output
+
+
+def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    calls: list[tuple[str, str | None]] = []
+    plan: dict[str, object] = {
+        "model": {
+            "model_id": "hf-research-model-123456789abc",
+            "label": "Research Model Q4_K_M",
+            "runtime": "llama-cpp",
+            "source_repository": "example/research-model-gguf",
+            "source_revision": "1" * 40,
+            "size_bytes": 4 * 1024**3,
+            "license_posture": "Source model card reports apache-2.0.",
+            "minimum_resource_envelope": "Estimated minimum: 4 CPU cores.",
+            "recommended_resource_envelope": "Recommended: 8 CPU cores.",
+        },
+        "selection_reason": "Selected a balanced single-file GGUF variant.",
+    }
+
+    def inspect(
+        _gateway: RealSessionGateway,
+        repository: str,
+        *,
+        revision: str | None = None,
+    ) -> dict[str, object]:
+        calls.append((f"inspect:{repository}", revision))
+        return plan
+
+    def download(
+        gateway: RealSessionGateway,
+        repository: str,
+        *,
+        revision: str | None = None,
+    ) -> Path:
+        calls.append((f"download:{repository}", revision))
+        return gateway.project.models_dir / "hf-research-model" / "model.gguf"
+
+    monkeypatch.setattr(RealSessionGateway, "inspect_model_repository", inspect)
+    monkeypatch.setattr(RealSessionGateway, "download_custom_local_model_now", download)
+    _install_deterministic_gateway(monkeypatch, model_catalog_service=_local_catalog(fail=True))
+
+    assert _run(project, monkeypatch, ["models", "inspect", "example/research-model-gguf"]) == 0
+    assert _run(project, monkeypatch, ["models", "download", "example/research-model-gguf"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Heartwood model plan" in output
+    assert "Runtime: CPU" in output
+    assert "Recommended: 8 CPU cores" in output
+    assert calls == [
+        ("inspect:example/research-model-gguf", None),
+        ("download:example/research-model-gguf", None),
+    ]
 
 
 def test_model_catalog_refresh_and_connect_use_shared_gateway_service(
@@ -896,12 +1069,33 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
     )
     artifacts = _format_model_artifacts(
         {
-            "artifacts": [None, {"artifact_id": "gguf", "artifact_size_bytes": "unknown"}],
-            "snapshots": [None, {"snapshot_id": "vllm", "expected_size_bytes": 1024}],
+            "models": [
+                None,
+                {
+                    "model_id": "gguf",
+                    "runtime": "llama-cpp",
+                    "size_bytes": "unknown",
+                    "catalog_source": "recommended",
+                    "label": "GGUF",
+                    "purpose": "Synthetic",
+                    "availability_reason": "Available",
+                },
+                {
+                    "model_id": "vllm",
+                    "runtime": "vllm",
+                    "size_bytes": 1024,
+                    "catalog_source": "user-selected",
+                    "label": "vLLM",
+                    "purpose": "Synthetic",
+                    "availability_reason": "Requires GPU",
+                },
+            ],
         }
     )
-    assert "gguf  0.00 GiB" in artifacts
-    assert "vllm  0.00 GiB" in artifacts
+    assert "gguf  CPU  0.00 GiB" in artifacts
+    assert "vllm  NVIDIA GPU  0.00 GiB" in artifacts
+    assert "heartwood models inspect <owner/model>" in artifacts
+    assert "invalid model plan" in _format_model_repository({"model": []})
 
     with pytest.raises(TypeError, match="expected dataset payload"):
         _mapping_payload([], "dataset")

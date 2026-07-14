@@ -201,7 +201,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     _stage(1, 6, "Verify the selected local model")
     if selection is None:
         print(
-            "No local model is selected. Run `heartwood models artifacts`, then "
+            "No local model is selected. Run `heartwood models local`, then "
             "`heartwood models download <model-id>`."
         )
         return 64
