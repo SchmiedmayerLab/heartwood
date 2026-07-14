@@ -184,6 +184,18 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     web_metadata = json.loads(web_path.read_text(encoding="utf-8"))
     if isinstance(web_metadata, dict) and isinstance(web_metadata.get("version"), str):
         semantic_versions[str(web_path.relative_to(root))] = web_metadata["version"]
+    for skill_root in (
+        root / "skills" / "verified",
+        root / "fixtures" / "synthetic" / "skills",
+    ):
+        for metadata_path in sorted(skill_root.glob("*/metadata.json")):
+            skill_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(skill_metadata, dict) and isinstance(
+                skill_metadata.get("heartwood.version"), str
+            ):
+                semantic_versions[str(metadata_path.relative_to(root))] = skill_metadata[
+                    "heartwood.version"
+                ]
     web_lock_path = root / "packages" / "webui" / "package-lock.json"
     web_lock = json.loads(web_lock_path.read_text(encoding="utf-8"))
     if isinstance(web_lock, dict):

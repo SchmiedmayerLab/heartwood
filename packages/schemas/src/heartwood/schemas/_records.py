@@ -14,6 +14,14 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
+_SEMVER_PATTERN = (
+    r"^(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
+
 __all__ = [
     "ActionConfirmationMode",
     "ApprovalRecord",
@@ -132,7 +140,7 @@ class SkillMetadata(_HeartwoodRecord):
         alias="heartwood.trust-tier"
     )
     requires_network: bool = Field(alias="heartwood.requires-network")
-    version: str = Field(alias="heartwood.version", min_length=1, pattern=r"^\d+\.\d+\.\d+$")
+    version: str = Field(alias="heartwood.version", min_length=1, pattern=_SEMVER_PATTERN)
     signature: str | None = Field(default=None, alias="heartwood.sig")
 
     @field_validator("dataset_types", "platforms", mode="before")
@@ -153,6 +161,19 @@ class SkillMetadata(_HeartwoodRecord):
                 return True
             if lowered == "false":
                 return False
+        return value
+
+    @field_validator("version")
+    @classmethod
+    def _reject_leading_zero_prerelease_identifiers(cls, value: str) -> str:
+        """Enforce the numeric prerelease rule from Semantic Versioning."""
+        prerelease = value.split("+", maxsplit=1)[0].partition("-")[2]
+        if prerelease and any(
+            identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
+            for identifier in prerelease.split(".")
+        ):
+            msg = "numeric Semantic Versioning prerelease identifiers cannot have leading zeroes"
+            raise ValueError(msg)
         return value
 
     @model_validator(mode="after")

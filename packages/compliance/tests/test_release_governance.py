@@ -150,6 +150,13 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
         f'{{"version": "{version}", "packages": {{"": {{"version": "{version}"}}}}}}\n',
         encoding="utf-8",
     )
+    skill = tmp_path / "skills" / "verified" / "example"
+    skill.mkdir(parents=True)
+    skill_metadata = skill / "metadata.json"
+    skill_metadata.write_text(
+        f'{{"heartwood.version": "{version}"}}\n',
+        encoding="utf-8",
+    )
     (tmp_path / "uv.lock").write_text(
         '[[package]]\nname = "heartwood-cli"\nversion = "0.2.0b1"\n',
         encoding="utf-8",
@@ -167,6 +174,12 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
         (docs / name).write_text(content, encoding="utf-8")
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
+
+    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.2"}\n', encoding="utf-8")
+    assert (
+        "skills/verified/example/metadata.json: 0.2.0-beta.2"
+        in _release_verifier().source_version_errors(tmp_path, version)
+    )
 
 
 def test_main_validation_owns_release_readiness_dependencies() -> None:
