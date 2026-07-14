@@ -381,10 +381,8 @@ def test_gateway_authorizes_discovery_before_retaining_transient_token(
         allowed_action_confirmation_modes=("always-confirm",),
         credential_allowlist=(),
     )
-    ProjectConfigStore(
-        denied_project,
-        ProjectConfig(platform_id="generic", policy=local_only_policy),
-    ).save(ProjectConfig(platform_id="generic", policy=local_only_policy))
+    denied_config = ProjectConfig(platform_id="generic", policy=local_only_policy)
+    ProjectConfigStore(denied_project, denied_config).save(denied_config)
     denied = SessionGateway(
         project=denied_project,
         env={},
@@ -594,10 +592,8 @@ def _catalog_project(root: Path) -> ProjectContext:
             "managed-identity",
         ),
     )
-    ProjectConfigStore(
-        project,
-        ProjectConfig(platform_id="generic", policy=policy),
-    ).save(ProjectConfig(platform_id="generic", policy=policy))
+    config = ProjectConfig(platform_id="generic", policy=policy)
+    ProjectConfigStore(project, config).save(config)
     return project
 
 

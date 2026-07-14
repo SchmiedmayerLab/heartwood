@@ -564,7 +564,8 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 
     local_runtime = _read("images/generic/scripts/start_local_runtime.sh")
     assert 'model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"' in local_runtime
-    assert '"${runtime_root}/images/generic/scripts/local_model_stub.py"' in local_runtime
+    assert '"${script_dir}/local_model_stub.py"' in local_runtime
+    assert "runtime_root=" not in local_runtime
     assert "mounted or downloaded GGUF file" in local_runtime
     local_smoke = _read("images/generic/scripts/local_inference_smoke.sh")
     assert "mktemp" in local_smoke

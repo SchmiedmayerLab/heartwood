@@ -24,6 +24,7 @@ from pathlib import Path
 
 import uvicorn
 
+from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
@@ -43,6 +44,8 @@ from heartwood.gateway import (
     ModelRepositoryError,
     ModelSettingsError,
     ModelSnapshotError,
+    ProjectConfig,
+    ProjectConfigStore,
     ProjectContext,
     SessionGateway,
     SkillSettingsError,
@@ -70,6 +73,14 @@ def _bundled_path(relative: Path) -> Path:
         if candidate.exists():
             return candidate
     return relative
+
+
+def _bundled_repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file() and (parent / "packages").is_dir():
+            return parent
+    msg = "Heartwood repository assets are unavailable in this installation"
+    raise RuntimeError(msg)
 
 
 _DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
@@ -489,20 +500,24 @@ def _configure_setup(
     model_id = getattr(args, "model_id", None)
     resume_existing = False
     if project.config_path.is_file():
-        existing_gateway = SessionGateway(project=project)
-        try:
-            existing = existing_gateway.config_store.load()
-            if source is None and existing.model_source is not None:
-                try:
-                    existing_profile = existing.model_settings.profile()
-                except ModelSettingsError:
-                    pass
-                else:
-                    source = existing.model_source
-                    model_id = existing_profile.model
-                    resume_existing = True
-        finally:
-            existing_gateway.stop()
+        adapter = select_platform_adapter(os.environ)
+        config_store = ProjectConfigStore(
+            project,
+            ProjectConfig(
+                platform_id=adapter.adapter_id,
+                policy=adapter.default_policy_profile(),
+            ),
+        )
+        existing = config_store.load()
+        if source is None and existing.model_source is not None:
+            try:
+                existing_profile = existing.model_settings.profile()
+            except ModelSettingsError:
+                pass
+            else:
+                source = existing.model_source
+                model_id = existing_profile.model
+                resume_existing = True
     if source is None:
         if non_interactive:
             parser.error("--model-source is required with --non-interactive")
@@ -1348,7 +1363,7 @@ def _handle_reviewer_packet(
     output: Path,
 ) -> int:
     packet = ReviewerPacketGenerator(
-        repository_root=project.root,
+        repository_root=_bundled_repository_root(),
         session_workspace=project.sessions_dir,
         session_id=session_id,
         fixture_root=fixture_root,

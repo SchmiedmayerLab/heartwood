@@ -1003,6 +1003,9 @@ def test_audit_export_and_reviewer_packet_use_project_sessions(
 
     assert "audit.export.recorded" in audit.read_text(encoding="utf-8")
     assert (reviewer / "reviewer-packet.md").is_file()
+    assert "`heartwood-cli`" in (reviewer / "dependency-license-summary.md").read_text(
+        encoding="utf-8"
+    )
     assert "Reviewer artifacts:" in capsys.readouterr().out
 
 

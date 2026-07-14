@@ -480,7 +480,7 @@ def test_asgi_lifespan_starts_and_stops_gateway_dependencies(tmp_path: Path) -> 
 
 class _LifecycleGateway(SessionGateway):
     def __init__(self, *, workspace: Path) -> None:
-        super().__init__(project=ProjectContext(workspace))
+        super().__init__(project=ProjectContext(workspace), env={})
         self.started = False
         self.stopped = False
 

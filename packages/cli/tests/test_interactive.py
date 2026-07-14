@@ -28,6 +28,7 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
 ) -> None:
     gateway = SessionGateway(
         project=ProjectContext(tmp_path),
+        env={},
         backend_id="deterministic",
     )
     gateway.start()
@@ -56,6 +57,7 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
 ) -> None:
     gateway = SessionGateway(
         project=ProjectContext(tmp_path),
+        env={},
         backend_id="deterministic",
     )
     gateway.start()
