@@ -10,7 +10,13 @@ import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
 import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
 import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
-import { Database, Menu, Pencil, ShieldCheck } from "lucide-react";
+import {
+  Database,
+  LoaderCircle,
+  Menu,
+  Pencil,
+  ShieldCheck,
+} from "lucide-react";
 import { useState } from "react";
 import type { ActionSettings, SessionContext, SessionSummary } from "../types";
 
@@ -108,7 +114,7 @@ export const WorkspaceHeader = ({
           <Tooltip tooltip="Detect platform and dataset">
             <Button
               aria-label="Detect environment"
-              disabled={session === null}
+              disabled={session === null || requestStatus === "busy"}
               size="sm"
               variant="outline"
               onClick={onDetect}
@@ -176,7 +182,16 @@ const StatusBadge = ({
     return <Badge variant="destructiveLight">Needs attention</Badge>;
   }
   if (requestStatus === "busy") {
-    return <Badge variant="secondary">Working</Badge>;
+    return (
+      <Badge variant="secondary">
+        <LoaderCircle
+          aria-hidden="true"
+          className="request-activity-icon"
+          size={13}
+        />
+        Working
+      </Badge>
+    );
   }
   if (modelStatus === "checking") {
     return <Badge variant="secondary">Checking model</Badge>;

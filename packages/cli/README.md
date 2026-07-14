@@ -22,6 +22,8 @@ On first use, bare `heartwood` guides model selection and then opens the convers
 
 Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
 
+Heartwood shows an animated activity message while a request is running. If a response takes longer than expected, it reports elapsed time without guessing which internal agent step is active. Model downloads and local-server startup use their own progress and readiness messages because those operations can take several minutes.
+
 ```text
 /allow        Allow the complete pending OpenHands action set once
 /reject       Reject the complete pending OpenHands action set

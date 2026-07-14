@@ -57,6 +57,8 @@ Runtime startup and scheduler allocation remain terminal operations because they
 
 Create or select a conversation, then describe the result you need. Heartwood displays messages, proposed commands and file edits, tool results, and completion status in one timeline.
 
+After you submit a task, an activity indicator remains in the conversation until Heartwood responds or asks for approval. If the wait becomes noticeable, the indicator reports elapsed time and explains that response time depends on the selected model and task. Keep the page open while it is active. This waiting message does not claim that a particular analysis step is running; named workflow steps appear only when the agent reports them. Local-model downloads are separate and show measured bytes and percentage completion in **Settings**.
+
 ![Heartwood synthetic reference analysis showing the cohort, baseline, and aggregate-export conversation](assets/web-reference-analysis.png)
 
 When an action needs confirmation, review every member of the displayed set. **Allow all once** continues the complete OpenHands action set; **Reject all** executes none of it. **Ask Every Time** is the default. A deployment may permit **Auto-Approve Low Risk**, but medium-, high-, and unknown-risk sets still require review.

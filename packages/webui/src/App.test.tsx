@@ -14,7 +14,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { HeartwoodClient, SessionEventResponse } from "./client";
 import { event, syntheticEvents } from "./test/fixtures";
@@ -564,6 +564,22 @@ class FakeClient implements HeartwoodClient {
   }
 }
 
+class DeferredCommandClient extends FakeClient {
+  private complete: ((response: SessionEventResponse) => void) | null = null;
+
+  override postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+    this.commands.push(command);
+    return new Promise((resolve) => {
+      this.complete = resolve;
+    });
+  }
+
+  completeCommand(): void {
+    this.complete?.({ events: [] });
+    this.complete = null;
+  }
+}
+
 describe("App", () => {
   it("opens first-run setup and configures a shared research model source", async () => {
     const client = new FakeClient();
@@ -692,6 +708,56 @@ describe("App", () => {
         screen.getByRole("log", { name: "Conversation transcript" }),
       ).getAllByText("Inspect the synthetic cohort"),
     ).toHaveLength(1);
+  });
+
+  it("keeps a delayed task visibly active without inventing workflow steps", async () => {
+    const client = new DeferredCommandClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText("Task"), {
+        target: { value: "Inspect the synthetic cohort" },
+      });
+      fireEvent.click(screen.getByLabelText("Send task"));
+
+      expect(
+        screen.getByRole("status", {
+          name: "Heartwood is working on your task",
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Task")).toBeDisabled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(11_000);
+        await Promise.resolve();
+      });
+      expect(
+        screen.getByRole("status", {
+          name: /Heartwood is still working on your task.*Response time depends/u,
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("11s elapsed")).toBeInTheDocument();
+
+      await act(async () => {
+        client.completeCommand();
+        await Promise.resolve();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Heartwood is still working on your task"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Task")).toBeEnabled();
   });
 
   it("refreshes shared project configuration when the browser regains focus", async () => {

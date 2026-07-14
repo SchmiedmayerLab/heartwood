@@ -17,6 +17,7 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     PendingAction,
+    interaction_activity,
 )
 from heartwood.cli._tui import HeartwoodTerminalApp
 from heartwood.gateway import ProjectContext, SessionGateway
@@ -164,6 +165,13 @@ def test_line_formatter_groups_multi_action_review_and_resolution() -> None:
     assert resolved_lines == ("[003-004] Action set approved (2 actions)",)
 
 
+def test_interaction_activity_matches_the_submitted_operation() -> None:
+    assert interaction_activity("inspect the project").label == "Working on your task"
+    assert "approved action set" in interaction_activity("/allow").label
+    assert "model" not in interaction_activity("/reject").guidance
+    assert interaction_activity("/unknown").label == "Running the command"
+
+
 def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() -> None:
     class BatchSession(InteractiveSession):
         def __init__(self) -> None:
@@ -205,6 +213,35 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
             assert session.submitted == ["/reject"]
             assert not app.query_one("#approval", Vertical).display
             assert not app.query_one("#composer", Input).disabled
+
+    asyncio.run(exercise())
+
+
+def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progress() -> None:
+    class IdleSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "activity"
+
+        def replay(self) -> tuple[SessionEvent, ...]:
+            return ()
+
+        def pending_actions(self) -> tuple[PendingAction, ...]:
+            return ()
+
+    async def exercise() -> None:
+        app = HeartwoodTerminalApp(IdleSession(), format_events=_format_tui_event_lines)
+        async with app.run_test(size=(72, 20)):
+            app._set_busy(
+                True,
+                activity=interaction_activity("inspect the project"),
+            )
+            app._busy_started -= 11
+            app._refresh_working_status()
+
+            status = str(app.query_one("#status", Static).render())
+            assert "Still working on your task" in status
+            assert "elapsed" in status
+            assert "local models can take several minutes" not in status
 
     asyncio.run(exercise())
 

@@ -129,7 +129,15 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(task).toBeEnabled();
 
   await task.fill("Fit a training-only age-only condition-history baseline");
-  await task.press("Enter");
+  const activity = page.getByRole("status", {
+    name: "Heartwood is working on your task",
+  });
+  await Promise.all([
+    page.getByLabel("Send task").click(),
+    expect(activity).toBeVisible(),
+    expect(task).toBeDisabled(),
+  ]);
+  await expect(activity).toBeHidden();
   await expect(
     page.getByText("Fit a training-only age-only condition-history baseline"),
   ).toBeVisible();
@@ -296,6 +304,9 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     }
     if (resource === "commands") {
       const payload = request.postDataJSON() as { kind?: string };
+      if (payload.kind === "chat") {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
       const nextEvents =
         sessionId === "session-test" && payload.kind === "approve" ?
           [

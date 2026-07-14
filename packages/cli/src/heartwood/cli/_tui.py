@@ -21,7 +21,12 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
-from heartwood.cli._interactive import InteractionResult, InteractiveSession
+from heartwood.cli._interactive import (
+    InteractionActivity,
+    InteractionResult,
+    InteractiveSession,
+    interaction_activity,
+)
 from heartwood.session import SessionEvent
 
 
@@ -60,6 +65,8 @@ class HeartwoodTerminalApp(App[None]):
         self._busy = False
         self._busy_started = 0.0
         self._frame = 0
+        self._activity = interaction_activity("")
+        self._guidance_shown = False
         self._animations_enabled = "NO_COLOR" not in os.environ
         self._activity_timer: Timer | None = None
 
@@ -94,7 +101,7 @@ class HeartwoodTerminalApp(App[None]):
         if self._busy or not event.value.strip():
             return
         event.input.value = ""
-        self._set_busy(True)
+        self._set_busy(True, activity=interaction_activity(event.value))
         self._submit(event.value)
 
     @work(thread=True, exclusive=True)
@@ -125,7 +132,13 @@ class HeartwoodTerminalApp(App[None]):
             style = _line_style(line) if self._animations_enabled else None
             log.write(Text(line, style=style) if style else line)
 
-    def _set_busy(self, busy: bool, *, failed: bool = False) -> None:
+    def _set_busy(
+        self,
+        busy: bool,
+        *,
+        activity: InteractionActivity | None = None,
+        failed: bool = False,
+    ) -> None:
         self._busy = busy
         composer = self.query_one("#composer", Input)
         composer.disabled = busy
@@ -134,8 +147,11 @@ class HeartwoodTerminalApp(App[None]):
         status.remove_class("working", "waiting", "error")
         timer = self._activity_timer
         if busy:
+            if activity is not None:
+                self._activity = activity
             self._busy_started = time.monotonic()
             self._frame = 0
+            self._guidance_shown = False
             status.add_class("working")
             if timer is not None:
                 timer.resume()
@@ -153,13 +169,18 @@ class HeartwoodTerminalApp(App[None]):
     def _refresh_working_status(self) -> None:
         if not self._busy:
             return
-        frames = (".", "i", "Y") if self._animations_enabled else ("*",)
+        frames = (".  ", ".. ", "...") if self._animations_enabled else ("...",)
         marker = frames[self._frame % len(frames)]
         self._frame += 1
         elapsed = int(time.monotonic() - self._busy_started)
-        self.query_one("#status", Static).update(
-            f"Working {marker} · {elapsed}s · local models can take several minutes"
-        )
+        if elapsed < 10:
+            message = f"{self._activity.label}{marker}"
+        else:
+            message = f"{self._activity.waiting_label}{marker} · {elapsed}s elapsed"
+            if not self._guidance_shown:
+                self._guidance_shown = True
+                self.notify(self._activity.guidance, title="Still working", timeout=6)
+        self.query_one("#status", Static).update(message)
 
     def _sync_approval(self) -> None:
         actions = self.session.pending_actions()
@@ -199,7 +220,7 @@ class HeartwoodTerminalApp(App[None]):
         if event.option_list.id != "approval-options" or self._busy:
             return
         directive = "/allow" if event.option_id == "allow" else "/reject"
-        self._set_busy(True)
+        self._set_busy(True, activity=interaction_activity(directive))
         self._submit(directive)
 
     def action_focus_composer(self) -> None:
@@ -211,7 +232,7 @@ class HeartwoodTerminalApp(App[None]):
         if self._busy:
             self.notify("The active OpenHands turn cannot yet be interrupted.", severity="warning")
             return
-        self._set_busy(True)
+        self._set_busy(True, activity=interaction_activity("/pause"))
         self._submit("/pause")
 
 

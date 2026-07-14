@@ -18,7 +18,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,9 +26,11 @@ import uvicorn
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._interactive import (
+    InteractionActivity,
     InteractionResult,
     InteractiveSession,
     command_help,
+    interaction_activity,
     pending_actions,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
@@ -91,6 +93,11 @@ _ACTION_MODE_ARGUMENTS = {
 }
 _MODEL_SOURCE_IDS = tuple(option.source_id for option in MODEL_SOURCE_OPTIONS)
 _MODEL_SOURCE_LABELS = {option.source_id: option.label for option in MODEL_SOURCE_OPTIONS}
+_MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
+    label="Downloading and verifying the model",
+    waiting_label="Still downloading and verifying the model",
+    guidance="Large models can take several minutes. Keep this process running.",
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -714,8 +721,10 @@ def _configure_local_model(
         print(f"  {item.get('label')}")
         if resources := item.get("recommended_resource_envelope"):
             print(f"  {resources}")
-        print("Downloading and verifying the model. Large models may take several minutes.")
-        gateway.download_local_model_now(model_id)
+        _run_with_progress(
+            lambda: gateway.download_local_model_now(model_id),
+            activity=_MODEL_DOWNLOAD_ACTIVITY,
+        )
         return
     if model_id in service_models:
         gateway.connect_model("local", model_id)
@@ -724,8 +733,11 @@ def _configure_local_model(
         plan = gateway.inspect_model_repository(model_id)
         print()
         print(_format_model_repository(plan))
-        print("\nDownloading and verifying the model. Large models may take several minutes.")
-        gateway.download_custom_local_model_now(model_id)
+        print()
+        _run_with_progress(
+            lambda: gateway.download_custom_local_model_now(model_id),
+            activity=_MODEL_DOWNLOAD_ACTIVITY,
+        )
         return
     qualifier = " in non-interactive setup" if non_interactive else ""
     raise ModelRepositoryError(
@@ -865,11 +877,17 @@ def _handle_models(
             if "/" not in args.model:
                 if args.revision is not None:
                     parser.error("--revision requires a Hugging Face owner/model identifier")
-                path = gateway.download_local_model_now(args.model)
+                path = _run_with_progress(
+                    lambda: gateway.download_local_model_now(args.model),
+                    activity=_MODEL_DOWNLOAD_ACTIVITY,
+                )
             else:
-                path = gateway.download_custom_local_model_now(
-                    args.model,
-                    revision=args.revision,
+                path = _run_with_progress(
+                    lambda: gateway.download_custom_local_model_now(
+                        args.model,
+                        revision=args.revision,
+                    ),
+                    activity=_MODEL_DOWNLOAD_ACTIVITY,
                 )
             print(f"Local model: {path}")
             print("Run `heartwood launch` to start the model and open Heartwood.")
@@ -1171,15 +1189,47 @@ def _submit_with_progress(
     update_interval: float = 15,
 ) -> InteractionResult:
     """Submit one blocking line-mode turn while reporting honest elapsed time."""
+    return _run_with_progress(
+        lambda: session.submit(line),
+        activity=interaction_activity(line),
+        update_interval=update_interval,
+    )
+
+
+def _run_with_progress[Result](
+    operation: Callable[[], Result],
+    *,
+    activity: InteractionActivity,
+    update_interval: float = 15,
+) -> Result:
+    """Run one blocking operation with animated TTY or line-safe status updates."""
     stopped = threading.Event()
     started = time.monotonic()
+    animated = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    frames = (".  ", ".. ", "...")
+    frame = 0
 
     def report_progress() -> None:
-        while not stopped.wait(update_interval):
+        nonlocal frame
+        interval = min(update_interval, 0.4) if animated else update_interval
+        while not stopped.wait(max(interval, 0.01)):
             elapsed = int(time.monotonic() - started)
-            print(f"Still working ({elapsed} seconds elapsed)...", flush=True)
+            if animated:
+                label = activity.label if elapsed < 10 else activity.waiting_label
+                suffix = "" if elapsed < 10 else f" ({elapsed}s elapsed)"
+                marker = frames[frame % len(frames)]
+                frame += 1
+                print(f"\r\033[2K{label}{marker}{suffix}", end="", flush=True)
+            else:
+                print(
+                    f"{activity.waiting_label} ({elapsed}s elapsed). {activity.guidance}",
+                    flush=True,
+                )
 
-    print("Working; local models may take several minutes...", flush=True)
+    if animated:
+        print(f"{activity.label}{frames[0]}", end="", flush=True)
+    else:
+        print(f"{activity.label}...", flush=True)
     reporter = threading.Thread(
         target=report_progress,
         name="heartwood-line-progress",
@@ -1187,10 +1237,12 @@ def _submit_with_progress(
     )
     reporter.start()
     try:
-        return session.submit(line)
+        return operation()
     finally:
         stopped.set()
         reporter.join()
+        if animated:
+            print("\r\033[2K", end="", flush=True)
 
 
 def _supports_full_screen_terminal() -> bool:

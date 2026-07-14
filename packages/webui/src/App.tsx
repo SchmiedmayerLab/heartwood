@@ -26,6 +26,10 @@ import {
 import { UtilitySheet } from "./components/UtilitySheet";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import { modelProfileLabel } from "./modelPresentation";
+import {
+  requestActivityForCommand,
+  type RequestActivity,
+} from "./requestActivity";
 import type {
   ActionConfirmationMode,
   ActionSettings,
@@ -89,6 +93,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [requestStatus, setRequestStatus] = useState<"idle" | "busy" | "error">(
     "idle",
   );
+  const [requestActivity, setRequestActivity] =
+    useState<RequestActivity | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<UtilityPanel>(null);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
@@ -403,7 +409,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   useEffect(() => {
     scrollConversationEnd(conversationEndRef.current);
-  }, [conversation.length]);
+  }, [conversation.length, requestStatus]);
 
   useEffect(() => {
     if (
@@ -443,6 +449,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   ) => {
     if (sessionId === null || commandInFlight.current) return false;
     commandInFlight.current = true;
+    setRequestActivity(requestActivityForCommand(kind));
     setRequestStatus("busy");
     setError(null);
     try {
@@ -473,6 +480,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       return false;
     } finally {
       commandInFlight.current = false;
+      setRequestActivity(null);
     }
   };
 
@@ -690,6 +698,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             paused={viewModel.paused}
             pendingActions={pendingActions}
             prompt={prompt}
+            requestActivity={requestActivity}
             requestStatus={requestStatus}
             onDecision={(decision, control) =>
               void decideAction(decision, control)

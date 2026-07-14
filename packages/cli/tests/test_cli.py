@@ -132,8 +132,10 @@ def test_line_mode_reports_elapsed_progress_for_a_slow_turn(
 
     assert result.message == "complete"
     output = capsys.readouterr().out
-    assert "Working; local models may take several minutes" in output
-    assert "Still working" in output
+    assert "Working on your task" in output
+    assert "Still working on your task" in output
+    assert "Response time depends on the selected model and task" in output
+    assert "local models may take several minutes" not in output
 
 
 def test_doctor_is_read_only_and_reports_current_project(
@@ -917,6 +919,7 @@ def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
     assert "Heartwood model plan" in output
     assert "Runtime: CPU" in output
     assert "Recommended: 8 CPU cores" in output
+    assert "Downloading and verifying the model" in output
     assert calls == [
         ("inspect:example/research-model-gguf", None),
         ("download:example/research-model-gguf", None),

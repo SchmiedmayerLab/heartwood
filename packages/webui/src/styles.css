@@ -526,6 +526,51 @@ summary:focus-visible {
   font-size: 0.76rem;
 }
 
+.request-activity {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  width: min(88%, 780px);
+  min-height: 36px;
+  align-items: start;
+  gap: 8px;
+  padding: 7px 2px;
+  color: #526159;
+}
+
+.request-activity-icon {
+  flex: 0 0 auto;
+  animation: request-activity-spin 1s linear infinite;
+  color: #18825f;
+}
+
+.request-activity > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.request-activity strong {
+  color: #2d4035;
+  font-size: 0.78rem;
+}
+
+.request-activity span,
+.request-activity small {
+  color: #66736b;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.request-activity small {
+  white-space: nowrap;
+}
+
+@keyframes request-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .composer-area {
   display: grid;
   flex: 0 0 auto;
@@ -1292,6 +1337,15 @@ summary:focus-visible {
   .conversation-message,
   .trace-message {
     width: 94%;
+  }
+
+  .request-activity {
+    grid-template-columns: 18px minmax(0, 1fr);
+    width: 94%;
+  }
+
+  .request-activity small {
+    grid-column: 2;
   }
 
   .composer-area {

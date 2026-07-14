@@ -15,12 +15,14 @@ import {
   Check,
   CirclePause,
   CirclePlay,
+  LoaderCircle,
   MessageSquareText,
   Send,
   Settings,
   TerminalSquare,
 } from "lucide-react";
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
+import type { RequestActivity as RequestActivityState } from "../requestActivity";
 import type { ApprovalControl, ConversationMessage } from "../types";
 
 interface ConversationWorkspaceProps {
@@ -31,6 +33,7 @@ interface ConversationWorkspaceProps {
   paused: boolean;
   pendingActions: ApprovalControl[];
   prompt: string;
+  requestActivity: RequestActivityState | null;
   requestStatus: "idle" | "busy" | "error";
   onDecision: (decision: "approve" | "deny", control: ApprovalControl) => void;
   onOpenSettings: () => void;
@@ -47,6 +50,7 @@ export const ConversationWorkspace = ({
   paused,
   pendingActions,
   prompt,
+  requestActivity,
   requestStatus,
   onDecision,
   onOpenSettings,
@@ -76,6 +80,9 @@ export const ConversationWorkspace = ({
           <ConversationItem key={message.id} message={message} />
         ))
       }
+      {requestStatus === "busy" && requestActivity !== null ?
+        <RequestActivity activity={requestActivity} />
+      : null}
       <div ref={conversationEndRef} aria-hidden="true" />
     </div>
 
@@ -90,11 +97,18 @@ export const ConversationWorkspace = ({
       <div className="composer">
         <Textarea
           aria-label="Task"
-          disabled={paused || !modelConfigured || pendingActions.length > 0}
+          disabled={
+            paused ||
+            !modelConfigured ||
+            pendingActions.length > 0 ||
+            requestStatus === "busy"
+          }
           placeholder={
             paused ? "Resume the session to continue"
             : !modelConfigured ?
               "Choose an authorized model to start"
+            : requestStatus === "busy" ?
+              "Heartwood is working on the current request"
             : "Ask Heartwood to work in this project"
           }
           value={prompt}
@@ -110,7 +124,7 @@ export const ConversationWorkspace = ({
           <Tooltip tooltip={paused ? "Resume agent" : "Pause agent"}>
             <Button
               aria-label={paused ? "Resume agent" : "Pause agent"}
-              disabled={!modelConfigured}
+              disabled={!modelConfigured || requestStatus === "busy"}
               size="sm"
               variant="ghost"
               onClick={onPauseToggle}
@@ -127,7 +141,8 @@ export const ConversationWorkspace = ({
                 !prompt.trim() ||
                 paused ||
                 !modelConfigured ||
-                pendingActions.length > 0
+                pendingActions.length > 0 ||
+                requestStatus === "busy"
               }
               isPending={requestStatus === "busy"}
               size="sm"
@@ -141,6 +156,44 @@ export const ConversationWorkspace = ({
     </div>
   </section>
 );
+
+const RequestActivity = ({ activity }: { activity: RequestActivityState }) => {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  const waiting = elapsed >= 10;
+  const label = waiting ? activity.waitingLabel : activity.label;
+  return (
+    <div
+      aria-atomic="true"
+      aria-label={waiting ? `${label}. ${activity.guidance}` : label}
+      aria-live="polite"
+      className="request-activity"
+      role="status"
+    >
+      <LoaderCircle
+        aria-hidden="true"
+        className="request-activity-icon"
+        size={17}
+      />
+      <div>
+        <strong>{label}</strong>
+        {waiting ?
+          <span>{activity.guidance}</span>
+        : null}
+      </div>
+      {waiting ?
+        <small aria-hidden="true">{elapsed}s elapsed</small>
+      : null}
+    </div>
+  );
+};
 
 const EmptyConversation = ({
   disabled,
