@@ -51,7 +51,7 @@ RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
       /opt/heartwood-vllm \
       /workspace \
       /home/heartwood/.openhands \
-    && chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /workspace /home/heartwood \
+    && chown -R heartwood:heartwood /workspace /home/heartwood \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates \
@@ -77,16 +77,13 @@ RUN set -eux; \
     echo "${llama_sha256}  /tmp/llama.cpp.tar.gz" | sha256sum --check -; \
     mkdir -p /opt/llama.cpp; \
     tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
-    rm /tmp/llama.cpp.tar.gz; \
-    chown -R heartwood:heartwood /opt/llama.cpp
+    rm /tmp/llama.cpp.tar.gz
 
 WORKDIR /opt/heartwood
 
-COPY --chown=heartwood:heartwood images/gpu/vllm-requirements.txt ./images/gpu/vllm-requirements.txt
+COPY images/gpu/vllm-requirements.txt ./images/gpu/vllm-requirements.txt
 
-USER heartwood
-
-RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
+RUN --mount=type=cache,target=/root/.cache/uv \
     if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
       uv venv /opt/heartwood-vllm --python 3.12 \
       && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt; \
@@ -94,20 +91,22 @@ RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid
       echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
     fi
 
-COPY --chown=heartwood:heartwood pyproject.toml uv.lock ./
-COPY --chown=heartwood:heartwood packages ./packages
-COPY --chown=heartwood:heartwood fixtures ./fixtures
-COPY --chown=heartwood:heartwood skills ./skills
-COPY --chown=heartwood:heartwood evals ./evals
-COPY --chown=heartwood:heartwood images ./images
-COPY --from=webui-build --chown=heartwood:heartwood /src/packages/webui/dist ./packages/webui/dist
+COPY pyproject.toml uv.lock ./
+COPY packages ./packages
+COPY fixtures ./fixtures
+COPY skills ./skills
+COPY evals ./evals
+COPY images ./images
+COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
 
-RUN --mount=type=cache,target=/home/heartwood/.cache/uv,uid=${HEARTWOOD_UID},gid=${HEARTWOOD_GID} \
+RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --all-extras
 
-COPY --chown=heartwood:heartwood README.md ACRONYMS.md ./
-COPY --chown=heartwood:heartwood docs ./docs
-COPY --chown=heartwood:heartwood design ./design
+COPY README.md ACRONYMS.md ./
+COPY docs ./docs
+COPY design ./design
+
+USER heartwood
 
 FROM heartwood-runtime-base AS gpu-ci-validate
 

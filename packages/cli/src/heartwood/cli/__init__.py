@@ -537,11 +537,9 @@ def _configure_setup(
         except EOFError:
             print("\nSetup cancelled because input closed.")
             return 1, None
-    if not confirmed:
-        if not resume_existing:
-            print("Setup cancelled.")
-            return 1, None
-        confirmed = True
+    if not confirmed and not resume_existing:
+        print("Setup cancelled.")
+        return 1, None
     snapshot = _snapshot_setup_file(project)
     gateway: SessionGateway | None = None
     try:

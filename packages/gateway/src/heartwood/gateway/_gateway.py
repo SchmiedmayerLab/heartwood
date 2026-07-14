@@ -805,8 +805,8 @@ class SessionGateway:
         )
         has_token = bool(token) or bool(self.env.get(credential_name)) or bool(runtime_token)
         dynamic = custom_model_connection(base_url, has_token=has_token)
-        self._configure_generic_custom_policy(dynamic)
         if connection != dynamic:
+            self._configure_generic_custom_policy(dynamic)
             if connection.base_url != dynamic.base_url:
                 self._runtime_credentials.pop(credential_name, None)
             self._model_connections[connection_id] = dynamic

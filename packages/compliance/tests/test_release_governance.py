@@ -56,9 +56,9 @@ def test_release_source_versions_match_candidate() -> None:
 
 
 def test_release_source_versions_reject_other_candidate() -> None:
-    errors = _release_verifier().source_version_errors(Path.cwd(), "0.1.0")
+    errors = _release_verifier().source_version_errors(Path.cwd(), "999.999.999")
     assert errors
-    assert "packages/cli/pyproject.toml: 0.2.0" in errors
+    assert f"packages/cli/pyproject.toml: {_declared_version()}" in errors
 
 
 def test_current_release_guides_match_declared_version() -> None:

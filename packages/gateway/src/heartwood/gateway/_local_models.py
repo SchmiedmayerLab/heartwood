@@ -55,7 +55,8 @@ class ModelInfoProvider(Protocol):
         revision: str | None = None,
         files_metadata: bool = False,
         token: str | bool | None = None,
-    ) -> object: ...
+    ) -> object:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)

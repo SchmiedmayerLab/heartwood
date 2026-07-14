@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -156,11 +157,28 @@ def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path)
     assert f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}/AGENTS.md" in contributing
 
 
-def test_documentation_stager_rejects_destructive_output_paths() -> None:
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        ".",
+        "docs",
+        "docs/generated-site",
+        "design",
+        "documentation/stylesheets",
+        "README.md",
+    ],
+)
+def test_documentation_stager_rejects_destructive_output_paths(relative_path: str) -> None:
     stager = _documentation_stager()
+    output = (_repo_root() / relative_path).resolve()
 
     with pytest.raises(ValueError, match="must not replace"):
-        stager.stage_documentation(_repo_root(), _repo_root())
+        stager.stage_documentation(_repo_root(), output)
+
+
+def test_documentation_stager_rejects_repository_ancestor() -> None:
+    stager = _documentation_stager()
+
     with pytest.raises(ValueError, match="must not replace"):
         stager.stage_documentation(_repo_root(), _repo_root().parent)
 
@@ -210,7 +228,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
 
     assert notebook["nbformat"] == 4
     assert "Terra-Style Jupyter Demo" in sources[0]
-    assert "0.2.0-terra`" in combined
+    assert f"{_declared_version()}-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
@@ -282,8 +300,8 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
 def test_carina_runbook_uses_project_local_release_workflow() -> None:
     runbook = _read("docs/carina-cli.md")
 
-    assert "## Install Release 0.2.0" in runbook
-    assert "--version 0.2.0" in runbook
+    assert f"## Install Release {_declared_version()}" in runbook
+    assert f"--version {_declared_version()}" in runbook
     assert "project's private `.heartwood/` state" in runbook
     assert "heartwood models download qwen25-7b-instruct-vllm" in runbook
     assert "heartwood launch" in runbook
@@ -294,7 +312,7 @@ def test_carina_runbook_uses_project_local_release_workflow() -> None:
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     runbook = _read("docs/terra-jupyter-demo.md")
 
-    assert "ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra" in runbook
+    assert f"ghcr.io/schmiedmayerlab/heartwood:{_declared_version()}-terra" in runbook
     assert "contains no model weights" in runbook
     assert "Terra Jupyter Python base" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
@@ -342,6 +360,13 @@ def test_platform_extension_guide_defines_one_shared_mechanism() -> None:
 
 def _read(path: str) -> str:
     return (_repo_root() / path).read_text(encoding="utf-8")
+
+
+def _declared_version() -> str:
+    metadata = tomllib.loads(_read("VERSION.toml"))
+    version = metadata.get("version")
+    assert isinstance(version, str)
+    return version
 
 
 def _documentation_stager() -> ModuleType:

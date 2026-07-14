@@ -46,7 +46,7 @@ Open `http://127.0.0.1:8767/`. Heartwood treats `/workspace` as the project and 
 
 `/workspace` is the image's default mount target and working directory, not a separate Heartwood workspace setting. Mounting another directory and selecting it with Docker's `--workdir` changes the project in exactly the same way as changing directories before running the native CLI. Platform images such as Terra use their platform's persistent home directory instead of imposing this generic mount convention.
 
-The image runs as non-root user `10001:10001`. On Linux, make the mounted project writable by that identity or run the container with a reviewed user mapping that can write the project. Do not make the application root writable merely to avoid a host-permission problem.
+The image runs as non-root user `10001:10001`. Installed application, Skill, and inference-runtime files remain root-owned, while the project and user-home paths are explicitly writable by the runtime identity. On Linux, make the mounted project writable by that identity or run the container with a reviewed user mapping that can write the project. Do not make the application root writable merely to avoid a host-permission problem.
 
 The same project can use the terminal interface instead:
 

@@ -100,8 +100,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     export UV_CACHE_DIR=/root/.cache/uv; \
     if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
       uv venv /opt/heartwood-vllm --python 3.12 \
-      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt \
-      && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm; \
+      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt; \
     elif [ "${HEARTWOOD_GPU_RUNTIME}" != "none" ]; then \
       echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
     fi
@@ -130,8 +129,6 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
         --name heartwood \
         --display-name "Python 3 (Heartwood)"; \
     fi
-
-RUN chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood
 
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}
 

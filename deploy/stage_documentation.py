@@ -33,6 +33,13 @@ _REFERENCE_FILES = (
     "LICENSE",
     "NOTICE",
 )
+_CANONICAL_DIRECTORIES = ("docs", "design", "documentation")
+_CANONICAL_FILES = (
+    "README.md",
+    "AGENTS.md",
+    "VERSION.toml",
+    *_REFERENCE_FILES,
+)
 _REPOSITORY_DIRECTORIES = (
     "evals",
     "fixtures",
@@ -64,12 +71,25 @@ def stage_documentation(source_root: Path, output_root: Path) -> None:
     """Create a deterministic site source tree from canonical project documents."""
     source_root = source_root.resolve()
     output_root = output_root.resolve()
-    version = declared_version(source_root)
-    temporary_root = output_root.with_name(f".{output_root.name}.staging")
 
     if output_root == source_root or output_root in source_root.parents:
         msg = "documentation output must not replace the repository root or an ancestor"
         raise ValueError(msg)
+    protected_directories = tuple(
+        (source_root / relative_path).resolve() for relative_path in _CANONICAL_DIRECTORIES
+    )
+    protected_files = tuple(
+        (source_root / relative_path).resolve() for relative_path in _CANONICAL_FILES
+    )
+    if output_root in protected_files or any(
+        output_root == directory or output_root.is_relative_to(directory)
+        for directory in protected_directories
+    ):
+        msg = "documentation output must not replace canonical repository sources"
+        raise ValueError(msg)
+
+    version = declared_version(source_root)
+    temporary_root = output_root.with_name(f".{output_root.name}.staging")
 
     shutil.rmtree(temporary_root, ignore_errors=True)
     temporary_root.mkdir(parents=True)

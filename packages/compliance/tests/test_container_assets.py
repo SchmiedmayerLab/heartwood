@@ -42,10 +42,16 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz" in dockerfile
     assert "      jq \\" in dockerfile
     assert "sha256sum --check" in dockerfile
-    assert (
-        "chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /workspace /home/heartwood"
-        in dockerfile
+    assert "chown -R heartwood:heartwood /workspace /home/heartwood" in dockerfile
+    assert "COPY --chown=heartwood:heartwood" not in dockerfile
+    assert dockerfile.index("uv sync --locked --no-dev --all-extras") < dockerfile.index(
+        "USER heartwood"
     )
+    for line in dockerfile.splitlines():
+        if "chown" in line:
+            assert "/opt/heartwood" not in line
+            assert "/opt/heartwood-vllm" not in line
+            assert "/opt/llama.cpp" not in line
     for legacy_setting in (
         "HEARTWOOD_AGENT_BACKEND=",
         "HEARTWOOD_HOME=",
@@ -215,14 +221,16 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "ffmpeg" in dockerfile
         assert "AS gpu-ci-validate" in dockerfile
         assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
-    assert generic.index("uv venv /opt/heartwood-vllm") < generic.index(
-        "COPY --chown=heartwood:heartwood packages"
-    )
+    assert generic.index("uv venv /opt/heartwood-vllm") < generic.index("COPY packages ./packages")
     assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
         "COPY packages ./packages"
     )
     assert platform.count("UV_CACHE_DIR=/root/.cache/uv") == 2
-    assert 'chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm' in platform
+    for dockerfile in (generic, platform):
+        for line in dockerfile.splitlines():
+            if "chown" in line:
+                assert "/opt/heartwood" not in line
+                assert "/opt/heartwood-vllm" not in line
     assert "vllm==0.25.0" in lock
     assert "torch==2.11.0" in lock
     assert "--hash=sha256:" in lock
@@ -558,6 +566,10 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert 'model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"' in local_runtime
     assert '"${runtime_root}/images/generic/scripts/local_model_stub.py"' in local_runtime
     assert "mounted or downloaded GGUF file" in local_runtime
+    local_smoke = _read("images/generic/scripts/local_inference_smoke.sh")
+    assert "mktemp" in local_smoke
+    assert "/tmp/heartwood-llama-smoke.log" not in local_smoke
+    assert 'rm -f "${log_file}"' in local_smoke
     assert not (_repo_root() / "images/generic/scripts/start_demo_stack.sh").exists()
     assert not (_repo_root() / "images/generic/scripts/start_web_ui.sh").exists()
 

@@ -466,6 +466,7 @@ def test_custom_api_manual_fallback_reuses_the_authorized_runtime_credential(
 
 def test_generic_project_authorizes_only_the_selected_custom_api_route(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def lister(
         _connection: ModelConnection,
@@ -498,11 +499,27 @@ def test_generic_project_authorizes_only_the_selected_custom_api_route(
         token="second-transient-secret",
         base_url="https://second.example/v1",
     )
+    config_save_calls = 0
+    original_save = gateway.config_store.save
+
+    def track_config_save(config: ProjectConfig) -> None:
+        nonlocal config_save_calls
+        config_save_calls += 1
+        original_save(config)
+
+    monkeypatch.setattr(gateway.config_store, "save", track_config_save)
+    repeated = gateway.discover_models(
+        "custom-api",
+        token="second-transient-secret",
+        base_url="https://second.example/v1",
+    )
     config = gateway.config_store.load()
     persisted = project.config_path.read_text(encoding="utf-8")
 
     assert _records(first, "models")[0]["model_id"] == "custom-coder"
     assert _records(second, "models")[0]["model_id"] == "custom-coder"
+    assert _records(repeated, "models")[0]["model_id"] == "custom-coder"
+    assert config_save_calls == 0
     assert config.policy.policy_id == "generic-custom-api"
     assert "https://second.example/v1/chat/completions" in config.policy.allowed_model_endpoints
     assert "https://second.example/v1/models" in config.policy.allowed_model_catalog_endpoints

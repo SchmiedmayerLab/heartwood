@@ -69,7 +69,10 @@ class ProjectFileEditorTool(FileEditorTool):
         project_root: str | None = None,
     ) -> Sequence[ProjectFileEditorTool]:
         workspace = Path(conv_state.workspace.working_dir).resolve()
-        project = ProjectContext(Path(project_root) if project_root is not None else workspace)
+        resolved_project_root = (
+            Path(project_root).expanduser().resolve() if project_root is not None else workspace
+        )
+        project = ProjectContext(resolved_project_root)
         if workspace != project.root:
             raise ProjectStateError("OpenHands workspace must match the Heartwood project")
         upstream = FileEditorTool.create(conv_state)[0]
