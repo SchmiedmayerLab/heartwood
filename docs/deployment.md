@@ -28,7 +28,7 @@ Do not install Heartwood a second time inside a published Heartwood image. Do no
 
 Heartwood keeps configuration, sessions, models, Skills, logs, caches, and audit data under `<project>/.heartwood/`. The deployment must make the whole project directory durable across process restarts, container replacement, platform pause, and scheduler transitions.
 
-The deployment may mount model storage separately at `.heartwood/models/`, but the logical project layout must remain unchanged. Researchers should not need deployment-specific workspace, state, model, or cache arguments.
+The deployment may mount model storage separately at `.heartwood/models/`, but the logical project layout must remain unchanged. On a fresh project, Heartwood recognizes an otherwise empty `.heartwood/` containing that regular model mount and initializes the remaining state around it without removing model files. Researchers should not need deployment-specific workspace, state, model, or cache arguments.
 
 ## Configure Model Access
 

@@ -20,6 +20,7 @@ import pytest
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._launch import (
     LaunchOptions,
+    LocalRuntimeSelection,
     _catalog_contains_model,
     _discover_slurm_gpu_partitions,
     _ensure_setup,
@@ -35,6 +36,7 @@ from heartwood.cli._launch import (
     _runtime_command,
     _runtime_environment,
     _stage_model,
+    _verify_local_model,
     _wait_for_runtime,
     build_launch_plan,
     run_launch,
@@ -838,11 +840,22 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
 def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path) -> None:
     source_file = tmp_path / "model.gguf"
     source_file.write_bytes(b"1234")
+    selection = LocalRuntimeSelection(
+        model_root=source_file,
+        runtime="llama-cpp",
+        model_id="test-model",
+        size_bytes=4,
+        artifact_sha256=hashlib.sha256(b"1234").hexdigest(),
+    )
+    _verify_local_model(selection)
     file_destination = tmp_path / "file-stage"
     file_destination.mkdir()
     staged_file = _stage_model(source_file, file_destination)
     assert staged_file.read_bytes() == b"1234"
     assert _model_size(source_file) == 4
+    staged_file.write_bytes(b"5678")
+    with pytest.raises(ValueError, match="checksum"):
+        _verify_local_model(selection, model_root=staged_file)
 
     source_directory = tmp_path / "snapshot"
     _snapshot(source_directory)

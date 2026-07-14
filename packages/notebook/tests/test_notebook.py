@@ -87,6 +87,26 @@ def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     assert exported.event_count == len(session.gateway.replay_events(session_id="notebook-session"))
 
 
+def test_notebook_session_adopts_and_validates_an_injected_gateway_project(
+    tmp_path: Path,
+) -> None:
+    gateway_root = tmp_path / "gateway-project"
+    other_root = tmp_path / "other-project"
+    gateway_root.mkdir()
+    other_root.mkdir()
+    gateway = SessionGateway(
+        project=ProjectContext(gateway_root),
+        env={},
+        backend_id="deterministic",
+    )
+
+    adopted = NotebookSession(gateway=gateway)
+
+    assert adopted.project.root == gateway_root
+    with pytest.raises(ValueError, match="must match the injected gateway project"):
+        NotebookSession(project=ProjectContext(other_root), gateway=gateway)
+
+
 def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path, "notebook-approvals")
 

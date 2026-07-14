@@ -16,14 +16,16 @@ from pathlib import PurePosixPath
 from typing import Literal, Protocol, cast
 
 from heartwood.gateway._model_artifacts import ModelArtifact
+from heartwood.gateway._model_identity import (
+    is_hugging_face_model_id,
+    is_immutable_revision,
+    is_resolved_revision,
+)
 from heartwood.gateway._model_snapshots import ModelSnapshot
 
 type LocalModelRuntime = Literal["llama-cpp", "vllm"]
 type LocalModelCatalogSource = Literal["recommended", "user-selected"]
 
-_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
-_PINNED_REVISION = re.compile(r"^[0-9a-f]{7,64}$")
-_RESOLVED_REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 _SPLIT_GGUF = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.IGNORECASE)
 _SAFETENSORS_WEIGHTS = re.compile(
     r"^model(?:-\d{5}-of-\d{5})?\.safetensors(?:\.index\.json)?$",
@@ -35,6 +37,8 @@ _PYTORCH_WEIGHTS = re.compile(
 )
 _ISSUE_URL = "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose"
 _GGUF_PREFERENCE = ("q4_k_m", "q5_k_m", "q4_k_s", "q5_k_s", "q8_0")
+_HERMES_MODEL_TYPES = {"qwen2"}
+_TEXT_GENERATION_PIPELINES = {"conversational", "text-generation"}
 _USER_SELECTED_PURPOSE = (
     "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
     "license, or suitability."
@@ -84,12 +88,14 @@ class LocalModelChoice:
             raise ModelRepositoryError("local model id must be a safe directory name")
         if not self.label.strip() or not self.purpose.strip():
             raise ModelRepositoryError("local model label and purpose must not be empty")
-        if _REPOSITORY.fullmatch(self.source_repository) is None:
+        if not is_hugging_face_model_id(self.source_repository):
             raise ModelRepositoryError("repository must be a Hugging Face owner/model id")
-        revision_pattern = (
-            _RESOLVED_REVISION if self.catalog_source == "user-selected" else _PINNED_REVISION
+        revision_is_valid = (
+            is_resolved_revision(self.source_revision)
+            if self.catalog_source == "user-selected"
+            else is_immutable_revision(self.source_revision)
         )
-        if revision_pattern.fullmatch(self.source_revision) is None:
+        if not revision_is_valid:
             raise ModelRepositoryError("model revision must resolve to an immutable commit")
         if self.size_bytes <= 0 or self.minimum_free_bytes < self.size_bytes:
             raise ModelRepositoryError("local model storage metadata is invalid")
@@ -254,7 +260,7 @@ class HuggingFaceModelRepository:
         """Resolve a repository revision and enumerate supported CPU and GPU candidates."""
         repository = repository.strip()
         revision = revision.strip() if revision is not None else None
-        if _REPOSITORY.fullmatch(repository) is None:
+        if not is_hugging_face_model_id(repository):
             raise ModelRepositoryError("repository must use the owner/model format")
         if revision == "":
             revision = None
@@ -273,15 +279,11 @@ class HuggingFaceModelRepository:
             ) from error
 
         resolved_revision = getattr(info, "sha", None)
-        if (
-            not isinstance(resolved_revision, str)
-            or _RESOLVED_REVISION.fullmatch(resolved_revision) is None
-        ):
+        if not isinstance(resolved_revision, str) or not is_resolved_revision(resolved_revision):
             raise ModelRepositoryError("Hugging Face did not return an immutable model revision")
         source_repository = getattr(info, "id", repository)
-        if (
-            not isinstance(source_repository, str)
-            or _REPOSITORY.fullmatch(source_repository) is None
+        if not isinstance(source_repository, str) or not is_hugging_face_model_id(
+            source_repository
         ):
             source_repository = repository
         if _requires_custom_code(info):
@@ -319,13 +321,15 @@ class HuggingFaceModelRepository:
             files,
             license_posture,
             metadata_complete=metadata_complete,
+            supports_tool_calls=_supports_hermes_tool_calls(info),
         )
         if snapshot is not None:
             candidates.append(snapshot)
         if not candidates:
             raise ModelRepositoryError(
                 "Heartwood does not yet support this model repository. Use a standard "
-                "safetensors model for NVIDIA vLLM or a single-file GGUF repository for CPU "
+                "tool-capable model supported by the NVIDIA vLLM runtime or a single-file "
+                "GGUF repository for CPU "
                 f"inference, or report the model at {_ISSUE_URL}"
             )
         return ModelRepositoryInspection(
@@ -460,8 +464,9 @@ def _snapshot_candidate(
     license_posture: str,
     *,
     metadata_complete: bool,
+    supports_tool_calls: bool,
 ) -> LocalModelChoice | None:
-    if not metadata_complete:
+    if not metadata_complete or not supports_tool_calls:
         return None
     paths = {file.path for file in files}
     has_weights = any(
@@ -528,6 +533,17 @@ def _requires_custom_code(info: object) -> bool:
         return True
     config = getattr(info, "config", None)
     return isinstance(config, dict) and bool(config.get("auto_map"))
+
+
+def _supports_hermes_tool_calls(info: object) -> bool:
+    config = getattr(info, "config", None)
+    if not isinstance(config, dict):
+        return False
+    model_type = config.get("model_type")
+    if not isinstance(model_type, str) or model_type.casefold() not in _HERMES_MODEL_TYPES:
+        return False
+    pipeline_tag = getattr(info, "pipeline_tag", None)
+    return not isinstance(pipeline_tag, str) or pipeline_tag in _TEXT_GENERATION_PIPELINES
 
 
 def _preferred_gguf(candidates: tuple[LocalModelChoice, ...]) -> LocalModelChoice | None:

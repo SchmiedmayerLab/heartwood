@@ -146,6 +146,9 @@ def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path)
 
     stager.stage_documentation(_repo_root(), destination)
 
+    assert (destination / ".heartwood-documentation-stage").read_text(
+        encoding="utf-8"
+    ) == "heartwood.documentation-stage.v1\n"
     assert (destination / "index.md").read_text(encoding="utf-8") == '--8<-- "README.md"\n'
     assert (destination / "docs" / "README.md").is_file()
     for filename in (
@@ -180,6 +183,10 @@ def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path)
     assert f"releases/download/{version}/heartwood-installer" in carina
     assert f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}/AGENTS.md" in contributing
 
+    (destination / "transient.txt").write_text("remove me\n", encoding="utf-8")
+    stager.stage_documentation(_repo_root(), destination)
+    assert not (destination / "transient.txt").exists()
+
 
 @pytest.mark.parametrize(
     "relative_path",
@@ -205,6 +212,43 @@ def test_documentation_stager_rejects_repository_ancestor() -> None:
 
     with pytest.raises(ValueError, match="must not replace"):
         stager.stage_documentation(_repo_root(), _repo_root().parent)
+
+
+def test_documentation_stager_preserves_unmarked_existing_output(tmp_path: Path) -> None:
+    stager = _documentation_stager()
+    destination = tmp_path / "unrelated"
+    destination.mkdir()
+    sentinel = destination / "keep.txt"
+    sentinel.write_text("research data\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="without a valid Heartwood staging marker"):
+        stager.stage_documentation(_repo_root(), destination)
+
+    assert sentinel.read_text(encoding="utf-8") == "research data\n"
+
+
+def test_documentation_stager_requires_exact_legacy_output_shape(tmp_path: Path) -> None:
+    stager = _documentation_stager()
+    destination = tmp_path / "legacy"
+    destination.mkdir()
+    for directory in ("design", "docs", "stylesheets"):
+        (destination / directory).mkdir()
+    for filename in (
+        "ACRONYMS.md",
+        "CONTRIBUTING.md",
+        "CONTRIBUTORS.md",
+        "LICENSE",
+        "NOTICE",
+        "README.md",
+    ):
+        (destination / filename).write_text("synthetic\n", encoding="utf-8")
+    (destination / "index.md").write_text('--8<-- "README.md"\n', encoding="utf-8")
+
+    assert stager._looks_like_legacy_stage(destination)
+
+    (destination / "research-data.csv").write_text("synthetic\n", encoding="utf-8")
+
+    assert not stager._looks_like_legacy_stage(destination)
 
 
 def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None:
@@ -367,6 +411,8 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert f"ghcr.io/schmiedmayerlab/heartwood:{_declared_version()}-terra" in runbook
     assert "contains no model weights" in runbook
     assert "Terra Jupyter Python base" in runbook
+    assert "OpenHands terminal commands retain the operating-system permissions" in runbook
+    assert "Terra's environment remains the hard filesystem boundary" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
     assert "rejects an Open Container Initiative index" in runbook
     assert "current project's `.heartwood/models/`" in runbook

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import shutil
@@ -262,7 +263,7 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
         minimum_free_bytes=7,
         license_posture="Source model card reports apache-2.0.",
         catalog_source="user-selected",
-        artifact_sha256="a" * 64,
+        artifact_sha256=hashlib.sha256(b"content").hexdigest(),
         minimum_resource_envelope="Estimated minimum: 4 CPU cores.",
         recommended_resource_envelope="Recommended: 8 CPU cores.",
     )
@@ -304,6 +305,7 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
     config = RealSessionGateway(project=ProjectContext(project), env={}).config_store.load()
     assert config.local_model is not None
     assert config.local_model.source_repository == "example/research-model-gguf"
+    assert _run(project, monkeypatch, ["setup"]) == 0
     output = capsys.readouterr().out
     assert "Heartwood model plan" in output
     assert "Run `heartwood launch`" in output
@@ -475,6 +477,7 @@ def test_local_setup_keeps_slash_model_ids_on_an_existing_service(
     ).config_store.load()
     assert config.model_source == "local"
     assert config.model_settings.profile().model == f"openai/{service_model}"
+    assert _run(project, monkeypatch, ["setup"]) == 0
 
 
 def test_non_interactive_setup_requires_explicit_inputs(

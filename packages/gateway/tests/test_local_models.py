@@ -114,6 +114,22 @@ def test_repository_plan_rejects_snapshots_with_incomplete_size_metadata() -> No
         )
 
 
+def test_repository_plan_rejects_snapshots_without_supported_tool_metadata() -> None:
+    repository = _repository(
+        _file("config.json", 100),
+        _file("model.safetensors", 1024, digest="a" * 64),
+        model_type="bert",
+        pipeline_tag="feature-extraction",
+    )
+
+    with pytest.raises(ModelRepositoryError, match=r"tool-capable model.*issues/new/choose"):
+        repository.plan(
+            "example/embedding-model",
+            cpu_available=False,
+            gpu_available=True,
+        )
+
+
 def test_repository_plan_reports_deployments_without_a_compatible_runtime() -> None:
     cpu = _repository(_file("model-q4_k_m.gguf", 1024, digest="a" * 64)).inspect(
         "example/cpu-model"
@@ -301,7 +317,9 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
 
 def _repository(
     *siblings: object,
-    tags: tuple[str, ...] = (),
+    tags: tuple[str, ...] = ("text-generation",),
+    model_type: str = "qwen2",
+    pipeline_tag: str | None = "text-generation",
 ) -> HuggingFaceModelRepository:
     info = SimpleNamespace(
         id="example/model",
@@ -309,6 +327,8 @@ def _repository(
         siblings=list(siblings),
         card_data=SimpleNamespace(license="apache-2.0"),
         tags=list(tags),
+        config={"model_type": model_type},
+        pipeline_tag=pipeline_tag,
     )
     return HuggingFaceModelRepository(model_info=lambda *_args, **_kwargs: info)
 

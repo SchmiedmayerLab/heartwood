@@ -48,6 +48,7 @@ from heartwood.gateway._model_artifacts import (
     ModelArtifactError,
     ModelDownload,
     load_model_artifact_catalog,
+    verify_model_artifact,
 )
 from heartwood.gateway._model_artifacts import (
     download_model_artifact as download_artifact,
@@ -264,6 +265,7 @@ class SessionGateway:
         self._model_connections: dict[str, ModelConnection] = {}
         self._reload_model_connections()
         self._runtime_credentials: dict[str, str] = {}
+        self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
         repository_root = _repository_root()
         catalog_path = (
             repository_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
@@ -618,13 +620,24 @@ class SessionGateway:
             path = selected.resolved_path(self.project)
             if path.exists():
                 size = selected.size_bytes or self._local_model_size(selected.artifact_id, path)
-                statuses[selected.artifact_id] = ModelDownload(
-                    model_id=selected.artifact_id,
-                    status="ready",
-                    bytes_downloaded=size,
-                    bytes_total=size,
-                    path=str(path),
-                )
+                try:
+                    self._verify_selected_local_artifact(selected, path)
+                except (OSError, ValueError) as error:
+                    statuses[selected.artifact_id] = ModelDownload(
+                        model_id=selected.artifact_id,
+                        status="error",
+                        bytes_downloaded=0,
+                        bytes_total=size,
+                        error=f"Selected model integrity check failed: {error}",
+                    )
+                else:
+                    statuses[selected.artifact_id] = ModelDownload(
+                        model_id=selected.artifact_id,
+                        status="ready",
+                        bytes_downloaded=size,
+                        bytes_total=size,
+                        path=str(path),
+                    )
         choices = [
             self._local_model_choice_dict(choice) for choice in self._local_model_choices.values()
         ]
@@ -654,6 +667,31 @@ class SessionGateway:
             "models": choices,
             "downloads": [status.safe_dict() for status in statuses.values()],
         }
+
+    def _verify_selected_local_artifact(
+        self,
+        selected: LocalModelSelection,
+        path: Path,
+    ) -> None:
+        runtime = selected.runtime
+        if runtime == "auto":
+            runtime = "llama-cpp" if path.suffix.casefold() == ".gguf" else "vllm"
+        if runtime != "llama-cpp":
+            return
+        if selected.size_bytes is None or selected.artifact_sha256 is None:
+            raise ModelArtifactError(
+                "selected llama.cpp artifact is missing persisted size or checksum metadata"
+            )
+        stat = path.stat()
+        cache_key = (path, stat.st_size, stat.st_mtime_ns, selected.artifact_sha256)
+        if cache_key in self._verified_local_artifacts:
+            return
+        verify_model_artifact(
+            path,
+            expected_size_bytes=selected.size_bytes,
+            expected_sha256=selected.artifact_sha256,
+        )
+        self._verified_local_artifacts = {cache_key}
 
     def inspect_model_repository(
         self,
@@ -852,12 +890,6 @@ class SessionGateway:
         return dynamic
 
     def _configure_generic_custom_policy(self, connection: ModelConnection) -> None:
-        config = self.config_store.load()
-        if config.platform_id != "generic" or config.policy.policy_id not in {
-            "generic-default",
-            "generic-custom-api",
-        }:
-            return
         if connection.catalog_endpoint is None or connection.policy_endpoint is None:
             raise ModelCatalogError("Custom API requires catalog and completion endpoints")
         default_policy = select_platform_adapter({}).default_policy_profile()
@@ -882,7 +914,16 @@ class SessionGateway:
                 "notes": "Generic project policy for one explicitly selected Custom API route.",
             }
         )
-        self.config_store.save(replace(config, policy=policy))
+
+        def apply(config: ProjectConfig) -> ProjectConfig:
+            if config.platform_id != "generic" or config.policy.policy_id not in {
+                "generic-default",
+                "generic-custom-api",
+            }:
+                return config
+            return replace(config, policy=policy)
+
+        self.config_store.update(apply)
 
     def _authorize_model_catalog(self, connection: ModelConnection) -> None:
         if connection.catalog_endpoint is None:

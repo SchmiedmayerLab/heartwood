@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import json
-import stat
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -19,7 +17,6 @@ from heartwood.gateway import (
     ModelProfile,
     ModelSettings,
     ModelSettingsError,
-    ModelSettingsStore,
     model_profile_from_mapping,
     model_profile_from_preset,
     model_settings_from_mapping,
@@ -121,18 +118,6 @@ def test_profile_accepts_bracketed_ipv6_loopback_without_credentials() -> None:
     profile.validate()
 
     assert profile.is_local is True
-
-
-def test_settings_store_round_trips_atomically_without_secrets(tmp_path: Path) -> None:
-    path = tmp_path / "settings" / "models.json"
-    store = ModelSettingsStore(path)
-    settings = ModelSettings().with_profile(_local_profile()).selecting("local")
-
-    store.save(settings)
-
-    assert store.load() == settings
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert "local-model-secret" not in path.read_text(encoding="utf-8")
 
 
 def test_settings_add_select_and_remove_profiles() -> None:
@@ -284,7 +269,7 @@ def test_profile_validation_enforces_credential_reference_shapes(tmp_path: Path)
         replace(missing_file, api_key_file=str(empty_file)).resolve_api_key({})
 
 
-def test_settings_validation_and_store_report_malformed_state(tmp_path: Path) -> None:
+def test_settings_validation_rejects_malformed_state() -> None:
     profile = _local_profile()
     invalid_settings = (
         ModelSettings(schema_version="unsupported"),
@@ -297,11 +282,6 @@ def test_settings_validation_and_store_report_malformed_state(tmp_path: Path) ->
 
     with pytest.raises(ModelSettingsError, match="unknown model profile"):
         ModelSettings().without_profile("missing")
-
-    path = tmp_path / "models.json"
-    path.write_text("{", encoding="utf-8")
-    with pytest.raises(ModelSettingsError, match="unable to load"):
-        ModelSettingsStore(path).load()
 
 
 @pytest.mark.parametrize(
@@ -353,22 +333,6 @@ def test_profile_mapping_applies_defaults_and_rejects_empty_optional_values() ->
     assert mapped.credential_kind == "environment"
     with pytest.raises(ModelSettingsError, match="description"):
         model_profile_from_mapping({**mapped.safe_dict(), "description": ""})
-
-
-def test_store_rejects_secret_field_in_existing_json(tmp_path: Path) -> None:
-    path = tmp_path / "models.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": "heartwood.model-settings.v1",
-                "profiles": [{**_local_profile().safe_dict(), "password": "secret"}],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ModelSettingsError, match="inline secret"):
-        ModelSettingsStore(path).load()
 
 
 def _local_profile() -> ModelProfile:

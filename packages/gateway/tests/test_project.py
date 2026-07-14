@@ -67,6 +67,8 @@ def test_project_context_repairs_private_state_permissions(tmp_path: Path) -> No
     (project.state_root / ".gitignore").chmod(0o644)
     project.config_path.write_text("synthetic = true\n", encoding="utf-8")
     project.config_path.chmod(0o644)
+    project.config_lock_path.write_text("synthetic\n", encoding="utf-8")
+    project.config_lock_path.chmod(0o644)
 
     project.initialize()
 
@@ -75,6 +77,7 @@ def test_project_context_repairs_private_state_permissions(tmp_path: Path) -> No
     assert project.state_path.stat().st_mode & 0o777 == 0o600
     assert (project.state_root / ".gitignore").stat().st_mode & 0o777 == 0o600
     assert project.config_path.stat().st_mode & 0o777 == 0o600
+    assert project.config_lock_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_project_context_rejects_invalid_internal_ignore_rule(tmp_path: Path) -> None:
@@ -108,6 +111,18 @@ def test_project_context_rejects_old_or_unknown_state(tmp_path: Path) -> None:
         ProjectContext(tmp_path).initialize()
 
 
+def test_project_context_initializes_around_a_fresh_model_mount(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.models_dir.mkdir(parents=True)
+    model = project.models_dir / "mounted-model.gguf"
+    model.write_bytes(b"synthetic")
+
+    project.initialize()
+
+    assert project.state_exists()
+    assert model.read_bytes() == b"synthetic"
+
+
 def test_project_context_does_not_treat_empty_state_as_initialized(tmp_path: Path) -> None:
     (tmp_path / ".heartwood").mkdir()
 
@@ -130,6 +145,17 @@ def test_project_context_rejects_state_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(ProjectStateError, match="must not be a symbolic link"):
         ProjectContext(tmp_path).initialize()
+
+
+def test_project_context_rejects_config_lock_symlink(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    target = tmp_path / "outside.lock"
+    target.write_text("synthetic\n", encoding="utf-8")
+    project.config_lock_path.symlink_to(target)
+
+    with pytest.raises(ProjectStateError, match=r"\.config\.lock must be a regular file"):
+        project.initialize()
 
 
 def test_project_path_boundary_excludes_state_and_escapes(tmp_path: Path) -> None:

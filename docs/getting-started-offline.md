@@ -92,7 +92,7 @@ heartwood models download <owner/model>
 
 `inspect` does not download model weights. It resolves the repository, chooses one supported plan, and displays the exact artifact and resources Heartwood would use. `download` repeats that resolution, transfers and verifies the content, and selects it for the project. Supply `--revision <branch-tag-or-commit>` only when the repository's default revision is not appropriate.
 
-The CPU runtime accepts a repository with one complete GGUF file and source digest metadata. When several files exist, Heartwood prefers a uniquely identifiable balanced quantization such as Q4_K_M and rejects an ambiguous choice. A supported NVIDIA deployment accepts a standard snapshot with `config.json` and safetensors or PyTorch weights for vLLM.
+The CPU runtime accepts a repository with one complete GGUF file and source digest metadata. When several files exist, Heartwood prefers a uniquely identifiable balanced quantization such as Q4_K_M and rejects an ambiguous choice. A supported NVIDIA deployment accepts a standard snapshot only when Hugging Face metadata identifies a text-generation model family supported by the packaged vLLM tool-call parser. Embedding models, unknown parser families, and other unsupported repositories fail before download and link to the issue chooser.
 
 Split GGUF files, custom model code, incomplete metadata, unsupported weight formats, and repositories without a representation for the installed runtime fail before transfer. The error links to the GitHub issue chooser so support can be evaluated without silently guessing.
 

@@ -52,7 +52,7 @@ heartwood detect
 heartwood doctor
 ```
 
-`heartwood-demo` is only the tutorial's project name. Heartwood has no fixed Terra workspace path: the directory containing the terminal command, notebook, or web-server process is the project, and the agent works only on that directory and its descendants. Heartwood creates `.heartwood/` inside that project for configuration, sessions, models, Skills, logs, and audit data. Both project files and Heartwood state survive a container restart when the Terra persistent disk is retained.
+`heartwood-demo` is only the tutorial's project name. Heartwood has no fixed Terra workspace path: the directory containing the terminal command, notebook, or web-server process is the project. Heartwood file operations stay within that directory and its descendants, excluding `.heartwood/`; OpenHands terminal commands retain the operating-system permissions of the Jupyter process, so Terra's environment remains the hard filesystem boundary. Heartwood creates `.heartwood/` inside the project for configuration, sessions, models, Skills, logs, and audit data. Both project files and Heartwood state survive a container restart when the Terra persistent disk is retained.
 
 The fixture contains 24 synthetic people, 39 condition-occurrence rows, and 20 people with condition concept `201826`. It contains no protected health information. Terra workspace buckets and data tables are separate storage; files must be localized into the project before the agent can use them.
 

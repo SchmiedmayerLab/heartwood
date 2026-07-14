@@ -168,6 +168,10 @@ class ModelConnection:
             return "managed-identity"
         return None
 
+    def provider_model_id(self, execution_model: str) -> str:
+        """Return the provider-facing identifier from a normalized execution model."""
+        return execution_model.removeprefix(self.model_prefix)
+
     def credential_status(self, env: Mapping[str, str]) -> str:
         """Return whether the referenced credential is available."""
         if self.credential_kind in {"managed-identity", "none"}:
@@ -599,7 +603,7 @@ def _model_compatibility(
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
     verified = _verified_openhands_models(connection)
-    model_name = execution_model.removeprefix(connection.model_prefix)
+    model_name = connection.provider_model_id(execution_model)
     if execution_model in verified or model_name in verified:
         return "available", "Verified by the pinned OpenHands SDK", None, True
     try:

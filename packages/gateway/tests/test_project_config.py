@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from pathlib import Path
+from threading import Event
 from typing import Literal
 
 import pytest
@@ -75,6 +77,46 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
     assert store.load() == default
     assert not project.state_root.exists()
     assert not store.configured
+
+
+def test_project_config_updates_serialize_across_store_instances(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    first = ProjectConfigStore(project, _default_config(project))
+    second = ProjectConfigStore(project, _default_config(project))
+    profile = ModelProfile(
+        profile_id="local",
+        model="openai/heartwood-local-model",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
+    )
+    entered = Event()
+    release = Event()
+
+    def update_model(config: ProjectConfig) -> ProjectConfig:
+        entered.set()
+        assert release.wait(timeout=2)
+        return config.with_model_settings(
+            ModelSettings(active_profile=profile.profile_id, profiles=(profile,))
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        model_update = executor.submit(first.update, update_model)
+        assert entered.wait(timeout=2)
+        action_update = executor.submit(
+            second.update,
+            lambda config: config.with_action_settings(
+                ActionSettings(confirmation_mode="confirm-risky")
+            ),
+        )
+        release.set()
+        model_update.result(timeout=2)
+        action_update.result(timeout=2)
+
+    configured = first.load()
+    assert configured.model_settings.active_profile == profile.profile_id
+    assert configured.action_settings.confirmation_mode == "confirm-risky"
+    assert project.config_lock_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_local_model_selection_stays_under_project_model_root(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal, assert_never
 
 from heartwood.adapters.platform import select_platform_adapter
-from heartwood.gateway._model_catalog import model_connections_from_mapping
+from heartwood.gateway._model_catalog import ModelConnection, model_connections_from_mapping
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
@@ -279,14 +279,10 @@ def persist_deployment_profile(
         project,
         ProjectConfig(platform_id=adapter.adapter_id, policy=platform_policy),
     )
-    current = store.load()
-    additional_connections = current.additional_connections
-    model_settings = current.model_settings
-    if current.model_source != model_source:
-        model_settings = replace(model_settings, active_profile=None)
+    configured_connections: tuple[ModelConnection, ...] = ()
     if model_source == "stanford-ai-api-gateway":
         all_connections = model_connections_from_mapping(_stanford_connection_manifest())
-        additional_connections = tuple(
+        configured_connections = tuple(
             connection for connection in all_connections if connection.source == "platform"
         )
         policy = PolicyProfile.model_validate(
@@ -310,8 +306,17 @@ def persist_deployment_profile(
         policy = platform_policy
     else:  # pragma: no cover - protected by the public type and CLI choices
         raise ProjectConfigError(f"unsupported model source: {model_source}")
-    store.save(
-        ProjectConfig(
+
+    def apply(current: ProjectConfig) -> ProjectConfig:
+        model_settings = current.model_settings
+        if current.model_source != model_source:
+            model_settings = replace(model_settings, active_profile=None)
+        additional_connections = (
+            configured_connections
+            if model_source == "stanford-ai-api-gateway"
+            else current.additional_connections
+        )
+        return ProjectConfig(
             platform_id=adapter.adapter_id,
             model_source=model_source,
             action_settings=current.action_settings,
@@ -320,7 +325,8 @@ def persist_deployment_profile(
             policy=policy,
             local_model=current.local_model,
         )
-    )
+
+    store.update(apply)
     return project.config_path
 
 

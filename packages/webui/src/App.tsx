@@ -127,6 +127,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
   const commandInFlight = useRef(false);
   const setupOpened = useRef(false);
+  const modelPollingError = useRef<string | null>(null);
 
   const refreshSessions = useCallback(async () => {
     const response = await resolvedClient.listSessions();
@@ -273,13 +274,25 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     ) ?? false;
 
   useEffect(() => {
-    if (!modelDownloadActive) return;
+    if (!modelDownloadActive) {
+      const recoveredError = modelPollingError.current;
+      modelPollingError.current = null;
+      if (recoveredError !== null) {
+        setError((current) => (current === recoveredError ? null : current));
+      }
+      return;
+    }
     let active = true;
     let timer: number | null = null;
     const poll = async (): Promise<void> => {
       try {
         const artifacts = await resolvedClient.getModelArtifacts();
         if (!active) return;
+        const recoveredError = modelPollingError.current;
+        modelPollingError.current = null;
+        if (recoveredError !== null) {
+          setError((current) => (current === recoveredError ? null : current));
+        }
         setModelArtifacts(artifacts);
         if (artifacts.downloads.some((item) => item.status === "downloading")) {
           timer = window.setTimeout(() => void poll(), 500);
@@ -289,7 +302,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           );
         }
       } catch (caught) {
-        if (active) setError(errorMessage(caught));
+        if (active) {
+          const message = errorMessage(caught);
+          modelPollingError.current = message;
+          setError(message);
+          timer = window.setTimeout(() => void poll(), 2_000);
+        }
       }
     };
     timer = window.setTimeout(() => void poll(), 500);

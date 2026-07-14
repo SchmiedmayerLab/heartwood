@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -822,7 +823,7 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
         minimum_free_bytes=7,
         license_posture="Source model card reports apache-2.0.",
         catalog_source="user-selected",
-        artifact_sha256="a" * 64,
+        artifact_sha256=hashlib.sha256(b"content").hexdigest(),
         minimum_resource_envelope="Estimated minimum resources",
         recommended_resource_envelope="Recommended resources",
     )
@@ -872,6 +873,14 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
     assert selected["recommended_resource_envelope"] == choice.recommended_resource_envelope
     assert selected["artifact_sha256"] == choice.artifact_sha256
     assert restarted.config_store.load().local_model is not None
+    downloads = cast(list[dict[str, object]], catalog["downloads"])
+    assert downloads[0]["status"] == "ready"
+
+    path.write_bytes(b"changed")
+    tampered = cast(list[dict[str, object]], restarted.model_artifacts()["downloads"])
+    assert tampered[0]["status"] == "error"
+    assert "checksum" in str(tampered[0]["error"])
+    path.write_bytes(b"content")
     monkeypatch.setattr(restarted, "_local_runtime_available", lambda _runtime: True)
 
     background_models: list[ModelArtifact | ModelSnapshot] = []

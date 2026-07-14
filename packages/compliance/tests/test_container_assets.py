@@ -356,7 +356,8 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "LOCAL_SCRATCH_JOB" in launch_runtime
     assert "--inside-allocation" in launch_runtime
     assert "HEARTWOOD_PLATFORM=carina" in launch_runtime
-    assert "verify_snapshot(model_root)" in launch_runtime
+    assert "_verify_local_model(selection)" in launch_runtime
+    assert "_verify_local_model(selection, model_root=staged_source)" in launch_runtime
     assert 'env.get("LOCAL_SCRATCH_JOB"' in launch_runtime
     assert "allowed_names" in launch_runtime
     assert "result = {name: env[name] for name in allowed_names if name in env}" in launch_runtime

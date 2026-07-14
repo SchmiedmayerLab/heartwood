@@ -106,6 +106,7 @@ class FakeClient implements HeartwoodClient {
   listCalls = 0;
   replayCalls = 0;
   artifactCalls = 0;
+  artifactFailures = 0;
   savedProfile: ModelProfile | null = null;
   catalogRequest: ModelCatalogRequest | null = null;
   catalogError: Error | null = null;
@@ -332,6 +333,10 @@ class FakeClient implements HeartwoodClient {
 
   getModelArtifacts(): Promise<ModelArtifacts> {
     this.artifactCalls += 1;
+    if (this.artifactFailures > 0) {
+      this.artifactFailures -= 1;
+      return Promise.reject(new Error("temporary model status failure"));
+    }
     if (
       this.downloadedArtifact !== null &&
       this.currentDownloads[0]?.status === "downloading" &&
@@ -1003,6 +1008,31 @@ describe("App", () => {
     expect(
       screen.getByLabelText("Download Research Model Q4_K_M"),
     ).toBeDisabled();
+  });
+
+  it("continues polling a model download after a transient status failure", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByLabelText("Download Stories 260K");
+    client.artifactFailures = 1;
+
+    fireEvent.click(screen.getByLabelText("Download Stories 260K"));
+
+    expect(
+      await screen.findByText("temporary model status failure"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Ready for Heartwood launch",
+        {},
+        { timeout: 5_000 },
+      ),
+    ).toBeInTheDocument();
+    expect(client.artifactCalls).toBeGreaterThanOrEqual(3);
+    expect(
+      screen.queryByText("temporary model status failure"),
+    ).not.toBeInTheDocument();
   });
 
   it("links unsupported Hugging Face models to the issue chooser", async () => {

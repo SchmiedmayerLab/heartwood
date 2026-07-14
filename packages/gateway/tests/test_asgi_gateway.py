@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterator
 from pathlib import Path
+from threading import Event, Timer
 from typing import cast
 
-from heartwood.gateway import GatewayAsgiApp, ProjectContext, SessionGateway
+import pytest
+
+from heartwood.gateway import GatewayAsgiApp, ProjectContext, RestResponse, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -57,6 +61,37 @@ def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
         EventKind.COMMAND_RECEIVED.value,
         EventKind.DETECTION_PROPOSED.value,
     ]
+
+
+def test_asgi_http_keeps_the_event_loop_responsive_during_blocking_gateway_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> float:
+        app = GatewayAsgiApp(_gateway(tmp_path))
+        entered = Event()
+        release = Event()
+
+        def blocking_handle(_request: object) -> RestResponse:
+            entered.set()
+            release.wait(timeout=2)
+            return RestResponse(status_code=200, body={"status": "complete"})
+
+        monkeypatch.setattr(app.rest, "handle", blocking_handle)
+        fallback_release = Timer(0.5, release.set)
+        fallback_release.start()
+        started = time.monotonic()
+        request = asyncio.create_task(_http_call(app, method="GET", path="/settings/models"))
+        while not entered.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)
+        elapsed = time.monotonic() - started
+        release.set()
+        await request
+        fallback_release.cancel()
+        return elapsed
+
+    assert asyncio.run(scenario()) < 0.25
 
 
 def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> None:

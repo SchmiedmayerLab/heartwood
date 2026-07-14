@@ -118,7 +118,16 @@ class NotebookSession:
         session_id: str = "session-local",
         gateway: SessionGateway | None = None,
     ) -> None:
-        self.project = ProjectContext.current() if project is None else project
+        gateway_project = getattr(gateway, "project", None)
+        if project is None and isinstance(gateway_project, ProjectContext):
+            self.project = gateway_project
+        else:
+            self.project = ProjectContext.current() if project is None else project
+        if (
+            isinstance(gateway_project, ProjectContext)
+            and gateway_project.root != self.project.root
+        ):
+            raise ValueError("notebook project must match the injected gateway project")
         self.session_id = session_id
         self.gateway = SessionGateway(project=self.project) if gateway is None else gateway
         self._next_command_sequence = len(self.gateway.replay_events(session_id=session_id))

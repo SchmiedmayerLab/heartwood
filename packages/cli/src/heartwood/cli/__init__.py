@@ -36,6 +36,7 @@ from heartwood.cli._interactive import (
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
+    BUILT_IN_MODEL_CONNECTIONS,
     MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
     DeploymentReadiness,
@@ -506,6 +507,7 @@ def _configure_setup(
     confirmed = bool(getattr(args, "yes", False))
     model_id = getattr(args, "model_id", None)
     resume_existing = False
+    resume_managed_local = False
     if project.config_path.is_file():
         adapter = select_platform_adapter(os.environ)
         config_store = ProjectConfigStore(
@@ -523,15 +525,40 @@ def _configure_setup(
                 pass
             else:
                 source = existing.model_source
-                model_id = existing_profile.model
+                if source == "local" and existing.local_model is not None:
+                    model_id = existing.local_model.artifact_id
+                    resume_managed_local = True
+                else:
+                    source_option = next(
+                        (item for item in MODEL_SOURCE_OPTIONS if item.source_id == source),
+                        None,
+                    )
+                    connections = (
+                        *BUILT_IN_MODEL_CONNECTIONS,
+                        *existing.additional_connections,
+                    )
+                    connection = next(
+                        (
+                            item
+                            for item in connections
+                            if item.connection_id
+                            == (source if source_option is None else source_option.connection_id)
+                        ),
+                        None,
+                    )
+                    model_id = (
+                        existing_profile.model
+                        if connection is None
+                        else connection.provider_model_id(existing_profile.model)
+                    )
                 resume_existing = True
     if source is None:
         if non_interactive:
             parser.error("--model-source is required with --non-interactive")
         print(_format_readiness(readiness))
         print("\nModel access:")
-        for index, option in enumerate(_MODEL_SOURCE_IDS, start=1):
-            print(f"  {index}. {_MODEL_SOURCE_LABELS[option]}")
+        for index, source_id in enumerate(_MODEL_SOURCE_IDS, start=1):
+            print(f"  {index}. {_MODEL_SOURCE_LABELS[source_id]}")
         try:
             choice = input(f"Select [1-{len(_MODEL_SOURCE_IDS)}]: ").strip()
         except EOFError:
@@ -572,11 +599,12 @@ def _configure_setup(
         if not resume_existing:
             gateway.select_action_confirmation_mode("always-confirm")
         if source == "local":
-            _configure_local_model(
-                gateway,
-                model_id=model_id,
-                non_interactive=non_interactive,
-            )
+            if not resume_managed_local:
+                _configure_local_model(
+                    gateway,
+                    model_id=model_id,
+                    non_interactive=non_interactive,
+                )
             print("Setup complete.")
             return 0, gateway
         connection_id = "local" if source == "local" else source

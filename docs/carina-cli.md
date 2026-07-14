@@ -78,7 +78,7 @@ heartwood models inspect <owner/model>
 heartwood models download <owner/model>
 ```
 
-Carina includes the vLLM runtime, so Heartwood accepts a standard repository snapshot with `config.json` and safetensors or PyTorch weights, resolves it to an immutable revision, and reports approximate download, disk, RAM, and GPU-memory requirements. Custom model code and unsupported formats fail before download and link to the issue chooser. A successful plan establishes packaging compatibility, not model quality, biomedical suitability, license approval, or authorization for Carina data.
+Carina includes the vLLM runtime, so Heartwood accepts a standard repository snapshot only when Hugging Face metadata identifies a text-generation model family supported by the packaged tool-call parser. It resolves the source to an immutable revision and reports approximate download, disk, RAM, and GPU-memory requirements. Custom model code, embedding models, unknown parser families, and unsupported formats fail before download and link to the issue chooser. A successful plan establishes packaging compatibility, not model quality, biomedical suitability, license approval, or authorization for Carina data.
 
 Review the project-local selection without requesting compute:
 

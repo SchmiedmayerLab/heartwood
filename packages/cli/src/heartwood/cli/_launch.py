@@ -23,7 +23,12 @@ from pathlib import Path
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
-from heartwood.gateway import ProjectConfig, ProjectConfigStore, ProjectContext
+from heartwood.gateway import (
+    ProjectConfig,
+    ProjectConfigStore,
+    ProjectContext,
+    verify_model_artifact,
+)
 
 InputFunction = Callable[[str], str]
 RunFunction = Callable[[Sequence[str]], int]
@@ -104,6 +109,17 @@ class LaunchPlan:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True, slots=True)
+class LocalRuntimeSelection:
+    """Persisted local-model selection normalized for runtime launch."""
+
+    model_root: Path
+    runtime: str
+    model_id: str
+    size_bytes: int | None
+    artifact_sha256: str | None
+
+
 def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchPlan:
     """Build a platform-specific launch plan without changing external state."""
     platform_id = select_platform_adapter(env).adapter_id
@@ -129,11 +145,11 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
         platform_id,
         allocation_required,
         command,
-        selection[0] if selection is not None else None,
+        selection.model_root if selection is not None else None,
         options.project.state_root,
         options.project.root,
-        selection[1] if selection is not None else None,
-        selection[2] if selection is not None else None,
+        selection.runtime if selection is not None else None,
+        selection.model_id if selection is not None else None,
         partition=partition,
     )
 
@@ -205,16 +221,17 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             "`heartwood models download <model-id>`."
         )
         return 64
-    model_root, runtime_kind, model_id = selection
+    model_root = selection.model_root
+    runtime_kind = selection.runtime
+    model_id = selection.model_id
     if not model_root.exists():
         print(f"Selected local model is unavailable: {model_root}")
         return 66
-    if runtime_kind == "vllm":
-        try:
-            verify_snapshot(model_root)
-        except (OSError, UnicodeError, ValueError) as error:
-            print(f"Model verification failed: {error}")
-            return 66
+    try:
+        _verify_local_model(selection)
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"Model verification failed: {error}")
+        return 66
     runtime_executable = _resolve_runtime_executable(runtime_kind)
     if not runtime_executable.is_file() or not os.access(runtime_executable, os.X_OK):
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
@@ -259,8 +276,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
                 print(f"Model staging failed: {error}")
                 return 74
             try:
-                if runtime_kind == "vllm":
-                    verify_snapshot(staged_source)
+                _verify_local_model(selection, model_root=staged_source)
             except (OSError, UnicodeError, ValueError) as error:
                 print(f"Staged model verification failed: {error}")
                 return 66
@@ -414,7 +430,7 @@ def _runtime_command(
 def _local_model_selection(
     project: ProjectContext,
     env: Mapping[str, str],
-) -> tuple[Path, str, str] | None:
+) -> LocalRuntimeSelection | None:
     adapter = select_platform_adapter(env)
     store = ProjectConfigStore(
         project,
@@ -433,7 +449,33 @@ def _local_model_selection(
     runtime = selection.runtime
     if runtime == "auto":
         runtime = "llama-cpp" if model.suffix.casefold() == ".gguf" else "vllm"
-    return model, runtime, selection.model_id
+    return LocalRuntimeSelection(
+        model_root=model,
+        runtime=runtime,
+        model_id=selection.model_id,
+        size_bytes=selection.size_bytes,
+        artifact_sha256=selection.artifact_sha256,
+    )
+
+
+def _verify_local_model(
+    selection: LocalRuntimeSelection,
+    *,
+    model_root: Path | None = None,
+) -> None:
+    root = selection.model_root if model_root is None else model_root
+    if selection.runtime == "vllm":
+        verify_snapshot(root)
+        return
+    if selection.size_bytes is None or selection.artifact_sha256 is None:
+        raise LaunchConfigurationError(
+            "the selected llama.cpp artifact is missing persisted size or checksum metadata"
+        )
+    verify_model_artifact(
+        _gguf_file(root),
+        expected_size_bytes=selection.size_bytes,
+        expected_sha256=selection.artifact_sha256,
+    )
 
 
 def _runtime_label(runtime: str) -> str:
@@ -588,7 +630,7 @@ def _ensure_setup(options: LaunchOptions, env: Mapping[str, str] | None = None) 
             "--model-source",
             "local",
             "--model-id",
-            selection[2],
+            selection.model_id,
             "--non-interactive",
             "--yes",
         )

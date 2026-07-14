@@ -13,7 +13,6 @@ from heartwood.gateway._action_settings import (
     ActionModeOption,
     ActionSettings,
     ActionSettingsError,
-    ActionSettingsStore,
     action_settings_from_mapping,
 )
 from heartwood.gateway._asgi import GatewayAsgiApp
@@ -35,6 +34,7 @@ from heartwood.gateway._model_artifacts import (
     ModelDownload,
     download_model_artifact,
     load_model_artifact_catalog,
+    verify_model_artifact,
 )
 from heartwood.gateway._model_catalog import (
     BUILT_IN_MODEL_CONNECTIONS,
@@ -54,7 +54,6 @@ from heartwood.gateway._model_settings import (
     ModelProfile,
     ModelSettings,
     ModelSettingsError,
-    ModelSettingsStore,
     model_profile_from_mapping,
     model_profile_from_preset,
     model_settings_from_mapping,
@@ -105,7 +104,6 @@ __all__ = [
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",
-    "ActionSettingsStore",
     "DeploymentReadiness",
     "GatewayAsgiApp",
     "GatewayEventStream",
@@ -130,7 +128,6 @@ __all__ = [
     "ModelRepositoryInspection",
     "ModelSettings",
     "ModelSettingsError",
-    "ModelSettingsStore",
     "ModelSnapshot",
     "ModelSnapshotCatalog",
     "ModelSnapshotError",
@@ -169,5 +166,6 @@ __all__ = [
     "model_settings_from_mapping",
     "persist_deployment_profile",
     "recommended_model_choices",
+    "verify_model_artifact",
     "verify_model_snapshot",
 ]

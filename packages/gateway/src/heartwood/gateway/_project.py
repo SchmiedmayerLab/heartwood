@@ -50,6 +50,11 @@ class ProjectContext:
         return self.state_root / "config.toml"
 
     @property
+    def config_lock_path(self) -> Path:
+        """Return the project-scoped interprocess configuration lock path."""
+        return self.state_root / ".config.lock"
+
+    @property
     def state_path(self) -> Path:
         """Return the internal state-schema marker path."""
         return self.state_root / "state.json"
@@ -113,6 +118,8 @@ class ProjectContext:
         self.state_path.chmod(0o600)
         if self.config_path.exists():
             self.config_path.chmod(0o600)
+        if self.config_lock_path.exists():
+            self.config_lock_path.chmod(0o600)
 
     def state_exists(self) -> bool:
         """Return whether a valid initialized state structure exists."""
@@ -150,7 +157,10 @@ class ProjectContext:
         if not self.state_root.is_dir():
             raise ProjectStateError(".heartwood must be a directory")
         if not self.state_path.exists():
-            if any(self.state_root.iterdir()):
+            entries = tuple(self.state_root.iterdir())
+            models = self.models_dir
+            fresh_model_mount = entries == (models,) and models.is_dir() and not models.is_symlink()
+            if entries and not fresh_model_mount:
                 raise ProjectStateError(
                     "incompatible .heartwood layout: no project-state marker is present"
                 )
@@ -186,6 +196,10 @@ class ProjectContext:
             self.config_path.is_symlink() or not self.config_path.is_file()
         ):
             raise ProjectStateError(".heartwood/config.toml must be a regular file")
+        if self.config_lock_path.is_symlink() or (
+            self.config_lock_path.exists() and not self.config_lock_path.is_file()
+        ):
+            raise ProjectStateError(".heartwood/.config.lock must be a regular file")
 
 
 def _atomic_private_json(path: Path, value: object) -> None:

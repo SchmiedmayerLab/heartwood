@@ -88,12 +88,13 @@ class GatewayAsgiApp:
 
         if gateway_path is not None:
             body = await _read_http_body(receive)
-            response = self.rest.handle(
+            response = await asyncio.to_thread(
+                self.rest.handle,
                 RestRequest(
                     method=_scope_string(scope, "method"),
                     path=_path_with_query(scope, path=gateway_path),
                     body=body.decode("utf-8"),
-                )
+                ),
             )
             if response.status_code != 404 or _is_gateway_api_path(gateway_path):
                 await _send_json_response(

@@ -6,15 +6,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from heartwood.gateway import (
-    ActionSettings,
     ActionSettingsError,
-    ActionSettingsStore,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -22,27 +19,6 @@ from heartwood.gateway import (
     action_settings_from_mapping,
 )
 from heartwood.schemas import PolicyProfile
-
-
-def test_action_settings_default_to_confirmation_for_every_action(tmp_path: Path) -> None:
-    store = ActionSettingsStore(tmp_path / "actions.json")
-
-    assert store.load().confirmation_mode == "always-confirm"
-
-
-def test_action_settings_round_trip_risk_based_selection(tmp_path: Path) -> None:
-    path = tmp_path / "actions.json"
-    store = ActionSettingsStore(path)
-    settings = ActionSettings(confirmation_mode="confirm-risky")
-
-    store.save(settings)
-
-    assert store.load() == settings
-    assert path.stat().st_mode & 0o777 == 0o600
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "confirmation_mode": "confirm-risky",
-        "schema_version": "heartwood.action-settings.v1",
-    }
 
 
 @pytest.mark.parametrize(

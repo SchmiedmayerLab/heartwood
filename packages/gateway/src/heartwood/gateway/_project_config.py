@@ -12,12 +12,13 @@ import os
 import re
 import tempfile
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import tomli_w
+from filelock import FileLock
 from pydantic import ValidationError
 
 from heartwood.gateway._action_settings import (
@@ -31,6 +32,11 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     model_connections_from_mapping,
 )
+from heartwood.gateway._model_identity import (
+    is_hugging_face_model_id,
+    is_immutable_revision,
+    is_resolved_revision,
+)
 from heartwood.gateway._model_settings import (
     ModelSettings,
     ModelSettingsError,
@@ -41,9 +47,6 @@ from heartwood.schemas import PolicyProfile
 
 _CONFIG_SCHEMA_VERSION = "heartwood.project-config.v1"
 _SAFE_SOURCE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_SAFE_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
-_IMMUTABLE_REVISION = re.compile(r"^[0-9a-f]{7,64}$")
-_RESOLVED_REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 _TOP_LEVEL_FIELDS = {
     "action",
     "connections",
@@ -90,20 +93,16 @@ class LocalModelSelection:
             raise ProjectConfigError("unsupported local model catalog source")
         if self.display_name is not None and not self.display_name.strip():
             raise ProjectConfigError("local model display_name must not be empty")
-        if (
-            self.source_repository is not None
-            and _SAFE_REPOSITORY.fullmatch(self.source_repository) is None
+        if self.source_repository is not None and not is_hugging_face_model_id(
+            self.source_repository
         ):
             raise ProjectConfigError("local model source_repository must use owner/model format")
-        if (
-            self.source_revision is not None
-            and _IMMUTABLE_REVISION.fullmatch(self.source_revision) is None
-        ):
+        if self.source_revision is not None and not is_immutable_revision(self.source_revision):
             raise ProjectConfigError("local model source_revision must be immutable")
         if (
             self.catalog_source == "user-selected"
             and self.source_revision is not None
-            and _RESOLVED_REVISION.fullmatch(self.source_revision) is None
+            and not is_resolved_revision(self.source_revision)
         ):
             raise ProjectConfigError(
                 "user-selected local model source_revision must be a resolved commit"
@@ -256,6 +255,23 @@ class ProjectConfigStore:
         """Persist validated configuration as owner-only TOML."""
         config.validate(self.project)
         self.project.initialize()
+        with FileLock(self.project.config_lock_path, mode=0o600):
+            self._save_unlocked(config)
+
+    def update(self, transform: Callable[[ProjectConfig], ProjectConfig]) -> ProjectConfig:
+        """Apply one read-modify-write operation under the project configuration lock."""
+        self.project.initialize()
+        with FileLock(self.project.config_lock_path, mode=0o600):
+            current = self.load()
+            updated = transform(current)
+            updated.validate(self.project)
+            if updated == current:
+                return current
+            self._save_unlocked(updated)
+            return updated
+
+    def _save_unlocked(self, config: ProjectConfig) -> None:
+        config.validate(self.project)
         payload = _config_mapping(config)
         contents = tomli_w.dumps(payload)
         try:
@@ -315,11 +331,12 @@ class ProjectConfigStore:
             recommended_resource_envelope=recommended_resource_envelope,
             catalog_source=catalog_source,
         )
-        updated = replace(self.load(), model_source="local", local_model=selection)
-        if settings is not None:
-            updated = updated.with_model_settings(settings)
-        self.save(updated)
-        return updated
+
+        def apply(current: ProjectConfig) -> ProjectConfig:
+            updated = replace(current, model_source="local", local_model=selection)
+            return updated if settings is None else updated.with_model_settings(settings)
+
+        return self.update(apply)
 
     def select_model_source(
         self,
@@ -327,9 +344,7 @@ class ProjectConfigStore:
         settings: ModelSettings,
     ) -> ProjectConfig:
         """Persist model settings and their canonical source in one atomic write."""
-        updated = self.load().with_model_selection(source, settings)
-        self.save(updated)
-        return updated
+        return self.update(lambda current: current.with_model_selection(source, settings))
 
 
 class ProjectModelSettingsStore:
@@ -348,7 +363,7 @@ class ProjectModelSettingsStore:
     def save(self, settings: ModelSettings) -> None:
         """Replace project model settings atomically."""
         try:
-            self.store.save(self.store.load().with_model_settings(settings))
+            self.store.update(lambda current: current.with_model_settings(settings))
         except ProjectConfigError as error:
             raise ModelSettingsError(str(error)) from error
 
@@ -376,7 +391,7 @@ class ProjectActionSettingsStore:
     def save(self, settings: ActionSettings) -> None:
         """Replace project action settings atomically."""
         try:
-            self.store.save(self.store.load().with_action_settings(settings))
+            self.store.update(lambda current: current.with_action_settings(settings))
         except ProjectConfigError as error:
             raise ActionSettingsError(str(error)) from error
 

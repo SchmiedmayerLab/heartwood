@@ -24,9 +24,12 @@ from typing import Any, Protocol, cast
 
 from filelock import FileLock
 
+from heartwood.gateway._model_identity import (
+    is_hugging_face_model_id,
+    is_resolved_revision,
+)
+
 _ENTRY = re.compile(r"^([0-9a-fA-F]{64}) [ *](.+)$")
-_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
-_REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 _SNAPSHOT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SIZE_TOLERANCE = 0.20
 
@@ -70,9 +73,9 @@ class ModelSnapshot:
         """Validate identity, source, and storage metadata."""
         if _SNAPSHOT_ID.fullmatch(self.snapshot_id) is None:
             raise ModelSnapshotError("snapshot_id must be a safe cache directory name")
-        if _REPOSITORY.fullmatch(self.source_repository) is None:
+        if not is_hugging_face_model_id(self.source_repository):
             raise ModelSnapshotError("source_repository must be a Hugging Face owner/repository id")
-        if _REVISION.fullmatch(self.source_revision) is None:
+        if not is_resolved_revision(self.source_revision):
             raise ModelSnapshotError("source_revision must be an immutable commit revision")
         for name, value in (
             ("runtime_profile", self.runtime_profile),

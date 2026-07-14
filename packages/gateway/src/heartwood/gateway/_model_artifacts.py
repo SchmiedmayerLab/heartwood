@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import shutil
 import tempfile
 import threading
@@ -23,6 +22,10 @@ from typing import Any, Literal, Protocol, cast
 
 from filelock import FileLock
 
+from heartwood.gateway._model_identity import (
+    is_hugging_face_model_id,
+    is_immutable_revision,
+)
 from heartwood.gateway._model_snapshots import (
     ModelSnapshot,
     ModelSnapshotCatalog,
@@ -33,9 +36,6 @@ from heartwood.gateway._model_snapshots import (
 type DownloadStatus = Literal["downloading", "error", "ready"]
 type ProgressCallback = Callable[[int, int], None]
 type DownloadReadyCallback = Callable[[str, Path, str], None]
-
-_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
-_REVISION = re.compile(r"^[0-9a-f]{7,64}$")
 
 
 class _DownloadProgress:
@@ -120,7 +120,7 @@ class ModelArtifact:
         if not self.artifact_id or "/" in self.artifact_id or ".." in self.artifact_id:
             msg = "artifact_id must be a safe cache directory name"
             raise ModelArtifactError(msg)
-        if _REPOSITORY.fullmatch(self.source_repository) is None:
+        if not is_hugging_face_model_id(self.source_repository):
             msg = "source_repository must be a Hugging Face owner/repository id"
             raise ModelArtifactError(msg)
         if (
@@ -130,7 +130,7 @@ class ModelArtifact:
         ):
             msg = "source_path must be a safe repository-relative path"
             raise ModelArtifactError(msg)
-        if _REVISION.fullmatch(self.source_revision) is None:
+        if not is_immutable_revision(self.source_revision):
             msg = "source_revision must be an immutable revision"
             raise ModelArtifactError(msg)
         if self.artifact_size_bytes <= 0 or self.minimum_free_bytes < self.artifact_size_bytes:
@@ -467,17 +467,37 @@ def _load_artifact(path: Path) -> ModelArtifact:
 
 
 def _verify_artifact(path: Path, artifact: ModelArtifact) -> None:
+    verify_model_artifact(
+        path,
+        expected_size_bytes=artifact.artifact_size_bytes,
+        expected_sha256=artifact.artifact_sha256,
+    )
+
+
+def verify_model_artifact(
+    path: Path,
+    *,
+    expected_size_bytes: int,
+    expected_sha256: str,
+) -> None:
+    """Verify one selected model file against its persisted integrity metadata."""
+    if expected_size_bytes <= 0:
+        raise ModelArtifactError("model artifact size must be positive")
+    if len(expected_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in expected_sha256
+    ):
+        raise ModelArtifactError("model artifact checksum must be a lowercase SHA-256 digest")
     if path.is_symlink() or not path.is_file():
         msg = f"downloaded model artifact is missing: {path}"
         raise ModelArtifactError(msg)
-    if path.stat().st_size != artifact.artifact_size_bytes:
+    if path.stat().st_size != expected_size_bytes:
         msg = "downloaded model artifact size does not match its pinned manifest"
         raise ModelArtifactError(msg)
     digest = hashlib.sha256()
     with path.open("rb") as file:
         for block in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(block)
-    if digest.hexdigest() != artifact.artifact_sha256:
+    if digest.hexdigest() != expected_sha256:
         msg = "downloaded model artifact checksum does not match its pinned manifest"
         raise ModelArtifactError(msg)
 
