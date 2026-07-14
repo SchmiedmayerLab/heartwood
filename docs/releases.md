@@ -14,7 +14,7 @@ Heartwood releases use Semantic Versioning without a `v` prefix. Examples includ
 
 ## Create a Release
 
-`VERSION.toml` is the canonical release version. Prepare a release through a reviewed pull request that updates this value, every workspace and web package version, runtime version constants, lockfiles, and versioned user-guide examples together. CI rejects inconsistent package or guide versions, and the release workflow refuses an input that differs from the canonical source version.
+`VERSION.toml` is the canonical release version. Prepare a release through a reviewed pull request that updates this value, every workspace and web package version, runtime version constants, lockfiles, and versioned user-guide examples together. CI rejects inconsistent package or guide versions, and the release workflow refuses an input that differs from the canonical source version. Python source declarations retain the Semantic Versioning spelling, while Python lock metadata uses the equivalent normalized Python version, such as `0.2.0b1` for `0.2.0-beta.1`.
 
 Start the protected workflow from the current `main` branch:
 
@@ -26,7 +26,7 @@ Every `main` commit runs the `Main Validation` workflow. Its dependency graph ca
 
 After automated verification, the workflow creates a draft with GitHub's automatically generated release notes and the verified native assets. The `Approve And Publish Release` job then waits in the protected `release` environment. Before approving, the designated maintainer can open the draft and refine its title or notes; release assets must remain unchanged. The maintainer may approve their own deployment. Approval authorizes only the already-verified commit, draft, and artifacts; it does not bypass a failed gate. Publication rechecks the draft assets and confirms that `main` still points to the approved commit, then stops if either changed while approval was pending.
 
-After the release is public, the same workflow checks out the exact published tag, rebuilds the canonical documentation strictly, and deploys it to [GitHub Pages](https://schmiedmayerlab.github.io/heartwood/) through the `github-pages` environment. Pull requests and `main` validate documentation changes but never deploy them, so the public site remains aligned with the latest published release rather than ongoing development.
+For a stable release, the same workflow checks out the exact published tag, rebuilds the canonical documentation strictly, and deploys it to [GitHub Pages](https://schmiedmayerlab.github.io/heartwood/) through the `github-pages` environment. Versions with a Semantic Versioning prerelease suffix are automatically published as GitHub prereleases, are never designated `Latest`, and do not replace the stable documentation site. Pull requests and `main` validate documentation changes but never deploy them, so the public site remains aligned with the latest stable release rather than ongoing development.
 
 The publication job creates these immutable version tags from the verified commit images:
 

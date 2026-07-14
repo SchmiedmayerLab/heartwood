@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Semantic version without a prefix, for example 0.2.0
+        description: Semantic version without a prefix, for example 0.2.0 or 0.2.0-beta.1
         required: true
         type: string
 
@@ -30,6 +30,8 @@ jobs:
     name: Verify Release Candidate
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    outputs:
+      prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v7
@@ -38,14 +40,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify version, ref, and release absence
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          python3 deploy/verify_release_candidate.py \
+          prerelease="$(python3 deploy/verify_release_candidate.py \
             --version "${RELEASE_VERSION}" \
             --source-root . \
-            --version-only
+            --print-prerelease)"
+          printf 'prerelease=%s\n' "${prerelease}" >> "${GITHUB_OUTPUT}"
           main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
           test "${main_sha}" = "${GITHUB_SHA}"
           if release_json="$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft,targetCommitish 2>/dev/null)"; then
@@ -155,6 +159,7 @@ jobs:
       - name: Create draft GitHub Release with assets
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           draft="$(gh release view "${RELEASE_VERSION}" \
@@ -163,16 +168,20 @@ jobs:
           if [[ "${draft}" == "true" ]]; then
             gh release delete "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --yes
           fi
+          release_flags=(--draft --latest=false)
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            release_flags+=(--prerelease)
+          fi
           gh release create "${RELEASE_VERSION}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "${RELEASE_VERSION}" \
             --generate-notes \
-            --draft
+            "${release_flags[@]}"
 
   publish:
     name: Approve And Publish Release
-    needs: prepare
+    needs: [verify, prepare]
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -192,6 +201,7 @@ jobs:
       - name: Verify candidate, editable draft, and assets
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
@@ -199,13 +209,17 @@ jobs:
             echo "main advanced while the release waited for approval" >&2
             exit 1
           fi
-          release_json="$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets,isDraft,targetCommitish)"
+          release_json="$(gh release view "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets,isDraft,isPrerelease,targetCommitish)"
           if [[ "$(jq -r .isDraft <<<"${release_json}")" != "true" ]]; then
             echo "editable release draft is unavailable" >&2
             exit 1
           fi
           if [[ "$(jq -r .targetCommitish <<<"${release_json}")" != "${GITHUB_SHA}" ]]; then
             echo "release draft targets a different commit" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r .isPrerelease <<<"${release_json}")" != "${PRERELEASE}" ]]; then
+            echo "release draft classification differs from the verified version" >&2
             exit 1
           fi
           actual_assets="$(jq -r '.assets[].name' <<<"${release_json}" | sort)"
@@ -238,12 +252,23 @@ jobs:
       - name: Publish immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
           RELEASE_VERSION: ${{ inputs.version }}
-        run: gh release edit "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest
+        run: |
+          release_flags=(--draft=false)
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            release_flags+=(--prerelease --latest=false)
+          else
+            release_flags+=(--prerelease=false --latest)
+          fi
+          gh release edit "${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            "${release_flags[@]}"
 
   documentation:
     name: Publish Release Documentation
-    needs: publish
+    needs: [verify, publish]
+    if: needs.verify.outputs.prerelease == 'false'
     permissions:
       contents: read
       pages: write

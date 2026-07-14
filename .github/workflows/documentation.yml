@@ -53,8 +53,12 @@ jobs:
           test "$(git tag --points-at HEAD --list "${RELEASE_VERSION}")" = "${RELEASE_VERSION}"
           release_json="$(gh release view "${RELEASE_VERSION}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --json isDraft,targetCommitish)"
+            --json isDraft,isPrerelease,targetCommitish)"
           test "$(jq -r .isDraft <<<"${release_json}")" = "false"
+          if [[ "$(jq -r .isPrerelease <<<"${release_json}")" != "false" ]]; then
+            echo "Prerelease documentation cannot replace the stable site." >&2
+            exit 1
+          fi
           test "$(jq -r .targetCommitish <<<"${release_json}")" = "$(git rev-parse HEAD)"
           latest_version="$(gh release view \
             --repo "${GITHUB_REPOSITORY}" \

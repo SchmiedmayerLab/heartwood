@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
@@ -37,7 +38,14 @@ def _declared_version() -> str:
 
 @pytest.mark.parametrize(
     "version",
-    ["0.1.0", "1.0.0", "2.3.4-rc.1", "2.3.4+build.7", "2.3.4-rc.1+build.7"],
+    [
+        "0.1.0",
+        "1.0.0",
+        "0.2.0-beta.1",
+        "2.3.4-rc.1",
+        "2.3.4+build.7",
+        "2.3.4-rc.1+build.7",
+    ],
 )
 def test_release_versions_accept_strict_semver(version: str) -> None:
     assert _release_verifier().valid_semver(version)
@@ -49,6 +57,63 @@ def test_release_versions_accept_strict_semver(version: str) -> None:
 )
 def test_release_versions_reject_non_semver(version: str) -> None:
     assert not _release_verifier().valid_semver(version)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("0.2.0", False),
+        ("0.2.0+build.7", False),
+        ("0.2.0-alpha.1", True),
+        ("0.2.0-beta.1", True),
+        ("0.2.0-rc.1+build.7", True),
+        ("0.2.0-preview.1", True),
+    ],
+)
+def test_release_versions_classify_every_semver_prerelease(version: str, expected: bool) -> None:
+    assert _release_verifier().is_prerelease(version) is expected
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("0.2.0", "0.2.0"),
+        ("0.2.0-alpha.1", "0.2.0a1"),
+        ("0.2.0-beta.1", "0.2.0b1"),
+        ("0.2.0-preview.1", "0.2.0rc1"),
+        ("0.2.0-rc.1", "0.2.0rc1"),
+        ("0.2.0-dev.1", "0.2.0.dev1"),
+        ("0.2.0-beta.1+BUILD-07", "0.2.0b1+build.7"),
+    ],
+)
+def test_release_versions_map_to_canonical_python_metadata(version: str, expected: str) -> None:
+    assert _release_verifier().python_package_version(version) == expected
+
+
+def test_release_versions_reject_unrepresentable_python_prerelease() -> None:
+    with pytest.raises(ValueError, match="Python packages support prerelease identifiers"):
+        _release_verifier().python_package_version("0.2.0-canary.1")
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("0.2.0", "false\n"), ("0.2.0-beta.1", "true\n")],
+)
+def test_release_prerelease_output_is_workflow_safe(version: str, expected: str) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "deploy/verify_release_candidate.py",
+            "--version",
+            version,
+            "--print-prerelease",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout == expected
+    assert result.stderr == ""
 
 
 def test_release_source_versions_match_candidate() -> None:
@@ -63,6 +128,45 @@ def test_release_source_versions_reject_other_candidate() -> None:
 
 def test_current_release_guides_match_declared_version() -> None:
     assert _release_verifier().source_version_errors(Path.cwd(), _declared_version()) == []
+
+
+def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
+    tmp_path: Path,
+) -> None:
+    version = "0.2.0-beta.1"
+    (tmp_path / "VERSION.toml").write_text(f'version = "{version}"\n', encoding="utf-8")
+    python_package = tmp_path / "packages" / "cli"
+    python_module = python_package / "src" / "heartwood" / "cli"
+    python_module.mkdir(parents=True)
+    (python_package / "pyproject.toml").write_text(
+        f'[project]\nname = "heartwood-cli"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+    (python_module / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+    web_package = tmp_path / "packages" / "webui"
+    web_package.mkdir(parents=True)
+    (web_package / "package.json").write_text(f'{{"version": "{version}"}}\n', encoding="utf-8")
+    (web_package / "package-lock.json").write_text(
+        f'{{"version": "{version}", "packages": {{"": {{"version": "{version}"}}}}}}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "heartwood-cli"\nversion = "0.2.0b1"\n',
+        encoding="utf-8",
+    )
+    documentation = {
+        "container-images.md": f"heartwood:{version}",
+        "carina-cli.md": (f"releases/download/{version}/heartwood-installer\n--version {version}"),
+        "platform-support.md": f"Release `{version}`\n`{version}-terra`",
+        "releases.md": f"-f version={version}",
+        "terra-jupyter-demo.md": f"heartwood:{version}-terra",
+    }
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for name, content in documentation.items():
+        (docs / name).write_text(content, encoding="utf-8")
+
+    assert _release_verifier().source_version_errors(tmp_path, version) == []
 
 
 def test_main_validation_owns_release_readiness_dependencies() -> None:
@@ -118,6 +222,8 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "refs/tags/{0}" in documentation
     assert "gh release view" in documentation
     assert "--json tagName" in documentation
+    assert "--json isDraft,isPrerelease,targetCommitish" in documentation
+    assert "Prerelease documentation cannot replace the stable site." in documentation
     assert "Documentation can be published only for the latest release." in documentation
     assert "--version-only" in documentation
     assert "zensical build --clean --strict" in documentation
@@ -133,8 +239,13 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert '"${DOCUMENTATION_URL}"' in publication
     assert "name: github-pages" in publication
     assert "group: github-pages" in publication
-    assert "needs: publish" in release
-    assert "--draft=false --latest" in release
+    assert "prerelease: ${{ steps.release.outputs.prerelease }}" in release
+    assert "--print-prerelease" in release
+    assert "release_flags=(--draft --latest=false)" in release
+    assert "release_flags+=(--prerelease --latest=false)" in release
+    assert "release_flags+=(--prerelease=false --latest)" in release
+    assert "needs: [verify, publish]" in release
+    assert "if: needs.verify.outputs.prerelease == 'false'" in release
     assert "uses: ./.github/workflows/publish-documentation.yml" in release
 
 
