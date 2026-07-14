@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 
 from heartwood.core_adapter import SessionResult
-from heartwood.gateway import ModelProfile, SessionGateway
+from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway
 from heartwood.notebook import (
     NotebookSession,
     build_view_model,
@@ -46,6 +46,25 @@ class _CountingGateway:
         return SessionResult(events=())
 
 
+class _ModelGateway(_CountingGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inspected: tuple[str, str | None] | None = None
+        self.downloaded: tuple[str, str | None] | None = None
+
+    def inspect_model_repository(
+        self, repository: str, *, revision: str | None = None
+    ) -> dict[str, object]:
+        self.inspected = (repository, revision)
+        return {"model": {"source_repository": repository}, "selection_reason": "automatic"}
+
+    def download_custom_local_model(
+        self, repository: str, *, revision: str | None = None
+    ) -> dict[str, object]:
+        self.downloaded = (repository, revision)
+        return {"model_id": "hf-model", "status": "downloading"}
+
+
 def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path, "notebook-session")
 
@@ -66,6 +85,26 @@ def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     assert not any(control.target_type == "model-call" for control in run.approval_controls)
     assert exported.export_actions[-1].path.endswith("audit-export.jsonl")
     assert exported.event_count == len(session.gateway.replay_events(session_id="notebook-session"))
+
+
+def test_notebook_session_adopts_and_validates_an_injected_gateway_project(
+    tmp_path: Path,
+) -> None:
+    gateway_root = tmp_path / "gateway-project"
+    other_root = tmp_path / "other-project"
+    gateway_root.mkdir()
+    other_root.mkdir()
+    gateway = SessionGateway(
+        project=ProjectContext(gateway_root),
+        env={},
+        backend_id="deterministic",
+    )
+
+    adopted = NotebookSession(gateway=gateway)
+
+    assert adopted.project.root == gateway_root
+    with pytest.raises(ValueError, match="must match the injected gateway project"):
+        NotebookSession(project=ProjectContext(other_root), gateway=gateway)
 
 
 def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
@@ -165,6 +204,46 @@ def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -
     }.issubset(artifact_ids)
 
 
+def test_notebook_reuses_gateway_model_inspection_and_download_contract(tmp_path: Path) -> None:
+    gateway = _ModelGateway()
+    session = NotebookSession(
+        project=ProjectContext(tmp_path),
+        session_id="notebook-model-download",
+        gateway=cast(SessionGateway, gateway),
+    )
+
+    plan = session.inspect_model_repository("example/model", revision="main")
+    download = session.download_custom_local_model("example/model", revision="1" * 40)
+
+    assert gateway.inspected == ("example/model", "main")
+    assert gateway.downloaded == ("example/model", "1" * 40)
+    assert cast(dict[str, object], plan["model"])["source_repository"] == "example/model"
+    assert download["status"] == "downloading"
+
+
+def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    session = NotebookSession(
+        project=project,
+        session_id="notebook-shared-state",
+        gateway=SessionGateway(project=project, env={}, backend_id="deterministic"),
+    )
+
+    configured = session.configure_model_source("local")
+    action_settings = session.select_action_confirmation_mode("confirm-risky")
+
+    reopened = NotebookSession(
+        project=project,
+        session_id="notebook-shared-state",
+        gateway=SessionGateway(project=project, env={}, backend_id="deterministic"),
+    )
+    assert configured["model_source"] == "local"
+    assert action_settings["confirmation_mode"] == "confirm-risky"
+    assert reopened.model_settings()["model_source"] == "local"
+    assert reopened.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert reopened.project_readiness()["project_root"] == str(tmp_path)
+
+
 def test_jupyter_proxy_url_uses_service_prefix() -> None:
     assert (
         jupyter_proxy_url(
@@ -180,7 +259,7 @@ def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
 ) -> None:
     gateway = _CountingGateway()
     session = NotebookSession(
-        workspace=tmp_path,
+        project=ProjectContext(tmp_path),
         session_id="notebook-counting",
         gateway=cast(SessionGateway, gateway),
     )
@@ -197,7 +276,7 @@ def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
 
 
 def test_notebook_pause_resume_updates_view_state(tmp_path: Path) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-lifecycle")
+    session = NotebookSession(project=ProjectContext(tmp_path), session_id="notebook-lifecycle")
 
     paused = session.pause()
     resumed = session.resume()
@@ -232,7 +311,7 @@ def test_widget_rendering_falls_back_without_ipywidgets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-fallback")
+    session = NotebookSession(project=ProjectContext(tmp_path), session_id="notebook-fallback")
     view_model = session.detect()
 
     monkeypatch.setattr("heartwood.notebook._widgets._load_widgets", lambda: None)
@@ -244,8 +323,11 @@ def test_widget_rendering_falls_back_without_ipywidgets(
 
 
 def _deterministic_session(workspace: Path, session_id: str) -> NotebookSession:
+    workspace.mkdir(parents=True, exist_ok=True)
+    project = ProjectContext(workspace)
     gateway = SessionGateway(
-        workspace=workspace,
-        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        project=project,
+        env={},
+        backend_id="deterministic",
     )
-    return NotebookSession(workspace=workspace, session_id=session_id, gateway=gateway)
+    return NotebookSession(project=project, session_id=session_id, gateway=gateway)

@@ -4,40 +4,37 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Read-only deployment readiness and persistent setup configuration."""
+"""Read-only project readiness and persistent first-run configuration."""
 
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Literal, assert_never, cast
-
-from pydantic import ValidationError
+from typing import Literal, assert_never
 
 from heartwood.adapters.platform import select_platform_adapter
-from heartwood.gateway._action_settings import ActionSettingsError, ActionSettingsStore
-from heartwood.gateway._model_catalog import ModelCatalogError, load_model_connections
-from heartwood.gateway._model_settings import (
-    ModelProfile,
-    ModelSettingsError,
-    ModelSettingsStore,
+from heartwood.gateway._model_catalog import ModelConnection, model_connections_from_mapping
+from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
+from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._project_config import (
+    ProjectConfig,
+    ProjectConfigError,
+    ProjectConfigStore,
 )
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
 
 ReadinessState = Literal["ready", "setup-required", "compute-required", "recovery-required"]
-ModelSource = Literal["local", "stanford-ai-api-gateway"]
+ModelSource = Literal["anthropic", "local", "openai", "stanford-ai-api-gateway"]
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
 
 
 @dataclass(frozen=True, slots=True)
 class ReadinessCheck:
-    """One content-free deployment readiness result."""
+    """One content-free project readiness result."""
 
     check_id: str
     status: Literal["pass", "warning", "fail"]
@@ -45,11 +42,57 @@ class ReadinessCheck:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelSourceOption:
+    """One approachable setup choice backed by a gateway model connection."""
+
+    source_id: ModelSource
+    connection_id: str
+    label: str
+    description: str
+
+    def safe_dict(self, *, selected: bool) -> dict[str, object]:
+        """Return the non-secret setup representation shared by all interfaces."""
+        return {**asdict(self), "selected": selected}
+
+
+MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
+    ModelSourceOption(
+        source_id="local",
+        connection_id="local",
+        label="On this device",
+        description=(
+            "Use a recommended model, another supported Hugging Face model, or an existing service."
+        ),
+    ),
+    ModelSourceOption(
+        source_id="openai",
+        connection_id="openai",
+        label="OpenAI",
+        description="Use the models available to an OpenAI token.",
+    ),
+    ModelSourceOption(
+        source_id="anthropic",
+        connection_id="anthropic",
+        label="Anthropic",
+        description="Use the models available to an Anthropic token.",
+    ),
+    ModelSourceOption(
+        source_id="stanford-ai-api-gateway",
+        connection_id="stanford-ai-api-gateway",
+        label="Stanford AI API Gateway",
+        description="Use models authorized through Stanford's managed gateway.",
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentReadiness:
-    """Read-only readiness projection shared by setup entrypoints."""
+    """Read-only readiness projection shared by every setup entrypoint."""
 
     state: ReadinessState
     platform_id: str
+    project_root: str
+    state_root: str
     evidence: tuple[str, ...]
     checks: tuple[ReadinessCheck, ...]
 
@@ -59,254 +102,232 @@ class DeploymentReadiness:
 
 
 def inspect_deployment(
-    workspace: Path,
+    project: ProjectContext,
     env: Mapping[str, str] | None = None,
 ) -> DeploymentReadiness:
-    """Inspect setup state without creating files or calling external services."""
+    """Inspect project setup without creating files or calling external services."""
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
     detection = adapter.detect(active_env)
-    state_root = workspace.parent
     checks: list[ReadinessCheck] = []
 
-    existing_parent = _existing_parent(state_root)
-    writable = os.access(existing_parent, os.W_OK)
+    writable = os.access(project.root, os.W_OK)
     checks.append(
         ReadinessCheck(
-            "state-storage",
+            "project-storage",
             "pass" if writable else "fail",
             (
-                f"State root can be created under {existing_parent}"
+                f"Project is writable at {project.root}"
                 if writable
-                else f"State root is not writable under {existing_parent}"
+                else f"Project is not writable at {project.root}"
             ),
         )
     )
-    setup_path = state_root / "setup.json"
-    setup = _load_setup_marker(setup_path)
-    setup_matches_platform = setup is not None and setup["platform_id"] == adapter.adapter_id
-    checks.append(
-        ReadinessCheck(
-            "setup",
-            ("pass" if setup_matches_platform else "fail" if setup_path.exists() else "warning"),
-            (
-                "Setup is complete"
-                if setup_matches_platform
-                else "Setup platform does not match the detected platform"
-                if setup is not None
-                else "Setup state is invalid"
-                if setup_path.exists()
-                else "Setup is incomplete"
-            ),
+    state_valid = False
+    try:
+        state_valid = project.state_exists()
+    except ProjectStateError as error:
+        checks.append(ReadinessCheck("project-state", "fail", str(error)))
+    else:
+        checks.append(
+            ReadinessCheck(
+                "project-state",
+                "pass" if state_valid else "warning",
+                "Project state is initialized" if state_valid else "Project setup is incomplete",
+            )
         )
+
+    config: ProjectConfig | None = None
+    config_store = ProjectConfigStore(
+        project,
+        ProjectConfig(
+            platform_id=adapter.adapter_id,
+            policy=adapter.default_policy_profile(),
+        ),
     )
-    model_path = state_root / "models.json"
-    active_model = _active_model_profile(model_path)
-    model_summary = (
-        f"Active model profile: {active_model.profile_id}"
-        if active_model
-        else ("Model settings are invalid" if model_path.exists() else "No active model selected")
-    )
+    if state_valid and config_store.configured:
+        try:
+            config = config_store.load()
+        except ProjectConfigError as error:
+            checks.append(ReadinessCheck("configuration", "fail", str(error)))
+        else:
+            platform_matches = config.platform_id == adapter.adapter_id
+            checks.append(
+                ReadinessCheck(
+                    "configuration",
+                    "pass" if platform_matches else "fail",
+                    (
+                        "Project configuration is valid"
+                        if platform_matches
+                        else "Configured platform does not match the detected platform"
+                    ),
+                )
+            )
+    else:
+        checks.append(ReadinessCheck("configuration", "warning", "Setup is incomplete"))
+
+    active_model = _active_model_profile(config)
     checks.append(
         ReadinessCheck(
             "model",
-            "pass" if active_model else ("fail" if model_path.exists() else "warning"),
-            model_summary,
+            "pass" if active_model else "warning",
+            (
+                f"Active model: {active_model.profile_id}"
+                if active_model
+                else "No active model selected"
+            ),
         )
     )
+    credential_ready = True
     if active_model is not None:
-        credential_status, credential_summary = _credential_readiness(active_model, active_env)
+        credential_status, credential_summary, credential_ready = _credential_readiness(
+            active_model, active_env
+        )
         checks.append(ReadinessCheck("model-credential", credential_status, credential_summary))
-    policy: PolicyProfile | None = None
-    if setup is not None:
-        policy_path = state_root / "policy.json"
-        policy = _load_policy(policy_path)
-        policy_ready = policy is not None and policy.platform_id == adapter.adapter_id
+    managed_local_available = False
+    if config is not None and config.model_source == "local":
+        selection = config.local_model
+        managed_local_available = (
+            selection is not None and selection.resolved_path(project).exists()
+        )
+        checks.append(
+            ReadinessCheck(
+                "local-model-artifact",
+                "pass" if managed_local_available else "warning",
+                (
+                    f"Selected local model is available: {selection.artifact_id}"
+                    if managed_local_available and selection is not None
+                    else (
+                        "No downloaded local model is selected; "
+                        "an existing local service is required"
+                    )
+                ),
+            )
+        )
+
+    if config is not None:
         checks.append(
             ReadinessCheck(
                 "policy",
-                "pass" if policy_ready else "fail",
-                (
-                    "Deployment policy is valid"
-                    if policy_ready
-                    else "Deployment policy is invalid or belongs to another platform"
-                ),
+                "pass",
+                "Deployment policy is valid",
             )
         )
-        action_mode = _action_confirmation_mode(state_root / "actions.json")
+        action_mode = str(config.action_settings.confirmation_mode)
         checks.append(
             ReadinessCheck(
                 "action-confirmation",
-                "pass" if action_mode is not None else "fail",
-                (
-                    f"Action confirmation mode: {action_mode}"
-                    if action_mode is not None
-                    else "Action confirmation settings are invalid or missing"
-                ),
+                "pass",
+                f"Action confirmation: {action_mode}",
             )
         )
-        configuration_ready = _configuration_is_coherent(
-            setup,
-            active_model,
-            policy,
-            action_mode,
-            state_root / "model-connections.json",
-        )
+        coherent = active_model is not None and _configuration_is_coherent(config)
         checks.append(
             ReadinessCheck(
-                "configuration",
-                "pass" if configuration_ready else "fail",
+                "configuration-coherence",
+                "pass" if coherent else "warning" if active_model is None else "fail",
                 (
-                    "Setup, model, policy, and connection agree"
-                    if configuration_ready
-                    else "Setup, model, policy, or connection do not agree"
+                    "Model, policy, connection, and action settings agree"
+                    if coherent
+                    else "Model selection is incomplete"
+                    if active_model is None
+                    else "Model, policy, connection, or action settings do not agree"
                 ),
             )
         )
+
     local_compute_required = False
     if adapter.adapter_id == "carina":
-        model_source = cast(ModelSource, setup["model_source"]) if setup is not None else None
+        model_source = config.model_source if config is not None else None
         carina_checks, local_compute_required = _carina_compute_checks(
             model_source=model_source,
             env=active_env,
         )
         checks.extend(carina_checks)
+
     if any(check.status == "fail" for check in checks):
         state: ReadinessState = "recovery-required"
-    elif setup is None or active_model is None:
+    elif managed_local_available and active_env.get("HEARTWOOD_LOCAL_RUNTIME_ACTIVE") != "1":
+        state = "compute-required"
+    elif config is None or active_model is None or not credential_ready:
         state = "setup-required"
     elif local_compute_required:
         state = "compute-required"
     else:
         state = "ready"
-    return DeploymentReadiness(state, adapter.adapter_id, detection.evidence, tuple(checks))
-
-
-def _carina_compute_checks(
-    *,
-    model_source: ModelSource | None,
-    env: Mapping[str, str],
-) -> tuple[tuple[ReadinessCheck, ...], bool]:
-    allocation = bool(env.get("SLURM_JOB_ID"))
-    if model_source == "stanford-ai-api-gateway":
-        return (
-            (
-                ReadinessCheck(
-                    "slurm-allocation",
-                    "pass",
-                    "Selected managed model route does not require a Slurm allocation",
-                ),
-            ),
-            False,
-        )
-
-    local_model = model_source == "local"
-    if not allocation:
-        allocation_summary = (
-            "Local model is configured; request a Carina Slurm allocation to start it"
-            if local_model
-            else "No active Slurm allocation; one is required only for local inference"
-        )
-        return (
-            (
-                ReadinessCheck("slurm-allocation", "warning", allocation_summary),
-                ReadinessCheck(
-                    "job-scratch",
-                    "warning",
-                    "Job-local scratch will be checked after allocation",
-                ),
-                ReadinessCheck(
-                    "gpu",
-                    "warning",
-                    "NVIDIA GPU visibility will be checked after allocation",
-                ),
-            ),
-            local_model,
-        )
-
-    requirement_status: Literal["warning", "fail"] = "fail" if local_model else "warning"
-    scratch = env.get("LOCAL_SCRATCH_JOB")
-    scratch_path = Path(scratch) if scratch else None
-    scratch_ready = bool(
-        scratch_path and scratch_path.is_dir() and os.access(scratch_path, os.W_OK)
-    )
-    gpu = _gpu_visible(env)
-    return (
-        (
-            ReadinessCheck("slurm-allocation", "pass", "Active Slurm allocation detected"),
-            ReadinessCheck(
-                "job-scratch",
-                "pass" if scratch_ready else requirement_status,
-                (
-                    f"Writable job-local scratch detected at {scratch_path}"
-                    if scratch_ready
-                    else "Active local-model allocation does not expose writable job scratch"
-                    if local_model
-                    else "No writable job-local scratch detected"
-                ),
-            ),
-            ReadinessCheck(
-                "gpu",
-                "pass" if gpu else requirement_status,
-                (
-                    "NVIDIA GPU is visible"
-                    if gpu
-                    else "Active local-model allocation does not expose an NVIDIA GPU"
-                    if local_model
-                    else "No NVIDIA GPU evidence detected"
-                ),
-            ),
-        ),
-        False,
+    return DeploymentReadiness(
+        state=state,
+        platform_id=adapter.adapter_id,
+        project_root=str(project.root),
+        state_root=str(project.state_root),
+        evidence=detection.evidence,
+        checks=tuple(checks),
     )
 
 
 def persist_deployment_profile(
-    workspace: Path,
+    project: ProjectContext,
     *,
     model_source: ModelSource,
     env: Mapping[str, str] | None = None,
-) -> tuple[Path, Path, Path]:
-    """Persist a non-secret connection, policy, and setup marker atomically."""
+) -> Path:
+    """Persist the selected platform, route policy, and connection in config.toml."""
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
-    state_root = workspace.parent
-    state_root.mkdir(parents=True, exist_ok=True)
-    policy_path = state_root / "policy.json"
-    connections_path = state_root / "model-connections.json"
-    setup_path = state_root / "setup.json"
     platform_policy = adapter.default_policy_profile()
-    if model_source == "stanford-ai-api-gateway":
-        connections = _stanford_connection_manifest()
-        policy: object = {
-            "schema_version": "heartwood.policy-profile.v1",
-            "policy_id": f"{adapter.adapter_id}-stanford-ai-api-gateway",
-            "platform_id": adapter.adapter_id,
-            "deny_egress_by_default": True,
-            "allowed_model_endpoints": [f"{_STANFORD_ROOT}/chat/completions"],
-            "allowed_model_catalog_endpoints": [f"{_STANFORD_ROOT}/models"],
-            "allowed_capability_tiers": ["supervised", "experimental"],
-            "allowed_action_confirmation_modes": list(
-                platform_policy.allowed_action_confirmation_modes
-            ),
-            "credential_allowlist": ["STANFORD_AI_API_KEY"],
-            "aggregate_count_floor": 20,
-            "notes": "Stanford gateway route; data eligibility requires deployment approval.",
-        }
-    else:
-        connections = {"schema_version": "heartwood.model-connections.v1", "connections": []}
-        policy = platform_policy.model_dump(mode="json")
-    _atomic_json(connections_path, connections)
-    _atomic_json(policy_path, policy)
-    _atomic_json(
-        setup_path,
-        {
-            "schema_version": "heartwood.setup.v1",
-            "platform_id": adapter.adapter_id,
-            "model_source": model_source,
-        },
+    store = ProjectConfigStore(
+        project,
+        ProjectConfig(platform_id=adapter.adapter_id, policy=platform_policy),
     )
-    return setup_path, policy_path, connections_path
+    configured_connections: tuple[ModelConnection, ...] = ()
+    if model_source == "stanford-ai-api-gateway":
+        all_connections = model_connections_from_mapping(_stanford_connection_manifest())
+        configured_connections = tuple(
+            connection for connection in all_connections if connection.source == "platform"
+        )
+        policy = PolicyProfile.model_validate(
+            {
+                "schema_version": "heartwood.policy-profile.v1",
+                "policy_id": f"{adapter.adapter_id}-stanford-ai-api-gateway",
+                "platform_id": adapter.adapter_id,
+                "deny_egress_by_default": True,
+                "allowed_model_endpoints": [f"{_STANFORD_ROOT}/chat/completions"],
+                "allowed_model_catalog_endpoints": [f"{_STANFORD_ROOT}/models"],
+                "allowed_capability_tiers": ["supervised", "experimental"],
+                "allowed_action_confirmation_modes": list(
+                    platform_policy.allowed_action_confirmation_modes
+                ),
+                "credential_allowlist": ["STANFORD_AI_API_KEY"],
+                "aggregate_count_floor": 20,
+                "notes": "Stanford gateway route; data eligibility requires deployment approval.",
+            }
+        )
+    elif model_source in {"anthropic", "local", "openai"}:
+        policy = platform_policy
+    else:  # pragma: no cover - protected by the public type and CLI choices
+        raise ProjectConfigError(f"unsupported model source: {model_source}")
+
+    def apply(current: ProjectConfig) -> ProjectConfig:
+        model_settings = current.model_settings
+        if current.model_source != model_source:
+            model_settings = replace(model_settings, active_profile=None)
+        additional_connections = (
+            configured_connections
+            if model_source == "stanford-ai-api-gateway"
+            else current.additional_connections
+        )
+        return ProjectConfig(
+            platform_id=adapter.adapter_id,
+            model_source=model_source,
+            action_settings=current.action_settings,
+            model_settings=model_settings,
+            additional_connections=additional_connections,
+            policy=policy,
+            local_model=current.local_model,
+        )
+
+    store.update(apply)
+    return project.config_path
 
 
 def _stanford_connection_manifest() -> dict[str, object]:
@@ -331,142 +352,66 @@ def _stanford_connection_manifest() -> dict[str, object]:
     }
 
 
-def _atomic_json(path: Path, value: object) -> None:
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump(value, file, indent=2, sort_keys=True)
-            file.write("\n")
-        temporary_path.chmod(0o600)
-        temporary_path.replace(path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
-def _existing_parent(path: Path) -> Path:
-    candidate = path
-    while not candidate.exists() and candidate != candidate.parent:
-        candidate = candidate.parent
-    return candidate
-
-
-def _load_setup_marker(path: Path) -> dict[str, str] | None:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if (
-        not isinstance(value, dict)
-        or set(value) != {"schema_version", "platform_id", "model_source"}
-        or value.get("schema_version") != "heartwood.setup.v1"
-        or not isinstance(value.get("platform_id"), str)
-        or value.get("model_source") not in {"local", "stanford-ai-api-gateway"}
-    ):
-        return None
-    return {
-        "schema_version": "heartwood.setup.v1",
-        "platform_id": str(value["platform_id"]),
-        "model_source": str(value["model_source"]),
-    }
-
-
-def _active_model_profile(path: Path) -> ModelProfile | None:
-    if not path.is_file():
+def _active_model_profile(config: ProjectConfig | None) -> ModelProfile | None:
+    if config is None:
         return None
     try:
-        return ModelSettingsStore(path).load().profile()
+        return config.model_settings.profile()
     except ModelSettingsError:
         return None
 
 
 def _credential_readiness(
     profile: ModelProfile, env: Mapping[str, str]
-) -> tuple[Literal["pass", "warning", "fail"], str]:
+) -> tuple[Literal["pass", "warning", "fail"], str, bool]:
     kind = profile.credential_kind
     if kind == "none":
-        return "pass", "Selected model requires no credential"
+        return "pass", "Selected model requires no credential", True
     if kind == "environment":
         name = profile.api_key_env
         if not isinstance(name, str) or not name.strip():
-            return "fail", "Selected model has an invalid environment credential reference"
-        available = bool(env.get(name))
-        summary = (
-            f"Credential reference {name} is available"
-            if available
-            else f"Credential {name} is missing"
-        )
+            return "fail", "Selected model has an invalid platform credential binding", False
         return (
-            "pass" if available else "fail",
-            summary,
+            ("pass", "Platform credential is available", True)
+            if env.get(name)
+            else ("warning", "A provider credential is required for this process", False)
         )
     if kind == "file":
         configured = profile.api_key_file
         available = isinstance(configured, str) and Path(configured).is_file()
-        summary = (
-            "Mounted credential file is available"
-            if available
-            else "Mounted credential file is missing"
-        )
         return (
-            "pass" if available else "fail",
-            summary,
+            ("pass", "Platform credential file is available", True)
+            if available
+            else ("warning", "The configured credential file is unavailable", False)
         )
     if kind == "managed-identity":
-        return "warning", "Managed identity must be validated by the deployment"
+        return "warning", "Managed identity must be validated by the deployment", True
     assert_never(kind)
 
 
-def _load_policy(path: Path) -> PolicyProfile | None:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    try:
-        return PolicyProfile.model_validate(value)
-    except ValidationError:
-        return None
-
-
-def _action_confirmation_mode(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    try:
-        return str(ActionSettingsStore(path).load().confirmation_mode)
-    except ActionSettingsError:
-        return None
-
-
-def _configuration_is_coherent(
-    setup: Mapping[str, str],
-    model: ModelProfile | None,
-    policy: PolicyProfile | None,
-    action_mode: str | None,
-    connections_path: Path,
-) -> bool:
-    if model is None or policy is None or action_mode is None:
+def _configuration_is_coherent(config: ProjectConfig) -> bool:
+    model = _active_model_profile(config)
+    if model is None or config.model_source is None:
         return False
-    try:
-        connections = load_model_connections(connections_path)
-    except ModelCatalogError:
-        return False
-    source = setup["model_source"]
-    if source == "local":
-        source_matches = model.is_local and not any(
-            item.connection_id == "stanford-ai-api-gateway" for item in connections
-        )
-    else:
+    if config.model_source == "local":
+        source_matches = model.is_local
+    elif config.model_source == "stanford-ai-api-gateway":
         source_matches = (
             model.policy_endpoint == f"{_STANFORD_ROOT}/chat/completions"
             and model.api_key_env == "STANFORD_AI_API_KEY"
-            and any(item.connection_id == "stanford-ai-api-gateway" for item in connections)
+            and any(
+                connection.connection_id == "stanford-ai-api-gateway"
+                for connection in config.additional_connections
+            )
         )
+    else:
+        source_matches = model.profile_id == config.model_source
     if not source_matches:
         return False
-    decision = ModelPolicyEngine(policy).evaluate(
+    decision = ModelPolicyEngine(config.policy).evaluate(
         endpoint=model.policy_endpoint,
         capability_tier=model.capability_tier,
-        action_confirmation_mode=action_mode,
+        action_confirmation_mode=config.action_settings.confirmation_mode,
         credential_reference=model.credential_reference,
         decision_id="deployment-readiness",
         purpose="deployment readiness",
@@ -474,7 +419,88 @@ def _configuration_is_coherent(
     return decision.decision == "allow"
 
 
-def _gpu_visible(env: Mapping[str, str]) -> bool:
+def _carina_compute_checks(
+    *,
+    model_source: str | None,
+    env: Mapping[str, str],
+) -> tuple[tuple[ReadinessCheck, ...], bool]:
+    allocation = bool(env.get("SLURM_JOB_ID"))
+    if model_source == "stanford-ai-api-gateway":
+        return (
+            (
+                ReadinessCheck(
+                    "slurm-allocation",
+                    "pass",
+                    "Selected managed model route does not require a Slurm allocation",
+                ),
+            ),
+            False,
+        )
+    local_model = model_source == "local"
+    if not allocation:
+        return (
+            (
+                ReadinessCheck(
+                    "slurm-allocation",
+                    "warning",
+                    (
+                        "Local model is configured; request a Carina allocation to start it"
+                        if local_model
+                        else "No Slurm allocation; one is required only for local inference"
+                    ),
+                ),
+                ReadinessCheck(
+                    "job-scratch",
+                    "warning",
+                    "Job-local scratch will be checked after allocation",
+                ),
+                ReadinessCheck(
+                    "gpu",
+                    "warning",
+                    "NVIDIA GPU visibility will be checked after allocation",
+                ),
+            ),
+            local_model,
+        )
+    requirement_status: Literal["warning", "fail"] = "fail" if local_model else "warning"
+    scratch = env.get("LOCAL_SCRATCH_JOB")
+    scratch_path = Path(scratch) if scratch else None
+    scratch_ready = bool(
+        scratch_path and scratch_path.is_dir() and os.access(scratch_path, os.W_OK)
+    )
+    gpu = gpu_visible(env)
+    return (
+        (
+            ReadinessCheck("slurm-allocation", "pass", "Active Slurm allocation detected"),
+            ReadinessCheck(
+                "job-scratch",
+                "pass" if scratch_ready else requirement_status,
+                (
+                    f"Writable job-local scratch detected at {scratch_path}"
+                    if scratch_ready
+                    else "Active local-model allocation has no writable job scratch"
+                    if local_model
+                    else "No writable job-local scratch detected"
+                ),
+            ),
+            ReadinessCheck(
+                "gpu",
+                "pass" if gpu else requirement_status,
+                (
+                    "NVIDIA GPU is visible"
+                    if gpu
+                    else "Active local-model allocation has no visible NVIDIA GPU"
+                    if local_model
+                    else "No NVIDIA GPU evidence detected"
+                ),
+            ),
+        ),
+        False,
+    )
+
+
+def gpu_visible(env: Mapping[str, str]) -> bool:
+    """Return whether the current process has evidence of an attached NVIDIA GPU."""
     visible = env.get("NVIDIA_VISIBLE_DEVICES") or env.get("CUDA_VISIBLE_DEVICES")
     configured = bool(visible and visible.lower() not in {"none", "void", "-1"})
     return configured or Path("/dev/nvidia0").exists()

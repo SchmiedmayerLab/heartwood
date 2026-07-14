@@ -56,17 +56,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/opt/heartwood/.venv \
     UV_PYTHON_INSTALL_DIR=/opt/heartwood/python \
     UV_PYTHON_PREFERENCE=managed \
-    HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu \
-    HEARTWOOD_AGENT_BACKEND=auto \
-    HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified \
-    HEARTWOOD_MODEL_CATALOG=/opt/heartwood/images/generic/local-runtime/model-catalog.toml \
-    HEARTWOOD_HOME=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace \
-    HEARTWOOD_MODEL_CACHE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models \
-    HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
-    HEARTWOOD_WORKSPACE=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions \
     HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python \
-    HEARTWOOD_WEB_HOST=127.0.0.1 \
-    HEARTWOOD_WEB_PORT=8767 \
     JUPYTER_PATH="${HEARTWOOD_JUPYTER_PREFIX}/share/jupyter" \
     LD_LIBRARY_PATH="/opt/llama.cpp:${LD_LIBRARY_PATH}" \
     PATH="/opt/llama.cpp:${PATH}"
@@ -102,8 +92,6 @@ RUN set -eux; \
     tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
     rm /tmp/llama.cpp.tar.gz
 
-ENV HF_HOME=${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models/.huggingface
-
 WORKDIR /opt/heartwood
 
 COPY images/gpu/vllm-requirements.txt ./images/gpu/vllm-requirements.txt
@@ -112,8 +100,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     export UV_CACHE_DIR=/root/.cache/uv; \
     if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
       uv venv /opt/heartwood-vllm --python 3.12 \
-      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt \
-      && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood-vllm; \
+      && uv pip sync --require-hashes --python /opt/heartwood-vllm/bin/python images/gpu/vllm-requirements.txt; \
     elif [ "${HEARTWOOD_GPU_RUNTIME}" != "none" ]; then \
       echo "unsupported GPU runtime: ${HEARTWOOD_GPU_RUNTIME}" >&2; exit 64; \
     fi
@@ -142,11 +129,6 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
         --name heartwood \
         --display-name "Python 3 (Heartwood)"; \
     fi
-
-RUN mkdir -p \
-      "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models" \
-      "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions" \
-    && chown -R "${HEARTWOOD_PLATFORM_USER}" /opt/heartwood "${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace"
 
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}
 

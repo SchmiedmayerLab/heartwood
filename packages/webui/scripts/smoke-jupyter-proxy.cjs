@@ -77,8 +77,6 @@ function startGateway() {
   const server = spawn(
     heartwoodExecutable,
     [
-      "--workspace",
-      path.join(workspace, "sessions"),
       "serve",
       "--host",
       "127.0.0.1",
@@ -90,7 +88,7 @@ function startGateway() {
       "/",
     ],
     {
-      cwd: repoRoot,
+      cwd: workspace,
       detached: true,
       env: Object.assign({}, process.env, {
         UV_CACHE_DIR: path.join(repoRoot, ".uv-cache"),

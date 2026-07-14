@@ -84,9 +84,8 @@ jobs:
           --tmpfs /tmp:rw,nosuid,nodev,size=1g
           --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
           --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
-          --env HEARTWOOD_AGENT_BACKEND=openhands-sdk
           "${CANDIDATE_REFERENCE}"
-          bash images/generic/scripts/offline_stack_smoke.sh
+          bash /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
       - name: Download and verify CI-only model fixture
         run: |
           mkdir -p /tmp/heartwood-model
@@ -109,7 +108,7 @@ jobs:
           --volume /tmp/heartwood-model:/models:ro
           --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
           "${CANDIDATE_REFERENCE}"
-          bash images/generic/scripts/local_inference_smoke.sh
+          bash /opt/heartwood/images/generic/scripts/local_inference_smoke.sh
       - name: Upload validated image digest
         uses: actions/upload-artifact@v7
         with:
@@ -295,14 +294,22 @@ jobs:
           --entrypoint bash
           "${CANDIDATE_REFERENCE}"
           /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
+      - name: Run staged Terra current-directory persistence smoke
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+        run: >-
+          bash images/platform/scripts/terra_project_persistence_smoke.sh
+          "${CANDIDATE_REFERENCE}"
       - name: Run staged Terra OpenHands smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
           docker run --rm --platform linux/amd64 --network none
-          --workdir /opt/heartwood --entrypoint bash
+          --entrypoint bash
+          --env HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis
+          --env HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis
           "${CANDIDATE_REFERENCE}"
-          images/generic/scripts/offline_stack_smoke.sh
+          /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
       - name: Download and verify CI-only model fixture
         run: |
           mkdir -p /tmp/heartwood-model

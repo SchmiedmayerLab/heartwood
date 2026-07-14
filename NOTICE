@@ -1,0 +1,17 @@
+<!--
+
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+
+-->
+
+# Heartwood Notices
+
+Heartwood is developed by Stanford University and the project authors listed in [CONTRIBUTORS.md](CONTRIBUTORS.md) and is distributed under the [MIT License](LICENSE).
+
+Heartwood uses third-party open-source software, including OpenHands, LiteLLM, llama.cpp, vLLM, Python packages, JavaScript packages, container base images, and GitHub Actions. Those components remain subject to their own copyright notices and license terms. Locked dependency metadata, image provenance, software bills of materials, and repository license files provide the applicable version and attribution evidence for a release.
+
+Stanford University names and marks may not be used to endorse or promote derived products without prior written permission.

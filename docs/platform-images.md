@@ -8,13 +8,13 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Platform Image Extension Guide
+# Build a Platform-Specific Image
 
 Platform images are thin additions to an existing research-platform base. They must preserve the platform runtime and add the same Heartwood payload, model-profile contract, repository-verified Skills, and no-weight policy as the generic image.
 
-This guide documents the implemented shared extension mechanism. It does not make every declared or future platform a supported deployment; current status is recorded in [Platform Support](platform-support.md), and unimplemented platform work is recorded in the [Delivery Roadmap](../design/09-implementation-plan.md).
+This guide documents the shared extension mechanism for a reviewed platform integration. An entry in a technical document or manifest does not make a platform supported; current evidence is recorded in [Platform Support and Validation](platform-support.md).
 
-## Source Of Truth
+## Source of Truth
 
 - `images/platforms.toml` declares the base image, architecture, user, home, workdir, entrypoint, ports, Jupyter prefix, proxy behavior, environment contract, registry media types, public tags, model storage, and required evidence.
 - `images/platform/Dockerfile` contains the shared additive build.
@@ -23,13 +23,13 @@ This guide documents the implemented shared extension mechanism. It does not mak
 - `.github/workflows/container-smoke.yml` builds the platform path and runs local contract tests.
 - `.github/workflows/container-image.yml` publishes and verifies the real platform-derived image.
 
-## Add Or Adapt A Platform Image
+## Add or Adapt a Platform Image
 
 1. Pin a platform-maintained base image and document its source, platform support, update cadence, user, home, workdir, entrypoint, service ports, Jupyter paths, and proxy routes.
 2. Add an `images/platforms.toml` entry. Do not encode platform assumptions only in a Dockerfile or workflow.
 3. Reuse `images/platform/Dockerfile` when the platform can express its differences through build arguments. Add another Dockerfile only when the base requires materially different installation mechanics.
 4. Keep the Heartwood payload list aligned with the generic image: lockfile, packages, fixtures, Skills, evaluations, image scripts, built web UI, README, documentation, and design record.
-5. Keep model weights and credentials out of every layer. Define a platform-persistent model cache and runtime credential mechanisms.
+5. Keep model weights and credentials out of every layer. Make the user's project directory durable, including its `.heartwood/models/` path, and define platform-owned credential bindings.
 6. Preserve the base entrypoint and service runtime. Register Heartwood as a separate kernel or tool environment instead of replacing the platform Python.
 7. Add a public Bake target and a local CI target. Keep `--set <target>.platform=<architecture>` on `--load` commands and use the Docker driver when a locally tagged CI base is required.
 8. Declare the registry manifest media type, config media type, supported platforms, and non-platform manifest policy. Do not assume every control plane accepts an Open Container Initiative index.
@@ -43,12 +43,14 @@ Platform images must expose:
 - `heartwood` and the Heartwood Python executable;
 - the packaged web UI and notebook bridge;
 - the OpenHands SDK and coding tools behind the Heartwood backend adapter;
-- the same non-secret model settings and reviewed artifact catalog;
+- the same non-secret model settings, recommendation catalog, and arbitrary Hugging Face planning contract;
 - verified bundled Skills loaded through the OpenHands native loader;
 - route policy, event persistence, action confirmation, replay, and scrubbed audit export;
-- an explicit persistent location for sessions, settings, OpenHands state, and optional model artifacts.
+- a durable current-directory project whose `.heartwood/` directory contains sessions, settings, OpenHands state, and optional model artifacts.
 
 Do not add a platform-specific agent loop, provider client, model settings format, web contract, or Skill loader. Platform-specific behavior belongs in base-image preservation, identity, route policy, storage, proxy, and deployment adapters.
+
+The platform home and image workdir are starting locations, not Heartwood workspace settings. A user selects a project by starting the CLI, browser server, or notebook kernel from that directory. Platform images must not create or redirect Heartwood to a specially named project directory.
 
 ## Continuous Integration
 
@@ -59,8 +61,9 @@ The pull-request platform target must test:
 - image user, workdir, entrypoint, exposed ports, and required environment;
 - platform Python and Jupyter precedence;
 - Heartwood kernel registration;
-- writable platform home and Heartwood persistent paths;
+- a writable project and complete private `.heartwood/` layout that survive container replacement;
 - inherited and control-plane-specific Jupyter launch routes;
+- the packaged Heartwood UI and project-readiness API through the real Jupyter Server Proxy route;
 - packaged web assets and notebook API;
 - model-profile validation and a real OpenHands conversation against the no-network loopback fixture;
 - repository-verified Skill loading and scrubbed audit export.

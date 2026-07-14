@@ -40,6 +40,7 @@ import {
   Download,
   HardDrive,
   RotateCcw,
+  Search,
   Server,
   ShieldCheck,
   Trash2,
@@ -51,14 +52,20 @@ import type {
   ActionSettings,
   CredentialKind,
   CredentialStatus,
+  CustomLocalModelDownloadRequest,
+  LocalModelChoice,
   ModelArtifacts,
   ModelCatalog,
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelConnection,
   ModelProfile,
+  ModelRepositoryPlan,
+  ModelRepositoryRequest,
+  ModelSource,
   ModelSettings,
   ModelValidation,
+  ProjectReadiness,
   SessionEvent,
   SkillSettings,
   SkillSummary,
@@ -72,6 +79,7 @@ interface UtilitySheetProps {
   events: SessionEvent[];
   panel: UtilityPanel;
   profileDraft: ModelProfile;
+  projectReadiness: ProjectReadiness | null;
   skillApproved: boolean;
   skillCandidate: SkillSummary | null;
   skillSettings: SkillSettings | null;
@@ -80,10 +88,15 @@ interface UtilitySheetProps {
   validation: ModelValidation | null;
   onClose: () => void;
   onConnectModel: (request: ModelConnectRequest) => Promise<void>;
+  onConfigureModelSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscoverModels: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
-  onDownload: (artifactId: string) => void;
+  onDownload: (modelId: string) => void;
+  onDownloadCustom: (request: CustomLocalModelDownloadRequest) => Promise<void>;
   onExportAudit: () => void;
   onInspectSkill: () => void;
+  onInspectModelRepository: (
+    request: ModelRepositoryRequest,
+  ) => Promise<ModelRepositoryPlan>;
   onInstallSkill: () => void;
   onProfileDraft: (profile: ModelProfile) => void;
   onRefreshActivity: () => void;
@@ -270,11 +283,15 @@ const SettingsContent = (props: UtilitySheetProps) => {
     actions,
     artifacts,
     profileDraft,
+    projectReadiness,
     settings,
     validation,
     onConnectModel,
+    onConfigureModelSource,
     onDownload,
+    onDownloadCustom,
     onDiscoverModels,
+    onInspectModelRepository,
     onProfileDraft,
     onRefreshSettings,
     onRemoveProfile,
@@ -286,6 +303,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
   const [settingsView, setSettingsView] = useState<"models" | "approvals">(
     "models",
   );
+  const localModels = artifacts ? localModelOptions(artifacts) : [];
   const applyPreset = (presetId: string) => {
     const preset = settings?.presets.find(
       (item) => item.preset_id === presetId,
@@ -305,8 +323,16 @@ const SettingsContent = (props: UtilitySheetProps) => {
   return (
     <>
       <SheetHeader>
-        <SheetTitle>Settings</SheetTitle>
-        <SheetDescription>Models and action approvals</SheetDescription>
+        <SheetTitle>
+          {projectReadiness?.state === "setup-required" ?
+            "Set up Heartwood"
+          : "Settings"}
+        </SheetTitle>
+        <SheetDescription>
+          {projectReadiness?.state === "setup-required" ?
+            "Choose a model for this project"
+          : "Project model and action approvals"}
+        </SheetDescription>
       </SheetHeader>
       <Tabs
         value={settingsView}
@@ -326,109 +352,119 @@ const SettingsContent = (props: UtilitySheetProps) => {
               Refresh
             </Button>
           </div>
-          <section className="panel-section">
-            <h3>Active model</h3>
-            <div className="inline-control">
-              <Select
-                disabled={!settings?.profiles.length}
-                value={settings?.active_profile ?? undefined}
-                onValueChange={onSelectProfile}
-              >
-                <SelectTrigger aria-label="Active model profile">
-                  <SelectValue placeholder="Not configured" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {settings?.profiles.map((profile) => (
-                      <SelectItem
-                        key={profile.profile_id}
-                        value={profile.profile_id}
-                      >
-                        {modelProfileLabel(profile, settings)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <Tooltip tooltip="Validate active profile">
-                <Button
-                  aria-label="Validate active model profile"
-                  disabled={!settings?.active_profile}
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    onValidateProfile(settings?.active_profile ?? undefined)
-                  }
+          <ProjectReadinessSummary readiness={projectReadiness} />
+          {settings?.profiles.length ?
+            <section className="panel-section">
+              <h3>Active model</h3>
+              <div className="inline-control">
+                <Select
+                  value={settings.active_profile ?? undefined}
+                  onValueChange={onSelectProfile}
                 >
-                  <ShieldCheck size={16} />
-                </Button>
-              </Tooltip>
-            </div>
-            {validation ?
-              <div className="validation-status">
-                <Badge
-                  variant={
-                    validation.policy_decision.decision === "allow" ?
-                      "secondary"
-                    : "destructiveLight"
-                  }
-                >
-                  {validation.policy_decision.decision === "allow" ?
-                    "Authorized"
-                  : "Not authorized"}
-                </Badge>
-                <span>
-                  {credentialStatusLabel(validation.credential_status)}
-                </span>
-                <small>
-                  {validation.policy_decision.decision === "allow" ?
-                    "Allowed by this environment"
-                  : validation.policy_decision.reason}
-                </small>
+                  <SelectTrigger aria-label="Active model profile">
+                    <SelectValue placeholder="Not configured" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {settings.profiles.map((profile) => (
+                        <SelectItem
+                          key={profile.profile_id}
+                          value={profile.profile_id}
+                        >
+                          {modelProfileLabel(profile, settings)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Tooltip tooltip="Validate active profile">
+                  <Button
+                    aria-label="Validate active model profile"
+                    disabled={!settings.active_profile}
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      onValidateProfile(settings.active_profile ?? undefined)
+                    }
+                  >
+                    <ShieldCheck size={16} />
+                  </Button>
+                </Tooltip>
               </div>
-            : null}
-          </section>
-
-          <ModelConnectionSetup
-            settings={settings}
-            onConnect={onConnectModel}
-            onDiscover={onDiscoverModels}
-          />
+              {validation ?
+                <div className="validation-status">
+                  <Badge
+                    variant={
+                      validation.policy_decision.decision === "allow" ?
+                        "secondary"
+                      : "destructiveLight"
+                    }
+                  >
+                    {validation.policy_decision.decision === "allow" ?
+                      "Authorized"
+                    : "Not authorized"}
+                  </Badge>
+                  <span>
+                    {credentialStatusLabel(validation.credential_status)}
+                  </span>
+                  <small>
+                    {validation.policy_decision.decision === "allow" ?
+                      "Allowed by this environment"
+                    : validation.policy_decision.reason}
+                  </small>
+                </div>
+              : null}
+            </section>
+          : null}
 
           <section className="panel-section artifact-list">
-            <h3>Models available to download</h3>
-            {artifacts?.artifacts.length ?
-              artifacts.artifacts.map((artifact) => {
+            <h3>Local models</h3>
+            {artifacts && localModels.length ?
+              localModels.map((model) => {
                 const download = artifacts.downloads.find(
-                  (item) => item.artifact_id === artifact.artifact_id,
+                  (item) => item.model_id === model.model_id,
                 );
                 return (
-                  <div className="artifact-row" key={artifact.artifact_id}>
+                  <div className="artifact-row" key={model.model_id}>
                     <div>
-                      <strong>{artifact.model_alias}</strong>
-                      <span>{formatBytes(artifact.artifact_size_bytes)}</span>
+                      <strong>
+                        {model.label}
+                        {model.catalog_source === "recommended" ?
+                          <Badge variant="outline">Recommended</Badge>
+                        : null}
+                      </strong>
+                      <span>
+                        {localComputeLabel(model.runtime)} ·{" "}
+                        {formatBytes(model.size_bytes)}
+                      </span>
+                      <small>{model.purpose}</small>
+                      <small>{model.availability_reason}</small>
+                      {model.recommended_resource_envelope ?
+                        <small>{model.recommended_resource_envelope}</small>
+                      : null}
                       <ArtifactDownloadStatus
-                        alias={artifact.model_alias}
+                        alias={model.label}
                         download={download}
                       />
                     </div>
                     <Tooltip
                       tooltip={
                         download?.status === "ready" ?
-                          `${artifact.model_alias} is ready`
-                        : `Download ${artifact.model_alias}`
+                          `${model.label} is ready`
+                        : `Download ${model.label}`
                       }
                     >
                       <Button
-                        aria-label={`Download ${artifact.model_alias}`}
+                        aria-label={`Download ${model.label}`}
                         disabled={
+                          !model.available ||
                           download?.status === "downloading" ||
                           download?.status === "ready"
                         }
                         isPending={download?.status === "downloading"}
                         size="sm"
                         variant="outline"
-                        onClick={() => onDownload(artifact.artifact_id)}
+                        onClick={() => onDownload(model.model_id)}
                       >
                         {download?.status === "ready" ?
                           <Check size={15} />
@@ -438,8 +474,21 @@ const SettingsContent = (props: UtilitySheetProps) => {
                   </div>
                 );
               })
-            : <p className="panel-empty">No reviewed models available</p>}
+            : <p className="panel-empty">No recommended models available</p>}
           </section>
+
+          <CustomLocalModelSetup
+            downloads={artifacts?.downloads ?? []}
+            onDownload={onDownloadCustom}
+            onInspect={onInspectModelRepository}
+          />
+
+          <ModelConnectionSetup
+            settings={settings}
+            onConnect={onConnectModel}
+            onConfigureSource={onConfigureModelSource}
+            onDiscover={onDiscoverModels}
+          />
 
           <details className="advanced-section">
             <summary>More options</summary>
@@ -509,13 +558,235 @@ const SettingsContent = (props: UtilitySheetProps) => {
   );
 };
 
+const ProjectReadinessSummary = ({
+  readiness,
+}: {
+  readiness: ProjectReadiness | null;
+}) => {
+  if (!readiness) {
+    return (
+      <section className="panel-section project-readiness" aria-live="polite">
+        <h3>This project</h3>
+        <span>Checking setup</span>
+      </section>
+    );
+  }
+  const status = readinessStatus(readiness.state);
+  const attention = readiness.checks.filter((check) => check.status !== "pass");
+  return (
+    <section className="panel-section project-readiness" aria-live="polite">
+      <div className="project-readiness-heading">
+        <div>
+          <h3>This project</h3>
+          <strong>{projectName(readiness.project_root)}</strong>
+        </div>
+        <Badge variant={status.variant}>{status.label}</Badge>
+      </div>
+      {attention.slice(0, 2).map((check) => (
+        <span key={check.check_id}>{check.summary}</span>
+      ))}
+      {readiness.state === "compute-required" ?
+        <div className="project-next-step">
+          <strong>Next step</strong>
+          <span>
+            Start the selected model and browser together with{" "}
+            <code>heartwood launch --web</code> from this project.
+          </span>
+        </div>
+      : null}
+      <details>
+        <summary>Project details</summary>
+        <div className="project-detail-content">
+          <small>Platform: {readiness.platform_id}</small>
+          <small>Project: {readiness.project_root}</small>
+          <ul className="readiness-checks">
+            {readiness.checks.map((check) => (
+              <li data-status={check.status} key={check.check_id}>
+                {check.summary}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </details>
+    </section>
+  );
+};
+
+const readinessStatus = (
+  state: ProjectReadiness["state"],
+): { label: string; variant: "destructiveLight" | "outline" | "secondary" } => {
+  if (state === "ready") return { label: "Ready", variant: "secondary" };
+  if (state === "setup-required")
+    return { label: "Setup needed", variant: "outline" };
+  if (state === "compute-required")
+    return { label: "Model runtime needed", variant: "outline" };
+  return { label: "Needs attention", variant: "destructiveLight" };
+};
+
+const projectName = (root: string): string => {
+  const parts = root.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? root;
+};
+
+const localModelOptions = (catalog: ModelArtifacts): LocalModelChoice[] =>
+  catalog.models;
+
+const localComputeLabel = (runtime: LocalModelChoice["runtime"]): string =>
+  runtime === "vllm" ? "Requires an NVIDIA GPU" : "Runs on CPU";
+
+const CustomLocalModelSetup = ({
+  downloads,
+  onDownload,
+  onInspect,
+}: {
+  downloads: ModelArtifacts["downloads"];
+  onDownload: (request: CustomLocalModelDownloadRequest) => Promise<void>;
+  onInspect: (request: ModelRepositoryRequest) => Promise<ModelRepositoryPlan>;
+}) => {
+  const modelIssueUrl =
+    "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose";
+  const [repository, setRepository] = useState("");
+  const [plan, setPlan] = useState<ModelRepositoryPlan | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const modelDownload =
+    plan === null ? undefined : (
+      downloads.find((item) => item.model_id === plan.model.model_id)
+    );
+
+  const inspect = async () => {
+    if (!repository.trim()) return;
+    setPending(true);
+    setError(null);
+    setPlan(null);
+    try {
+      setPlan(await onInspect({ repository: repository.trim() }));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const download = async () => {
+    if (!plan) return;
+    setPending(true);
+    setError(null);
+    try {
+      await onDownload({
+        repository: plan.model.source_repository,
+        revision: plan.model.source_revision,
+      });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <details className="advanced-section local-model-import">
+      <summary>Other model</summary>
+      <div className="advanced-section-content local-model-form">
+        <p className="panel-empty">
+          Enter a public or authorized Hugging Face model identifier. Heartwood
+          will select a supported runtime and model file for this deployment.
+        </p>
+        <label>
+          Model repository
+          <Input
+            autoComplete="off"
+            placeholder="owner/model"
+            value={repository}
+            onChange={(event) => {
+              setRepository(event.target.value);
+              setPlan(null);
+              setError(null);
+            }}
+          />
+        </label>
+        <Button
+          disabled={pending || !repository.trim()}
+          isPending={pending && plan === null}
+          variant="outline"
+          onClick={() => void inspect()}
+        >
+          <Search size={15} />
+          Check model
+        </Button>
+        {plan ?
+          <div className="local-model-plan" role="status">
+            <strong>{plan.model.label}</strong>
+            <span>
+              {localComputeLabel(plan.model.runtime)} ·{" "}
+              {formatBytes(plan.model.size_bytes)}
+            </span>
+            <small>{plan.selection_reason}</small>
+            <small>{plan.model.purpose}</small>
+            {plan.model.minimum_resource_envelope ?
+              <small>{plan.model.minimum_resource_envelope}</small>
+            : null}
+            {plan.model.recommended_resource_envelope ?
+              <small>{plan.model.recommended_resource_envelope}</small>
+            : null}
+            <small>{plan.model.license_posture}</small>
+            <details className="model-plan-source">
+              <summary>Source details</summary>
+              <div>
+                <small>Repository: {plan.model.source_repository}</small>
+                <small>Revision: {plan.model.source_revision}</small>
+                <small>
+                  Representation:{" "}
+                  {plan.model.source_path ?? "Complete repository snapshot"}
+                </small>
+              </div>
+            </details>
+            <ArtifactDownloadStatus
+              alias={plan.model.label}
+              download={modelDownload}
+            />
+            <Button
+              disabled={
+                pending ||
+                modelDownload?.status === "downloading" ||
+                modelDownload?.status === "ready"
+              }
+              isPending={pending || modelDownload?.status === "downloading"}
+              onClick={() => void download()}
+            >
+              {modelDownload?.status === "ready" ?
+                <Check size={15} />
+              : <Download size={15} />}
+              {modelDownload?.status === "ready" ?
+                "Downloaded"
+              : "Download model"}
+            </Button>
+          </div>
+        : null}
+        {error ?
+          <div className="connection-error" role="alert">
+            <span>{error}</span>
+            {error.includes(modelIssueUrl) ?
+              <a href={modelIssueUrl} rel="noreferrer" target="_blank">
+                Report an unsupported model
+              </a>
+            : null}
+          </div>
+        : null}
+      </div>
+    </details>
+  );
+};
+
 const ModelConnectionSetup = ({
   settings,
   onConnect,
+  onConfigureSource,
   onDiscover,
 }: {
   settings: ModelSettings | null;
   onConnect: (request: ModelConnectRequest) => Promise<void>;
+  onConfigureSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscover: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
 }) => {
   const [connectionId, setConnectionId] = useState<string | null>(null);
@@ -525,14 +796,22 @@ const ModelConnectionSetup = ({
   const [baseUrl, setBaseUrl] = useState("");
   const [manualModel, setManualModel] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const connections = settings?.connections ?? [];
   const connection = connections.find(
     (candidate) => candidate.connection_id === connectionId,
   );
   const groups = connectionGroups(connections);
+  const unconfiguredSources =
+    settings?.source_options.filter(
+      (source) =>
+        !connections.some(
+          (candidate) => candidate.connection_id === source.connection_id,
+        ),
+    ) ?? [];
 
-  const choose = (next: ModelConnection) => {
+  const selectConnection = (next: ModelConnection) => {
     setConnectionId(next.connection_id);
     setCatalog(null);
     setSelectedModel("");
@@ -540,6 +819,31 @@ const ModelConnectionSetup = ({
     setBaseUrl(next.base_url ?? "");
     setManualModel("");
     setError(null);
+    setSourceError(null);
+  };
+
+  const configureSource = async (
+    sourceId: ModelSource,
+    connectionId: string,
+  ): Promise<ModelConnection> => {
+    const updated = await onConfigureSource(sourceId);
+    const configured = updated.connections.find(
+      (candidate) => candidate.connection_id === connectionId,
+    );
+    if (!configured) throw new Error("Configured model source is unavailable");
+    return configured;
+  };
+
+  const prepareSource = async (sourceId: ModelSource, connectionId: string) => {
+    setPending(true);
+    setSourceError(null);
+    try {
+      selectConnection(await configureSource(sourceId, connectionId));
+    } catch (caught) {
+      setSourceError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
   };
 
   const discover = async () => {
@@ -594,6 +898,40 @@ const ModelConnectionSetup = ({
 
   return (
     <section className="panel-section model-connections">
+      {unconfiguredSources.length ?
+        <div className="connection-group">
+          <h3>Research environment</h3>
+          <div className="connection-list">
+            {unconfiguredSources.map((source) => (
+              <div className="connection-row" key={source.source_id}>
+                <span className="connection-icon">
+                  <Building2 size={16} />
+                </span>
+                <div>
+                  <strong>{source.label}</strong>
+                  <span>{source.description}</span>
+                </div>
+                <Button
+                  disabled={pending}
+                  isPending={pending}
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void prepareSource(source.source_id, source.connection_id)
+                  }
+                >
+                  Set up
+                </Button>
+              </div>
+            ))}
+          </div>
+          {sourceError ?
+            <div className="connection-error" role="alert">
+              {sourceError}
+            </div>
+          : null}
+        </div>
+      : null}
       {groups.map((group) =>
         group.connections.length ?
           <div className="connection-group" key={group.label}>
@@ -618,9 +956,10 @@ const ModelConnectionSetup = ({
                     <Button
                       aria-expanded={item.connection_id === connectionId}
                       aria-pressed={item.connection_id === connectionId}
+                      disabled={pending}
                       size="sm"
                       variant="outline"
-                      onClick={() => choose(item)}
+                      onClick={() => selectConnection(item)}
                     >
                       {(
                         item.credential_status === "missing" &&
@@ -851,12 +1190,6 @@ const ModelChoiceStatus = ({
 
 const connectionGroups = (connections: ModelConnection[]) => [
   {
-    label: "On this device",
-    connections: connections.filter(
-      (connection) => connection.connection_id === "local",
-    ),
-  },
-  {
     label: "Research environment",
     connections: connections.filter(
       (connection) => connection.source === "platform",
@@ -867,7 +1200,13 @@ const connectionGroups = (connections: ModelConnection[]) => [
     connections: connections.filter(
       (connection) =>
         connection.source !== "platform" &&
-        connection.connection_id !== "local",
+        !["custom-api", "local"].includes(connection.connection_id),
+    ),
+  },
+  {
+    label: "Other model services",
+    connections: connections.filter((connection) =>
+      ["custom-api", "local"].includes(connection.connection_id),
     ),
   },
 ];
@@ -885,7 +1224,7 @@ const connectionStatus = (connection: ModelConnection): string => {
         "Setup required"
       : "Provided here";
   }
-  if (connection.connection_id === "local") return "Local runtime";
+  if (connection.connection_id === "local") return "Already running locally";
   return connection.credential_status === "missing" ?
       "Not connected"
     : "Connected";
@@ -900,7 +1239,7 @@ const ArtifactDownloadStatus = ({
 }) => {
   if (!download) return null;
   if (download.status === "ready") {
-    return <small role="status">Ready in model storage</small>;
+    return <small role="status">Ready for Heartwood launch</small>;
   }
   if (download.status === "error") {
     return <small role="alert">{download.error ?? "Download failed"}</small>;

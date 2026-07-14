@@ -1,6 +1,6 @@
 {
   "name": "@heartwood/webui",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Researcher web UI for Heartwood sessions.",
@@ -27,7 +27,7 @@
     "@stanfordspezi/spezi-web-design-system": "0.20.0",
     "@tanstack/react-query": "5.101.2",
     "lucide-react": "1.24.0",
-    "next-intl": "4.13.1",
+    "next-intl": "4.13.2",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   },
@@ -44,15 +44,15 @@
     "@types/node": "24.13.3",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "5.1.4",
-    "@vitest/coverage-v8": "3.2.6",
-    "eslint": "9.39.4",
+    "@vitejs/plugin-react": "6.0.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "eslint": "9.39.5",
     "eslint-import-resolver-typescript": "4.4.5",
     "jsdom": "29.1.1",
     "prettier": "3.9.5",
     "tailwindcss": "4.3.2",
-    "typescript": "5.9.3",
-    "vite": "7.3.6",
-    "vitest": "3.2.6"
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
   }
 }

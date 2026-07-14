@@ -26,10 +26,13 @@ members = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.14",
-    "mypy>=2.2.0",
+    "ruff>=0.15.21",
+    "mypy>=2.3.0",
     "pytest>=8.4",
     "pytest-cov>=7.0",
+]
+docs = [
+    "zensical==0.0.50",
 ]
 
 # ---------------------------------------------------------------------------
@@ -37,7 +40,7 @@ dev = [
 # ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = [".venv"]
 
 [tool.ruff.lint]
@@ -79,7 +82,7 @@ ban-relative-imports = "all"
 # mypy — strict static typing
 # ---------------------------------------------------------------------------
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unreachable = true
 warn_redundant_casts = true

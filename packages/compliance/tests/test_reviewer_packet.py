@@ -11,16 +11,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from heartwood.compliance import ReviewerPacketGenerator
-from heartwood.gateway import SessionGateway
+from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.session import CommandKind, JsonValue, SessionCommand
 
 
 def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Path) -> None:
-    workspace = tmp_path / "sessions"
+    project = ProjectContext(tmp_path)
+    workspace = project.sessions_dir
     session_id = "review-session"
     gateway = SessionGateway(
-        workspace=workspace,
-        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        project=project,
+        env={},
+        backend_id="deterministic",
     )
     gateway.handle(_command(session_id, CommandKind.DETECT))
     gateway.handle(

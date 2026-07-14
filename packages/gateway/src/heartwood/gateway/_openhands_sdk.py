@@ -87,6 +87,7 @@ class OpenHandsSdkBackend:
         workspace: Path,
         skills_dir: Path,
         persistence_dir: Path,
+        conversation_key: str,
         additional_skills_dirs: Sequence[Path] = (),
         credential_environment_names: Sequence[str] = (),
         action_confirmation_mode: ActionConfirmationMode = "always-confirm",
@@ -103,6 +104,7 @@ class OpenHandsSdkBackend:
         self.skills_dir = skills_dir.resolve()
         self.additional_skills_dirs = tuple(path.resolve() for path in additional_skills_dirs)
         self.persistence_dir = persistence_dir.resolve()
+        self.conversation_key = conversation_key
         self._credential_environment_names = tuple(sorted(set(credential_environment_names)))
         self.env = env
         self._captured: list[object] = []
@@ -256,6 +258,7 @@ class OpenHandsSdkBackend:
             sdk = import_module("openhands.sdk")
             skill_module = import_module("openhands.sdk.skills")
             tools_module = import_module("openhands.tools")
+            project_file_editor_module = import_module("heartwood.gateway._project_file_editor")
         except ImportError as error:  # pragma: no cover - image includes the pinned extra
             msg = "OpenHands SDK dependencies are not installed"
             raise OpenHandsSdkError(msg) from error
@@ -293,12 +296,15 @@ class OpenHandsSdkBackend:
                         self._credential_environment_names,
                     ),
                 ),
-                sdk.Tool(name=tools_module.FileEditorTool.name),
+                sdk.Tool(
+                    name=project_file_editor_module.PROJECT_FILE_EDITOR_SPEC,
+                    params={"project_root": str(self.workspace)},
+                ),
             ],
             agent_context=context,
             tool_concurrency_limit=1,
         )
-        conversation_id = uuid.uuid5(uuid.NAMESPACE_URL, str(self.workspace))
+        conversation_id = uuid.uuid5(uuid.NAMESPACE_URL, self.conversation_key)
         conversation = sdk.Conversation(
             agent=agent,
             workspace=self.workspace,
@@ -456,8 +462,9 @@ def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
         load_public_skills=False,
         load_project_skills=False,
         system_message_suffix=(
-            "Operate only inside the configured workspace and follow Heartwood data-use, "
-            "egress, and aggregate-export controls."
+            "Operate only inside the configured project directory. Do not inspect or modify "
+            "the reserved .heartwood directory. Follow Heartwood data-use, egress, and "
+            "aggregate-export controls."
         ),
     )
 

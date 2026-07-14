@@ -8,10 +8,13 @@ schema_version = "heartwood.model-snapshot-catalog.v1"
 
 [snapshots.qwen25-7b-instruct-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Reviewed local agent model for synthetic OpenHands tool-use demonstrations on NVIDIA GPUs."
+purpose = "GPU-accelerated local model for synthetic tool-use demonstrations; not reviewed for biomedical use."
 source_repository = "Qwen/Qwen2.5-7B-Instruct"
 source_revision = "a09a35458c702b33eeacc393d103063234e8bc28"
 expected_size_bytes = 15200000000
 minimum_free_bytes = 21474836480
 license_posture = "Apache-2.0; retain the model card and source provenance. No biomedical or production-quality claim is made."
 model_alias = "Qwen2.5-7B-Instruct for vLLM"
+minimum_resource_envelope = "One NVIDIA GPU with at least 24 GB VRAM, 8 CPU cores, 32 GB RAM, and 20 GB free project storage."
+recommended_resource_envelope = "One NVIDIA GPU with at least 32 GB VRAM, 8 or more CPU cores, 64 GB RAM, and 30 GB free project storage."
+recommended = true

@@ -18,6 +18,10 @@ test("supports the researcher conversation and session workflow", async ({
   await page.goto("/");
 
   await expect(page.getByText("Heartwood", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Set up Heartwood" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
   const newAnalysis = page.getByRole("button", { name: "New analysis" });
   await expect(newAnalysis).toHaveCSS("display", "flex");
   await expect(newAnalysis).toHaveCSS("gap", "8px");
@@ -77,7 +81,9 @@ test("supports the researcher conversation and session workflow", async ({
     exact: true,
   });
   await modelPolicyButton.click();
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Set up Heartwood" }),
+  ).toBeVisible();
   const localConnection = page.locator(".connection-row").filter({
     has: page.getByText("Local", { exact: true }),
   });
@@ -95,6 +101,7 @@ test("supports the researcher conversation and session workflow", async ({
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Use model" }).click();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(
     page.getByLabel("Active model profile", { exact: true }),
   ).toContainText("Local · local-model");
@@ -110,14 +117,27 @@ test("supports the researcher conversation and session workflow", async ({
   ).toBeVisible();
   await approvalsTab.press("ArrowLeft");
   await expect(modelsTab).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("No reviewed models available")).toBeVisible();
+  await expect(page.getByText("No recommended models available")).toBeVisible();
+  await page.getByText("Other model", { exact: true }).click();
+  await page.getByLabel("Model repository").fill("example/research-model-gguf");
+  await page.getByRole("button", { name: "Check model" }).click();
+  await expect(page.getByText("Research Model Q4_K_M")).toBeVisible();
+  await expect(page.getByText(/balanced single-file GGUF/u)).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeHidden();
   await expect(modelPolicyButton).toBeFocused();
   await expect(task).toBeEnabled();
 
   await task.fill("Fit a training-only age-only condition-history baseline");
-  await task.press("Enter");
+  const activity = page.getByRole("status", {
+    name: "Heartwood is working on your task",
+  });
+  await Promise.all([
+    page.getByLabel("Send task").click(),
+    expect(activity).toBeVisible(),
+    expect(task).toBeDisabled(),
+  ]);
+  await expect(activity).toBeHidden();
   await expect(
     page.getByText("Fit a training-only age-only condition-history baseline"),
   ).toBeVisible();
@@ -141,6 +161,10 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await page.goto("/");
 
   await expect(
+    page.getByRole("heading", { name: "Set up Heartwood" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
     page.getByRole("heading", { name: "Synthetic cohort analysis" }),
   ).toBeVisible();
   await page.getByLabel("Open sessions").click();
@@ -162,6 +186,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   let modelSettings = {
     schema_version: "heartwood.model-settings.v1",
     active_profile: null as string | null,
+    model_source: "local",
     profiles: [] as Array<Record<string, unknown>>,
     connections: [
       {
@@ -197,7 +222,63 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         description: "Local runtime",
       },
     ],
+    source_options: [
+      {
+        source_id: "local",
+        connection_id: "local",
+        label: "Local",
+        description: "Use a model service running with this project.",
+        selected: true,
+      },
+      {
+        source_id: "openai",
+        connection_id: "openai",
+        label: "OpenAI",
+        description: "Use the models available to an OpenAI token.",
+        selected: false,
+      },
+      {
+        source_id: "anthropic",
+        connection_id: "anthropic",
+        label: "Anthropic",
+        description: "Use the models available to an Anthropic token.",
+        selected: false,
+      },
+      {
+        source_id: "stanford-ai-api-gateway",
+        connection_id: "stanford-ai-api-gateway",
+        label: "Stanford AI API Gateway",
+        description:
+          "Use models authorized through Stanford's managed gateway.",
+        selected: false,
+      },
+    ],
   };
+
+  await page.route("**/project/readiness", (route) =>
+    json(route, {
+      state: modelSettings.active_profile ? "ready" : "setup-required",
+      platform_id: "generic",
+      project_root: "/workspace/synthetic-analysis",
+      state_root: "/workspace/synthetic-analysis/.heartwood",
+      evidence: [],
+      checks: [
+        {
+          check_id: "project-storage",
+          status: "pass",
+          summary: "Project storage is writable",
+        },
+        {
+          check_id: "model",
+          status: modelSettings.active_profile ? "pass" : "warning",
+          summary:
+            modelSettings.active_profile ?
+              "Active model: local"
+            : "No active model selected",
+        },
+      ],
+    }),
+  );
 
   await page.route("**/sessions", async (route) => {
     if (route.request().method() === "POST") {
@@ -223,6 +304,9 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     }
     if (resource === "commands") {
       const payload = request.postDataJSON() as { kind?: string };
+      if (payload.kind === "chat") {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
       const nextEvents =
         sessionId === "session-test" && payload.kind === "approve" ?
           [
@@ -261,8 +345,51 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   await page.route("**/settings/models/artifacts", (route) =>
     json(route, {
       schema_version: "heartwood.local-model-catalog.v1",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v1",
       artifacts: [],
+      snapshots: [],
+      models: [],
       downloads: [],
+    }),
+  );
+  await page.route("**/settings/models/source", async (route) => {
+    const payload = route.request().postDataJSON() as { source_id: string };
+    const sourceChanged = modelSettings.model_source !== payload.source_id;
+    modelSettings = {
+      ...modelSettings,
+      active_profile: sourceChanged ? null : modelSettings.active_profile,
+      model_source: payload.source_id,
+      source_options: modelSettings.source_options.map((source) => ({
+        ...source,
+        selected: source.source_id === payload.source_id,
+      })),
+    };
+    await json(route, modelSettings);
+  });
+  await page.route("**/settings/models/repository", (route) =>
+    json(route, {
+      model: {
+        model_id: "hf-research-model-123456789abc",
+        label: "Research Model Q4_K_M",
+        purpose: "User-selected Hugging Face model.",
+        runtime: "llama-cpp",
+        source_repository: "example/research-model-gguf",
+        source_revision: "1".repeat(40),
+        source_path: "research-model-q4_k_m.gguf",
+        size_bytes: 4 * 1024 * 1024 * 1024,
+        minimum_free_bytes: 4 * 1024 * 1024 * 1024,
+        license_posture: "Source model card reports apache-2.0.",
+        catalog_source: "user-selected",
+        artifact_sha256: "a".repeat(64),
+        minimum_resource_envelope:
+          "Estimated minimum: 4 CPU cores and 12 GB RAM.",
+        recommended_resource_envelope:
+          "Recommended: 8 CPU cores and 16 GB RAM.",
+        available: true,
+        availability_reason: "Available on this deployment",
+      },
+      selection_reason:
+        "Selected a balanced single-file GGUF variant for the CPU runtime.",
     }),
   );
   await page.route("**/settings/models/catalog", (route) =>
@@ -306,6 +433,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     modelSettings = {
       ...modelSettings,
       active_profile: payload.connection_id,
+      model_source: payload.connection_id,
       profiles: [profile],
     };
     await json(route, modelSettings);

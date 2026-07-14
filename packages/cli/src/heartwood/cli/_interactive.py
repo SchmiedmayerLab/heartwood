@@ -36,6 +36,64 @@ class InteractionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class InteractionActivity:
+    """Honest waiting copy for one blocking terminal interaction."""
+
+    label: str
+    waiting_label: str
+    guidance: str
+
+
+_TASK_ACTIVITY = InteractionActivity(
+    label="Working on your task",
+    waiting_label="Still working on your task",
+    guidance="Response time depends on the selected model and task.",
+)
+_DEFAULT_ACTIVITY = InteractionActivity(
+    label="Running the command",
+    waiting_label="Still running the command",
+    guidance="Heartwood is waiting for the operation to complete.",
+)
+_COMMAND_ACTIVITIES = {
+    "/allow": InteractionActivity(
+        label="Continuing the approved action set",
+        waiting_label="Still continuing the action set",
+        guidance="The model may need time to process the tool results.",
+    ),
+    "/reject": InteractionActivity(
+        label="Rejecting the action set",
+        waiting_label="Still rejecting the action set",
+        guidance="Heartwood is waiting for the session to settle.",
+    ),
+    "/pause": InteractionActivity(
+        label="Pausing the session",
+        waiting_label="Still pausing the session",
+        guidance="Heartwood is waiting for the active operation to stop safely.",
+    ),
+    "/resume": InteractionActivity(
+        label="Resuming the session",
+        waiting_label="Still resuming the session",
+        guidance="Response time depends on the selected model and task.",
+    ),
+    "/replay": InteractionActivity(
+        label="Loading the conversation",
+        waiting_label="Still loading the conversation",
+        guidance="A long session can take additional time to restore.",
+    ),
+    "/audit-export": InteractionActivity(
+        label="Preparing the audit export",
+        waiting_label="Still preparing the audit export",
+        guidance="Large session histories can take additional time to process.",
+    ),
+    "/status": InteractionActivity(
+        label="Checking the session",
+        waiting_label="Still checking the session",
+        guidance="Heartwood is waiting for the project services to respond.",
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
 class PendingAction:
     """One member of the current OpenHands confirmation batch."""
 
@@ -137,6 +195,14 @@ class InteractiveSession:
 def command_help() -> str:
     """Return the commands common to terminal clients."""
     return "/allow  /reject  /pause  /resume  /status  /replay  /audit-export  /help  /exit"
+
+
+def interaction_activity(line: str) -> InteractionActivity:
+    """Describe client-side waiting without inventing agent workflow steps."""
+    directive = line.strip().split(maxsplit=1)[0] if line.strip() else ""
+    if not directive.startswith("/"):
+        return _TASK_ACTIVITY
+    return _COMMAND_ACTIVITIES.get(directive, _DEFAULT_ACTIVITY)
 
 
 def pending_actions(events: Sequence[SessionEvent]) -> tuple[PendingAction, ...]:

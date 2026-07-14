@@ -10,51 +10,76 @@ SPDX-License-Identifier: MIT
 
 # Documentation
 
-Heartwood documentation is organized by purpose so implemented behavior, design rationale, and future work cannot be mistaken for one another.
+Start with [Get Started with Heartwood](getting-started.md). It explains how to choose an installation path, open a project, connect a model, and begin a conversation without requiring knowledge of the internal architecture.
 
-## Current Operational Documentation
+## Start Here
 
-These documents describe commands, images, interfaces, and validation paths implemented in the repository:
+- [Get Started with Heartwood](getting-started.md) explains when to use a container, native installation, or platform image and follows the first project through model setup and conversation.
+- [Work with the Agent](using-heartwood.md) explains conversations, action review, session controls, resume, and audit export.
+- [Use the Browser and Notebooks](web-interface.md) explains visual setup, shared project state, local-model preparation, conversations, and Jupyter routing.
 
-- [Platform Support](platform-support.md) records the current support and validation status for each platform.
-- [Container Images](container-images.md) defines published tags, image contents, runtime configuration, and continuous integration.
-- [Releases](releases.md) defines Semantic Versioning, automated release gates, approval, and published artifacts.
-- [Model Connections](model-connections.md) defines built-in, platform-provided, local, cloud, and custom model configuration.
-- [Researcher Web Interface](web-interface.md) documents the shared session workflow, model setup, action review, audit and CLI parity, notebook layout, and reproducible screenshots.
-- [Using Heartwood](using-heartwood.md) documents the shared conversation, action-set review, terminal commands, replay, audit, web, notebook, and persistence behavior.
-- [Set Up Heartwood On Carina](carina-cli.md) documents the synthetic-only native GPU and Stanford AI API Gateway workflow.
-- [Getting Started With Local And Offline Models](getting-started-offline.md) is the runnable generic-container and local-inference guide.
-- [Terra Jupyter Demo](terra-jupyter-demo.md) is the synthetic Terra validation runbook.
-- [Platform Image Extension Guide](platform-images.md) documents the implemented shared mechanism for maintaining or adding a platform-derived image.
+## Models
 
-Operational documentation describes repository behavior, not institutional approval. A path marked implemented or CI-validated is not automatically approved for controlled data.
+- [Connect a Model](model-connections.md) explains the choices shown during model setup and how credentials are handled.
+- [Run a Model Locally](getting-started-offline.md) explains model weights, inference servers, recommended and user-selected Hugging Face downloads, automatic runtime selection, managed launch, and no-network validation.
 
-## Design And Rationale
+## Platforms
 
-The [design set](../design) owns durable product and engineering decisions:
+- [Choose Where to Run Heartwood](platforms.md) compares workstation, container, Terra, Carina, and other managed environments.
+- [Heartwood on Terra](terra-jupyter-demo.md) provides the custom-image, Jupyter, proxy, and synthetic validation workflow.
+- [Heartwood on Stanford Carina](carina-cli.md) provides the native installation and synthetic GPU workflow.
 
-- [Overview](../design/01-overview.md) defines scope, users, and the reference workflow.
-- [Platforms](../design/02-platforms.md) explains platform assumptions and target-environment rationale.
-- [Architecture](../design/03-architecture.md) defines component ownership and runtime data flow.
-- [Skills And Auto-Detection](../design/04-skills.md) defines Skill packaging, trust, detection, and extension behavior.
-- [Security And Compliance](../design/05-security-compliance.md) defines threat boundaries and evidence requirements.
-- [Observability, Audit, And Feedback](../design/06-observability-audit.md) defines records, replay, and export behavior.
-- [Testing And Evaluation](../design/07-testing-eval.md) defines implemented test layers and evaluation requirements.
-- [Development Practices](../design/08-development.md) defines repository, toolchain, continuous-integration, and supply-chain policy.
+## Deployment
 
-Design documents explain why the system is shaped this way. Runnable commands and platform status belong in the operational documents instead.
+- [Deploy Heartwood](deployment.md) introduces artifact selection, persistence, model access, security boundaries, and validation claims.
+- [Container Images](container-images.md) documents generic and Terra-derived image tags, project mounts, security controls, and publication.
+- [Build a Platform-Specific Image](platform-images.md) defines how maintainers extend Heartwood from another platform base image.
+- [Platform Support and Validation](platform-support.md) records release-specific evidence without implying institutional approval.
+- [Release Heartwood](releases.md) defines the protected release process.
 
-## Delivery Roadmap
+## How Heartwood Works
 
-The [Delivery Roadmap](../design/09-implementation-plan.md) records the test-backed baseline, material readiness gaps, ordered delivery priorities, acceptance gates, and deferred work. Operational issue tracking may reference roadmap items, but it does not replace the architecture and acceptance criteria in the design record.
+These documents progress from product intent to implementation and validation details:
 
-## Status Terms
+- [Product Scope](../design/01-overview.md) defines the mission, users, boundaries, and reference workflow.
+- [System Architecture](../design/03-architecture.md) defines component ownership, the project and state contract, and runtime data flow.
+- [Security and Compliance](../design/05-security-compliance.md) defines threat boundaries and evidence requirements.
+- [Skills and Extensions](../design/04-skills.md) defines Skill packaging, trust, detection, and extension behavior.
+- [Audit and Reproducibility](../design/06-observability-audit.md) defines in-boundary records, replay, and scrubbed export.
+- [Platform Architecture](../design/02-platforms.md) defines deployment assumptions and target-environment rationale.
+- [Testing and Evaluation](../design/07-testing-eval.md) defines test layers and model capability evidence.
+- [Engineering and Releases](../design/08-development.md) defines repository, toolchain, continuous-integration, and supply-chain policy.
+
+## Reference
+
+- [Project Files and State](project-state.md) defines the current-directory project boundary and `.heartwood/` layout.
+- [Glossary and Acronyms](../ACRONYMS.md) explains specialized terms used throughout the project.
+- [Contributing](../CONTRIBUTING.md) defines the contributor workflow and local checks.
+
+## Documentation Status
 
 | Term | Meaning |
 |---|---|
 | Implemented | Code and repository tests exist for the behavior. |
-| CI-validated | Automated checks exercise the behavior in synthetic or controlled test infrastructure. |
-| Live-validated | The published artifact has passed the documented synthetic workflow in the real platform control plane. |
-| Institution-approved | The deploying institution has approved the exact image, model route, credentials, data use, network controls, and evidence. Heartwood cannot assign this status. |
-| Release-ready | Every acceptance gate for the declared release scope is reproducible from an immutable published artifact. |
-| Planned | The item is future work and must not be described as current capability. |
+| CI-validated | Automated checks exercise the behavior with synthetic data or controlled test infrastructure. |
+| Live-validated | A published artifact has passed the documented synthetic workflow in the real platform control plane. |
+| Institution-approved | The deploying institution approved the exact image, model route, credentials, data use, network controls, and evidence. Heartwood cannot assign this status. |
+| Release-ready | Every acceptance gate for the declared release scope is reproducible from an immutable artifact. |
+
+## Project Planning
+
+[GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) own planned implementation, dependencies, and acceptance criteria. The [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) owns delivery status. Documentation describes current behavior and durable rationale; it does not serve as a backlog, implementation diary, or decision transcript.
+
+## Published Documentation
+
+The public [Heartwood documentation site](https://schmiedmayerlab.github.io/heartwood/) is built from the exact latest release tag. Pull requests and `main` validate the evolving source without changing the released site.
+
+Preview the current source locally:
+
+```bash
+uv sync --locked --only-group docs
+uv run --no-sync python deploy/stage_documentation.py
+uv run --no-sync zensical serve
+```
+
+Use `uv run --no-sync zensical build --clean --strict` for the same strict build used by continuous integration.

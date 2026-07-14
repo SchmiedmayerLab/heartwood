@@ -28,7 +28,7 @@ if [[ "${1:-}" == "--version" ]]; then
   echo "heartwood synthetic"
   exit 0
 fi
-printf '%s|%s|%s|%s\n' "${HEARTWOOD_INSTALL_ROOT}" "${HEARTWOOD_NATIVE_VERSION}" "${HEARTWOOD_VERSION}" "${HEARTWOOD_HOME}"
+echo "heartwood synthetic command"
 COMMAND
   chmod +x "${UV_PROJECT_ENVIRONMENT}/bin/heartwood"
   ;;
@@ -97,19 +97,19 @@ fi
 
 test -x "${workspace}/installation/bin/heartwood"
 test -L "${workspace}/installation/current"
-for directory in state state/sessions state/workspaces state/runtime models cache logs; do
+for directory in versions runtimes bin; do
   test -d "${workspace}/installation/${directory}"
   test "$(stat -c '%a' "${workspace}/installation/${directory}")" = "700"
 done
-output="$("${workspace}/installation/bin/heartwood")"
-case "${output}" in
-  "${workspace}/installation/versions/"*"|"*"|"*"|${workspace}/installation/state") ;;
-  *) echo "installed command did not receive native installation metadata" >&2; exit 1 ;;
-esac
-grep --fixed-strings "HEARTWOOD_MODEL_CACHE=${workspace}/installation/models" \
-  "${workspace}/installation/bin/heartwood"
-grep --fixed-strings "HF_HOME=${workspace}/installation/cache/huggingface" \
-  "${workspace}/installation/bin/heartwood"
+for directory in state models cache logs; do
+  test ! -e "${workspace}/installation/${directory}"
+done
+test "$("${workspace}/installation/bin/heartwood")" = "heartwood synthetic command"
+if grep --extended-regexp 'HEARTWOOD_(HOME|WORKSPACE|MODEL_CACHE|INSTALL_ROOT|NATIVE_ROOT|NATIVE_VERSION|VERSION)|HF_HOME' \
+  "${workspace}/installation/bin/heartwood"; then
+  echo "installed command wrapper exports project or release state" >&2
+  exit 1
+fi
 
 for _ in 1 2; do
   HEARTWOOD_INSTALL_MINIMUM_FREE_GIB=1 PATH="${workspace}/bin:${PATH}" \
@@ -131,19 +131,19 @@ test -x "${carina_runtime}/vllm/bin/hf"
 test -L "${workspace}/carina-installation/bin/hf"
 test "$(readlink "${workspace}/carina-installation/bin/hf")" = \
   "${carina_runtime}/vllm/bin/hf"
-for directory in state state/sessions state/workspaces state/runtime models cache logs; do
+for directory in versions runtimes bin; do
   test -d "${workspace}/carina-installation/${directory}"
   test "$(stat -c '%a' "${workspace}/carina-installation/${directory}")" = "700"
 done
-carina_output="$("${workspace}/carina-installation/bin/heartwood")"
-case "${carina_output}" in
-  "${workspace}/carina-installation/versions/"*"|"*"|"*"|${workspace}/carina-installation/state") ;;
-  *) echo "Carina command did not receive native installation metadata" >&2; exit 1 ;;
-esac
-grep --fixed-strings "HEARTWOOD_MODEL_CACHE=${workspace}/carina-installation/models" \
-  "${workspace}/carina-installation/bin/heartwood"
-grep --fixed-strings "HF_HOME=${workspace}/carina-installation/cache/huggingface" \
-  "${workspace}/carina-installation/bin/heartwood"
+for directory in state models cache logs; do
+  test ! -e "${workspace}/carina-installation/${directory}"
+done
+test "$("${workspace}/carina-installation/bin/heartwood")" = "heartwood synthetic command"
+if grep --extended-regexp 'HEARTWOOD_(HOME|WORKSPACE|MODEL_CACHE|INSTALL_ROOT|NATIVE_ROOT|NATIVE_VERSION|VERSION)|HF_HOME' \
+  "${workspace}/carina-installation/bin/heartwood"; then
+  echo "Carina command wrapper exports project or release state" >&2
+  exit 1
+fi
 
 printf '%064d  heartwood-native.tar.gz\n' 0 >"${workspace}/invalid-SHA256SUMS"
 if "${assets}/heartwood-installer" \

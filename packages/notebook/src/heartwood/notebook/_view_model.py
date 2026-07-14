@@ -11,10 +11,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal
 
-from heartwood.gateway import ModelProfile, SessionGateway
+from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 
@@ -115,13 +114,22 @@ class NotebookSession:
     def __init__(
         self,
         *,
-        workspace: Path = Path(".heartwood") / "sessions",
+        project: ProjectContext | None = None,
         session_id: str = "session-local",
         gateway: SessionGateway | None = None,
     ) -> None:
-        self.workspace = workspace
+        gateway_project = getattr(gateway, "project", None)
+        if project is None and isinstance(gateway_project, ProjectContext):
+            self.project = gateway_project
+        else:
+            self.project = ProjectContext.current() if project is None else project
+        if (
+            isinstance(gateway_project, ProjectContext)
+            and gateway_project.root != self.project.root
+        ):
+            raise ValueError("notebook project must match the injected gateway project")
         self.session_id = session_id
-        self.gateway = SessionGateway(workspace=workspace) if gateway is None else gateway
+        self.gateway = SessionGateway(project=self.project) if gateway is None else gateway
         self._next_command_sequence = len(self.gateway.replay_events(session_id=session_id))
 
     def detect(self) -> NotebookViewModel:
@@ -145,6 +153,14 @@ class NotebookSession:
         """Return non-secret model profiles and presets."""
         return self.gateway.model_settings()
 
+    def project_readiness(self) -> dict[str, object]:
+        """Return the shared project setup and compute readiness report."""
+        return self.gateway.project_readiness()
+
+    def configure_model_source(self, source_id: str) -> dict[str, object]:
+        """Prepare the same project model source used by terminal and browser clients."""
+        return self.gateway.configure_model_source(source_id)
+
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or update one non-secret model profile."""
         return self.gateway.save_model_profile(profile)
@@ -158,8 +174,41 @@ class NotebookSession:
         return self.gateway.validate_model_profile(profile_id)
 
     def model_artifacts(self) -> dict[str, object]:
-        """Return reviewed optional local-model artifacts."""
+        """Return default and user-selected local-model choices."""
         return self.gateway.model_artifacts()
+
+    def inspect_model_repository(
+        self,
+        repository: str,
+        *,
+        revision: str | None = None,
+    ) -> dict[str, object]:
+        """Inspect supported candidates from one Hugging Face model repository."""
+        return self.gateway.inspect_model_repository(repository, revision=revision)
+
+    def download_local_model(self, model_id: str) -> dict[str, object]:
+        """Start a recommended project-local model download."""
+        return self.gateway.download_local_model(model_id)
+
+    def download_custom_local_model(
+        self,
+        repository: str,
+        *,
+        revision: str | None = None,
+    ) -> dict[str, object]:
+        """Start one inspected user-selected local-model download."""
+        return self.gateway.download_custom_local_model(
+            repository,
+            revision=revision,
+        )
+
+    def action_settings(self) -> dict[str, object]:
+        """Return the shared action-confirmation settings."""
+        return self.gateway.action_settings()
+
+    def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
+        """Select a deployment-allowed action-confirmation mode."""
+        return self.gateway.select_action_confirmation_mode(mode)
 
     def web_proxy_url(self, *, port: int = 8767) -> str:
         """Return the proxied web UI URL for Jupyter-style environments."""

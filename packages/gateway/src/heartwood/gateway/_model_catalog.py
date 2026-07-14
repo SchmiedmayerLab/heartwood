@@ -16,15 +16,15 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypeAlias, cast
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 from heartwood.gateway._model_settings import CredentialKind
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
-ConnectionProtocol: TypeAlias = Literal["anthropic", "openai", "openai-compatible", "static"]
-ConnectionSource: TypeAlias = Literal["built-in", "platform", "user"]
-ModelAvailability: TypeAlias = Literal["available", "experimental", "unsupported"]
+type ConnectionProtocol = Literal["anthropic", "openai", "openai-compatible", "static"]
+type ConnectionSource = Literal["built-in", "platform", "user"]
+type ModelAvailability = Literal["available", "experimental", "unsupported"]
 
 _CONNECTION_PROTOCOLS = {"anthropic", "openai", "openai-compatible", "static"}
 _CONNECTION_SOURCES = {"built-in", "platform", "user"}
@@ -167,6 +167,10 @@ class ModelConnection:
         if self.credential_kind == "managed-identity":
             return "managed-identity"
         return None
+
+    def provider_model_id(self, execution_model: str) -> str:
+        """Return the provider-facing identifier from a normalized execution model."""
+        return execution_model.removeprefix(self.model_prefix)
 
     def credential_status(self, env: Mapping[str, str]) -> str:
         """Return whether the referenced credential is available."""
@@ -441,22 +445,23 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
 )
 
 
-def model_connections_path(env: Mapping[str, str] | None = None) -> Path | None:
-    """Return the optional platform connection manifest path."""
-    configured = (os.environ if env is None else env).get("HEARTWOOD_MODEL_CONNECTIONS")
-    return None if not configured else Path(configured)
-
-
 def load_model_connections(path: Path | None) -> tuple[ModelConnection, ...]:
     """Load platform-provided connections and combine them with built-ins."""
-    for connection in BUILT_IN_MODEL_CONNECTIONS:
-        connection.validate(configurable=connection.connection_id == "custom-api")
     if path is None:
+        for connection in BUILT_IN_MODEL_CONNECTIONS:
+            connection.validate(configurable=connection.connection_id == "custom-api")
         return BUILT_IN_MODEL_CONNECTIONS
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ModelCatalogError(f"unable to load model connections {path}") from error
+    return model_connections_from_mapping(value)
+
+
+def model_connections_from_mapping(value: object) -> tuple[ModelConnection, ...]:
+    """Validate configured connections and combine them with built-ins."""
+    for connection in BUILT_IN_MODEL_CONNECTIONS:
+        connection.validate(configurable=connection.connection_id == "custom-api")
     if (
         not isinstance(value, dict)
         or value.get("schema_version") != "heartwood.model-connections.v1"
@@ -598,7 +603,7 @@ def _model_compatibility(
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
     verified = _verified_openhands_models(connection)
-    model_name = execution_model.removeprefix(connection.model_prefix)
+    model_name = connection.provider_model_id(execution_model)
     if execution_model in verified or model_name in verified:
         return "available", "Verified by the pinned OpenHands SDK", None, True
     try:

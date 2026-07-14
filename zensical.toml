@@ -1,0 +1,124 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+[project]
+site_name = "Heartwood"
+site_description = "Auditable agentic coding for biomedical research environments"
+site_url = "https://schmiedmayerlab.github.io/heartwood/"
+repo_url = "https://github.com/SchmiedmayerLab/heartwood"
+repo_name = "SchmiedmayerLab/heartwood"
+docs_dir = "build/documentation"
+site_dir = "site"
+copyright = "Copyright Stanford University and the Heartwood project authors"
+extra_css = ["stylesheets/extra.css"]
+nav = [
+    { "Home" = "index.md" },
+    { "Start Here" = [
+        { "Get Started" = "docs/getting-started.md" },
+        { "Work with the Agent" = "docs/using-heartwood.md" },
+        { "Browser and Notebooks" = "docs/web-interface.md" },
+    ] },
+    { "Models" = [
+        { "Connect a Model" = "docs/model-connections.md" },
+        { "Run a Model Locally" = "docs/getting-started-offline.md" },
+    ] },
+    { "Platforms" = [
+        { "Choose an Environment" = "docs/platforms.md" },
+        { "Terra" = "docs/terra-jupyter-demo.md" },
+        { "Stanford Carina" = "docs/carina-cli.md" },
+    ] },
+    { "Deployment" = [
+        { "Deployment Overview" = "docs/deployment.md" },
+        { "Container Images" = "docs/container-images.md" },
+        { "Platform-Specific Images" = "docs/platform-images.md" },
+        { "Support and Validation" = "docs/platform-support.md" },
+        { "Release Heartwood" = "docs/releases.md" },
+    ] },
+    { "How Heartwood Works" = [
+        { "Product Scope" = "design/01-overview.md" },
+        { "System Architecture" = "design/03-architecture.md" },
+        { "Security and Compliance" = "design/05-security-compliance.md" },
+        { "Skills and Extensions" = "design/04-skills.md" },
+        { "Audit and Reproducibility" = "design/06-observability-audit.md" },
+        { "Platform Architecture" = "design/02-platforms.md" },
+        { "Testing and Evaluation" = "design/07-testing-eval.md" },
+        { "Engineering and Releases" = "design/08-development.md" },
+    ] },
+    { "Reference" = [
+        { "Project Files and State" = "docs/project-state.md" },
+        { "Glossary and Acronyms" = "ACRONYMS.md" },
+        { "Documentation Guide" = "docs/README.md" },
+        { "Contributing" = "CONTRIBUTING.md" },
+        { "License" = "LICENSE" },
+    ] },
+]
+
+[project.validation]
+invalid_links = true
+invalid_link_anchors = true
+unresolved_references = true
+unresolved_footnotes = true
+
+[project.theme]
+features = [
+    "content.code.copy",
+    "navigation.indexes",
+    "navigation.sections",
+    "navigation.tabs",
+    "navigation.tabs.sticky",
+    "navigation.top",
+    "search.highlight",
+]
+
+[project.theme.icon]
+logo = "lucide/trees"
+repo = "fontawesome/brands/github"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Use light appearance"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Use dark appearance"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Follow system appearance"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+
+[project.markdown_extensions.toc]
+permalink = true
+
+[project.markdown_extensions.pymdownx.details]
+
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+
+[project.markdown_extensions.pymdownx.inlinehilite]
+
+[project.markdown_extensions.pymdownx.snippets]
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+    { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]

@@ -136,7 +136,8 @@ class ReviewerPacketGenerator:
                     "authoritative network controls."
                 ),
                 (
-                    "- Images contain no model weights. Optional reviewed downloads and the "
+                    "- Images contain no model weights. Optional recommended or user-selected "
+                    "downloads and the "
                     "CI fixture make no production or biomedical-quality claim."
                 ),
                 (

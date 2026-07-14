@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Reviewed multi-file model snapshots for native inference runtimes."""
+"""Recommended multi-file model snapshots for native inference runtimes."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import tomllib
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
@@ -22,11 +24,16 @@ from typing import Any, Protocol, cast
 
 from filelock import FileLock
 
+from heartwood.gateway._model_identity import (
+    is_hugging_face_model_id,
+    is_resolved_revision,
+)
+
 _ENTRY = re.compile(r"^([0-9a-fA-F]{64}) [ *](.+)$")
-_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
-_REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 _SNAPSHOT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SIZE_TOLERANCE = 0.20
+
+type ProgressCallback = Callable[[int, int], None]
 
 
 class SnapshotDownloader(Protocol):
@@ -58,14 +65,17 @@ class ModelSnapshot:
     minimum_free_bytes: int
     license_posture: str
     model_alias: str
+    minimum_resource_envelope: str | None = None
+    recommended_resource_envelope: str | None = None
+    recommended: bool = False
 
     def validate(self) -> None:
         """Validate identity, source, and storage metadata."""
         if _SNAPSHOT_ID.fullmatch(self.snapshot_id) is None:
             raise ModelSnapshotError("snapshot_id must be a safe cache directory name")
-        if _REPOSITORY.fullmatch(self.source_repository) is None:
+        if not is_hugging_face_model_id(self.source_repository):
             raise ModelSnapshotError("source_repository must be a Hugging Face owner/repository id")
-        if _REVISION.fullmatch(self.source_revision) is None:
+        if not is_resolved_revision(self.source_revision):
             raise ModelSnapshotError("source_revision must be an immutable commit revision")
         for name, value in (
             ("runtime_profile", self.runtime_profile),
@@ -85,13 +95,13 @@ class ModelSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class ModelSnapshotCatalog:
-    """Reviewed multi-file snapshots keyed by stable id."""
+    """Recommended multi-file snapshots keyed by stable id."""
 
     schema_version: str
     snapshots: tuple[ModelSnapshot, ...]
 
     def snapshot(self, snapshot_id: str) -> ModelSnapshot:
-        """Return one reviewed snapshot."""
+        """Return one snapshot from the repository recommendation catalog."""
         for snapshot in self.snapshots:
             if snapshot.snapshot_id == snapshot_id:
                 return snapshot
@@ -106,7 +116,7 @@ class ModelSnapshotCatalog:
 
 
 def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
-    """Load reviewed snapshot metadata from the repository catalog."""
+    """Load recommended snapshot metadata from the repository catalog."""
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
@@ -133,6 +143,9 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             minimum_free_bytes=_positive_int(item, "minimum_free_bytes"),
             license_posture=_string(item, "license_posture"),
             model_alias=_string(item, "model_alias"),
+            minimum_resource_envelope=_optional_string(item, "minimum_resource_envelope"),
+            recommended_resource_envelope=_optional_string(item, "recommended_resource_envelope"),
+            recommended=_optional_bool(item, "recommended", default=False),
         )
         snapshot.validate()
         snapshots.append(snapshot)
@@ -144,6 +157,7 @@ def download_model_snapshot(
     *,
     cache_dir: Path,
     downloader: SnapshotDownloader | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """Download a pinned snapshot atomically and create an exact local manifest."""
     snapshot.validate()
@@ -161,6 +175,8 @@ def download_model_snapshot(
                 raise ModelSnapshotError(
                     f"existing model snapshot is incomplete or modified: {destination}: {error}"
                 ) from error
+            if progress_callback is not None:
+                progress_callback(snapshot.expected_size_bytes, snapshot.expected_size_bytes)
             return destination
         available = shutil.disk_usage(cache_dir).free
         if available < snapshot.minimum_free_bytes:
@@ -176,12 +192,38 @@ def download_model_snapshot(
                 import_module("huggingface_hub").snapshot_download,
             )
         staging = Path(tempfile.mkdtemp(prefix=f".{snapshot.snapshot_id}.", dir=cache_dir))
-        try:
-            downloader(
-                repo_id=snapshot.source_repository,
-                revision=snapshot.source_revision,
-                local_dir=staging,
+        progress_stop = threading.Event()
+        progress_thread: threading.Thread | None = None
+        if progress_callback is not None:
+            progress_callback(0, snapshot.expected_size_bytes)
+            progress_thread = threading.Thread(
+                target=_monitor_download_progress,
+                args=(
+                    staging,
+                    snapshot.expected_size_bytes,
+                    progress_callback,
+                    progress_stop,
+                ),
+                daemon=True,
+                name=f"heartwood-snapshot-progress-{snapshot.snapshot_id}",
             )
+            progress_thread.start()
+        try:
+            try:
+                downloader(
+                    repo_id=snapshot.source_repository,
+                    revision=snapshot.source_revision,
+                    local_dir=staging,
+                )
+            finally:
+                progress_stop.set()
+                if progress_thread is not None:
+                    progress_thread.join()
+                if progress_callback is not None:
+                    progress_callback(
+                        min(_directory_size(staging), snapshot.expected_size_bytes),
+                        snapshot.expected_size_bytes,
+                    )
             shutil.rmtree(staging / ".cache", ignore_errors=True)
             _verify_download_size(staging, snapshot)
             source_record = {
@@ -198,9 +240,31 @@ def download_model_snapshot(
             verify_model_snapshot(staging)
             _verify_source_record(staging, snapshot)
             staging.replace(destination)
+            if progress_callback is not None:
+                progress_callback(snapshot.expected_size_bytes, snapshot.expected_size_bytes)
         finally:
+            progress_stop.set()
+            if progress_thread is not None and progress_thread.is_alive():
+                progress_thread.join()
             shutil.rmtree(staging, ignore_errors=True)
         return destination
+
+
+def _monitor_download_progress(
+    root: Path,
+    total: int,
+    callback: ProgressCallback,
+    stop: threading.Event,
+) -> None:
+    while not stop.wait(0.25):
+        callback(min(_directory_size(root), total), total)
+
+
+def _directory_size(root: Path) -> int:
+    try:
+        return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+    except OSError:
+        return 0
 
 
 def verify_model_snapshot(root: Path) -> None:
@@ -308,4 +372,18 @@ def _positive_int(data: dict[str, Any], key: str) -> int:
     value = data.get(key)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ModelSnapshotError(f"{key} must be a positive integer")
+    return value
+
+
+def _optional_string(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ModelSnapshotError(f"{key} must be a non-empty string when provided")
+    return value
+
+
+def _optional_bool(data: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ModelSnapshotError(f"{key} must be a boolean")
     return value

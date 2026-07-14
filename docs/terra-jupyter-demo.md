@@ -8,201 +8,172 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Terra Jupyter Demo
+# Heartwood on Terra
 
-This runbook exercises the published Heartwood image in a synthetic Terra workspace. It validates Jupyter startup, the Leonardo proxy, the Heartwood kernel, the CLI, the web conversation, model configuration, OpenHands action confirmation, replay, and audit export. Do not use controlled data until the deployment policy and institutional review are complete.
+Use the Terra image when an analysis already lives in a Terra workspace and Heartwood should be available beside its notebooks and files. The image preserves Terra's normal Jupyter environment and adds the Heartwood terminal command, browser interface, notebook kernel, and local-model support.
 
-The Terra image and its continuous-integration contracts are implemented. The live workspace evidence in this runbook remains required before the repository can mark Terra live-validated. See [Platform Support](platform-support.md) for the current status and [02 — Platforms](../design/02-platforms.md) for rationale.
+The complete release workflow has not yet been live-validated in Terra. Follow this guide in a synthetic workspace containing no protected health information while collecting that evidence.
 
-## Select The Image
+## Before You Begin
 
-Use:
+You need permission to create a Terra Cloud Environment with a custom image and a persistent disk large enough for the project. A hosted model needs an authorized route and credential. A local model also needs storage and enough CPU or GPU capacity for the resource guidance Heartwood displays.
+
+Terra keeps `/home/jupyter` on the persistent disk. Create a separate analysis directory there; that directory, rather than all of `/home/jupyter`, becomes the Heartwood project.
+
+## Start the Terra Environment
+
+Use the immutable release image:
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra
+ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra
 ```
 
-The Semantic Version tag is the reproducible release reference. Use `sha-<git-sha>-terra` to identify the exact validated source commit or `edge-terra` only to follow the moving validated-main channel. Every variant remains derived from the pinned Terra Jupyter Notebook base image.
+Create a Terra workspace containing no protected health information, select the custom image, and start Jupyter. Confirm that:
 
-The Terra tag is a public, unauthenticated, `linux/amd64` Docker schema-2 image manifest with media type `application/vnd.docker.distribution.manifest.v2+json`. This is deliberate: Leonardo rejects an Open Container Initiative index during image auto-detection. `docker manifest inspect` alone is insufficient because it does not prove that the registry returns Leonardo’s accepted media type. Verify a published commit with:
+- the normal notebook file browser opens rather than returning a 404;
+- the `Python 3 (Heartwood)` kernel is available;
+- the notebook survives the expected Leonardo route prefix;
+- `/home/jupyter` is backed by the persistent disk selected for the environment.
 
-```bash
-python3 images/platform/scripts/verify_registry_manifest.py \
-  --manifest images/platforms.toml \
-  --platform terra \
-  --image-name ghcr.io/schmiedmayerlab/heartwood \
-  --git-sha <git-sha>
-```
+If the file browser does not open normally, stop before model or project setup and record the Cloud Environment error. Do not install Heartwood again inside the image.
 
-## Create A Synthetic Workspace
+## Create a Synthetic Project
 
-1. Create a Terra workspace that contains no protected health information.
-2. Select the Heartwood custom image.
-3. Use the default Jupyter service route and confirm that the notebook file browser loads instead of returning a 404.
-4. Confirm that the `Python 3 (Heartwood)` kernel is available.
-5. Record the custom image digest, Terra base digest, machine shape, persistent disk size, and startup time.
-
-The image preserves Terra’s `jupyter` user, `/home/jupyter` home, `/opt/conda` platform Python, Jupyter entrypoint, `/etc/jupyter/scripts/run-jupyter.sh`, and `/notebooks/...` route. Heartwood is installed separately under `/opt/heartwood`.
-
-The current image pins `terra-jupyter-python:1.1.6`, which remains listed in Terra's official image catalog. Terra also publishes the newer slim `terra-base:1.0.0`; Heartwood does not switch bases until the complete runtime contract in this runbook passes against the replacement.
-
-## Prepare The Reference Workspace
-
-Terra mounts a Jupyter persistent disk at `/home/jupyter`. Heartwood keeps session events, OpenHands workspaces, downloaded model artifacts, and generated analysis files under that mount so they survive an application restart when the disk is retained. The workspace bucket is separate storage; collaborators cannot see files left only on a user's persistent disk.
-
-Create one named synthetic analysis workspace from the checked-in image fixture:
+Terra opens terminals and notebooks on its persistent `/home/jupyter` disk. Create one directory for the analysis, place the notebook and localized inputs there, and open that copy of the notebook from the Jupyter file browser:
 
 ```bash
-export HEARTWOOD_STATE_ROOT=/home/jupyter/heartwood-workspace
-export HEARTWOOD_WORKSPACE="${HEARTWOOD_STATE_ROOT}/sessions"
-export HEARTWOOD_SESSION_ID=terra-demo
-
-mkdir -p "${HEARTWOOD_STATE_ROOT}/workspaces/${HEARTWOOD_SESSION_ID}/input"
+mkdir -p /home/jupyter/heartwood-demo/input
+cp /opt/heartwood/docs/terra-jupyter-demo.ipynb \
+  /home/jupyter/heartwood-demo/
 cp /opt/heartwood/fixtures/synthetic/omop-like/*.csv \
-  "${HEARTWOOD_STATE_ROOT}/workspaces/${HEARTWOOD_SESSION_ID}/input/"
-
-heartwood --workspace "${HEARTWOOD_WORKSPACE}" \
-  --session-id "${HEARTWOOD_SESSION_ID}" detect
+  /home/jupyter/heartwood-demo/input/
+cd /home/jupyter/heartwood-demo
+heartwood detect
+heartwood doctor
 ```
 
-The fixture contains 24 synthetic people, 39 condition-occurrence rows, 20 people with condition concept `201826`, and no protected health information. Every person has recorded condition history, and the positive and negative groups overlap in age. Its size and class balance are deliberate: the reference cohort passes a count floor of 20, the low-count tests exercise suppression separately, and the baseline has both outcome classes without a perfectly separated age feature.
+`heartwood-demo` is only the tutorial's project name. Heartwood has no fixed Terra workspace path: the directory containing the terminal command, notebook, or web-server process is the project. Heartwood file operations stay within that directory and its descendants, excluding `.heartwood/`; OpenHands terminal commands retain the operating-system permissions of the Jupyter process, so Terra's environment remains the hard filesystem boundary. Heartwood creates `.heartwood/` inside the project for configuration, sessions, models, Skills, logs, and audit data. Both project files and Heartwood state survive a container restart when the Terra persistent disk is retained.
 
-For institution-approved workspace data, localize only the required files from the workspace bucket into the named analysis workspace. Terra exposes `WORKSPACE_NAMESPACE`, `WORKSPACE_NAME`, and `WORKSPACE_BUCKET`; for example:
+The fixture contains 24 synthetic people, 39 condition-occurrence rows, and 20 people with condition concept `201826`. It contains no protected health information. Terra workspace buckets and data tables are separate storage; files must be localized into the project before the agent can use them.
+
+## Configure a Model
+
+The image contains no model weights and no provider credentials. Choose one path.
+
+### Research Environment or Hosted Model
+
+Open the Heartwood browser interface and select a platform-provided research service, OpenAI, Anthropic, or Custom API. The interface asks only for values required by that connection and lists models returned by the service itself. The deploying institution must authorize the exact provider, route, identity, retention settings, and data classification. For controlled data, the route must be covered by an institution-approved business associate agreement when one is required.
+
+The CLI exposes the same model catalog:
 
 ```bash
-gcloud storage cp \
-  "${WORKSPACE_BUCKET}/approved-reference-input/person.csv" \
-  "${HEARTWOOD_STATE_ROOT}/workspaces/${HEARTWOOD_SESSION_ID}/input/person.csv"
-gcloud storage cp \
-  "${WORKSPACE_BUCKET}/approved-reference-input/condition_occurrence.csv" \
-  "${HEARTWOOD_STATE_ROOT}/workspaces/${HEARTWOOD_SESSION_ID}/input/condition_occurrence.csv"
+heartwood models list
+heartwood models refresh <connection-id>
+heartwood models connect <connection-id> <model-id>
 ```
 
-Terra data tables hold metadata and file references; they do not make files available inside the container automatically. The current release has no live Terra or BigQuery OMOP data-source adapter, so the commands above describe the platform localization pattern rather than a supported controlled-data workflow. Keep this validation synthetic until the adapter, deployment policy, data permissions, and institutional review gates in the roadmap are complete.
+### Local Model
 
-## Configure A Model
-
-The image contains no model weights. Choose one path.
-
-For an institution-authorized endpoint, the deployment supplies a platform connection manifest or enables a built-in connection. Its credential remains in the workspace environment, mounted secret file, or managed identity. List the available connections and select an exact identifier returned by the authorized catalog:
+Choose a machine and persistent-disk size that meet the guidance shown by `heartwood models local`, then select a recommendation or another supported Hugging Face model:
 
 ```bash
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models list
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models refresh <connection-id>
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models connect \
-  <connection-id> <model-id>
+heartwood models local
+heartwood models download qwen25-7b-instruct-q4_k_m
+# Or inspect and download another repository:
+heartwood models inspect <owner/model>
+heartwood models download <owner/model>
+heartwood launch --web
 ```
 
-The workspace must supply `HEARTWOOD_POLICY_PROFILE` with the exact catalog endpoint, completion endpoint, capability tier, and non-secret credential reference such as the environment-variable name. `HEARTWOOD_MODEL_CONNECTIONS` may point to a platform-owned manifest that exposes every model available to the workspace identity. See [Model Connections](model-connections.md). A provider name does not establish HIPAA eligibility or a business associate agreement.
+The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and browser interface. First inference on CPU can be slow, and attaching a GPU does not accelerate this portable image's llama.cpp path.
 
-For a local synthetic demo, list and download a reviewed artifact to Terra-persistent storage:
+The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. In that image, Heartwood prefers a supported standard Hugging Face snapshot and reports approximate GPU-memory requirements. GPU selection, model suitability, and live platform validation must match the deployment evidence before it replaces the CPU path.
+
+## Open the Browser Interface
+
+For a hosted or already running model, start the interface from the project directory:
 
 ```bash
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models artifacts
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models download \
-  qwen25-7b-instruct-q4_k_m \
-  --cache /home/jupyter/heartwood-workspace/models
+cd /home/jupyter/heartwood-demo
+heartwood serve
 ```
 
-Start the included CPU server in a terminal using the exact path printed by the download:
-
-```bash
-cd /opt/heartwood
-HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/heartwood-workspace/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
-  bash images/generic/scripts/start_local_runtime.sh
-```
-
-In another terminal, discover and select the model reported by the loopback runtime:
-
-```bash
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models refresh local
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions models connect \
-  local <model-id>
-```
-
-Choose a machine and disk based on the selected model manifest. The current reviewed Qwen artifact records 4 vCPU and 16 GB RAM as a minimum demonstration envelope and 8 vCPU and 32 GB RAM as the recommended envelope. It is CPU-only in the baseline runtime; attaching a GPU does not accelerate it.
-
-## Start The Web Interface
-
-In a terminal:
-
-```bash
-cd /opt/heartwood
-HEARTWOOD_WORKSPACE=/home/jupyter/heartwood-workspace/sessions \
-  HEARTWOOD_WEB_HOST=127.0.0.1 \
-  HEARTWOOD_WEB_PORT=8767 \
-  bash images/generic/scripts/start_web_ui.sh
-```
-
-Open the Jupyter proxy route for port `8767`. The browser path normally ends in `/proxy/8767/`; Heartwood infers that prefix while the internal gateway remains root-relative.
+For a Heartwood-managed local model, use `heartwood launch --web` instead so the model remains supervised. Open the authenticated Jupyter proxy route for port `8767`; it normally ends in `/proxy/8767/`. Treat this as a synthetic validation workflow until the exact release image completes the route, persistence, and resume checks in a real Terra control plane.
 
 ![Heartwood synthetic reference analysis at a narrow notebook viewport](assets/web-notebook-viewport.png)
 
-The screenshot is generated from the synthetic reference-analysis system test at the automated notebook viewport. It demonstrates responsive layout, not live Leonardo proxy or Terra control-plane behavior; those require the validation steps below.
+The screenshot shows the responsive layout used by the automated notebook-viewport test. It is not evidence of live Leonardo behavior or model quality.
 
-Open the existing `terra-demo` session and confirm in Settings that the selected model appears under the platform, local, or cloud connection used above. Submit these tasks in order:
+## Run the Synthetic Workflow
 
-1. `Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Read the localized tables in input, require age 18 or older, apply an aggregate count floor of 20, write cohort-summary.json, and report the cohort definition and quality checks without row-level values.`
-2. `Fit the repository-verified training-only age-only baseline for recorded condition 201826 history in the localized synthetic tables. Write baseline-model.json and report aggregate training diagnostics, the lack of holdout evaluation, and that this is not a clinical model.`
-3. `Prepare the aggregate export from cohort-summary.json with the repository-verified aggregate export Skill. Apply a count floor of 20, write aggregate-export.json, and do not include row-level values.`
+Open session `terra-demo` and submit:
 
-Review every terminal or file action in the displayed OpenHands action set and select **Allow all once** only when every command, path, and expected output matches the request. Exercise **Reject all** on a separate synthetic action set so the reference artifacts remain complete. The expected cohort output reports 24 source participants, 39 source condition rows, 20 cohort participants, 35 cohort condition rows, 20 target-condition occurrences, passing identifier, chronology, and referential-integrity checks, and no row values. The baseline output must identify itself as training-only with no holdout evaluation. The export output must report a count floor of 20, `exported: true`, and `suppressed: false`; successful script output is not an authorization to move data outside the workspace.
-
-Verify that agent messages and actual tool outcomes appear in the conversation, then use Activity for the ordered event trace and Export Audit for the scrubbed record. Do not expect model route or repository-verified Skill activation prompts; those are deployment and installation decisions, not conversational action confirmation.
-
-Action confirmation defaults to **Ask Every Time**. To validate the deployment-allowed risk-based path with synthetic data, select **Auto-Approve Low Risk** in Settings or run `heartwood --workspace /home/jupyter/heartwood-workspace/sessions actions set auto-approve-low-risk`. Confirm that low-risk actions still appear in Activity and that medium-, high-, and unknown-risk action sets retain **Allow all once** and **Reject all** controls.
-
-## Verify CLI And Notebook Parity
-
-Use the same session identifier shown in the web UI:
-
-```bash
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions \
-  --session-id terra-demo replay
-heartwood --workspace /home/jupyter/heartwood-workspace/sessions \
-  --session-id terra-demo audit export \
-  --output /home/jupyter/heartwood-workspace/audit.jsonl
+```text
+Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Read the tables in input, require age 18 or older, apply an aggregate count floor of 20, write cohort-summary.json, and report aggregate quality checks without row-level values.
 ```
 
-In the Heartwood kernel:
+Review every member of the pending OpenHands action set. Select **Allow all once** only when the commands, paths, and outputs match the request. Exercise **Reject all** on a separate synthetic proposal.
+
+The expected cohort result reports 24 source participants, 39 source condition rows, 20 cohort participants, 35 cohort condition rows, passing integrity checks, and no row-level values. A successful synthetic result validates integration behavior, not biomedical correctness for another dataset.
+
+Use Activity to inspect the ordered event trace and Export Audit to produce the scrubbed record. Action confirmation defaults to **Ask Every Time**. When policy permits **Auto-Approve Low Risk**, medium-, high-, and unknown-risk action sets continue to require grouped review.
+
+## Verify the Same Session
+
+After the web conversation is idle, replay it from a terminal in the same project:
+
+```bash
+cd /home/jupyter/heartwood-demo
+heartwood --session-id terra-demo replay
+heartwood --session-id terra-demo audit export \
+  --output terra-demo-audit.jsonl
+```
+
+Open the copied notebook from the project directory with the Heartwood kernel. Its process starts in the notebook directory, so the notebook bridge resolves the same project without another path setting:
 
 ```python
 from pathlib import Path
+
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
-session = NotebookSession(
-    workspace=Path("/home/jupyter/heartwood-workspace/sessions"),
-    session_id="terra-demo",
-)
+project_root = Path.cwd().resolve()
+session = NotebookSession(session_id="terra-demo")
 view = session.replay()
+assert session.project.root == project_root
 print(view.event_count)
 print(jupyter_proxy_url(port=8767))
 ```
 
-The CLI, notebook bridge, and web UI must report the same persisted event count because they share one gateway contract and audit store. Run these checks sequentially after the web conversation is idle; concurrent independent processes writing the same session are not part of the current pre-release contract.
+The terminal, notebook bridge, and browser interface read the same project session and must report the same persisted events. Use them sequentially; independently running writers to one file-backed session are not a supported coordination pattern.
 
-## Live-Validation Evidence
+## Record Live-Validation Evidence
 
 Record only synthetic evidence:
 
-- custom image and base image digests;
-- machine shape, disk size, startup time, and autopause/resume result;
-- notebook route, Heartwood kernel, and proxy URL behavior;
-- selected profile identifier, credential-reference kind, and policy decision without secret values;
-- optional model artifact identifier and digest;
-- one web conversation with a proposed action and its allow or reject result;
-- CLI and notebook replay counts;
-- scrubbed audit export path;
-- observed runtime network policy and identity mechanism.
+- Heartwood image and Terra base image digests;
+- machine shape, persistent-disk size, startup time, and autopause/resume behavior;
+- notebook route, Heartwood kernel, and proxy behavior;
+- selected non-secret model profile and route-policy decision;
+- optional local artifact identifier and digest;
+- one allowed and one rejected action set;
+- matching web, CLI, and notebook replay results;
+- scrubbed audit export location;
+- observed platform identity and network controls.
 
-A real Terra workspace validation remains required before claiming the image is supported for a specific institutional deployment.
+## Understand the Image Contract
 
-## Authoritative Terra References
+The release extends the pinned Terra Jupyter Python base recorded in `images/platforms.toml`. It preserves the `jupyter` user, persistent home, notebook server, kernel registration, entrypoint, and Leonardo proxy behavior.
+
+The public tag is a `linux/amd64` Docker schema-2 manifest with media type `application/vnd.docker.distribution.manifest.v2+json`. Terra Leonardo image auto-detection rejects an Open Container Initiative index, so the Terra tag intentionally differs from the generic multi-platform tag. `edge-terra` follows the latest validated `main` build and is appropriate only for development testing.
+
+Record both the Heartwood image and Terra base image digests when collecting deployment evidence. Passing the image and proxy checks establishes software compatibility, not authorization for workspace data, a model provider, or controlled-data use.
+
+A real Terra workspace validation is still distinct from institutional approval. Do not introduce controlled data until the exact image, model route, credentials, project storage, network path, and intended use have passed institutional review.
+
+## Terra References
 
 - [Terra custom cloud environment tutorial](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks)
-- [Terra Jupyter cloud environment customization](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app)
-- [Terra architecture and persistent-disk mounts](https://support.terra.bio/hc/en-us/articles/360058163311-Terra-architecture-where-your-data-and-tools-live)
+- [Starting and customizing a Jupyter app](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app)
+- [Terra architecture and persistent disks](https://support.terra.bio/hc/en-us/articles/360058163311-Terra-architecture-where-your-data-and-tools-live)
 - [Accessing workspace-bucket data from a notebook](https://support.terra.bio/hc/en-us/articles/360046617372-Accessing-data-from-the-workspace-Bucket-in-a-notebook)
-- [Managing Terra data with tables](https://support.terra.bio/hc/en-us/articles/360025758392-Managing-data-with-tables)
-- [Terra custom-environment base-image update](https://support.terra.bio/hc/en-us/articles/31191625622811-Easily-build-customize-and-reuse-compute-environments-Jupyter-Notebooks-Launching-1-16-26)
-- [DataBiosphere Terra Docker image catalog](https://github.com/DataBiosphere/terra-docker)
+- [DataBiosphere Terra Docker images](https://github.com/DataBiosphere/terra-docker)

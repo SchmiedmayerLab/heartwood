@@ -9,13 +9,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal, TypeAlias, cast
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from heartwood.schemas import EgressAttestationRecord, ModelCallDecision, PolicyProfile
 
-CapabilityTier: TypeAlias = Literal["autonomous", "supervised", "experimental"]
-ActionConfirmationMode: TypeAlias = Literal["always-confirm", "confirm-risky"]
+type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
+type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
 
 _VALID_CAPABILITY_TIERS = {"autonomous", "supervised", "experimental"}
 _VALID_ACTION_CONFIRMATION_MODES = {"always-confirm", "confirm-risky"}

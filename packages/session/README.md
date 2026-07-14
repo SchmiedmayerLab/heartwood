@@ -12,4 +12,4 @@ SPDX-License-Identifier: MIT
 
 The shared session command/event contract for Heartwood interfaces. The CLI, notebook API, web UI, scripts, and tests drive the same session through this contract, so no interface owns separate execution semantics.
 
-See [`design/03-architecture.md`](../../design/03-architecture.md) and [`design/09-implementation-plan.md`](../../design/09-implementation-plan.md).
+See [`design/03-architecture.md`](../../design/03-architecture.md) and the [Heartwood issue tracker](https://github.com/SchmiedmayerLab/heartwood/issues).

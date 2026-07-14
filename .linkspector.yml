@@ -12,6 +12,7 @@ useGitIgnore: true
 ignorePatterns:
   - pattern: '^doc:.*$'
   - pattern: '^http://localhost.*$'
+  - pattern: '^https://schmiedmayerlab\.github\.io/heartwood/.*$'
 replacementPatterns:
   - pattern: '(.*)#gh-dark-mode-only'
     replacement: '$1'

@@ -8,11 +8,10 @@
 
 Every Heartwood interface — the primary CLI, notebook API, and web UI — drives
 the same session by issuing commands and consuming a single
-structured event stream. This package will hold that contract so no interface
+structured event stream. This package defines that contract so no interface
 owns separate execution semantics.
 
-See ``design/03-architecture.md`` and ``design/09-implementation-plan.md`` for
-the contract's role.
+See ``design/03-architecture.md`` for the contract's role.
 """
 
 from __future__ import annotations
@@ -36,4 +35,4 @@ __all__ = [
     "validate_session_id",
 ]
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"

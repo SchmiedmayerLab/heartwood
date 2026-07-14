@@ -18,12 +18,14 @@ from pydantic import ValidationError
 
 from heartwood.gateway._action_settings import ActionSettingsError
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._local_models import ModelRepositoryError
 from heartwood.gateway._model_artifacts import ModelArtifactError
 from heartwood.gateway._model_catalog import ModelCatalogError
 from heartwood.gateway._model_settings import (
     ModelSettingsError,
     model_profile_from_mapping,
 )
+from heartwood.gateway._project_config import ProjectConfigError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.schemas import JsonValue
@@ -61,6 +63,12 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(self.gateway.sessions()))
         if parts == ("sessions",) and request.method == "POST":
             return self._handle_session_creation(body=request.body)
+        if parts == ("project", "readiness") and request.method == "GET":
+            try:
+                readiness = self.gateway.project_readiness()
+            except ProjectConfigError as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(readiness))
         if len(parts) == 2 and parts[0] == "sessions" and request.method == "GET":
             try:
                 session_id = validate_session_id(parts[1])
@@ -112,18 +120,26 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(self.gateway.model_artifacts()))
         if parts == ("settings", "models", "catalog") and request.method == "POST":
             return self._handle_model_catalog(body=request.body)
+        if parts == ("settings", "models", "repository") and request.method == "POST":
+            return self._handle_model_repository(body=request.body)
+        if parts == ("settings", "models", "source") and request.method == "PUT":
+            return self._handle_model_source(body=request.body)
         if parts == ("settings", "models", "downloads") and request.method == "POST":
             try:
                 payload = json.loads(request.body)
             except json.JSONDecodeError:
                 return _error(400, "request body must be valid JSON")
-            if not isinstance(payload, dict) or not isinstance(payload.get("artifact_id"), str):
-                return _error(422, "artifact_id must be a string")
+            if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
+                return _error(422, "model_id must be a string")
+            if set(payload) != {"model_id"}:
+                return _error(422, "local model download contains unsupported fields")
             try:
-                download = self.gateway.download_model_artifact(payload["artifact_id"])
-            except ModelArtifactError as error:
+                download = self.gateway.download_local_model(payload["model_id"])
+            except (ModelArtifactError, ModelRepositoryError) as error:
                 return _error(422, error)
             return RestResponse(status_code=202, body=_json_object(download))
+        if parts == ("settings", "models", "downloads", "custom") and request.method == "POST":
+            return self._handle_custom_model_download(body=request.body)
         if parts == ("settings", "models", "validation") and request.method == "GET":
             profile_id = parse_qs(parsed.query).get("profile_id", [None])[0]
             try:
@@ -247,6 +263,64 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(settings))
 
+    def _handle_model_repository(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict) or not isinstance(payload.get("repository"), str):
+            return _error(422, "repository must be a string")
+        if set(payload) - {"repository", "revision"}:
+            return _error(422, "model repository request contains unsupported fields")
+        revision = payload.get("revision")
+        if revision is not None and not isinstance(revision, str):
+            return _error(422, "revision must be a string when provided")
+        try:
+            inspection = self.gateway.inspect_model_repository(
+                payload["repository"],
+                revision=revision,
+            )
+        except ModelRepositoryError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(inspection))
+
+    def _handle_custom_model_download(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict) or not isinstance(payload.get("repository"), str):
+            return _error(422, "repository must be a string")
+        allowed = {"repository", "revision"}
+        if set(payload) - allowed:
+            return _error(422, "custom model download contains unsupported fields")
+        revision = payload.get("revision")
+        if revision is not None and not isinstance(revision, str):
+            return _error(422, "revision must be a string when provided")
+        try:
+            download = self.gateway.download_custom_local_model(
+                payload["repository"],
+                revision=revision,
+            )
+        except ModelRepositoryError as error:
+            return _error(422, error)
+        return RestResponse(status_code=202, body=_json_object(download))
+
+    def _handle_model_source(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict) or not isinstance(payload.get("source_id"), str):
+            return _error(422, "source_id must be a string")
+        if set(payload) != {"source_id"}:
+            return _error(422, "model source request contains unsupported fields")
+        try:
+            settings = self.gateway.configure_model_source(payload["source_id"])
+        except (ModelCatalogError, ProjectConfigError) as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(settings))
+
     def _handle_model_connection(self, *, body: str) -> RestResponse:
         try:
             payload = json.loads(body)
@@ -254,16 +328,6 @@ class RestGateway:
             return _error(400, "request body must be valid JSON")
         if not isinstance(payload, dict):
             return _error(422, "request body must be an object")
-        if set(payload) <= {"model_name", "preset_id"}:
-            preset_id = payload.get("preset_id")
-            model_name = payload.get("model_name")
-            if not isinstance(preset_id, str) or not isinstance(model_name, str):
-                return _error(422, "preset_id and model_name must be strings")
-            try:
-                settings = self.gateway.connect_model_provider(preset_id, model_name)
-            except ModelSettingsError as error:
-                return _error(422, error)
-            return RestResponse(status_code=200, body=_json_object(settings))
         allowed = {"base_url", "connection_id", "manual", "model_id", "token"}
         if set(payload) - allowed:
             return _error(422, "model connection contains unsupported fields")
