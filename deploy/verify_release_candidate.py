@@ -163,6 +163,7 @@ def check_status(
 
 def source_version_errors(root: Path, version: str) -> list[str]:
     """Return packaged components whose source metadata differs from version."""
+    errors: list[str] = []
     semantic_versions: dict[str, str] = {}
     python_source_versions: dict[str, str] = {}
     python_lock_versions: dict[str, str] = {}
@@ -190,12 +191,15 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     ):
         for metadata_path in sorted(skill_root.glob("*/metadata.json")):
             skill_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            if isinstance(skill_metadata, dict) and isinstance(
-                skill_metadata.get("heartwood.version"), str
-            ):
-                semantic_versions[str(metadata_path.relative_to(root))] = skill_metadata[
-                    "heartwood.version"
-                ]
+            relative_path = str(metadata_path.relative_to(root))
+            if not isinstance(skill_metadata, dict):
+                errors.append(f"{relative_path}: expected a JSON object")
+                continue
+            skill_version = skill_metadata.get("heartwood.version")
+            if not isinstance(skill_version, str):
+                errors.append(f"{relative_path}: heartwood.version must be a string")
+                continue
+            semantic_versions[relative_path] = skill_version
     web_lock_path = root / "packages" / "webui" / "package-lock.json"
     web_lock = json.loads(web_lock_path.read_text(encoding="utf-8"))
     if isinstance(web_lock, dict):
@@ -225,11 +229,12 @@ def source_version_errors(root: Path, version: str) -> list[str]:
             ):
                 python_lock_versions[f"uv.lock:{name}"] = package_version
     if not semantic_versions and not python_source_versions and not python_lock_versions:
-        return ["no packaged component versions were found"]
+        errors.append("no packaged component versions were found")
+        return errors
     observed_source_versions = semantic_versions | python_source_versions
-    errors = [
+    errors.extend(
         f"{path}: {found}" for path, found in observed_source_versions.items() if found != version
-    ]
+    )
     errors.extend(
         f"{path}: {found} (expected Python version {expected_python_version})"
         for path, found in python_lock_versions.items()

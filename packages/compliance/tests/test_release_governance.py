@@ -181,6 +181,24 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
         in _release_verifier().source_version_errors(tmp_path, version)
     )
 
+    skill_metadata.write_text("{}\n", encoding="utf-8")
+    assert (
+        "skills/verified/example/metadata.json: heartwood.version must be a string"
+        in _release_verifier().source_version_errors(tmp_path, version)
+    )
+
+    skill_metadata.write_text('{"heartwood.version": 2}\n', encoding="utf-8")
+    assert (
+        "skills/verified/example/metadata.json: heartwood.version must be a string"
+        in _release_verifier().source_version_errors(tmp_path, version)
+    )
+
+    skill_metadata.write_text("[]\n", encoding="utf-8")
+    assert (
+        "skills/verified/example/metadata.json: expected a JSON object"
+        in _release_verifier().source_version_errors(tmp_path, version)
+    )
+
 
 def test_main_validation_owns_release_readiness_dependencies() -> None:
     workflow = Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8")
