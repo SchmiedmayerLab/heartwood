@@ -11,9 +11,12 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
-from typing import Protocol
+from threading import RLock
+from typing import Concatenate, Protocol, cast
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.core_adapter import (
@@ -94,6 +97,25 @@ from heartwood.schemas import PolicyProfile
 from heartwood.session import SessionCommand, SessionEvent
 
 SessionServiceFactory = Callable[[Path, str], SessionService]
+
+
+class _SerializedStateOwner(Protocol):
+    _state_lock: AbstractContextManager[object]
+
+
+def _serialized_state[StateOwner: _SerializedStateOwner, **Parameters, Return](
+    method: Callable[Concatenate[StateOwner, Parameters], Return],
+) -> Callable[Concatenate[StateOwner, Parameters], Return]:
+    @wraps(method)
+    def locked(
+        self: StateOwner,
+        *args: Parameters.args,
+        **kwargs: Parameters.kwargs,
+    ) -> Return:
+        with self._state_lock:
+            return method(self, *args, **kwargs)
+
+    return cast(Callable[Concatenate[StateOwner, Parameters], Return], locked)
 
 
 class _ModelSettingsStore(Protocol):
@@ -219,6 +241,7 @@ class SessionGateway:
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
+        self._state_lock: AbstractContextManager[object] = RLock()
         adapter = select_platform_adapter(self.env)
         self.config_store = ProjectConfigStore(
             self.project,
@@ -290,13 +313,13 @@ class SessionGateway:
     def start(self) -> None:
         """Start gateway dependencies lazily with the first conversation."""
 
+    @_serialized_state
     def stop(self) -> None:
         """Close active OpenHands conversations."""
-        for service in self._services.values():
-            service.close()
-        self._services.clear()
+        self._reset_services()
         self._runtime_credentials.clear()
 
+    @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
         service = self._service(command.session_id)
@@ -334,6 +357,7 @@ class SessionGateway:
             "content": content,
         }
 
+    @_serialized_state
     def replay_events(
         self,
         *,
@@ -387,6 +411,7 @@ class SessionGateway:
             self._credential_environment(),
         ).safe_dict()
 
+    @_serialized_state
     def configure_model_source(self, model_source: str) -> dict[str, object]:
         """Prepare one shared model source and its deployment policy."""
         option = next(
@@ -497,10 +522,13 @@ class SessionGateway:
             aws_profile_name=connection.aws_profile_name,
             description=f"{connection.label}: {entry.display_name}",
         )
-        settings = self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
-        self._save_model_selection(connection.connection_id, settings)
-        self._reset_services()
-        return self.model_settings()
+        with self._state_lock:
+            settings = (
+                self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
+            )
+            self._save_model_selection(connection.connection_id, settings)
+            self._reset_services()
+            return self.model_settings()
 
     def action_settings(self) -> dict[str, object]:
         """Return the selected and deployment-allowed confirmation modes."""
@@ -515,6 +543,7 @@ class SessionGateway:
             ],
         }
 
+    @_serialized_state
     def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
         """Select a deployment-allowed OpenHands confirmation mode."""
         policy_profile = self._policy_profile()
@@ -526,6 +555,7 @@ class SessionGateway:
         self._reset_services()
         return self.action_settings()
 
+    @_serialized_state
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or replace a non-secret profile and reset active services."""
         settings = self.settings_store.load().with_profile(profile)
@@ -533,6 +563,7 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
+    @_serialized_state
     def select_model_profile(self, profile_id: str) -> dict[str, object]:
         """Select a profile and reset active services."""
         settings = self.settings_store.load().selecting(profile_id)
@@ -540,6 +571,7 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
+    @_serialized_state
     def remove_model_profile(self, profile_id: str) -> dict[str, object]:
         """Remove a profile and reset active services."""
         settings = self.settings_store.load().without_profile(profile_id)
@@ -702,18 +734,21 @@ class SessionGateway:
         """Verify a mounted Skill source without installing it."""
         return self.skill_manager.inspect(source).safe_dict()
 
+    @_serialized_state
     def install_skill(self, source: Path, *, approved: bool) -> dict[str, object]:
         """Install one extension after an explicit trust decision."""
         self.skill_manager.install(source, approved=approved)
         self._reset_services()
         return self.skill_settings()
 
+    @_serialized_state
     def remove_skill(self, name: str) -> dict[str, object]:
         """Remove one installed extension and reset active conversations."""
         self.skill_manager.remove(name)
         self._reset_services()
         return self.skill_settings()
 
+    @_serialized_state
     def _service(self, session_id: str) -> SessionService:
         self.session_catalog.ensure(session_id)
         service = self._services.get(session_id)
@@ -780,6 +815,7 @@ class SessionGateway:
     def _policy_profile(self) -> PolicyProfile:
         return self.config_store.load().policy
 
+    @_serialized_state
     def _resolve_model_connection(
         self,
         connection_id: str,
@@ -875,11 +911,13 @@ class SessionGateway:
     def _credential_environment(self) -> dict[str, str]:
         return {**self.env, **self._runtime_credentials}
 
+    @_serialized_state
     def _reset_services(self) -> None:
         for service in self._services.values():
             service.close()
         self._services.clear()
 
+    @_serialized_state
     def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:
         if isinstance(self.settings_store, ProjectModelSettingsStore):
             self.settings_store.save_selection(source, settings)
@@ -887,6 +925,7 @@ class SessionGateway:
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
 
+    @_serialized_state
     def _reload_model_connections(self) -> None:
         configured = self.config_store.load().additional_connections
         loaded = (*self._base_model_connections, *configured)
@@ -900,6 +939,7 @@ class SessionGateway:
         for connection_id in previous_ids | set(self._model_connections):
             self.model_catalog_service.invalidate(connection_id)
 
+    @_serialized_state
     def _select_downloaded_local_model(
         self,
         model_id: str,

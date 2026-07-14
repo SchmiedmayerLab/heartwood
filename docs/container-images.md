@@ -95,7 +95,7 @@ docker run --rm -it \
   heartwood models download <owner/model>
 ```
 
-The download requires network access and sufficient project storage. Heartwood reports the automatic runtime and resource plan, shows transfer progress, verifies the immutable source and content, and records the selection without copying the model into an image layer. Unsupported or ambiguous repositories fail before transfer and link to the issue chooser.
+The download requires network access and sufficient project storage. Heartwood reports the automatic runtime and resource plan, shows transfer progress, verifies the immutable source and content, and records the selection without copying the model into an image layer. Unsupported or ambiguous repositories fail before transfer and link to the [GitHub issue-template chooser](https://github.com/SchmiedmayerLab/heartwood/issues/new/choose) for a model-support request.
 
 Start the model and browser together:
 

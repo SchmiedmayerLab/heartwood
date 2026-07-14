@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Any, cast
 
 import pytest
 
+from heartwood.core_adapter import SessionResult
 from heartwood.gateway import (
     LocalModelChoice,
     LocalModelDownloadPlan,
@@ -31,7 +34,7 @@ from heartwood.gateway import (
     RestResponse,
     SessionGateway,
 )
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 
 def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: JsonValue) -> str:
@@ -62,6 +65,25 @@ def _gateway(workspace: Path) -> SessionGateway:
     )
 
 
+@dataclass
+class _BlockingSessionService:
+    entered: Event
+    release: Event
+    closed: Event
+
+    def handle(self, _command: SessionCommand) -> SessionResult:
+        self.entered.set()
+        if not self.release.wait(timeout=2):
+            raise TimeoutError("test session was not released")
+        return SessionResult(events=())
+
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def close(self) -> None:
+        self.closed.set()
+
+
 def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -> None:
     first = _gateway(tmp_path / "first-project")
     second = _gateway(tmp_path / "second-project")
@@ -76,6 +98,60 @@ def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -
     assert second.action_settings()["confirmation_mode"] == "always-confirm"
     assert not (second.project.models_dir / "project-marker").exists()
     assert first.project.config_path != second.project.config_path
+
+
+def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) -> None:
+    entered = Event()
+    release = Event()
+    closed = Event()
+    selection_started = Event()
+    selection_finished = Event()
+    service = _BlockingSessionService(entered=entered, release=release, closed=closed)
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    model_id = "llama-cpp-stories260k-ci"
+    model_path = gateway.project.models_dir / model_id / "model.gguf"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"synthetic")
+    command = SessionCommand(
+        command_id="command-1",
+        session_id="session-1",
+        kind=CommandKind.DETECT,
+        actor_id="synthetic-user",
+        created_at="2026-01-01T00:00:00Z",
+        payload={},
+    )
+
+    def select_download() -> None:
+        selection_started.set()
+        gateway._select_downloaded_local_model(model_id, model_path, "llama-cpp-cpu")
+        selection_finished.set()
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        command_future = executor.submit(gateway.handle, command)
+        selection_future = None
+        try:
+            assert entered.wait(timeout=1)
+            status = executor.submit(gateway.model_artifacts).result(timeout=1)
+            assert status["downloads"] == []
+            selection_future = executor.submit(select_download)
+            assert selection_started.wait(timeout=1)
+            assert not selection_finished.wait(timeout=0.1)
+            assert not closed.is_set()
+        finally:
+            release.set()
+        assert command_future.result(timeout=2).events == ()
+        assert selection_future is not None
+        selection_future.result(timeout=2)
+
+    selected = gateway.config_store.load().local_model
+    assert selected is not None
+    assert selected.artifact_id == model_id
+    assert closed.is_set()
 
 
 def test_rest_command_routes_through_session_service_and_streams_events(tmp_path: Path) -> None:
