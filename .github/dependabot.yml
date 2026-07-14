@@ -29,3 +29,12 @@ updates:
     groups:
       web-ui:
         patterns: ["*"]
+    ignore:
+      # Spezi Web Configurations 0.7 supports ESLint 9 and TypeScript below 6.1.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # Heartwood and the Spezi design system currently target Node 24.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]

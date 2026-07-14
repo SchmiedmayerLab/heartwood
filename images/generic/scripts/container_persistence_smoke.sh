@@ -9,21 +9,17 @@ set -euo pipefail
 
 compose_file="${1:-images/generic/compose.yaml}"
 state_volume="heartwood-state-smoke-$$"
-model_volume="heartwood-model-smoke-$$"
-workspace="/home/heartwood/.local/share/heartwood/sessions"
-model_cache="/home/heartwood/.cache/heartwood/models"
 
 cleanup() {
-  docker volume rm --force "${state_volume}" "${model_volume}" >/dev/null 2>&1 || true
+  docker volume rm --force "${state_volume}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 docker volume create "${state_volume}" >/dev/null
-docker volume create "${model_volume}" >/dev/null
 
 docker compose -f "${compose_file}" run --rm --no-deps \
-  --volume "${state_volume}:/home/heartwood/.local/share/heartwood" \
-  heartwood heartwood --workspace "${workspace}" models add local-persistence \
+  --volume "${state_volume}:/workspace" \
+  heartwood heartwood models add local-persistence \
   --model openai/local-persistence \
   --base-url http://127.0.0.1:8765/v1 \
   --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
@@ -31,15 +27,15 @@ docker compose -f "${compose_file}" run --rm --no-deps \
   --select
 
 docker compose -f "${compose_file}" run --rm --no-deps \
-  --volume "${state_volume}:/home/heartwood/.local/share/heartwood" \
-  heartwood heartwood --workspace "${workspace}" models validate local-persistence
+  --volume "${state_volume}:/workspace" \
+  heartwood heartwood models validate local-persistence
 
 docker compose -f "${compose_file}" run --rm --no-deps \
-  --volume "${model_volume}:${model_cache}" \
-  heartwood bash -c 'printf %s persisted > /home/heartwood/.cache/heartwood/models/persistence-probe'
+  --volume "${state_volume}:/workspace" \
+  heartwood bash -c 'printf %s persisted > /workspace/.heartwood/models/persistence-probe'
 
 docker compose -f "${compose_file}" run --rm --no-deps \
-  --volume "${model_volume}:${model_cache}" \
-  heartwood bash -c 'test "$(cat /home/heartwood/.cache/heartwood/models/persistence-probe)" = persisted'
+  --volume "${state_volume}:/workspace" \
+  heartwood bash -c 'test "$(cat /workspace/.heartwood/models/persistence-probe)" = persisted'
 
 echo "Named-volume persistence smoke: ok"

@@ -94,7 +94,7 @@ export const SessionRailContent = ({
       </div>
     </nav>
 
-    <nav className="rail-tools" aria-label="Workspace tools">
+    <nav className="rail-tools" aria-label="Project tools">
       <Button
         aria-pressed={activePanel === "skills"}
         variant={activePanel === "skills" ? "secondary" : "ghost"}

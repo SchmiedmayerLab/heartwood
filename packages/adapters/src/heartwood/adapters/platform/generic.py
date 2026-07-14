@@ -48,7 +48,7 @@ class GenericPlatformAdapter:
 
     def credential_allowlist(self) -> tuple[str, ...]:
         """Return the generic credential allowlist."""
-        return ()
+        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
     def default_policy_profile(self) -> PolicyProfile:
         """Return the default deny-egress policy for generic local execution."""
@@ -59,8 +59,14 @@ class GenericPlatformAdapter:
             allowed_model_endpoints=(
                 "https://model.local.invalid/v1/chat/completions",
                 "http://127.0.0.1:8765/v1/chat/completions",
+                "https://api.anthropic.com/v1/messages",
+                "https://api.openai.com/v1/chat/completions",
             ),
-            allowed_model_catalog_endpoints=("http://127.0.0.1:8765/v1/models",),
+            allowed_model_catalog_endpoints=(
+                "http://127.0.0.1:8765/v1/models",
+                "https://api.anthropic.com/v1/models",
+                "https://api.openai.com/v1/models",
+            ),
             allowed_capability_tiers=("supervised", "experimental"),
             allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
             credential_allowlist=self.credential_allowlist(),

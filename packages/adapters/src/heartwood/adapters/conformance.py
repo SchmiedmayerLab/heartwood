@@ -59,7 +59,7 @@ def assert_data_source_adapter_conforms(
 def assert_registry_adapter_conforms(
     adapter: RegistryAdapter,
     skill_id: str = "heartwood.synthetic.omop-summary",
-    version: str = "0.1.0",
+    version: str = "0.2.0",
 ) -> None:
     """Assert the shared minimum contract for registry adapters."""
     assert adapter.registry_id

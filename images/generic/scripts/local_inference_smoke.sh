@@ -9,17 +9,26 @@ set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
 port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+log_file="$(mktemp "${TMPDIR:-/tmp}/heartwood-llama-smoke.XXXXXX.log")"
 
 HEARTWOOD_LOCAL_MODEL_PATH="${model_path}" \
 HEARTWOOD_LOCAL_MODEL_CONTEXT=256 \
 HEARTWOOD_LOCAL_MODEL_THREADS=2 \
 HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" \
-  bash images/generic/scripts/start_local_runtime.sh >/tmp/heartwood-llama-smoke.log 2>&1 &
+  bash "${script_dir}/start_local_runtime.sh" >"${log_file}" 2>&1 &
 runtime_pid="$!"
 
 cleanup() {
+  status="$?"
   kill "${runtime_pid}" >/dev/null 2>&1 || true
   wait "${runtime_pid}" >/dev/null 2>&1 || true
+  if [ "${status}" -ne 0 ]; then
+    printf 'Local inference runtime log:\n' >&2
+    tail -n 200 "${log_file}" >&2 || true
+  fi
+  rm -f "${log_file}"
+  return "${status}"
 }
 trap cleanup EXIT
 

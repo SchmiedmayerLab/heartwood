@@ -24,7 +24,6 @@ from heartwood.core_adapter._facade import (
     BackendEvent,
     BackendEventKind,
     DeterministicAgentBackend,
-    LocalWorkspaceAgentBackend,
     ProposedToolCall,
     ToolExecution,
 )
@@ -97,7 +96,7 @@ class SessionService:
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
     ) -> SessionService:
-        """Build a local service using the caller environment."""
+        """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
         platform = select_platform_adapter(active_env)
         store = FileSessionStore(workspace, session_id)
@@ -105,7 +104,7 @@ class SessionService:
             store=store,
             platform_adapter=platform,
             data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
-            backend=_backend_from_env(store=store, env=active_env) if backend is None else backend,
+            backend=DeterministicAgentBackend() if backend is None else backend,
             policy_profile=policy_profile,
             env=active_env,
             clock=clock,
@@ -489,16 +488,6 @@ def _utc_now() -> str:
 
 def _kind_value(kind: CommandKind | str) -> str:
     return kind.value if isinstance(kind, CommandKind) else kind
-
-
-def _backend_from_env(*, store: FileSessionStore, env: Mapping[str, str]) -> AgentBackend:
-    backend_id = env.get("HEARTWOOD_AGENT_BACKEND", "deterministic-local")
-    if backend_id in {"deterministic-local", "deterministic"}:
-        return DeterministicAgentBackend()
-    if backend_id in {"local-workspace", "workspace"}:
-        return LocalWorkspaceAgentBackend(store.session_dir / "agent-artifacts")
-    msg = f"unsupported HEARTWOOD_AGENT_BACKEND: {backend_id}"
-    raise ValueError(msg)
 
 
 def _pending_tool_calls(events: tuple[SessionEvent, ...]) -> tuple[ProposedToolCall, ...]:

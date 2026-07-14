@@ -8,67 +8,119 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Using Heartwood
+# Work with the Agent
 
-Heartwood provides one persisted coding-agent session through the terminal, web interface, and notebook bridge. All interfaces use the same gateway-owned OpenHands conversation, model route, action decisions, workspace, replay, and audit records.
+Heartwood works on one project at a time. The project is exactly the directory where you start the command, and approved agent actions may modify files in that directory or its subdirectories.
 
-## Start Or Resume
+## Start a Project
 
-Run `heartwood` in an interactive terminal. A new installation opens setup when configuration is missing, directs a configured Carina local-model session through `heartwood launch` when compute is not yet allocated, reports recovery guidance when readiness checks fail, and otherwise resumes the selected conversation. Use `heartwood doctor` for a read-only readiness report and `heartwood --help` for automation and administration commands.
-
-The terminal client opens full screen when the terminal supports it. The conversation is replayed from persistent state, the prompt composer remains available while the session is idle, and an elapsed-time status remains visible while the local model or agent is working. Use `Ctrl+Q` to exit and `Ctrl+L` to return focus to the prompt.
-
-Use line mode for limited terminals, logs, or scripted demonstrations:
+Change into the analysis directory before starting Heartwood:
 
 ```bash
-heartwood chat --plain
+cd /path/to/analysis-project
+heartwood
 ```
 
-Line mode prints concise task, action, outcome, and error information without repeating the line just entered or routine allowed-route records. Complete route and event evidence remains available through replay and audit export.
+Heartwood does not search parent directories or require a workspace option. Starting it from a nested directory creates a separate project there. Run `pwd` first when the boundary matters.
 
-## Submit Work
+On the first run, Heartwood guides you to a model connection. Local setup offers a small recommendation list and an **Other Hugging Face model** choice; Heartwood determines the supported runtime and shows resource guidance. A configured project opens the interactive conversation directly. A downloaded local model that needs managed compute directs you to `heartwood launch`.
 
-Describe the desired outcome and constraints in plain language. Heartwood sends the task to the selected OpenHands model with the repository-verified Skills and confines terminal and file tools to the managed session workspace. The workspace path is displayed during native launch and remains separate from the shell directory used to start Heartwood.
+Use the read-only diagnostic at any time:
 
-The model may answer directly, propose tool actions, or stop with an error. Local model turns and first inference startup can take several minutes; the active terminal status and launch stages report elapsed time rather than inventing a completion estimate.
+```bash
+heartwood doctor
+```
+
+`ready`, `setup-required`, and `compute-required` describe normal next steps. `recovery-required` identifies configuration or runtime evidence that must be corrected before work continues.
+
+## Ask for Work
+
+Enter a specific task at the `heartwood>` prompt. State the inputs, expected outputs, and constraints that matter for review. For example:
+
+```text
+Inspect the CSV files in input, summarize missing values by column, and write the aggregate result to missingness-summary.csv. Do not include row-level values.
+```
+
+Heartwood sends the request to the selected model together with the reviewed Skills available to the project. The agent may respond directly or propose coding actions. Heartwood records the messages, proposed actions, decisions, and tool outcomes in the project session.
+
+For automation or a basic terminal, submit one task without opening the full-screen interface:
+
+```bash
+heartwood chat --plain --prompt "Summarize the analysis scripts and their outputs."
+```
 
 ## Review Actions
 
-OpenHands may propose one or more actions in a single confirmation stop. Its public SDK approves or rejects that complete pending action set; it does not expose selective execution of individual members. Heartwood therefore lists every action, tool, summary, and upstream risk before presenting one truthful decision:
+Heartwood defaults to **Ask Every Time**. When OpenHands reaches a confirmation stop, Heartwood shows every member of the pending action set with its tool, summary, arguments, and risk classification.
 
-- **Allow all once** executes the displayed action set and continues until OpenHands finishes or reaches another confirmation stop.
-- **Reject all** rejects the displayed action set without executing any member.
+- Choose **Allow all once** only when every action in the set is appropriate.
+- Choose **Reject all** when any member is unnecessary, unsafe, out of scope, or unclear.
 
-In the full-screen terminal, use the arrow keys to choose a decision and press Enter. In line mode, use `/allow` or `/reject`; no internal identifier is required. Explicit tool-call and legacy confirmation-request identifiers remain accepted for automation compatibility but are not part of the normal workflow.
+The OpenHands SDK approves or rejects one confirmation stop as a group. Heartwood does not imply that individual actions can be executed independently when the upstream runtime cannot support that behavior.
 
-**Ask Every Time** is the default. **Auto-Approve Low Risk** delegates risk classification and confirmation to OpenHands: low-risk actions run automatically, while medium-, high-, and unknown-risk action sets still require review. Heartwood does not expose unconditional automatic approval.
+The optional **Auto-Approve Low Risk** mode lets actions classified by OpenHands as low risk execute automatically. Medium-, high-, and unknown-risk action sets still stop for review. The selected platform policy determines whether this mode is available.
 
-## Session Commands
+## Control the Session
 
-The terminal clients support:
+The terminal interface supports arrow-key navigation and displays available actions at each confirmation stop. Type `/help` for the current command list. Common commands include:
 
-```text
-/allow
-/reject
-/pause
-/resume
-/status
-/replay
-/audit-export
-/help
-/exit
+| Command | Result |
+|---|---|
+| `/status` | Show the selected model, credential status, action mode, and policy decision. |
+| `/allow` | Allow the complete pending action set once. |
+| `/reject` | Reject the complete pending action set. |
+| `/pause` and `/resume` | Pause or resume the current session. |
+| `/replay` | Reprint the persisted session history. |
+| `/audit-export` | Create a scrubbed JSON Lines audit export. |
+| `/exit` | Close the interface without deleting project state. |
+
+Use a session identifier when separate conversations should share the same project files:
+
+```bash
+heartwood --session-id cohort-review
+heartwood --session-id manuscript-review
 ```
 
-`/pause` affects an idle or between-step conversation; the current gateway cannot interrupt an in-flight blocking model call. `/status` reports the active model, credential-reference availability, confirmation mode, and policy decision. `/replay` rebuilds the complete persisted conversation. `/audit-export` writes a scrubbed JSON Lines record that excludes prompts, responses, action summaries, paths, row values, and secrets.
+Return to a session by starting Heartwood with the same identifier. The browser interface lists sessions recorded in the current project.
 
-## Web And Notebook Access
+## Use the Browser Interface
 
-Run `heartwood serve` to serve the researcher web interface through the local gateway. In Jupyter environments, use the platform's authenticated proxy URL documented by the platform guide. The web interface presents the same conversation and groups every pending OpenHands action into one action-set review control.
+Start the shared gateway and web application from the project directory:
 
-The notebook package exposes the same session as Python view models and compact widgets. A pending OpenHands set appears as one approval control with every member listed; the first member identifier addresses the whole set in the programmatic `approve` and `deny` methods. The notebook bridge is intended for status, launch, and notebook integration rather than a separate agent implementation. Use one active writer per file-backed session and interact with the CLI, web UI, and notebook sequentially.
+```bash
+heartwood serve
+```
 
-## Persistence And Audit
+Open `http://127.0.0.1:8767/`. The browser uses the same project configuration, sessions, action settings, model profiles, Skills, and audit store as the terminal. See [Use the Browser and Notebooks](web-interface.md) for model setup and notebook-proxy use.
 
-Session commands, OpenHands state, managed workspaces, model and action settings, installed Skills, and audit records live under the configured Heartwood state root. Reviewed model artifacts live under the configured model cache. Native installations set these paths automatically; containers require durable state and model-cache volumes as described in [Container Images](container-images.md). Until [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) completes shared-writer coordination, use only one active CLI, web, or notebook writer for a file-backed session.
+An unconfigured project opens the shared setup view automatically. Changes made through the browser are visible to the next terminal or notebook command, and opening **Settings** refreshes changes made by another interface. A downloaded local model still needs the terminal-owned `heartwood launch --web` lifecycle before the browser can submit a task.
 
-Replay is the operational session history. Audit export is a separate content-minimized evidence record. Neither a successful model route nor a successful tool action authorizes controlled-data use or export outside the workspace.
+## Use a Notebook
+
+The notebook bridge also binds to the notebook process's current directory:
+
+```python
+from heartwood.notebook import NotebookSession
+
+session = NotebookSession(session_id="cohort-review")
+view = session.replay()
+print(view.event_count)
+```
+
+Run terminal, web, and notebook writes to the same session sequentially. File-backed sessions protect one process at a time; independently running writers are not a supported coordination mechanism.
+
+## Preserve the Project
+
+Heartwood stores configuration, conversations, downloaded models, Skills, logs, and audit data in `.heartwood/` inside the project. Keep that directory with the project, do not commit it, and do not ask the agent to inspect or modify it.
+
+[Project Files and State](project-state.md) explains the complete layout, persistence behavior, interface sharing, and project migration.
+
+## Export an Audit Record
+
+The in-boundary session contains conversation content needed for resume. Audit export is a separate, content-minimized record of route decisions, action classifications, approvals or rejections, tool outcomes, and Skill activation.
+
+```bash
+heartwood --session-id cohort-review audit export
+```
+
+Review the export before moving it outside the deployment boundary. A scrubbed export is evidence about Heartwood activity, not automatic authorization to disclose data or results.

@@ -8,12 +8,7 @@
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
 from typing import cast
 
 from heartwood.schemas import ActionConfirmationMode
@@ -71,48 +66,6 @@ class ActionSettings:
     def safe_dict(self) -> dict[str, object]:
         """Return serializable non-secret settings."""
         return asdict(self)
-
-
-class ActionSettingsStore:
-    """Load and atomically persist the action-confirmation selection."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-
-    def load(self) -> ActionSettings:
-        """Load settings or return the conservative default when absent."""
-        if not self.path.exists():
-            return ActionSettings()
-        try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            msg = f"unable to load action settings {self.path}: {error}"
-            raise ActionSettingsError(msg) from error
-        return action_settings_from_mapping(value)
-
-    def save(self, settings: ActionSettings) -> None:
-        """Persist settings atomically."""
-        settings.validate()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
-        temporary_path = Path(temporary)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(settings.safe_dict(), file, indent=2, sort_keys=True)
-                file.write("\n")
-            temporary_path.chmod(0o600)
-            temporary_path.replace(self.path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
-
-
-def action_settings_path(workspace: Path, env: Mapping[str, str] | None = None) -> Path:
-    """Resolve the shared action settings path for a session workspace."""
-    active_env = os.environ if env is None else env
-    configured = active_env.get("HEARTWOOD_ACTION_SETTINGS")
-    if configured:
-        return Path(configured)
-    return workspace.parent / "actions.json"
 
 
 def action_settings_from_mapping(value: object) -> ActionSettings:

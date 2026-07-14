@@ -20,7 +20,6 @@ const webRoot = path.join(packageRoot, "dist");
 const stateRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-reference-analysis-"),
 );
-const workspace = path.join(stateRoot, "sessions");
 const gatewayPort = process.env.HEARTWOOD_REFERENCE_GATEWAY_PORT || "4187";
 const origin = `http://127.0.0.1:${gatewayPort}`;
 const screenshotOption =
@@ -51,12 +50,8 @@ const failurePrompt =
 const processes = [];
 const logs = [];
 const runtimeEnvironment = Object.assign({}, process.env, {
-  HEARTWOOD_ACTION_SETTINGS: path.join(stateRoot, "actions.json"),
-  HEARTWOOD_AGENT_BACKEND: "openhands-sdk",
   HEARTWOOD_MODEL_REQUEST_LOG: path.join(stateRoot, "model-requests.jsonl"),
-  HEARTWOOD_MODEL_SETTINGS: path.join(stateRoot, "models.json"),
   HEARTWOOD_RUNTIME_ROOT: repoRoot,
-  HEARTWOOD_WORKSPACE: workspace,
   LITELLM_LOCAL_MODEL_COST_MAP: "True",
   OPENHANDS_SUPPRESS_BANNER: "1",
   UV_CACHE_DIR: path.join(repoRoot, ".uv-cache"),
@@ -80,6 +75,14 @@ async function main() {
 
   let browser;
   try {
+    const inputRoot = path.join(stateRoot, "input");
+    fs.mkdirSync(inputRoot, { recursive: true });
+    for (const filename of ["person.csv", "condition_occurrence.csv"]) {
+      fs.copyFileSync(
+        path.join(repoRoot, "fixtures", "synthetic", "omop-like", filename),
+        path.join(inputRoot, filename),
+      );
+    }
     startProcess(pythonExecutable, [
       path.join(repoRoot, "images/generic/scripts/local_model_stub.py"),
       "--host",
@@ -94,8 +97,6 @@ async function main() {
     runCli("models", "connect", "local", "heartwood-local-runtime");
 
     startProcess(heartwoodExecutable, [
-      "--workspace",
-      workspace,
       "serve",
       "--host",
       "127.0.0.1",
@@ -134,15 +135,6 @@ async function main() {
       .click();
     await expect(page.getByText("omop-cdm", { exact: true })).toBeVisible();
 
-    const inputRoot = path.join(stateRoot, "workspaces", sessionId, "input");
-    fs.mkdirSync(inputRoot, { recursive: true });
-    for (const filename of ["person.csv", "condition_occurrence.csv"]) {
-      fs.copyFileSync(
-        path.join(repoRoot, "fixtures", "synthetic", "omop-like", filename),
-        path.join(inputRoot, filename),
-      );
-    }
-
     await page.getByRole("button", { name: "Skills", exact: true }).click();
     await expect(
       page.getByText("omop-cohort-summary", { exact: true }),
@@ -180,12 +172,7 @@ async function main() {
       summary: "run the failing synthetic command",
     });
 
-    const artifactPath = path.join(
-      stateRoot,
-      "workspaces",
-      sessionId,
-      "cohort-summary.json",
-    );
+    const artifactPath = path.join(stateRoot, "cohort-summary.json");
     if (!fs.existsSync(artifactPath)) {
       const events = await fetchJson(`${origin}/sessions/${sessionId}/events`);
       const files = listFiles(stateRoot);
@@ -212,11 +199,7 @@ async function main() {
         "browser-generated cohort did not preserve aggregate-only output",
       );
     }
-    const baseline = readJsonArtifact(
-      stateRoot,
-      sessionId,
-      "baseline-model.json",
-    );
+    const baseline = readJsonArtifact(stateRoot, "baseline-model.json");
     if (
       baseline.model?.model_type !== "synthetic-logistic-condition-history" ||
       baseline.training_summary?.participant_count !== 24 ||
@@ -228,11 +211,7 @@ async function main() {
         `unexpected browser-generated baseline: ${JSON.stringify(baseline)}`,
       );
     }
-    const aggregate = readJsonArtifact(
-      stateRoot,
-      sessionId,
-      "aggregate-export.json",
-    );
+    const aggregate = readJsonArtifact(stateRoot, "aggregate-export.json");
     if (
       aggregate.exported !== true ||
       aggregate.suppressed !== false ||
@@ -373,8 +352,8 @@ async function assertNoHorizontalOverflow(page, viewportName) {
   }
 }
 
-function readJsonArtifact(root, sessionId, filename) {
-  const artifact = path.join(root, "workspaces", sessionId, filename);
+function readJsonArtifact(root, filename) {
+  const artifact = path.join(root, filename);
   if (!fs.existsSync(artifact)) {
     throw new Error(`reference artifact is missing at ${artifact}`);
   }
@@ -383,7 +362,7 @@ function readJsonArtifact(root, sessionId, filename) {
 
 function startProcess(command, args) {
   const child = spawn(command, args, {
-    cwd: repoRoot,
+    cwd: stateRoot,
     detached: true,
     env: runtimeEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
@@ -395,15 +374,11 @@ function startProcess(command, args) {
 }
 
 function runCli(...args) {
-  const result = spawnSync(
-    heartwoodExecutable,
-    ["--workspace", workspace, ...args],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: runtimeEnvironment,
-    },
-  );
+  const result = spawnSync(heartwoodExecutable, args, {
+    cwd: stateRoot,
+    encoding: "utf8",
+    env: runtimeEnvironment,
+  });
   if (result.status !== 0) {
     throw new Error(
       `heartwood ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`,

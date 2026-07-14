@@ -28,6 +28,7 @@ const profile = (profileId: string, model: string): ModelProfile => ({
 const settings: ModelSettings = {
   schema_version: "heartwood.model-settings.v1",
   active_profile: null,
+  model_source: null,
   profiles: [],
   connections: [
     {
@@ -63,6 +64,7 @@ const settings: ModelSettings = {
       description: "",
     },
   ],
+  source_options: [],
 };
 
 describe("modelProfileLabel", () => {
@@ -75,6 +77,12 @@ describe("modelProfileLabel", () => {
   it("uses an advanced preset label when no connection exists", () => {
     expect(modelProfileLabel(profile("openai", "openai/gpt"), settings)).toBe(
       "OpenAI · gpt",
+    );
+  });
+
+  it("preserves a preset model that does not use the expected prefix", () => {
+    expect(modelProfileLabel(profile("openai", "gateway/gpt"), settings)).toBe(
+      "OpenAI · gateway/gpt",
     );
   });
 

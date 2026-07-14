@@ -140,6 +140,24 @@ export interface ActionSettings {
   modes: ActionModeOption[];
 }
 
+export type ReadinessState =
+  "ready" | "setup-required" | "compute-required" | "recovery-required";
+
+export interface ReadinessCheck {
+  check_id: string;
+  status: "pass" | "warning" | "fail";
+  summary: string;
+}
+
+export interface ProjectReadiness {
+  state: ReadinessState;
+  platform_id: string;
+  project_root: string;
+  state_root: string;
+  evidence: string[];
+  checks: ReadinessCheck[];
+}
+
 export interface ModelProfile {
   profile_id: string;
   model: string;
@@ -225,12 +243,25 @@ export interface ModelPreset {
   description: string;
 }
 
+export type ModelSource =
+  "anthropic" | "local" | "openai" | "stanford-ai-api-gateway";
+
+export interface ModelSourceOption {
+  source_id: ModelSource;
+  connection_id: string;
+  label: string;
+  description: string;
+  selected: boolean;
+}
+
 export interface ModelSettings {
   schema_version: "heartwood.model-settings.v1";
   active_profile: string | null;
+  model_source: string | null;
   profiles: ModelProfile[];
   connections: ModelConnection[];
   presets: ModelPreset[];
+  source_options: ModelSourceOption[];
 }
 
 export interface ModelValidation {
@@ -258,10 +289,11 @@ export interface ModelArtifact {
   model_alias: string;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
+  recommended: boolean;
 }
 
 export interface ModelDownload {
-  artifact_id: string;
+  model_id: string;
   status: "downloading" | "error" | "ready";
   bytes_downloaded: number;
   bytes_total: number;
@@ -269,9 +301,63 @@ export interface ModelDownload {
   error: string | null;
 }
 
+export type LocalModelRuntime = "llama-cpp" | "vllm";
+
+export interface LocalModelChoice {
+  model_id: string;
+  label: string;
+  purpose: string;
+  runtime: LocalModelRuntime;
+  source_repository: string;
+  source_revision: string;
+  source_path: string | null;
+  size_bytes: number;
+  minimum_free_bytes: number;
+  license_posture: string;
+  catalog_source: "recommended" | "user-selected";
+  artifact_sha256: string | null;
+  minimum_resource_envelope: string | null;
+  recommended_resource_envelope: string | null;
+  available: boolean;
+  availability_reason: string;
+}
+
+export interface ModelRepositoryPlan {
+  model: LocalModelChoice;
+  selection_reason: string;
+}
+
+export interface ModelRepositoryRequest {
+  repository: string;
+  revision?: string;
+}
+
+export interface CustomLocalModelDownloadRequest {
+  repository: string;
+  revision?: string;
+}
+
+export interface ModelSnapshot {
+  snapshot_id: string;
+  runtime_profile: string;
+  purpose: string;
+  source_repository: string;
+  source_revision: string;
+  expected_size_bytes: number;
+  minimum_free_bytes: number;
+  license_posture: string;
+  model_alias: string;
+  minimum_resource_envelope: string | null;
+  recommended_resource_envelope: string | null;
+  recommended: boolean;
+}
+
 export interface ModelArtifacts {
   schema_version: "heartwood.local-model-catalog.v1";
+  snapshot_schema_version: "heartwood.model-snapshot-catalog.v1";
   artifacts: ModelArtifact[];
+  snapshots: ModelSnapshot[];
+  models: LocalModelChoice[];
   downloads: ModelDownload[];
 }
 

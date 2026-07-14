@@ -8,20 +8,18 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
-CredentialKind: TypeAlias = Literal["environment", "file", "managed-identity", "none"]
-CapabilityTier: TypeAlias = Literal["autonomous", "experimental", "supervised"]
+type CredentialKind = Literal["environment", "file", "managed-identity", "none"]
+type CapabilityTier = Literal["autonomous", "experimental", "supervised"]
 
 _CREDENTIAL_KINDS = {"environment", "file", "managed-identity", "none"}
 _CAPABILITY_TIERS = {"autonomous", "experimental", "supervised"}
@@ -240,44 +238,6 @@ class ModelSettings:
         }
 
 
-class ModelSettingsStore:
-    """Load and atomically persist non-secret model settings."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-
-    def load(self) -> ModelSettings:
-        """Load settings or return an empty collection when absent."""
-        if not self.path.exists():
-            return ModelSettings()
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            msg = f"unable to load model settings {self.path}: {error}"
-            raise ModelSettingsError(msg) from error
-        return model_settings_from_mapping(raw)
-
-    def save(self, settings: ModelSettings) -> None:
-        """Persist settings atomically without writing credentials."""
-        settings.validate()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": settings.schema_version,
-            "active_profile": settings.active_profile,
-            "profiles": [profile.safe_dict() for profile in settings.profiles],
-        }
-        fd, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
-        temporary_path = Path(temporary)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(payload, file, indent=2, sort_keys=True)
-                file.write("\n")
-            temporary_path.chmod(0o600)
-            temporary_path.replace(self.path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
-
-
 @dataclass(frozen=True, slots=True)
 class ModelPreset:
     """Non-secret defaults for one common OpenHands/LiteLLM provider path."""
@@ -381,15 +341,6 @@ def model_profile_from_preset(preset_id: str, model_name: str) -> ModelProfile:
     )
     profile.validate()
     return profile
-
-
-def model_settings_path(workspace: Path, env: Mapping[str, str] | None = None) -> Path:
-    """Resolve the shared settings path for a session workspace."""
-    active_env = os.environ if env is None else env
-    configured = active_env.get("HEARTWOOD_MODEL_SETTINGS")
-    if configured:
-        return Path(configured)
-    return workspace.parent / "models.json"
 
 
 def model_settings_from_mapping(value: object) -> ModelSettings:

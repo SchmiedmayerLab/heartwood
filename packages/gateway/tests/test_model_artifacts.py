@@ -18,10 +18,12 @@ from typing import Any, cast
 import pytest
 
 from heartwood.gateway import (
+    LocalModelDownloadManager,
     ModelArtifact,
     ModelArtifactCatalog,
     ModelArtifactError,
-    ModelArtifactManager,
+    ModelSnapshot,
+    ModelSnapshotCatalog,
     download_model_artifact,
     load_model_artifact_catalog,
 )
@@ -98,6 +100,58 @@ def test_artifact_download_rejects_integrity_mismatch(tmp_path: Path) -> None:
             cache_dir=tmp_path / "models",
             downloader=downloader,
         )
+    assert not (tmp_path / "models" / artifact.artifact_id).exists()
+
+
+def test_artifact_download_reuses_verified_installation(tmp_path: Path) -> None:
+    content = b"reviewed-model-artifact"
+    artifact = _artifact(content)
+    installed = tmp_path / "models" / artifact.artifact_id / artifact.source_path
+    installed.parent.mkdir(parents=True)
+    installed.write_bytes(content)
+    progress: list[tuple[int, int]] = []
+
+    path = download_model_artifact(
+        artifact,
+        cache_dir=tmp_path / "models",
+        downloader=lambda **_kwargs: pytest.fail("verified artifacts must not be downloaded again"),
+        progress_callback=lambda downloaded, total: progress.append((downloaded, total)),
+    )
+
+    assert path == installed
+    assert progress == [(len(content), len(content))]
+
+
+def test_artifact_download_rejects_modified_existing_installation(tmp_path: Path) -> None:
+    artifact = _artifact(b"reviewed-model-artifact")
+    installed = tmp_path / "models" / artifact.artifact_id / artifact.source_path
+    installed.parent.mkdir(parents=True)
+    installed.write_bytes(b"modified")
+
+    with pytest.raises(ModelArtifactError, match="existing model artifact is incomplete"):
+        download_model_artifact(
+            artifact,
+            cache_dir=tmp_path / "models",
+            downloader=lambda **_kwargs: pytest.fail("modified artifacts must not be overwritten"),
+        )
+
+
+def test_artifact_download_checks_free_space_before_transfer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _artifact(b"reviewed-model-artifact")
+    monkeypatch.setattr(
+        "heartwood.gateway._model_artifacts.shutil.disk_usage",
+        lambda _path: SimpleNamespace(free=artifact.minimum_free_bytes - 1),
+    )
+
+    with pytest.raises(ModelArtifactError, match=r"requires at least.*available"):
+        download_model_artifact(
+            artifact,
+            cache_dir=tmp_path / "models",
+            downloader=lambda **_kwargs: pytest.fail("download must not start"),
+        )
 
 
 def test_artifact_metadata_rejects_floating_revisions() -> None:
@@ -131,7 +185,13 @@ def test_background_manager_reports_ready_download(
         return installed
 
     monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
-    manager = ModelArtifactManager(catalog=catalog, cache_dir=tmp_path / "models")
+    selected: list[tuple[str, Path, str]] = []
+    manager = LocalModelDownloadManager(
+        artifact_catalog=catalog,
+        snapshot_catalog=_empty_snapshot_catalog(),
+        cache_dir=tmp_path / "models",
+        on_ready=lambda model_id, path, runtime: selected.append((model_id, path, runtime)),
+    )
 
     assert manager.start(artifact.artifact_id).status == "downloading"
     deadline = time.monotonic() + 2
@@ -142,6 +202,7 @@ def test_background_manager_reports_ready_download(
     assert manager.statuses()[0].bytes_downloaded == len(b"content")
     assert manager.statuses()[0].bytes_total == len(b"content")
     assert manager.statuses()[0].path == str(installed)
+    assert selected == [(artifact.artifact_id, installed, artifact.runtime_profile)]
     assert manager.start(artifact.artifact_id).status == "ready"
 
 
@@ -164,6 +225,7 @@ def test_background_manager_exposes_in_progress_byte_count(
         progress_callback: Callable[[int, int], None],
     ) -> Path:
         progress_callback(3, len(b"content"))
+        progress_callback(1, len(b"content"))
         started.set()
         assert release.wait(timeout=2)
         path = cache_dir / artifact.artifact_id / "model.gguf"
@@ -172,7 +234,12 @@ def test_background_manager_exposes_in_progress_byte_count(
         return path
 
     monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
-    manager = ModelArtifactManager(catalog=catalog, cache_dir=tmp_path / "models")
+    manager = LocalModelDownloadManager(
+        artifact_catalog=catalog,
+        snapshot_catalog=_empty_snapshot_catalog(),
+        cache_dir=tmp_path / "models",
+        on_ready=lambda _model_id, _path, _runtime: None,
+    )
 
     manager.start(artifact.artifact_id)
     assert started.wait(timeout=2)
@@ -187,6 +254,100 @@ def test_background_manager_exposes_in_progress_byte_count(
     assert manager.statuses()[0].status == "ready"
 
 
+def test_background_manager_reports_actionable_safe_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _artifact(b"content")
+    catalog = ModelArtifactCatalog(
+        schema_version="heartwood.local-model-catalog.v1",
+        artifacts=(artifact,),
+    )
+
+    def rejected_download(
+        _artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
+        progress_callback(1, artifact.artifact_size_bytes)
+        raise ModelArtifactError(f"not enough project storage under {cache_dir}")
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_artifacts.download_model_artifact",
+        rejected_download,
+    )
+    manager = LocalModelDownloadManager(
+        artifact_catalog=catalog,
+        snapshot_catalog=_empty_snapshot_catalog(),
+        cache_dir=tmp_path / "models",
+        on_ready=lambda _model_id, _path, _runtime: None,
+    )
+
+    manager.start(artifact.artifact_id)
+    deadline = time.monotonic() + 2
+    while manager.statuses()[0].status == "downloading" and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    status = manager.statuses()[0]
+    assert status.status == "error"
+    assert status.bytes_downloaded == 1
+    assert status.error == f"not enough project storage under {tmp_path / 'models'}"
+
+
+def test_background_manager_downloads_and_selects_a_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = ModelSnapshot(
+        snapshot_id="test-snapshot",
+        runtime_profile="vllm-cuda",
+        purpose="Synthetic snapshot",
+        source_repository="example/test-snapshot",
+        source_revision="a" * 40,
+        expected_size_bytes=7,
+        minimum_free_bytes=7,
+        license_posture="Synthetic",
+        model_alias="Test snapshot",
+    )
+    installed = tmp_path / "models" / snapshot.snapshot_id
+
+    def download(
+        _snapshot: ModelSnapshot,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
+        progress_callback(4, 7)
+        path = cache_dir / snapshot.snapshot_id
+        path.mkdir(parents=True)
+        return path
+
+    monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_snapshot", download)
+    selected: list[tuple[str, Path, str]] = []
+    manager = LocalModelDownloadManager(
+        artifact_catalog=ModelArtifactCatalog(
+            schema_version="heartwood.local-model-catalog.v1",
+            artifacts=(),
+        ),
+        snapshot_catalog=ModelSnapshotCatalog(
+            schema_version="heartwood.model-snapshot-catalog.v1",
+            snapshots=(snapshot,),
+        ),
+        cache_dir=tmp_path / "models",
+        on_ready=lambda model_id, path, runtime: selected.append((model_id, path, runtime)),
+    )
+
+    assert manager.start(snapshot.snapshot_id).model_id == snapshot.snapshot_id
+    deadline = time.monotonic() + 2
+    while manager.statuses()[0].status == "downloading" and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert manager.statuses()[0].status == "ready"
+    assert manager.statuses()[0].path == str(installed)
+    assert selected == [(snapshot.snapshot_id, installed, snapshot.runtime_profile)]
+
+
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
@@ -195,7 +356,8 @@ def test_background_manager_exposes_in_progress_byte_count(
         ({"source_path": "/model.gguf"}, "source_path"),
         ({"source_path": "../model.gguf"}, "source_path"),
         ({"source_revision": "latest"}, "immutable revision"),
-        ({"artifact_size_bytes": 0}, "positive"),
+        ({"artifact_size_bytes": 0}, "storage metadata"),
+        ({"minimum_free_bytes": 1}, "storage metadata"),
         ({"artifact_sha256": "ABC"}, "lowercase SHA-256"),
     ],
 )
@@ -297,6 +459,18 @@ def test_download_rejects_missing_outside_and_wrong_size_paths(tmp_path: Path) -
     with pytest.raises(ModelArtifactError, match="escapes"):
         download_model_artifact(artifact, cache_dir=tmp_path / "models", downloader=escaped)
 
+    def wrong_source(**kwargs: object) -> str:
+        path = Path(str(kwargs["local_dir"])) / "other.gguf"
+        path.write_bytes(b"expected")
+        return str(path)
+
+    with pytest.raises(ModelArtifactError, match="does not match its pinned source"):
+        download_model_artifact(
+            artifact,
+            cache_dir=tmp_path / "models",
+            downloader=wrong_source,
+        )
+
     def wrong_size(**kwargs: object) -> str:
         path = Path(str(kwargs["local_dir"])) / "model.gguf"
         path.write_bytes(b"short")
@@ -343,6 +517,7 @@ def _artifact_manifest(artifact_id: str) -> str:
             'source_revision = "0123456789abcdef"',
             'artifact_format = "GGUF"',
             "artifact_size_bytes = 7",
+            "minimum_free_bytes = 11",
             f'artifact_sha256 = "{digest}"',
             'license_posture = "Synthetic"',
             'model_alias = "test"',
@@ -360,9 +535,17 @@ def _artifact(content: bytes) -> ModelArtifact:
         source_revision="0123456789abcdef",
         artifact_format="GGUF",
         artifact_size_bytes=len(content),
+        minimum_free_bytes=(len(content) * 3 + 1) // 2,
         artifact_sha256=hashlib.sha256(content).hexdigest(),
         license_posture="Synthetic test fixture.",
         model_alias="test-model",
+    )
+
+
+def _empty_snapshot_catalog() -> ModelSnapshotCatalog:
+    return ModelSnapshotCatalog(
+        schema_version="heartwood.model-snapshot-catalog.v1",
+        snapshots=(),
     )
 
 

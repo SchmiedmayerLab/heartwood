@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 05 — Security And Compliance
+# Security and Compliance
 
 ## Threat Model
 
@@ -19,12 +19,12 @@ Heartwood does not make a trusted interactive container equivalent to a hardened
 ## Deployment Boundary
 
 - Platform egress policy is the authoritative network control. Air-gapped deployments disable runtime networking; connected deployments allow only reviewed destinations through platform controls.
-- Heartwood evaluates the selected model profile's declared normalized policy endpoint, capability tier, credential reference, and action-confirmation mode before initial task submission and before an approved or resumed continuation that may call the model. Rejecting a pending action set does not continue the model. A custom base URL must share the policy endpoint's origin. Provider-native routing without a custom base URL remains an audited deployment assertion that authoritative platform network controls must enforce. Deployment policy defaults to the supervised tier and `always-confirm` mode only. This is a deny-by-default application gate and audit record, not a substitute for a firewall, private endpoint, or workspace sandbox.
-- Model connections and profiles contain no secret values. Credentials are resolved at runtime from an environment variable, mounted file, or managed identity only after policy allows that non-secret reference. A user-submitted provider token may exist only in gateway memory for the running process; it is never returned to the browser, persisted in settings, written to logs or audit records, or accepted as a CLI argument. Policy records and audit exports never include the credential value.
-- Model discovery is separately policy-gated egress. A deployment must authorize the exact catalog endpoint and credential reference before the gateway invokes a provider SDK. Catalog responses remain in the gateway's bounded memory cache and are not persisted to settings or session audit records; subsequent model-route records identify the selected non-secret profile and route decision.
-- The active environment-referenced provider key is passed directly to the in-process OpenHands model client, while every environment-variable reference in the configured model profiles is blanked in OpenHands terminal subprocesses. This does not isolate mounted credential files or a managed identity from code running as the workspace user; those credentials require least privilege and a deployment-owned process, remote-workspace, or platform boundary when tools must not access them.
+- Heartwood evaluates the selected model profile's declared normalized policy endpoint, capability tier, credential binding, and action-confirmation mode before initial task submission and before an approved or resumed continuation that may call the model. Rejecting a pending action set does not continue the model. A custom base URL must share the policy endpoint's origin. Provider-native routing without a custom base URL remains an audited deployment assertion that authoritative platform network controls must enforce. Deployment policy defaults to the supervised tier and `always-confirm` mode only. This is a deny-by-default application gate and audit record, not a substitute for a firewall, private endpoint, or workspace sandbox.
+- Model connections, profiles, and `.heartwood/config.toml` contain no secret values. Credentials are resolved only after policy authorizes a non-secret binding to a managed identity, environment-backed platform secret, mounted file, or session-only value. A submitted provider token is never returned to the browser, persisted in project state, written to logs or audit records, or accepted as a CLI argument. Policy records and audit exports never include the credential value.
+- Model discovery is separately policy-gated egress. A deployment must authorize the exact catalog endpoint and credential binding before the gateway invokes a provider SDK. Catalog responses remain in the gateway's bounded memory cache and are not persisted to settings or session audit records; subsequent model-route records identify the selected non-secret profile and route decision.
+- The gateway passes an authorized provider credential directly to the in-process OpenHands model client and excludes provider credentials from OpenHands terminal subprocess environments. This does not isolate a readable platform secret, same-user process state, or a managed identity from code running as the workspace user; those credentials require least privilege and a deployment-owned process, remote-workspace, or platform boundary when tools must not access them.
 - Provider connections are configuration templates, not Health Insurance Portability and Accountability Act eligibility claims. The deploying institution must verify the business associate agreement, covered service, identity, region, retention, training, logging, and network path.
-- Images contain no model weights. Optional artifacts are explicit runtime inputs in mounted or platform-persistent storage and are checked against an immutable source revision, byte size, SHA-256 digest, format, and license metadata.
+- Images contain no model weights. Recommended and user-selected artifacts are explicit runtime inputs in mounted or platform-persistent storage. Heartwood resolves user requests to immutable source revisions, requires complete size metadata, verifies single-file artifacts against source SHA-256 metadata, creates and verifies an exact manifest for snapshots, and records source-reported license posture. A successful preparation proves content provenance and supported packaging, not license approval, model safety, biomedical suitability, or capability.
 
 ## Human Decisions
 
@@ -44,10 +44,10 @@ Export remains an explicit researcher action under platform and dataset policy.
 - Repository verification identifies the Skill bytes shipped in the reviewed image; it does not make a writable same-user container immutable. A deployment that relies on runtime Skill integrity must keep application and bundled-Skill paths read-only or place tools in a separate workspace boundary.
 - Current local verification checks metadata consistency, trust tier, declared tools, network posture, entrypoint confinement, and provenance-field shape. It does not cryptographically verify the existing Sigstore placeholders.
 - Verified status requires independent security and clinical or statistical review before controlled-data use.
-- External Skills are not fetched at runtime. The current installer accepts only a mounted local directory, rejects symbolic links and path escapes, validates declared permissions, records the trust decision, and copies atomically. Automatic OpenHands user, public-marketplace, and project-workspace Skill loading is disabled. Remote acquisition, immutable-source resolution, digest verification, and cryptographic signature verification remain future distribution controls.
+- External Skills are not fetched at runtime. The installer accepts only a mounted local directory, rejects symbolic links and path escapes, validates declared permissions, records the trust decision, and copies atomically. Automatic OpenHands user, public-marketplace, and project-workspace Skill loading is disabled. Remote acquisition and cryptographic source verification are not part of the current trust model.
 - Skill instructions do not create process isolation. OpenHands local terminal and file tools start from the configured workspace inside the interactive container, but the local workspace is not a filesystem sandbox and same-user code can reach other readable paths. A deployment that needs stronger isolation must supply a supported remote workspace, operating-system sandbox, or platform-native job boundary and validate it independently.
 
-## Data And Log Handling
+## Data and Log Handling
 
 - Source control, public examples, CI, replay traces, and screenshots use synthetic fixtures only.
 - Researcher and agent message text remains in the in-boundary OpenHands conversation and Heartwood session event stores so every client can replay the same transcript, but exported audit records omit content by default.
@@ -56,13 +56,13 @@ Export remains an explicit researcher action under platform and dataset policy.
 - Live protected health information must never be copied into fixtures, public logs, issue reports, or reviewer artifacts.
 - Dependencies and repository-verified Skills are installed at image build time. Runtime package installation is not part of a normal researcher workflow.
 
-## Audit And Tamper Evidence
+## Audit and Tamper Evidence
 
 Heartwood translates OpenHands events into one session stream and appends a separate hash-chained audit record. Hash chaining detects edits but cannot make a researcher-controlled local disk immutable. Authoritative retention, signing, and off-workspace copies require deployment integration and must be described as such.
 
 ## Compliance Evidence
 
-Per-platform evidence should include the data-flow diagram, deployment policy profile, image and base digests, model route and credential-reference mechanism, artifact digest when local inference is used, network posture, identity binding, synthetic action-confirmation trace, scrubbed audit export, platform proxy behavior, and documented limitations.
+Per-platform evidence should include the data-flow diagram, deployment policy profile, image and base digests, model route and credential-binding mechanism, artifact digest when local inference is used, network posture, identity binding, synthetic action-confirmation trace, scrubbed audit export, platform proxy behavior, and documented limitations.
 
 The repository’s generated reviewer artifacts are a synthetic evidence aid, not a substitute for institutional security, privacy, clinical, or statistical review.
 

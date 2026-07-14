@@ -29,6 +29,9 @@ jobs:
     name: Container Images
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/container-image.yml
+  documentation:
+    name: Documentation
+    uses: ./.github/workflows/documentation.yml
   container-smoke:
     name: Container Smoke Tests
     uses: ./.github/workflows/container-smoke.yml
@@ -57,6 +60,7 @@ jobs:
       - codeql
       - containers
       - container-smoke
+      - documentation
       - gpu-containers
       - native-assets
       - python

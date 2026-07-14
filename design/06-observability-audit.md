@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 06 — Observability, Audit, And Feedback
+# Audit and Reproducibility
 
 ## Two Records
 
@@ -37,15 +37,15 @@ Each Heartwood audit event includes the previous event hash. Editing, deleting, 
 
 The CLI, notebook, and web UI render the same plain-language sequence from the shared event stream. The conversation remains primary; route policy, selected confirmation mode, Skill identity, action risk, confirmations, tool status, and export details are available without forcing a researcher to approve deployment policy or repository-verified Skill activation repeatedly. Auto-approved low-risk actions still produce proposed-action and execution events, so reduced prompting does not remove activity or audit visibility.
 
-## Replay And Resume
+## Replay and Resume
 
 Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, and pending action set. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
 
-## Improvement Export
+## Field Feedback Boundary
 
-Future field-feedback export must be researcher initiated and separately authorized. It may retain a reduced trajectory skeleton, decisions, timings, errors, recovery, and ratings only after deterministic scrubbing and human confirmation that the artifact contains no protected health information. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
+Heartwood does not export field-feedback trajectories. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
 
-Validated synthetic or scrubbed trajectories can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; cryptographically signed Skill releases can join that path only after the distribution controls in [04](04-skills.md) are implemented.
+Validated synthetic fixtures can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; external Skill releases remain subject to the distribution boundary in [Skills and Extensions](04-skills.md).
 
 ## Anti-Goals
 

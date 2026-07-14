@@ -7,19 +7,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
-import pytest
-
+from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway import (
-    ActionSettings,
-    ActionSettingsStore,
     ModelCatalogService,
     ModelConnection,
     ModelProfile,
     ModelSettings,
-    ModelSettingsStore,
+    ProjectConfig,
+    ProjectConfigStore,
+    ProjectContext,
     ProviderModel,
     SessionGateway,
     inspect_deployment,
@@ -27,347 +26,257 @@ from heartwood.gateway import (
 )
 
 
-def _write_ready_local_state(
-    workspace: Path,
+def _project(tmp_path: Path) -> ProjectContext:
+    return ProjectContext(tmp_path)
+
+
+def _store(project: ProjectContext, env: dict[str, str]) -> ProjectConfigStore:
+    adapter = select_platform_adapter(env)
+    return ProjectConfigStore(
+        project,
+        ProjectConfig(
+            platform_id=adapter.adapter_id,
+            policy=adapter.default_policy_profile(),
+        ),
+    )
+
+
+def _configure_model(
+    project: ProjectContext,
     *,
-    env: dict[str, str] | None = None,
+    source: str,
+    env: dict[str, str],
 ) -> None:
-    persist_deployment_profile(workspace, model_source="local", env=env or {})
-    ModelSettingsStore(workspace.parent / "models.json").save(
-        ModelSettings(
-            active_profile="local",
-            profiles=(
-                ModelProfile(
-                    profile_id="local",
-                    model="openai/test-model",
-                    policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
-                    base_url="http://127.0.0.1:8765/v1",
-                    credential_kind="none",
-                ),
+    persist_deployment_profile(project, model_source=source, env=env)  # type: ignore[arg-type]
+    store = _store(project, env)
+    config = store.load()
+    if source == "local":
+        profile = ModelProfile(
+            profile_id="local",
+            model="openai/heartwood-local-model",
+            policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+            base_url="http://127.0.0.1:8765/v1",
+            credential_kind="none",
+        )
+        model_path = project.models_dir / "synthetic-model"
+        model_path.mkdir()
+        store.select_local_model(
+            artifact_id="synthetic-model",
+            path=model_path,
+            runtime="vllm",
+        )
+        config = store.load()
+    else:
+        profile = ModelProfile(
+            profile_id="stanford-ai-api-gateway",
+            model="openai/claude-sonnet-4-6",
+            policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
+            base_url="https://aiapi-prod.stanford.edu/v1",
+            credential_kind="environment",
+            api_key_env="STANFORD_AI_API_KEY",
+        )
+    store.save(
+        replace(
+            config,
+            model_settings=ModelSettings(
+                active_profile=profile.profile_id,
+                profiles=(profile,),
             ),
         )
     )
-    ActionSettingsStore(workspace.parent / "actions.json").save(ActionSettings())
 
 
-def test_readiness_is_setup_required_without_mutating_state(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    readiness = inspect_deployment(workspace, env={})
+def test_readiness_is_read_only_before_setup(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+
+    readiness = inspect_deployment(project, env={})
+
     assert readiness.state == "setup-required"
     assert readiness.platform_id == "generic"
-    assert not (tmp_path / "state").exists()
+    assert readiness.project_root == str(tmp_path)
+    assert not project.state_root.exists()
 
 
-def test_carina_readiness_reports_allocation_scratch_and_gpu(tmp_path: Path) -> None:
+def test_initialized_project_without_configuration_requires_setup(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    project.initialize()
+
+    readiness = inspect_deployment(project, env={})
+
+    assert readiness.state == "setup-required"
+    assert next(
+        check for check in readiness.checks if check.check_id == "project-state"
+    ).status == ("pass")
+
+
+def test_malformed_project_state_and_configuration_require_recovery(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    project.state_root.mkdir()
+    (project.state_root / "legacy.json").write_text("{}", encoding="utf-8")
+
+    readiness = inspect_deployment(project, env={})
+
+    assert readiness.state == "recovery-required"
+    assert any("incompatible .heartwood layout" in check.summary for check in readiness.checks)
+
+    (project.state_root / "legacy.json").unlink()
+    project.initialize()
+    project.config_path.write_text("{", encoding="utf-8")
+    readiness = inspect_deployment(project, env={})
+    assert readiness.state == "recovery-required"
+    assert any(
+        "unable to load .heartwood/config.toml" in check.summary for check in readiness.checks
+    )
+
+
+def test_ready_local_project_reports_selected_artifact(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _configure_model(project, source="local", env={})
+
+    stopped = inspect_deployment(project, env={})
+    readiness = inspect_deployment(project, env={"HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1"})
+
+    assert stopped.state == "compute-required"
+    assert readiness.state == "ready"
+    artifact = next(check for check in readiness.checks if check.check_id == "local-model-artifact")
+    assert artifact.status == "pass"
+    assert "synthetic-model" in artifact.summary
+
+
+def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    persist_deployment_profile(project, model_source="local", env={})
+    store = _store(project, {})
+    model_path = project.models_dir / "synthetic-model"
+    model_path.mkdir()
+    store.select_local_model(
+        artifact_id="synthetic-model",
+        path=model_path,
+        runtime="llama-cpp",
+    )
+
+    stopped = inspect_deployment(project, env={})
+    running = inspect_deployment(
+        project,
+        env={"HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1"},
+    )
+
+    assert stopped.state == "compute-required"
+    assert running.state == "setup-required"
+
+
+def test_carina_local_project_requires_and_validates_compute(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    carina = {"HEARTWOOD_PLATFORM": "carina"}
+    _configure_model(project, source="local", env=carina)
+
+    login_readiness = inspect_deployment(project, env=carina)
+    missing_runtime = inspect_deployment(
+        project,
+        env={**carina, "SLURM_JOB_ID": "123"},
+    )
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    readiness = inspect_deployment(
-        tmp_path / "state" / "sessions",
+    allocated = inspect_deployment(
+        project,
         env={
-            "HEARTWOOD_PLATFORM": "carina",
+            **carina,
             "SLURM_JOB_ID": "123",
             "LOCAL_SCRATCH_JOB": str(scratch),
             "CUDA_VISIBLE_DEVICES": "0",
+            "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
         },
     )
-    assert readiness.platform_id == "carina"
-    assert readiness.state == "setup-required"
-    assert {check.check_id: check.status for check in readiness.checks} == {
-        "state-storage": "pass",
-        "setup": "warning",
-        "model": "warning",
-        "slurm-allocation": "pass",
-        "job-scratch": "pass",
-        "gpu": "pass",
+
+    assert login_readiness.state == "compute-required"
+    assert missing_runtime.state == "recovery-required"
+    assert allocated.state == "ready"
+    assert {check.check_id for check in allocated.checks} >= {
+        "slurm-allocation",
+        "job-scratch",
+        "gpu",
     }
 
 
-def test_unconfigured_carina_login_node_requires_setup_not_recovery(tmp_path: Path) -> None:
-    readiness = inspect_deployment(
-        tmp_path / "state" / "sessions", env={"HEARTWOOD_PLATFORM": "carina"}
-    )
-    assert readiness.state == "setup-required"
-    checks = {check.check_id: check for check in readiness.checks}
-    assert checks["slurm-allocation"].status == "warning"
-    assert "only for local inference" in checks["slurm-allocation"].summary
+def test_carina_managed_route_does_not_require_compute(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    env = {
+        "HEARTWOOD_PLATFORM": "carina",
+        "STANFORD_AI_API_KEY": "external-secret",
+    }
+    _configure_model(project, source="stanford-ai-api-gateway", env=env)
+
+    readiness = inspect_deployment(project, env=env)
+
+    assert readiness.state == "ready"
+    allocation = next(check for check in readiness.checks if check.check_id == "slurm-allocation")
+    assert allocation.status == "pass"
+    assert "does not require" in allocation.summary
 
 
-def test_unconfigured_carina_allocation_reports_gpu_and_scratch_as_warnings(
+def test_missing_external_credential_requires_session_setup_without_naming_secret_value(
     tmp_path: Path,
 ) -> None:
-    readiness = inspect_deployment(
-        tmp_path / "state" / "sessions",
-        env={"HEARTWOOD_PLATFORM": "carina", "SLURM_JOB_ID": "123"},
-    )
-    checks = {check.check_id: check.status for check in readiness.checks}
-    assert checks["job-scratch"] == "warning"
-    assert checks["gpu"] == "warning"
+    project = _project(tmp_path)
+    _configure_model(project, source="stanford-ai-api-gateway", env={})
+
+    readiness = inspect_deployment(project, env={})
+
+    assert readiness.state == "setup-required"
+    credential = next(check for check in readiness.checks if check.check_id == "model-credential")
+    assert credential.status == "warning"
+    assert credential.summary == "A provider credential is required for this process"
 
 
-def test_configured_carina_local_model_requires_compute_on_login_node(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    env = {"HEARTWOOD_PLATFORM": "carina"}
-    _write_ready_local_state(workspace, env=env)
+def test_configuration_for_another_detected_platform_requires_recovery(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _configure_model(project, source="local", env={})
 
-    readiness = inspect_deployment(workspace, env=env)
-
-    assert readiness.state == "compute-required"
-    checks = {check.check_id: check for check in readiness.checks}
-    assert checks["slurm-allocation"].status == "warning"
-    assert checks["job-scratch"].status == "warning"
-    assert checks["gpu"].status == "warning"
-
-
-def test_configured_carina_local_allocation_requires_scratch_and_gpu(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
-    _write_ready_local_state(workspace, env=platform_env)
-
-    readiness = inspect_deployment(
-        workspace,
-        env={**platform_env, "SLURM_JOB_ID": "123"},
-    )
-
-    assert readiness.state == "recovery-required"
-    checks = {check.check_id: check for check in readiness.checks}
-    assert checks["job-scratch"].status == "fail"
-    assert checks["gpu"].status == "fail"
-
-
-def test_configured_carina_local_allocation_is_ready(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
-    _write_ready_local_state(workspace, env=platform_env)
-
-    readiness = inspect_deployment(
-        workspace,
-        env={
-            **platform_env,
-            "SLURM_JOB_ID": "123",
-            "LOCAL_SCRATCH_JOB": str(scratch),
-            "CUDA_VISIBLE_DEVICES": "0",
-        },
-    )
-
-    assert readiness.state == "ready"
-
-
-def test_carina_managed_model_route_does_not_require_compute(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
-    persist_deployment_profile(
-        workspace,
-        model_source="stanford-ai-api-gateway",
-        env=platform_env,
-    )
-    ModelSettingsStore(workspace.parent / "models.json").save(
-        ModelSettings(
-            active_profile="stanford-ai-api-gateway",
-            profiles=(
-                ModelProfile(
-                    profile_id="stanford-ai-api-gateway",
-                    model="openai/test-model",
-                    policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
-                    base_url="https://aiapi-prod.stanford.edu/v1",
-                    credential_kind="environment",
-                    api_key_env="STANFORD_AI_API_KEY",
-                ),
-            ),
-        )
-    )
-    ActionSettingsStore(workspace.parent / "actions.json").save(ActionSettings())
-
-    readiness = inspect_deployment(
-        workspace,
-        env={**platform_env, "STANFORD_AI_API_KEY": "synthetic-secret"},
-    )
-
-    assert readiness.state == "ready"
-    checks = {check.check_id: check for check in readiness.checks}
-    assert checks["slurm-allocation"].status == "pass"
-    assert "job-scratch" not in checks
-    assert "gpu" not in checks
-
-
-def test_completed_setup_with_active_model_is_ready(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    _write_ready_local_state(workspace)
-
-    readiness = inspect_deployment(workspace, env={})
-
-    assert readiness.state == "ready"
-
-
-def test_readiness_rejects_state_created_for_another_platform(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    _write_ready_local_state(workspace)
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-
-    readiness = inspect_deployment(
-        workspace,
-        env={
-            "HEARTWOOD_PLATFORM": "carina",
-            "SLURM_JOB_ID": "123",
-            "LOCAL_SCRATCH_JOB": str(scratch),
-            "CUDA_VISIBLE_DEVICES": "0",
-        },
-    )
-
-    assert readiness.state == "recovery-required"
-    checks = {check.check_id: check for check in readiness.checks}
-    assert checks["setup"].status == "fail"
-    assert checks["policy"].status == "fail"
-
-
-def test_readiness_rejects_model_that_disagrees_with_setup_source(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    _write_ready_local_state(workspace)
-    setup = json.loads((workspace.parent / "setup.json").read_text(encoding="utf-8"))
-    setup["model_source"] = "stanford-ai-api-gateway"
-    (workspace.parent / "setup.json").write_text(json.dumps(setup), encoding="utf-8")
-
-    readiness = inspect_deployment(workspace, env={})
+    readiness = inspect_deployment(project, env={"HEARTWOOD_PLATFORM": "carina"})
 
     assert readiness.state == "recovery-required"
     configuration = next(check for check in readiness.checks if check.check_id == "configuration")
     assert configuration.status == "fail"
 
 
-def test_malformed_setup_and_model_files_are_not_ready(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    state.mkdir()
-    (state / "setup.json").write_text("not-json", encoding="utf-8")
-    (state / "models.json").write_text("[]", encoding="utf-8")
+def test_local_setup_uses_one_private_project_configuration(tmp_path: Path) -> None:
+    project = _project(tmp_path)
 
-    readiness = inspect_deployment(state / "sessions", env={})
-
-    assert readiness.state == "recovery-required"
-
-
-def test_ready_setup_fails_when_external_credential_is_missing(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    persist_deployment_profile(state / "sessions", model_source="stanford-ai-api-gateway", env={})
-    ModelSettingsStore(state / "models.json").save(
-        ModelSettings(
-            active_profile="stanford-ai-api-gateway",
-            profiles=(
-                ModelProfile(
-                    profile_id="stanford-ai-api-gateway",
-                    model="openai/test-model",
-                    policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
-                    base_url="https://aiapi-prod.stanford.edu/v1",
-                    credential_kind="environment",
-                    api_key_env="STANFORD_AI_API_KEY",
-                ),
-            ),
-        )
-    )
-    ActionSettingsStore(state / "actions.json").save(ActionSettings())
-
-    readiness = inspect_deployment(state / "sessions", env={})
-
-    assert readiness.state == "recovery-required"
-    credential = next(check for check in readiness.checks if check.check_id == "model-credential")
-    assert credential.status == "fail"
-    assert "STANFORD_AI_API_KEY" in credential.summary
-
-
-@pytest.mark.parametrize(
-    ("profile", "expected_status"),
-    [
-        ({"credential_kind": "file", "api_key_file": "/missing/key"}, "fail"),
-        ({"credential_kind": "managed-identity"}, "warning"),
-    ],
-)
-def test_doctor_reports_non_environment_credential_readiness(
-    tmp_path: Path,
-    profile: dict[str, object],
-    expected_status: str,
-) -> None:
-    state = tmp_path / "state"
-    persist_deployment_profile(state / "sessions", model_source="local", env={})
-    profile.update(
-        {
-            "profile_id": "configured",
-            "model": "openai/test-model",
-            "policy_endpoint": "http://127.0.0.1:8765/v1/chat/completions",
-            "base_url": "http://127.0.0.1:8765/v1",
-        }
-    )
-    (state / "models.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "heartwood.model-settings.v1",
-                "active_profile": "configured",
-                "profiles": [profile],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    readiness = inspect_deployment(state / "sessions", env={})
-
-    credential = next(check for check in readiness.checks if check.check_id == "model-credential")
-    assert credential.status == expected_status
-
-
-def test_doctor_rejects_missing_environment_credential_reference(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    persist_deployment_profile(state / "sessions", model_source="local", env={})
-    (state / "models.json").write_text(
-        json.dumps(
-            {
-                "active_profile": "configured",
-                "profiles": [{"profile_id": "configured", "credential_kind": "environment"}],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    readiness = inspect_deployment(state / "sessions", env={})
-
-    model = next(check for check in readiness.checks if check.check_id == "model")
-    assert model.status == "fail"
-    assert model.summary == "Model settings are invalid"
-
-
-def test_local_setup_persists_conservative_restart_configuration(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    setup, policy, connections = persist_deployment_profile(
-        workspace, model_source="local", env={"HEARTWOOD_PLATFORM": "carina"}
-    )
-    assert setup.stat().st_mode & 0o777 == 0o600
-    assert policy.stat().st_mode & 0o777 == 0o600
-    assert connections.stat().st_mode & 0o777 == 0o600
-    payload = json.loads(policy.read_text(encoding="utf-8"))
-    assert payload["platform_id"] == "carina"
-    assert payload["allowed_action_confirmation_modes"] == ["always-confirm", "confirm-risky"]
-    assert payload["credential_allowlist"] == []
-
-    gateway = SessionGateway(workspace=workspace, env={"HEARTWOOD_PLATFORM": "carina"})
-    selected = gateway.select_action_confirmation_mode("confirm-risky")
-    assert selected["confirmation_mode"] == "confirm-risky"
-
-
-def test_stanford_setup_inherits_carina_confirmation_modes(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    _, policy, _ = persist_deployment_profile(
-        workspace,
-        model_source="stanford-ai-api-gateway",
+    path = persist_deployment_profile(
+        project,
+        model_source="local",
         env={"HEARTWOOD_PLATFORM": "carina"},
     )
-    payload = json.loads(policy.read_text(encoding="utf-8"))
-    assert payload["allowed_action_confirmation_modes"] == ["always-confirm", "confirm-risky"]
+    gateway = SessionGateway(
+        project=project,
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+
+    assert path == project.config_path
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not any(
+        (project.state_root / name).exists()
+        for name in (
+            "setup.json",
+            "policy.json",
+            "model-connections.json",
+            "models.json",
+            "actions.json",
+        )
+    )
+    assert gateway.select_action_confirmation_mode("confirm-risky")["confirmation_mode"] == (
+        "confirm-risky"
+    )
 
 
-def test_stanford_setup_is_discovered_after_gateway_restart(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    persist_deployment_profile(workspace, model_source="stanford-ai-api-gateway", env={})
-    gateway = SessionGateway(workspace=workspace, env={"STANFORD_AI_API_KEY": "secret"})
-    settings = gateway.model_settings()
+def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    persist_deployment_profile(project, model_source="stanford-ai-api-gateway", env={})
+
+    settings = SessionGateway(
+        project=project,
+        env={"STANFORD_AI_API_KEY": "external-secret"},
+    ).model_settings()
     connections = settings["connections"]
     assert isinstance(connections, list)
     connection = next(
@@ -375,16 +284,17 @@ def test_stanford_setup_is_discovered_after_gateway_restart(tmp_path: Path) -> N
         for item in connections
         if isinstance(item, dict) and item["connection_id"] == "stanford-ai-api-gateway"
     )
-    assert connection["protocol"] == "openai-compatible"
+
     assert connection["catalog_endpoint"] == "https://aiapi-prod.stanford.edu/v1/models"
-    assert connection["policy_endpoint"] == ("https://aiapi-prod.stanford.edu/v1/chat/completions")
+    assert connection["policy_endpoint"] == "https://aiapi-prod.stanford.edu/v1/chat/completions"
     assert connection["credential_status"] == "available"
-    assert "secret" not in json.dumps(settings)
+    assert "external-secret" not in project.config_path.read_text(encoding="utf-8")
+    assert "external-secret" not in json.dumps(settings)
 
 
-def test_stanford_catalog_uses_exact_alias_and_external_key(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-    persist_deployment_profile(workspace, model_source="stanford-ai-api-gateway", env={})
+def test_stanford_catalog_uses_external_key_and_exact_connection(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    persist_deployment_profile(project, model_source="stanford-ai-api-gateway", env={})
     observed: list[tuple[str, str | None]] = []
 
     def list_models(connection: ModelConnection, api_key: str | None) -> tuple[ProviderModel, ...]:
@@ -392,25 +302,30 @@ def test_stanford_catalog_uses_exact_alias_and_external_key(tmp_path: Path) -> N
         return (ProviderModel(model_id="claude-sonnet-4-6"),)
 
     gateway = SessionGateway(
-        workspace=workspace,
-        env={"STANFORD_AI_API_KEY": "secret"},
+        project=project,
+        env={"STANFORD_AI_API_KEY": "external-secret"},
         model_catalog_service=ModelCatalogService(
             openai_lister=list_models,
             compatibility=lambda _connection, _model: (
                 "available",
-                "verified by test",
+                "verified",
                 None,
                 True,
             ),
         ),
     )
-    catalog = gateway.discover_models("stanford-ai-api-gateway", refresh=True)
-    settings = gateway.connect_model("stanford-ai-api-gateway", "claude-sonnet-4-6")
 
-    assert observed == [("stanford-ai-api-gateway", "secret")]
-    catalog_models = cast(list[dict[str, object]], catalog["models"])
-    profiles = cast(list[dict[str, object]], settings["profiles"])
-    assert catalog_models[0]["model_id"] == "claude-sonnet-4-6"
-    assert settings["active_profile"] == "stanford-ai-api-gateway"
-    assert profiles[0]["model"] == "openai/claude-sonnet-4-6"
-    assert "secret" not in (tmp_path / "state" / "models.json").read_text(encoding="utf-8")
+    catalog = gateway.discover_models("stanford-ai-api-gateway", refresh=True)
+
+    assert observed == [("stanford-ai-api-gateway", "external-secret")]
+    assert catalog["models"] == [
+        {
+            "availability": "available",
+            "context_window": None,
+            "display_name": "claude-sonnet-4-6",
+            "execution_model": "openai/claude-sonnet-4-6",
+            "model_id": "claude-sonnet-4-6",
+            "reason": "verified",
+            "supports_tools": True,
+        }
+    ]

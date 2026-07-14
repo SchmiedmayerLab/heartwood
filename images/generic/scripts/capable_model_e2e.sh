@@ -8,24 +8,20 @@
 set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
-workspace="${HEARTWOOD_CAPABLE_WORKSPACE:-/tmp/heartwood-capable/sessions}"
-state_root="$(dirname "${workspace}")"
+project="${HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project}"
+state_root="${project}/.heartwood"
+workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-capable-model}"
-settings="${HEARTWOOD_MODEL_SETTINGS:-${state_root}/models.json}"
-action_settings="${HEARTWOOD_ACTION_SETTINGS:-${state_root}/actions.json}"
-transcript="${HEARTWOOD_TRANSCRIPT:-${state_root}/transcript.txt}"
-runtime_log="${HEARTWOOD_RUNTIME_LOG:-${state_root}/llama-server.log}"
+transcript="${HEARTWOOD_TRANSCRIPT:-${project}/heartwood-transcript.txt}"
+runtime_log="${HEARTWOOD_RUNTIME_LOG:-${project}/llama-server.log}"
 command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-900}"
-runtime_root="${HEARTWOOD_RUNTIME_ROOT:-/opt/heartwood}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+runtime_root="$(cd "${script_dir}/../../.." && pwd)"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
-cohort_path="${state_root}/workspaces/${session_id}/cohort-summary.json"
+cohort_path="${project}/cohort-summary.json"
 events_path="${workspace}/${session_id}/events.jsonl"
 
-export HEARTWOOD_AGENT_BACKEND="openhands-sdk"
-export HEARTWOOD_WORKSPACE="${workspace}"
 export HEARTWOOD_SESSION_ID="${session_id}"
-export HEARTWOOD_MODEL_SETTINGS="${settings}"
-export HEARTWOOD_ACTION_SETTINGS="${action_settings}"
 export HEARTWOOD_LOCAL_RUNTIME_PROFILE="llama-cpp-cpu"
 export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
 export HEARTWOOD_LOCAL_MODEL_ALIAS="heartwood-local-runtime"
@@ -36,13 +32,19 @@ export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
 
-rm -rf "${workspace}" "${state_root}/openhands" "${state_root}/workspaces"
-rm -f "${settings}" "${action_settings}" "${transcript}" "${runtime_log}"
-mkdir -p "${state_root}/workspaces/${session_id}/input"
+if [[ "${project}" == "/" ]]; then
+  echo "refusing to use the filesystem root as the capable-model project" >&2
+  exit 64
+fi
+mkdir -p "${project}/input"
+rm -rf "${project}/input" "${state_root}/sessions" "${state_root}/audit"
+mkdir -p "${project}/input"
+rm -f "${cohort_path}" "${transcript}" "${runtime_log}"
 cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv \
-  "${state_root}/workspaces/${session_id}/input/"
+  "${project}/input/"
+cd "${project}"
 
-bash images/generic/scripts/start_local_runtime.sh >"${runtime_log}" 2>&1 &
+bash "${runtime_root}/images/generic/scripts/start_local_runtime.sh" >"${runtime_log}" 2>&1 &
 runtime_pid="$!"
 
 cleanup() {
@@ -85,12 +87,12 @@ run_heartwood() {
   timeout "${command_timeout}" heartwood "$@"
 }
 
-run_heartwood --workspace "${workspace}" models refresh local | tee -a "${transcript}"
-run_heartwood --workspace "${workspace}" models connect local heartwood-local-runtime \
+run_heartwood models refresh local | tee -a "${transcript}"
+run_heartwood models connect local heartwood-local-runtime \
   | tee -a "${transcript}"
-run_heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
-run_heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
-run_heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
+run_heartwood models validate local | tee -a "${transcript}"
+run_heartwood actions set auto-approve-low-risk | tee -a "${transcript}"
+run_heartwood --session-id "${session_id}" chat \
   --prompt "Call the terminal tool to execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
   | tee -a "${transcript}"
 
@@ -119,11 +121,11 @@ PY
   if [[ -z "${pending_id}" ]]; then
     break
   fi
-  run_heartwood --workspace "${workspace}" --session-id "${session_id}" allow "${pending_id}" \
+  run_heartwood --session-id "${session_id}" allow "${pending_id}" \
     | tee -a "${transcript}"
 done
 
-run_heartwood --workspace "${workspace}" --session-id "${session_id}" audit export \
+run_heartwood --session-id "${session_id}" audit export \
   --output "${state_root}/audit-export.jsonl" | tee -a "${transcript}"
 
 python - "${events_path}" "${cohort_path}" <<'PY'

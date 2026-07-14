@@ -10,28 +10,28 @@ default_demo_agent_model = "qwen25-7b-instruct-q4_k_m"
 default_demo_coding_model = "qwen25-coder-7b-instruct-q4_k_m"
 storage_policy = "Artifacts are downloaded only after an explicit CLI or web request and must be stored outside the container image in mounted or platform-persistent storage."
 
-[models.llama-cpp-stories260k-ci]
+[models.qwen25-7b-instruct-q4_k_m]
 status = "implemented"
-purpose = "Tiny GGUF load and query artifact for CI only; it has no coding-quality claim."
+purpose = "Local model for synthetic tool-use demonstrations; not reviewed for biomedical use."
 runtime_profile = "llama-cpp-cpu"
-artifact_manifest = "images/generic/local-runtime/models/stories260k.toml"
+artifact_manifest = "images/generic/local-runtime/models/qwen25-7b-instruct-q4_k_m.toml"
 quality_claim = false
+quality_claim_scope = "Demo-quality local agent output only; no biomedical, production, or benchmark claim."
 production_use = false
 
 [models.qwen25-coder-7b-instruct-q4_k_m]
 status = "implemented"
-purpose = "Optional reviewed local coding-output model; it is not the default OpenHands tool-use acceptance model."
+purpose = "Local coding model for synthetic demonstrations; not reviewed for biomedical use."
 runtime_profile = "llama-cpp-cpu"
 artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
 quality_claim = false
 quality_claim_scope = "Demo-quality local coding output only; no biomedical, production, or benchmark claim."
 production_use = false
 
-[models.qwen25-7b-instruct-q4_k_m]
+[models.llama-cpp-stories260k-ci]
 status = "implemented"
-purpose = "Optional reviewed local agent model for synthetic OpenHands tool-use demonstrations."
+purpose = "Installation and offline checks only; not suitable for coding tasks."
 runtime_profile = "llama-cpp-cpu"
-artifact_manifest = "images/generic/local-runtime/models/qwen25-7b-instruct-q4_k_m.toml"
+artifact_manifest = "images/generic/local-runtime/models/stories260k.toml"
 quality_claim = false
-quality_claim_scope = "Demo-quality local agent output only; no biomedical, production, or benchmark claim."
 production_use = false

@@ -39,6 +39,7 @@ def test_repository_snapshot_catalog_pins_the_carina_demo_model() -> None:
 
 def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path) -> None:
     snapshot = _snapshot()
+    progress: list[tuple[int, int]] = []
 
     def downloader(**kwargs: object) -> str:
         local_dir = Path(str(kwargs["local_dir"]))
@@ -52,6 +53,7 @@ def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path
         snapshot,
         cache_dir=tmp_path / "models",
         downloader=downloader,
+        progress_callback=lambda downloaded, total: progress.append((downloaded, total)),
     )
 
     assert destination == tmp_path / "models" / snapshot.snapshot_id
@@ -63,6 +65,8 @@ def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path
     assert not any(
         path.is_dir() for path in (tmp_path / "models").glob(f".{snapshot.snapshot_id}.*")
     )
+    assert progress[0] == (0, snapshot.expected_size_bytes)
+    assert progress[-1] == (snapshot.expected_size_bytes, snapshot.expected_size_bytes)
 
 
 def test_snapshot_download_reuses_verified_content_and_rejects_tampering(tmp_path: Path) -> None:

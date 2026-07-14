@@ -27,7 +27,7 @@ usage() {
   cat <<'EOF'
 Usage: heartwood-installer [options]
 
-  --root PATH          Installation and runtime root
+  --root PATH          Installation root
   --version VERSION    GitHub release tag, or latest (default)
   --platform NAME      auto, carina, or generic
   --bundle PATH        Use a local heartwood-native.tar.gz
@@ -149,27 +149,16 @@ printf 'Available: %d GiB; installation minimum: %d GiB\n' \
 versions_root="${root}/versions"
 source_root="${versions_root}/${release_version}"
 runtime_root="${root}/runtimes/${release_version}"
-stage "Create the Heartwood-owned directory layout"
+stage "Create the Heartwood installation layout"
 mkdir -p \
   "${versions_root}" \
   "${root}/runtimes" \
-  "${root}/bin" \
-  "${root}/state/sessions" \
-  "${root}/state/workspaces" \
-  "${root}/state/runtime" \
-  "${root}/models" \
-  "${root}/cache" \
-  "${root}/logs"
+  "${root}/bin"
 chmod 700 \
   "${root}" \
   "${root}/bin" \
-  "${root}/state" \
-  "${root}/state/sessions" \
-  "${root}/state/workspaces" \
-  "${root}/state/runtime" \
-  "${root}/models" \
-  "${root}/cache" \
-  "${root}/logs"
+  "${versions_root}" \
+  "${root}/runtimes"
 
 stage "Install the immutable Heartwood source"
 if [[ ! -d "${source_root}" ]]; then
@@ -203,10 +192,7 @@ if [[ ! -x "${command_path}" ]]; then
   echo "installed heartwood command is unavailable" >&2
   exit 70
 fi
-printf '#!/usr/bin/env bash\nexport HEARTWOOD_INSTALL_ROOT=%q\nexport HEARTWOOD_NATIVE_ROOT=%q\nexport HEARTWOOD_NATIVE_VERSION=%q\nexport HEARTWOOD_VERSION=%q\nexport HEARTWOOD_HOME=%q\nexport HEARTWOOD_MODEL_CACHE=%q\nexport HF_HOME=%q\nexec %q "$@"\n' \
-  "${source_root}" "${root}" "${release_version}" "${release_version}" "${root}/state" \
-  "${root}/models" "${root}/cache/huggingface" "${command_path}" \
-  >"${root}/bin/heartwood"
+printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${command_path}" >"${root}/bin/heartwood"
 chmod +x "${root}/bin/heartwood"
 if [[ -x "${runtime_root}/vllm/bin/hf" ]]; then
   ln -sfn "${runtime_root}/vllm/bin/hf" "${root}/bin/hf"

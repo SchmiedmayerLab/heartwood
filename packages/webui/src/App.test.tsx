@@ -14,7 +14,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { HeartwoodClient, SessionEventResponse } from "./client";
 import { event, syntheticEvents } from "./test/fixtures";
@@ -22,6 +22,8 @@ import type {
   ActionConfirmationMode,
   ActionSettings,
   AuditExport,
+  CustomLocalModelDownloadRequest,
+  LocalModelChoice,
   ModelArtifacts,
   ModelCatalog,
   ModelCatalogRequest,
@@ -29,8 +31,12 @@ import type {
   ModelConnection,
   ModelDownload,
   ModelProfile,
+  ModelRepositoryPlan,
+  ModelRepositoryRequest,
+  ModelSource,
   ModelSettings,
   ModelValidation,
+  ProjectReadiness,
   SessionCommand,
   SessionEvent,
   SessionList,
@@ -42,6 +48,7 @@ import type {
 const settings = (): ModelSettings => ({
   schema_version: "heartwood.model-settings.v1",
   active_profile: null,
+  model_source: null,
   profiles: [],
   connections: [
     modelConnection("local", "Local", "built-in", "configured", false),
@@ -68,6 +75,16 @@ const settings = (): ModelSettings => ({
       description: "Local runtime",
     },
   ],
+  source_options: [
+    modelSource("local", "local", "On this device"),
+    modelSource("openai", "openai", "OpenAI"),
+    modelSource("anthropic", "anthropic", "Anthropic"),
+    modelSource(
+      "stanford-ai-api-gateway",
+      "stanford-ai-api-gateway",
+      "Stanford AI API Gateway",
+    ),
+  ],
 });
 
 const actions = (): ActionSettings => ({
@@ -89,19 +106,28 @@ class FakeClient implements HeartwoodClient {
   listCalls = 0;
   replayCalls = 0;
   artifactCalls = 0;
+  artifactFailures = 0;
   savedProfile: ModelProfile | null = null;
-  connectedProvider: { presetId: string; modelName: string } | null = null;
   catalogRequest: ModelCatalogRequest | null = null;
   catalogError: Error | null = null;
   validationError: Error | null = null;
   modelConnectionRequest: ModelConnectRequest | null = null;
   currentSettings = settings();
   currentActions = actions();
+  currentReadiness = projectReadiness();
   currentDownloads: ModelDownload[] = [];
   downloadedArtifact: string | null = null;
+  customDownloadRequest: CustomLocalModelDownloadRequest | null = null;
+  inspectedRepository: ModelRepositoryRequest | null = null;
+  repositoryError: Error | null = null;
+  customModel: LocalModelChoice | null = null;
   installedSkill: string | null = null;
   currentSessions: SessionSummary[] = [sessionSummary("session-test")];
   streamListener: ((events: SessionEvent[]) => void) | null = null;
+
+  getProjectReadiness(): Promise<ProjectReadiness> {
+    return Promise.resolve(this.currentReadiness);
+  }
 
   listSessions(): Promise<SessionList> {
     this.listCalls += 1;
@@ -192,6 +218,45 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve(this.currentSettings);
   }
 
+  configureModelSource(sourceId: ModelSource): Promise<ModelSettings> {
+    const source = this.currentSettings.source_options.find(
+      (option) => option.source_id === sourceId,
+    );
+    if (!source) return Promise.reject(new Error("unknown source"));
+    const sourceChanged = this.currentSettings.model_source !== sourceId;
+    const connections =
+      (
+        this.currentSettings.connections.some(
+          (connection) => connection.connection_id === source.connection_id,
+        )
+      ) ?
+        this.currentSettings.connections
+      : [
+          ...this.currentSettings.connections,
+          modelConnection(
+            source.connection_id,
+            source.label,
+            "platform",
+            "missing",
+            true,
+          ),
+        ];
+    this.currentSettings = {
+      ...this.currentSettings,
+      active_profile:
+        sourceChanged ? null : this.currentSettings.active_profile,
+      connections,
+      model_source: sourceId,
+      source_options: this.currentSettings.source_options.map((option) => ({
+        ...option,
+        selected: option.source_id === sourceId,
+      })),
+    };
+    if (sourceChanged)
+      this.currentReadiness = projectReadiness("setup-required");
+    return Promise.resolve(this.currentSettings);
+  }
+
   discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog> {
     this.catalogRequest = request;
     if (this.catalogError) return Promise.reject(this.catalogError);
@@ -248,27 +313,10 @@ class FakeClient implements HeartwoodClient {
     this.currentSettings = {
       ...this.currentSettings,
       active_profile: profile.profile_id,
+      model_source: connection.connection_id,
       profiles: [profile],
     };
-    return Promise.resolve(this.currentSettings);
-  }
-
-  connectModelProvider(
-    presetId: string,
-    modelName: string,
-  ): Promise<ModelSettings> {
-    this.connectedProvider = { presetId, modelName };
-    const profile = {
-      ...localProfile(),
-      profile_id: presetId,
-      model:
-        modelName.startsWith("openai/") ? modelName : `openai/${modelName}`,
-    };
-    this.currentSettings = {
-      ...this.currentSettings,
-      active_profile: presetId,
-      profiles: [profile],
-    };
+    this.currentReadiness = projectReadiness("ready");
     return Promise.resolve(this.currentSettings);
   }
 
@@ -285,6 +333,10 @@ class FakeClient implements HeartwoodClient {
 
   getModelArtifacts(): Promise<ModelArtifacts> {
     this.artifactCalls += 1;
+    if (this.artifactFailures > 0) {
+      this.artifactFailures -= 1;
+      return Promise.reject(new Error("temporary model status failure"));
+    }
     if (
       this.downloadedArtifact !== null &&
       this.currentDownloads[0]?.status === "downloading" &&
@@ -298,9 +350,26 @@ class FakeClient implements HeartwoodClient {
           path: "/models/stories260k/model.gguf",
         },
       ];
+      this.currentSettings = {
+        ...this.currentSettings,
+        active_profile: "local",
+        model_source: "local",
+        profiles: [
+          {
+            ...localProfile(),
+            model: "openai/heartwood-local-model",
+            description: "Heartwood-managed local model",
+          },
+        ],
+        source_options: this.currentSettings.source_options.map((source) => ({
+          ...source,
+          selected: source.source_id === "local",
+        })),
+      };
     }
     return Promise.resolve({
       schema_version: "heartwood.local-model-catalog.v1",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v1",
       artifacts: [
         {
           artifact_id: "stories260k",
@@ -316,19 +385,109 @@ class FakeClient implements HeartwoodClient {
           model_alias: "Stories 260K",
           minimum_resource_envelope: null,
           recommended_resource_envelope: null,
+          recommended: true,
         },
+      ],
+      snapshots: [],
+      models: [
+        {
+          model_id: "stories260k",
+          label: "Stories 260K",
+          purpose: "Synthetic smoke-test model.",
+          runtime: "llama-cpp",
+          source_repository: "example/stories260k",
+          source_revision: "0".repeat(40),
+          source_path: "model.gguf",
+          size_bytes: 256 * 1024 * 1024,
+          minimum_free_bytes: 256 * 1024 * 1024,
+          license_posture: "Test fixture",
+          catalog_source: "recommended",
+          artifact_sha256: "a".repeat(64),
+          minimum_resource_envelope: "Minimum: 4 CPU cores and 8 GB RAM.",
+          recommended_resource_envelope:
+            "Recommended: 8 CPU cores and 16 GB RAM.",
+          available: true,
+          availability_reason: "Available on this deployment",
+        },
+        ...(this.customModel === null ? [] : [this.customModel]),
       ],
       downloads: this.currentDownloads,
     });
   }
 
-  downloadModelArtifact(artifactId: string): Promise<ModelDownload> {
-    this.downloadedArtifact = artifactId;
+  inspectModelRepository(
+    request: ModelRepositoryRequest,
+  ): Promise<ModelRepositoryPlan> {
+    this.inspectedRepository = request;
+    if (this.repositoryError) return Promise.reject(this.repositoryError);
+    const candidate: LocalModelChoice = {
+      model_id: "hf-research-model-123456789abc",
+      label: "Research Model Q4_K_M",
+      purpose: "User-selected Hugging Face model.",
+      runtime: "llama-cpp",
+      source_repository: request.repository,
+      source_revision: "1".repeat(40),
+      source_path: "research-model-q4_k_m.gguf",
+      size_bytes: 4 * 1024 * 1024 * 1024,
+      minimum_free_bytes: 4 * 1024 * 1024 * 1024,
+      license_posture: "Source model card reports apache-2.0.",
+      catalog_source: "user-selected",
+      artifact_sha256: "b".repeat(64),
+      minimum_resource_envelope:
+        "Estimated minimum: 4 CPU cores and 12 GB RAM.",
+      recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
+      available: true,
+      availability_reason: "Available on this deployment",
+    };
+    return Promise.resolve({
+      model: candidate,
+      selection_reason: "Selected a balanced GGUF model for the CPU runtime.",
+    });
+  }
+
+  downloadLocalModel(modelId: string): Promise<ModelDownload> {
+    this.downloadedArtifact = modelId;
     const download: ModelDownload = {
-      artifact_id: artifactId,
+      model_id: modelId,
       status: "downloading",
       bytes_downloaded: 64 * 1024 * 1024,
       bytes_total: 256 * 1024 * 1024,
+      path: null,
+      error: null,
+    };
+    this.currentDownloads = [download];
+    this.currentReadiness = projectReadiness("compute-required");
+    return Promise.resolve(download);
+  }
+
+  downloadCustomLocalModel(
+    request: CustomLocalModelDownloadRequest,
+  ): Promise<ModelDownload> {
+    this.customDownloadRequest = request;
+    this.customModel = {
+      model_id: "hf-research-model-123456789abc",
+      label: "Research Model Q4_K_M",
+      purpose: "User-selected Hugging Face model.",
+      runtime: "llama-cpp",
+      source_repository: request.repository,
+      source_revision: request.revision ?? "1".repeat(40),
+      source_path: "research-model-q4_k_m.gguf",
+      size_bytes: 4 * 1024 * 1024 * 1024,
+      minimum_free_bytes: 4 * 1024 * 1024 * 1024,
+      license_posture: "Source model card reports apache-2.0.",
+      catalog_source: "user-selected",
+      artifact_sha256: "b".repeat(64),
+      minimum_resource_envelope:
+        "Estimated minimum: 4 CPU cores and 12 GB RAM.",
+      recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
+      available: true,
+      availability_reason: "Available on this deployment",
+    };
+    const download: ModelDownload = {
+      model_id: this.customModel.model_id,
+      status: "downloading",
+      bytes_downloaded: 0,
+      bytes_total: this.customModel.size_bytes,
       path: null,
       error: null,
     };
@@ -410,7 +569,62 @@ class FakeClient implements HeartwoodClient {
   }
 }
 
+class DeferredCommandClient extends FakeClient {
+  private complete: ((response: SessionEventResponse) => void) | null = null;
+
+  override postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+    this.commands.push(command);
+    return new Promise((resolve) => {
+      this.complete = resolve;
+    });
+  }
+
+  completeCommand(): void {
+    this.complete?.({ events: [] });
+    this.complete = null;
+  }
+}
+
 describe("App", () => {
+  it("opens first-run setup and configures a shared research model source", async () => {
+    const client = new FakeClient();
+    client.currentReadiness = projectReadiness("setup-required");
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Set up Heartwood" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("synthetic-analysis")).toBeInTheDocument();
+    const stanford = screen
+      .getByText("Stanford AI API Gateway")
+      .closest(".connection-row");
+    expect(stanford).not.toBeNull();
+    fireEvent.click(
+      within(stanford as HTMLElement).getByRole("button", { name: "Set up" }),
+    );
+    fireEvent.change(await screen.findByLabelText("API token"), {
+      target: { value: "runtime-only-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    await screen.findByLabelText(
+      "Models available from Stanford AI API Gateway",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use model" }));
+
+    await waitFor(() =>
+      expect(client.currentSettings.model_source).toBe(
+        "stanford-ai-api-gateway",
+      ),
+    );
+    await waitFor(() => expect(client.currentReadiness.state).toBe("ready"));
+    const project = screen
+      .getByRole("heading", { name: "This project" })
+      .closest<HTMLElement>("section");
+    if (project === null)
+      throw new Error("project readiness section is missing");
+    expect(within(project).getByText("Ready")).toBeInTheDocument();
+  });
+
   it("creates, renames, and switches persisted sessions", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
@@ -499,6 +713,99 @@ describe("App", () => {
         screen.getByRole("log", { name: "Conversation transcript" }),
       ).getAllByText("Inspect the synthetic cohort"),
     ).toHaveLength(1);
+  });
+
+  it("keeps a delayed task visibly active without inventing workflow steps", async () => {
+    const client = new DeferredCommandClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText("Task"), {
+        target: { value: "Inspect the synthetic cohort" },
+      });
+      fireEvent.click(screen.getByLabelText("Send task"));
+
+      expect(
+        screen.getByRole("status", {
+          name: "Heartwood is working on your task",
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText("Task")).toBeDisabled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(11_000);
+        await Promise.resolve();
+      });
+      expect(
+        screen.getByRole("status", {
+          name: /Heartwood is still working on your task.*Response time depends/u,
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("11s elapsed")).toBeInTheDocument();
+
+      await act(async () => {
+        client.completeCommand();
+        await Promise.resolve();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Heartwood is still working on your task"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Task")).toBeEnabled();
+  });
+
+  it("refreshes shared project configuration when the browser regains focus", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      model_source: "local",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    client.currentSettings = settings();
+    client.currentReadiness = projectReadiness("setup-required");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeDisabled());
+    expect(screen.getByText("Choose a model to begin.")).toBeInTheDocument();
+  });
+
+  it("refreshes shared project configuration when settings opens", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "local",
+      model_source: "local",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    client.currentSettings = settings();
+    client.currentReadiness = projectReadiness("setup-required");
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeDisabled());
+    expect(
+      screen.getByRole("heading", { name: "Set up Heartwood" }),
+    ).toBeInTheDocument();
   });
 
   it("coalesces session refreshes for streamed event batches", async () => {
@@ -606,7 +913,16 @@ describe("App", () => {
     });
     expect(progress).toHaveAttribute("aria-valuenow", String(64 * 1024 * 1024));
     expect(
-      await screen.findByText("Ready in model storage"),
+      await screen.findByText("Ready for Heartwood launch"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Model runtime needed")).toBeInTheDocument();
+    expect(screen.getByText("heartwood launch --web")).toBeInTheDocument();
+    expect(screen.getByLabelText("Active model profile")).toHaveTextContent(
+      "Local · heartwood-local-model",
+    );
+    expect(screen.getByLabelText("Task")).toBeDisabled();
+    expect(
+      screen.getByText("Start the selected model with heartwood launch --web."),
     ).toBeInTheDocument();
   });
 
@@ -624,11 +940,12 @@ describe("App", () => {
         name: "Connect",
       }),
     );
-    fireEvent.change(screen.getByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API token"), {
       target: { value: "runtime-only-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
     await screen.findByLabelText("Models available from OpenAI");
+    expect(client.currentSettings.model_source).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Use model" }));
 
     await waitFor(() =>
@@ -645,6 +962,97 @@ describe("App", () => {
     expect(screen.getByLabelText("API token")).toHaveValue("");
     expect(JSON.stringify(client.currentSettings)).not.toContain(
       "runtime-only-token",
+    );
+  });
+
+  it("plans and downloads another Hugging Face model through the shared gateway", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByText("Other model"));
+    fireEvent.change(screen.getByLabelText("Model repository"), {
+      target: { value: "research/research-model-gguf" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check model" }));
+
+    expect(
+      await screen.findByText("Research Model Q4_K_M"),
+    ).toBeInTheDocument();
+    const selectionReason = screen.getByText(
+      "Selected a balanced GGUF model for the CPU runtime.",
+    );
+    const modelPlan = selectionReason.closest(".local-model-plan");
+    expect(modelPlan).not.toBeNull();
+    expect(
+      within(modelPlan as HTMLElement).getByText(/Recommended: 8 CPU cores/u),
+    ).toBeInTheDocument();
+    expect(
+      within(modelPlan as HTMLElement).getByText(`Revision: ${"1".repeat(40)}`),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Download model" }));
+
+    await waitFor(() =>
+      expect(client.customDownloadRequest).toEqual({
+        repository: "research/research-model-gguf",
+        revision: "1".repeat(40),
+      }),
+    );
+    expect(client.inspectedRepository).toEqual({
+      repository: "research/research-model-gguf",
+    });
+    expect(
+      within(modelPlan as HTMLElement).getByRole("progressbar", {
+        name: "Download progress for Research Model Q4_K_M",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Download Research Model Q4_K_M"),
+    ).toBeDisabled();
+  });
+
+  it("continues polling a model download after a transient status failure", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByLabelText("Download Stories 260K");
+    client.artifactFailures = 1;
+
+    fireEvent.click(screen.getByLabelText("Download Stories 260K"));
+
+    expect(
+      await screen.findByText("temporary model status failure"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Ready for Heartwood launch",
+        {},
+        { timeout: 5_000 },
+      ),
+    ).toBeInTheDocument();
+    expect(client.artifactCalls).toBeGreaterThanOrEqual(3);
+    expect(
+      screen.queryByText("temporary model status failure"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("links unsupported Hugging Face models to the issue chooser", async () => {
+    const client = new FakeClient();
+    client.repositoryError = new Error(
+      "Heartwood does not yet support this model. Report it at https://github.com/SchmiedmayerLab/heartwood/issues/new/choose",
+    );
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByText("Other model"));
+    fireEvent.change(screen.getByLabelText("Model repository"), {
+      target: { value: "research/unsupported-model" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check model" }));
+
+    expect(
+      await screen.findByRole("link", { name: "Report an unsupported model" }),
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose",
     );
   });
 
@@ -728,6 +1136,24 @@ describe("App", () => {
     expect(screen.getByLabelText("Task")).toBeDisabled();
     expect(screen.getByLabelText("Pause agent")).toBeDisabled();
     expect(screen.getByText("Setup needed")).toBeInTheDocument();
+  });
+
+  it("uses shared compute readiness before a launch materializes the local profile", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      model_source: "local",
+    };
+    client.currentReadiness = projectReadiness("compute-required");
+
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(
+      await screen.findByText(
+        "Start the selected model with heartwood launch --web.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Task")).toBeDisabled();
   });
 
   it("keeps the composer unavailable when route validation fails", async () => {
@@ -960,6 +1386,38 @@ const modelConnection = (
   static_models: [],
   accepts_token: acceptsToken,
   credential_status: credentialStatus,
+});
+
+const modelSource = (
+  sourceId: ModelSource,
+  connectionId: string,
+  label: string,
+) => ({
+  source_id: sourceId,
+  connection_id: connectionId,
+  label,
+  description: `${label} models`,
+  selected: false,
+});
+
+const projectReadiness = (
+  state: ProjectReadiness["state"] = "ready",
+): ProjectReadiness => ({
+  state,
+  platform_id: "generic",
+  project_root: "/projects/synthetic-analysis",
+  state_root: "/projects/synthetic-analysis/.heartwood",
+  evidence: ["synthetic test"],
+  checks: [
+    {
+      check_id: "configuration",
+      status: state === "ready" ? "pass" : "warning",
+      summary:
+        state === "ready" ?
+          "Project configuration is valid"
+        : "Setup is incomplete",
+    },
+  ],
 });
 
 const bundledSkill = (): SkillSummary => ({

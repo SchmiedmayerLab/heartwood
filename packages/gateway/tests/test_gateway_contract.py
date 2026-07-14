@@ -8,26 +8,35 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from threading import Event
+from typing import Any, cast
 
 import pytest
 
+from heartwood.core_adapter import SessionResult
 from heartwood.gateway import (
+    LocalModelChoice,
+    LocalModelDownloadPlan,
     ModelArtifact,
     ModelArtifactCatalog,
     ModelCatalogService,
+    ModelDownload,
+    ModelRepositoryError,
     ModelSnapshot,
-    ModelSnapshotError,
+    ProjectContext,
     ProviderModel,
     RestGateway,
     RestRequest,
     RestResponse,
     SessionGateway,
 )
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 
 def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: JsonValue) -> str:
@@ -50,7 +59,101 @@ def _events(response: RestResponse) -> list[Mapping[str, JsonValue]]:
 
 
 def _gateway(workspace: Path) -> SessionGateway:
-    return SessionGateway(workspace=workspace, env={"HEARTWOOD_AGENT_BACKEND": "deterministic"})
+    workspace.mkdir(parents=True, exist_ok=True)
+    return SessionGateway(
+        project=ProjectContext(workspace),
+        env={},
+        backend_id="deterministic",
+    )
+
+
+@dataclass
+class _BlockingSessionService:
+    entered: Event
+    release: Event
+    closed: Event
+
+    def handle(self, _command: SessionCommand) -> SessionResult:
+        self.entered.set()
+        if not self.release.wait(timeout=2):
+            raise TimeoutError("test session was not released")
+        return SessionResult(events=())
+
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -> None:
+    first = _gateway(tmp_path / "first-project")
+    second = _gateway(tmp_path / "second-project")
+
+    first_session = first.create_session("First project session")
+    first.select_action_confirmation_mode("confirm-risky")
+    (first.project.models_dir / "project-marker").write_text("first\n", encoding="utf-8")
+
+    assert first.sessions() == {"sessions": [first_session]}
+    assert second.sessions() == {"sessions": []}
+    assert first.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert second.action_settings()["confirmation_mode"] == "always-confirm"
+    assert not (second.project.models_dir / "project-marker").exists()
+    assert first.project.config_path != second.project.config_path
+
+
+def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) -> None:
+    entered = Event()
+    release = Event()
+    closed = Event()
+    selection_started = Event()
+    selection_finished = Event()
+    service = _BlockingSessionService(entered=entered, release=release, closed=closed)
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    model_id = "llama-cpp-stories260k-ci"
+    model_path = gateway.project.models_dir / model_id / "model.gguf"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"synthetic")
+    command = SessionCommand(
+        command_id="command-1",
+        session_id="session-1",
+        kind=CommandKind.DETECT,
+        actor_id="synthetic-user",
+        created_at="2026-01-01T00:00:00Z",
+        payload={},
+    )
+
+    def select_download() -> None:
+        selection_started.set()
+        gateway._select_downloaded_local_model(model_id, model_path, "llama-cpp-cpu")
+        selection_finished.set()
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        command_future = executor.submit(gateway.handle, command)
+        selection_future = None
+        try:
+            assert entered.wait(timeout=1)
+            status = executor.submit(gateway.model_artifacts).result(timeout=1)
+            assert status["downloads"] == []
+            selection_future = executor.submit(select_download)
+            assert selection_started.wait(timeout=1)
+            assert not selection_finished.wait(timeout=0.1)
+            assert not closed.is_set()
+        finally:
+            release.set()
+        assert command_future.result(timeout=2).events == ()
+        assert selection_future is not None
+        selection_future.result(timeout=2)
+
+    selected = gateway.config_store.load().local_model
+    assert selected is not None
+    assert selected.artifact_id == model_id
+    assert closed.is_set()
 
 
 def test_rest_command_routes_through_session_service_and_streams_events(tmp_path: Path) -> None:
@@ -108,7 +211,7 @@ def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) 
             "letters, numbers, dots, hyphens, or underscores"
         )
     }
-    assert list(tmp_path.iterdir()) == []
+    assert list((tmp_path / ".heartwood" / "sessions").iterdir()) == []
 
 
 def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
@@ -122,7 +225,11 @@ def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
         )
     )
 
-    audit_lines = (tmp_path / "session-1" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    audit_lines = (
+        (tmp_path / ".heartwood" / "sessions" / "session-1" / "audit.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     assert response.status_code == 200
     assert len(audit_lines) == 2
 
@@ -206,7 +313,7 @@ def test_task_streams_confirmation_request_after_route_authorization(tmp_path: P
 
 
 def test_unconfigured_model_fails_without_allowing_a_synthetic_route(tmp_path: Path) -> None:
-    gateway = SessionGateway(workspace=tmp_path, env={})
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
     rest = RestGateway(gateway)
 
     response = rest.handle(
@@ -340,10 +447,9 @@ def test_rest_rejects_malformed_action_confirmation_selection(tmp_path: Path) ->
 
 
 def test_rest_reports_malformed_persisted_settings(tmp_path: Path) -> None:
-    workspace = tmp_path / "sessions"
-    (tmp_path / "actions.json").write_text("{", encoding="utf-8")
-    (tmp_path / "models.json").write_text("{", encoding="utf-8")
-    rest = RestGateway(_gateway(workspace))
+    gateway = _gateway(tmp_path)
+    (tmp_path / ".heartwood" / "config.toml").write_text("{", encoding="utf-8")
+    rest = RestGateway(gateway)
 
     action_response = rest.handle(RestRequest(method="GET", path="/settings/actions"))
     model_response = rest.handle(RestRequest(method="GET", path="/settings/models"))
@@ -355,7 +461,7 @@ def test_rest_reports_malformed_persisted_settings(tmp_path: Path) -> None:
 
 
 def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> None:
-    gateway = _gateway(tmp_path / "sessions")
+    gateway = _gateway(tmp_path)
     rest = RestGateway(gateway)
     profile = {
         "profile_id": "local",
@@ -392,15 +498,15 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     )
     artifacts = rest.handle(RestRequest(method="GET", path="/settings/models/artifacts"))
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/local"))
-    connected = rest.handle(
-        RestRequest(
-            method="POST",
-            path="/settings/models/connect",
-            body=json.dumps({"preset_id": "local-openai-compatible", "model_name": "local-model"}),
-        )
-    )
-
     assert initial.status_code == 200
+    assert initial.body["model_source"] is None
+    source_options = cast(list[dict[str, JsonValue]], initial.body["source_options"])
+    assert [option["source_id"] for option in source_options] == [
+        "local",
+        "openai",
+        "anthropic",
+        "stanford-ai-api-gateway",
+    ]
     connections = cast(list[dict[str, JsonValue]], initial.body["connections"])
     assert [connection["connection_id"] for connection in connections] == [
         "local",
@@ -419,7 +525,6 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v1"
     assert artifacts.body["snapshots"]
     assert removed.body["active_profile"] is None
-    assert connected.body["active_profile"] == "local-openai-compatible"
     artifact_ids = {
         artifact["artifact_id"]
         for artifact in cast(list[dict[str, JsonValue]], artifacts.body["artifacts"])
@@ -429,6 +534,55 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
+
+
+def test_local_model_availability_reflects_installed_runtime_executables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    real_is_file = Path.is_file
+
+    def without_packaged_runtimes(path: Path) -> bool:
+        if path in {
+            Path("/opt/heartwood-vllm/bin/vllm"),
+            Path("/opt/llama.cpp/llama-server"),
+        }:
+            return False
+        return real_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", without_packaged_runtimes)
+    monkeypatch.setattr("heartwood.gateway._gateway.shutil.which", lambda *_args, **_kwargs: None)
+
+    unavailable = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    assert not any(model["available"] for model in unavailable)
+    rejected = RestGateway(gateway).handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/downloads",
+            body=json.dumps({"model_id": "qwen25-7b-instruct-q4_k_m"}),
+        )
+    )
+    assert rejected.status_code == 422
+    assert "portable CPU runtime" in str(rejected.body["error"])
+
+    monkeypatch.setattr(
+        "heartwood.gateway._gateway.shutil.which",
+        lambda executable, **_kwargs: (
+            "/runtime/llama-server" if executable == "llama-server" else None
+        ),
+    )
+    gateway.env["PATH"] = "/runtime"
+    available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    assert all(model["available"] is (model["runtime"] == "llama-cpp") for model in available)
+
+    monkeypatch.setattr(
+        "heartwood.gateway._gateway.shutil.which",
+        lambda executable, **_kwargs: f"/runtime/{executable}",
+    )
+    gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
+    fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    assert all(model["available"] for model in fully_available)
 
 
 def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) -> None:
@@ -442,8 +596,9 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
         ),
     )
     gateway = SessionGateway(
-        workspace=tmp_path / "sessions",
-        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
         model_catalog_service=service,
     )
     rest = RestGateway(gateway)
@@ -479,9 +634,75 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
     assert connected.body["active_profile"] == "local"
     profiles = cast(list[dict[str, JsonValue]], connected.body["profiles"])
     assert profiles[0]["model"] == "openai/local-coder"
+    assert gateway.config_store.load().model_source == "local"
+    restarted = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
+    assert restarted.model_settings()["active_profile"] == "local"
+    assert restarted.config_store.load().model_source == "local"
+    switched = RestGateway(restarted).handle(
+        RestRequest(
+            method="PUT",
+            path="/settings/models/source",
+            body=json.dumps({"source_id": "openai"}),
+        )
+    )
+    assert switched.status_code == 200
+    assert switched.body["active_profile"] is None
+    assert switched.body["model_source"] == "openai"
+    assert restarted.project_readiness()["state"] == "setup-required"
+    assert any(
+        profile["profile_id"] == "local"
+        for profile in cast(list[dict[str, JsonValue]], switched.body["profiles"])
+    )
 
 
-def test_rest_starts_artifact_download_and_validates_payloads(
+def test_rest_shares_project_readiness_and_model_source_setup(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+
+    initial = rest.handle(RestRequest(method="GET", path="/project/readiness"))
+    configured = rest.handle(
+        RestRequest(
+            method="PUT",
+            path="/settings/models/source",
+            body=json.dumps({"source_id": "stanford-ai-api-gateway"}),
+        )
+    )
+    readiness = rest.handle(RestRequest(method="GET", path="/project/readiness"))
+
+    assert initial.status_code == 200
+    assert initial.body["state"] == "setup-required"
+    assert initial.body["project_root"] == str(tmp_path)
+    assert configured.status_code == 200
+    assert configured.body["model_source"] == "stanford-ai-api-gateway"
+    connections = cast(list[dict[str, JsonValue]], configured.body["connections"])
+    assert any(
+        connection["connection_id"] == "stanford-ai-api-gateway" for connection in connections
+    )
+    assert readiness.body["state"] == "setup-required"
+    assert gateway.config_store.load().policy.policy_id == ("generic-stanford-ai-api-gateway")
+    assert (
+        rest.handle(
+            RestRequest(
+                method="PUT",
+                path="/settings/models/source",
+                body=json.dumps({"source_id": "unknown"}),
+            )
+        ).status_code
+        == 422
+    )
+    assert (
+        rest.handle(
+            RestRequest(
+                method="PUT",
+                path="/settings/models/source",
+                body=json.dumps({"source_id": "local", "extra": True}),
+            )
+        ).status_code
+        == 422
+    )
+
+
+def test_rest_starts_local_model_download_and_validates_payloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -489,9 +710,9 @@ def test_rest_starts_artifact_download_and_validates_payloads(
     rest = RestGateway(gateway)
     monkeypatch.setattr(
         gateway,
-        "download_model_artifact",
-        lambda artifact_id: {
-            "artifact_id": artifact_id,
+        "download_local_model",
+        lambda model_id: {
+            "model_id": model_id,
             "status": "downloading",
             "bytes_downloaded": 0,
             "bytes_total": 1,
@@ -502,11 +723,12 @@ def test_rest_starts_artifact_download_and_validates_payloads(
         RestRequest(
             method="POST",
             path="/settings/models/downloads",
-            body=json.dumps({"artifact_id": "llama-cpp-stories260k-ci"}),
+            body=json.dumps({"model_id": "llama-cpp-stories260k-ci"}),
         )
     )
 
     assert response.status_code == 202
+    assert response.body["model_id"] == "llama-cpp-stories260k-ci"
     assert response.body["status"] == "downloading"
     assert (
         rest.handle(
@@ -520,58 +742,240 @@ def test_rest_starts_artifact_download_and_validates_payloads(
         ).status_code
         == 422
     )
+    assert (
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/downloads",
+                body=json.dumps({"model_id": "model", "token": "forbidden"}),
+            )
+        ).status_code
+        == 422
+    )
 
 
-def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interface(
+def test_rest_plans_and_starts_automatic_repository_downloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gateway = _gateway(tmp_path / "sessions")
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+    plan = {
+        "model": {"model_id": "hf-model"},
+        "selection_reason": "Selected automatically",
+    }
+    monkeypatch.setattr(gateway, "inspect_model_repository", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(
+        gateway,
+        "download_custom_local_model",
+        lambda repository, **_kwargs: {
+            "model_id": f"download-{repository.replace('/', '-')}",
+            "status": "downloading",
+            "bytes_downloaded": 0,
+            "bytes_total": 1,
+        },
+    )
+
+    inspected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/repository",
+            body=json.dumps({"repository": "example/model"}),
+        )
+    )
+    downloaded = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/downloads/custom",
+            body=json.dumps({"repository": "example/model", "revision": "1" * 40}),
+        )
+    )
+
+    assert inspected.status_code == 200
+    assert inspected.body["selection_reason"] == "Selected automatically"
+    assert downloaded.status_code == 202
+    assert downloaded.body["model_id"] == "download-example-model"
+    assert (
+        rest.handle(
+            RestRequest(
+                method="POST",
+                path="/settings/models/downloads/custom",
+                body=json.dumps({"repository": "example/model", "runtime": "vllm"}),
+            )
+        ).status_code
+        == 422
+    )
+
+
+def test_user_selected_model_plan_persists_across_gateway_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    choice = LocalModelChoice(
+        model_id="hf-research-model-123456789abc",
+        label="Research Model Q4_K_M",
+        purpose="User-selected Hugging Face model.",
+        runtime="llama-cpp",
+        source_repository="example/research-model-gguf",
+        source_revision="1" * 40,
+        source_path="model-q4_k_m.gguf",
+        size_bytes=7,
+        minimum_free_bytes=7,
+        license_posture="Source model card reports apache-2.0.",
+        catalog_source="user-selected",
+        artifact_sha256=hashlib.sha256(b"content").hexdigest(),
+        minimum_resource_envelope="Estimated minimum resources",
+        recommended_resource_envelope="Recommended resources",
+    )
+
+    @dataclass
+    class Repository:
+        calls: int = 0
+
+        def plan(self, *_args: object, **_kwargs: object) -> LocalModelDownloadPlan:
+            self.calls += 1
+            return LocalModelDownloadPlan(choice, "Selected automatically")
+
+    repository = Repository()
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        model_repository=cast(Any, repository),
+    )
+
+    def download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+        destination = cache_dir / artifact.artifact_id / artifact.source_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"content")
+        return destination
+
+    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", download)
+
+    plan = gateway.inspect_model_repository("example/research-model-gguf")
+    path = gateway.download_custom_local_model_now(
+        choice.source_repository,
+        revision=choice.source_revision,
+    )
+
+    assert repository.calls == 1
+    model = cast(dict[str, object], plan["model"])
+    assert model["runtime"] == "llama-cpp"
+    assert path.is_file()
+    restarted = _gateway(tmp_path)
+    catalog = restarted.model_artifacts()
+    models = cast(list[dict[str, object]], catalog["models"])
+    selected = next(model for model in models if model["model_id"] == choice.model_id)
+    assert selected["source_repository"] == choice.source_repository
+    assert selected["catalog_source"] == "user-selected"
+    assert selected["license_posture"] == choice.license_posture
+    assert selected["minimum_resource_envelope"] == choice.minimum_resource_envelope
+    assert selected["recommended_resource_envelope"] == choice.recommended_resource_envelope
+    assert selected["artifact_sha256"] == choice.artifact_sha256
+    assert restarted.config_store.load().local_model is not None
+    downloads = cast(list[dict[str, object]], catalog["downloads"])
+    assert downloads[0]["status"] == "ready"
+
+    path.write_bytes(b"changed")
+    tampered = cast(list[dict[str, object]], restarted.model_artifacts()["downloads"])
+    assert tampered[0]["status"] == "error"
+    assert "checksum" in str(tampered[0]["error"])
+    path.write_bytes(b"content")
+    monkeypatch.setattr(restarted, "_local_runtime_available", lambda _runtime: True)
+
+    background_models: list[ModelArtifact | ModelSnapshot] = []
+
+    def start_model(model: ModelArtifact | ModelSnapshot) -> ModelDownload:
+        background_models.append(model)
+        return ModelDownload(
+            model_id=choice.model_id,
+            status="downloading",
+            bytes_downloaded=0,
+            bytes_total=choice.size_bytes,
+        )
+
+    monkeypatch.setattr(restarted.local_model_manager, "start_model", start_model)
+    background = restarted.download_local_model(choice.model_id)
+
+    assert background["status"] == "downloading"
+    assert len(background_models) == 1
+    assert isinstance(background_models[0], ModelArtifact)
+
+    path.unlink()
+    restored = restarted.download_local_model_now(choice.model_id)
+
+    assert restored == path
+    assert restored.read_bytes() == b"content"
+
+
+def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_interface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
     observed: list[tuple[str, str, Path]] = []
 
     def artifact_download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
         artifact_id = artifact.artifact_id
         observed.append(("artifact", artifact_id, cache_dir))
-        return cache_dir / artifact_id
+        path = cache_dir / artifact_id
+        path.mkdir(parents=True)
+        return path
 
     def snapshot_download(snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
         snapshot_id = snapshot.snapshot_id
         observed.append(("snapshot", snapshot_id, cache_dir))
-        return cache_dir / snapshot_id
+        path = cache_dir / snapshot_id
+        path.mkdir(parents=True)
+        return path
 
     monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", artifact_download)
     monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
 
     artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
-    snapshot_cache = tmp_path / "snapshot-cache"
-    snapshot = gateway.download_local_model_now(
-        "qwen25-7b-instruct-vllm",
-        cache_dir=snapshot_cache,
-    )
+    snapshot = gateway.download_local_model_now("qwen25-7b-instruct-vllm")
 
-    assert artifact == tmp_path / "models" / "llama-cpp-stories260k-ci"
-    assert snapshot == snapshot_cache / "qwen25-7b-instruct-vllm"
+    model_cache = tmp_path / ".heartwood" / "models"
+    assert artifact == model_cache / "llama-cpp-stories260k-ci"
+    assert snapshot == model_cache / "qwen25-7b-instruct-vllm"
     assert observed == [
-        ("artifact", "llama-cpp-stories260k-ci", tmp_path / "models"),
-        ("snapshot", "qwen25-7b-instruct-vllm", snapshot_cache),
+        ("artifact", "llama-cpp-stories260k-ci", model_cache),
+        ("snapshot", "qwen25-7b-instruct-vllm", model_cache),
     ]
-    with pytest.raises(ModelSnapshotError, match="unknown reviewed local model: missing"):
+    config = gateway.config_store.load()
+    assert config.model_source == "local"
+    assert config.local_model is not None
+    assert config.local_model.artifact_id == "qwen25-7b-instruct-vllm"
+    assert config.model_settings.active_profile == "local"
+    assert config.model_settings.profile().model == "openai/heartwood-local-model"
+    restarted = _gateway(tmp_path)
+    assert restarted.model_settings()["active_profile"] == "local"
+    assert restarted.project_readiness()["state"] == "compute-required"
+    with pytest.raises(ModelRepositoryError, match="unknown local model: missing"):
         gateway.download_local_model_now("missing")
 
 
-def test_gateway_does_not_mask_unexpected_artifact_catalog_errors(
+def test_gateway_download_uses_the_normalized_model_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gateway = _gateway(tmp_path / "sessions")
+    gateway = _gateway(tmp_path)
+    monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    destination = tmp_path / ".heartwood" / "models" / "qwen25-7b-instruct-vllm"
 
     def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:
         raise ValueError("artifact catalog validation failed")
 
-    monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
+    def snapshot_download(_snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
+        assert cache_dir == tmp_path / ".heartwood" / "models"
+        destination.mkdir(parents=True)
+        return destination
 
-    with pytest.raises(ValueError, match="artifact catalog validation failed"):
-        gateway.download_local_model_now("qwen25-7b-instruct-vllm")
+    monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
+    monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
+
+    assert gateway.download_local_model_now("qwen25-7b-instruct-vllm") == destination
 
 
 def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> None:
@@ -644,11 +1048,12 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
 
 def test_gateway_rejects_unknown_backend_configuration(tmp_path: Path) -> None:
     gateway = SessionGateway(
-        workspace=tmp_path,
-        env={"HEARTWOOD_AGENT_BACKEND": "unknown"},
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="unknown",
     )
 
-    with pytest.raises(ValueError, match="unsupported HEARTWOOD_AGENT_BACKEND"):
+    with pytest.raises(ValueError, match="unsupported agent backend"):
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
 
 

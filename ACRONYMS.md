@@ -8,19 +8,19 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Acronyms And Glossary
+# Glossary and Acronyms
 
-This glossary defines acronyms and specialized terms used in Heartwood documentation. Add an entry when introducing a term and remove entries that are no longer used.
+This glossary defines acronyms, platform names, formats, and specialized terms used throughout Heartwood documentation.
 
-## Workflow Languages And Engines
+## Workflow Languages and Engines
 
 | Term | Expansion | What it is |
 |---|---|---|
-| WDL | Workflow Description Language | Broad's pipeline language ("widdle"); executed by Cromwell |
-| CWL | Common Workflow Language | Vendor-neutral open standard for pipelines/tools |
-| Cromwell | *(name, not an acronym)* | Broad's engine that executes WDL/CWL |
-| Nextflow | *(name)* | Popular workflow framework/DSL |
-| Hail | *(name)* | Genomics analysis framework that runs on Spark |
+| WDL | Workflow Description Language | Workflow language maintained by the OpenWDL community and commonly executed by Cromwell |
+| CWL | Common Workflow Language | Vendor-neutral open standard for describing computational workflows and tools |
+| Cromwell | *(project name)* | Workflow engine that executes WDL and selected CWL workflows |
+| Nextflow | *(project name)* | Framework and domain-specific language for computational workflows |
+| Hail | *(project name)* | Genomics analysis framework that can use Apache Spark |
 | Spark | *(name)* | Distributed compute engine for large datasets |
 
 ## GA4GH Interoperability Standards
@@ -33,7 +33,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | TES | Task Execution Service | Standard API to run one containerized task anywhere |
 | TRS | Tool Registry Service | Standard API for sharing tools/workflows (used by Dockstore) |
 
-## Health Data And Genomics Standards And Formats
+## Health Data and Genomics Standards and Formats
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -48,13 +48,13 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | VCF | Variant Call Format | Text format listing genomic variants |
 | BAM | Binary Alignment Map | Compressed file of sequencing reads aligned to a genome |
 
-## Compliance And Security
+## Compliance and Security
 
 | Term | Expansion | What it is |
 |---|---|---|
-| PHI | Protected Health Information | Identifiable health data (must not leak) |
-| HIPAA | Health Insurance Portability and Accountability Act | US law governing PHI handling |
-| BAA | Business Associate Agreement | Contract letting a vendor process PHI compliantly |
+| PHI | Protected Health Information | Individually identifiable health information protected under applicable US regulation |
+| HIPAA | Health Insurance Portability and Accountability Act | US legal framework that includes privacy and security requirements for protected health information |
+| BAA | Business Associate Agreement | Contract defining permitted protected-health-information processing by a covered entity's business associate |
 | VPC | Virtual Private Cloud | An isolated private network in a cloud |
 | VPC-SC | VPC Service Controls | Google's "perimeter" that blocks data egress |
 | IRB | Institutional Review Board | Ethics board that approves human-subjects research |
@@ -65,7 +65,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | SPDX | Software Package Data Exchange | Standard for per-file license/copyright metadata (used by REUSE) |
 | TLS | Transport Layer Security | Encryption protocol used to secure network connections |
 
-## Cloud And Infrastructure
+## Cloud and Infrastructure
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -77,10 +77,11 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | CPU | Central Processing Unit | General-purpose processor used for local inference when no accelerator is available |
 | CUDA | Compute Unified Device Architecture | NVIDIA GPU runtime and programming stack used by optional accelerated inference profiles |
 | GID | Group Identifier | Numeric Unix group id used to run containers as a stable non-root group |
-| GPU | Graphics Processing Unit | Accelerator for ML / heavy compute |
+| GPU | Graphics Processing Unit | Accelerator used for model inference and other parallel computations |
 | UID | User Identifier | Numeric Unix user id used to run containers as a stable non-root user |
 | vCPU | virtual CPU | A virtual processor core on a VM |
-| OS | Operating System | e.g. Linux / Ubuntu |
+| VRAM | Video Random Access Memory | Accelerator memory used to load model weights and inference buffers on a GPU |
+| OS | Operating System | System software such as Linux that manages hardware and application processes |
 | CDN | Content Delivery Network | External static-asset hosting, forbidden for the runtime web UI |
 | DNS | Domain Name System | Resolves hostnames to network addresses |
 | HTTP(S) | HyperText Transfer Protocol (Secure) | The web request protocol |
@@ -104,7 +105,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | GHCR | GitHub Container Registry |
 | OCI | Open Container Initiative (open standard for images & artifacts) |
 
-## AI And Agent Stack
+## AI and Agent Stack
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -119,14 +120,14 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | LiteLLM / Ollama / llama.cpp | *(project names)* | Model-routing proxy / local model runners |
 | SKILL.md | *(file name)* | Portable directory format for agent instructions, scripts, references, and assets |
 
-## Programming And Interoperability
+## Programming and Interoperability
 
 | Term | Expansion | What it is |
 |---|---|---|
-| API | Application Programming Interface | How programs talk to a service |
+| API | Application Programming Interface | Defined mechanism through which software components communicate |
 | ASGI | Asynchronous Server Gateway Interface | Python interface used for async web servers and applications |
-| CLI | Command-Line Interface | Terminal-driven tool |
-| SDK | Software Development Kit | Libraries/tools for building on a platform |
+| CLI | Command-Line Interface | Text-based interface used from a terminal |
+| SDK | Software Development Kit | Libraries and tools used to integrate with a software platform |
 | PyPI | Python Package Index | Public Python package registry; unavailable when a deployment disables runtime network access |
 | JSON | JavaScript Object Notation | Lightweight structured-data format used for schemas and events |
 | JSONL | JSON Lines | One JSON object per line, used for scrubbed audit exports |
@@ -140,7 +141,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | UI | User Interface | The screens and controls a person uses to operate software |
 | UX | User Experience | The overall user workflow and interaction quality |
 
-## Platforms And Organizations
+## Platforms and Organizations
 
 | Term | Expansion | What it is |
 |---|---|---|

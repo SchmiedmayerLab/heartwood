@@ -526,6 +526,51 @@ summary:focus-visible {
   font-size: 0.76rem;
 }
 
+.request-activity {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  width: min(88%, 780px);
+  min-height: 36px;
+  align-items: start;
+  gap: 8px;
+  padding: 7px 2px;
+  color: #526159;
+}
+
+.request-activity-icon {
+  flex: 0 0 auto;
+  animation: request-activity-spin 1s linear infinite;
+  color: #18825f;
+}
+
+.request-activity > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.request-activity strong {
+  color: #2d4035;
+  font-size: 0.78rem;
+}
+
+.request-activity span,
+.request-activity small {
+  color: #66736b;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.request-activity small {
+  white-space: nowrap;
+}
+
+@keyframes request-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .composer-area {
   display: grid;
   flex: 0 0 auto;
@@ -702,6 +747,110 @@ summary:focus-visible {
   font-size: 0.8rem;
 }
 
+.project-readiness {
+  gap: 7px;
+}
+
+.project-readiness-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-readiness-heading > div,
+.project-readiness details {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.project-readiness strong {
+  color: #1f3026;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.project-readiness > span,
+.project-readiness small,
+.project-readiness summary {
+  color: #68756d;
+  font-size: 0.73rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.project-readiness summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.project-detail-content {
+  display: grid;
+  gap: 3px;
+  padding-top: 3px;
+}
+
+.project-next-step {
+  display: grid;
+  gap: 3px;
+  margin-top: 3px;
+  padding: 10px;
+  border-left: 3px solid #517a63;
+  background: #f1f6f2;
+}
+
+.project-next-step strong {
+  font-size: 0.76rem;
+}
+
+.project-next-step span {
+  color: #46584d;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.project-next-step code {
+  color: #26392d;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.readiness-checks {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness-checks li {
+  position: relative;
+  padding-left: 13px;
+  color: #617067;
+  font-size: 0.71rem;
+  line-height: 1.4;
+}
+
+.readiness-checks li::before {
+  position: absolute;
+  top: 0.45em;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4e765e;
+  content: "";
+}
+
+.readiness-checks li[data-status="warning"]::before {
+  background: #9a6b22;
+}
+
+.readiness-checks li[data-status="fail"]::before {
+  background: #a43f3a;
+}
+
 .model-connections,
 .connection-group,
 .connection-form,
@@ -865,6 +1014,13 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.artifact-row strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .skill-row,
 .artifact-row,
 .profile-row {
@@ -952,6 +1108,48 @@ summary:focus-visible {
   display: grid;
   gap: 13px;
   padding: 0 0 20px;
+}
+
+.local-model-form > button,
+.local-model-plan > button {
+  justify-self: start;
+}
+
+.local-model-plan {
+  display: grid;
+  gap: 5px;
+  padding: 12px 0 2px;
+  border-top: 1px solid #dce2dd;
+}
+
+.local-model-plan span,
+.local-model-plan small {
+  color: #68756d;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.model-plan-source {
+  margin: 2px 0;
+}
+
+.model-plan-source summary {
+  color: #536159;
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.model-plan-source > div {
+  display: grid;
+  gap: 3px;
+  padding: 6px 0 1px;
+}
+
+.local-model-form .connection-error a {
+  color: #7a2420;
+  font-size: 0.75rem;
+  font-weight: 650;
 }
 
 .advanced-section-content label,
@@ -1139,6 +1337,15 @@ summary:focus-visible {
   .conversation-message,
   .trace-message {
     width: 94%;
+  }
+
+  .request-activity {
+    grid-template-columns: 18px minmax(0, 1fr);
+    width: 94%;
+  }
+
+  .request-activity small {
+    grid-column: 2;
   }
 
   .composer-area {

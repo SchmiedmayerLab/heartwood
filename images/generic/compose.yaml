@@ -28,6 +28,4 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
-    environment:
-      HEARTWOOD_AGENT_BACKEND: openhands-sdk
-    command: bash images/generic/scripts/offline_stack_smoke.sh
+    command: bash /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh

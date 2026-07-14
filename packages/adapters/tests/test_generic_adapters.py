@@ -28,7 +28,12 @@ from heartwood.adapters.registry import LocalRegistryAdapter, RegistryBoundaryEr
 
 
 def test_generic_platform_adapter_conforms() -> None:
-    assert_platform_adapter_conforms(GenericPlatformAdapter())
+    adapter = GenericPlatformAdapter()
+    assert_platform_adapter_conforms(adapter)
+    policy = adapter.default_policy_profile()
+    assert policy.credential_allowlist == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+    assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
+    assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
 
 
 def test_carina_platform_adapter_conforms_and_defaults_to_local_only() -> None:
