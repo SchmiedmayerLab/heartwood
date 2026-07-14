@@ -294,10 +294,13 @@ class HuggingFaceModelRepository:
             raise ModelRepositoryError("the model repository does not expose downloadable files")
 
         inspected_files: list[_RepositoryFile] = []
+        metadata_complete = True
         for sibling in siblings:
             file = _repository_file(sibling)
             if file is not None:
                 inspected_files.append(file)
+            else:
+                metadata_complete = False
         files = tuple(inspected_files)
         license_posture = _license_posture(getattr(info, "card_data", None))
         candidates = [
@@ -315,6 +318,7 @@ class HuggingFaceModelRepository:
             resolved_revision,
             files,
             license_posture,
+            metadata_complete=metadata_complete,
         )
         if snapshot is not None:
             candidates.append(snapshot)
@@ -407,7 +411,7 @@ def recommended_model_choices(
 def _repository_file(value: object) -> _RepositoryFile | None:
     path = getattr(value, "rfilename", None)
     size = getattr(value, "size", None)
-    if not isinstance(path, str) or not path or not isinstance(size, int) or size <= 0:
+    if not isinstance(path, str) or not path or not isinstance(size, int) or size < 0:
         return None
     lfs = getattr(value, "lfs", None)
     digest = getattr(lfs, "sha256", None)
@@ -424,6 +428,7 @@ def _gguf_candidate(
 ) -> LocalModelChoice | None:
     if (
         not file.path.casefold().endswith(".gguf")
+        or file.size <= 0
         or _SPLIT_GGUF.search(file.path) is not None
         or file.sha256 is None
     ):
@@ -453,7 +458,11 @@ def _snapshot_candidate(
     revision: str,
     files: tuple[_RepositoryFile, ...],
     license_posture: str,
+    *,
+    metadata_complete: bool,
 ) -> LocalModelChoice | None:
+    if not metadata_complete:
+        return None
     paths = {file.path for file in files}
     has_weights = any(
         _SAFETENSORS_WEIGHTS.fullmatch(path) is not None

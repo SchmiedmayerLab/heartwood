@@ -25,6 +25,7 @@ from heartwood.gateway import (
     ModelArtifact,
     ModelArtifactCatalog,
     ModelCatalogService,
+    ModelDownload,
     ModelRepositoryError,
     ModelSnapshot,
     ProjectContext,
@@ -844,7 +845,7 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
 
     def download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
         destination = cache_dir / artifact.artifact_id / artifact.source_path
-        destination.parent.mkdir(parents=True)
+        destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"content")
         return destination
 
@@ -871,6 +872,31 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
     assert selected["recommended_resource_envelope"] == choice.recommended_resource_envelope
     assert selected["artifact_sha256"] == choice.artifact_sha256
     assert restarted.config_store.load().local_model is not None
+    monkeypatch.setattr(restarted, "_local_runtime_available", lambda _runtime: True)
+
+    background_models: list[ModelArtifact | ModelSnapshot] = []
+
+    def start_model(model: ModelArtifact | ModelSnapshot) -> ModelDownload:
+        background_models.append(model)
+        return ModelDownload(
+            model_id=choice.model_id,
+            status="downloading",
+            bytes_downloaded=0,
+            bytes_total=choice.size_bytes,
+        )
+
+    monkeypatch.setattr(restarted.local_model_manager, "start_model", start_model)
+    background = restarted.download_local_model(choice.model_id)
+
+    assert background["status"] == "downloading"
+    assert len(background_models) == 1
+    assert isinstance(background_models[0], ModelArtifact)
+
+    path.unlink()
+    restored = restarted.download_local_model_now(choice.model_id)
+
+    assert restored == path
+    assert restored.read_bytes() == b"content"
 
 
 def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_interface(
@@ -917,24 +943,30 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     restarted = _gateway(tmp_path)
     assert restarted.model_settings()["active_profile"] == "local"
     assert restarted.project_readiness()["state"] == "compute-required"
-    with pytest.raises(ModelRepositoryError, match="unknown recommended local model: missing"):
+    with pytest.raises(ModelRepositoryError, match="unknown local model: missing"):
         gateway.download_local_model_now("missing")
 
 
-def test_gateway_does_not_mask_unexpected_artifact_catalog_errors(
+def test_gateway_download_uses_the_normalized_model_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gateway = _gateway(tmp_path / "sessions")
+    gateway = _gateway(tmp_path)
     monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    destination = tmp_path / ".heartwood" / "models" / "qwen25-7b-instruct-vllm"
 
     def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:
         raise ValueError("artifact catalog validation failed")
 
-    monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
+    def snapshot_download(_snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
+        assert cache_dir == tmp_path / ".heartwood" / "models"
+        destination.mkdir(parents=True)
+        return destination
 
-    with pytest.raises(ValueError, match="artifact catalog validation failed"):
-        gateway.download_local_model_now("qwen25-7b-instruct-vllm")
+    monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
+    monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
+
+    assert gateway.download_local_model_now("qwen25-7b-instruct-vllm") == destination
 
 
 def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> None:

@@ -669,13 +669,18 @@ def _configure_local_model(
             ]
 
     if model_id is None:
-        print("\nRecommended models:")
+        print("\nLocal models:")
         choices: list[tuple[str, str]] = []
         for item in recommendations:
             recommendation_id = str(item.get("model_id"))
             label = str(item.get("label"))
             runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
-            choices.append((recommendation_id, f"{label} ({runtime})"))
+            source = (
+                "Recommended"
+                if item.get("catalog_source") == "recommended"
+                else "Previously selected"
+            )
+            choices.append((recommendation_id, f"{label} ({source}, {runtime})"))
         choices.append(("other", "Other Hugging Face model"))
         choices.extend((model, f"{model} (already running)") for model in service_models)
         for index, (_value, label) in enumerate(choices, start=1):
@@ -700,11 +705,11 @@ def _configure_local_model(
     if not model_id.strip():
         raise ModelRepositoryError("a local model must be selected")
 
-    recommended_ids = {
+    known_local_ids = {
         str(item.get("model_id")): item for item in recommendations if item.get("model_id")
     }
-    if model_id in recommended_ids:
-        item = recommended_ids[model_id]
+    if model_id in known_local_ids:
+        item = known_local_ids[model_id]
         print("\nSelected local model")
         print(f"  {item.get('label')}")
         if resources := item.get("recommended_resource_envelope"):

@@ -37,6 +37,7 @@ from heartwood.gateway._action_settings import (
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
     LocalModelChoice,
+    LocalModelRuntime,
     ModelRepositoryError,
     recommended_model_choices,
 )
@@ -287,6 +288,14 @@ class SessionGateway:
             choice.model_id: choice for choice in downloadable_choices
         }
         self._local_model_choices = {choice.model_id: choice for choice in choices}
+        selected_local_model = self.config_store.load().local_model
+        if (
+            selected_local_model is not None
+            and selected_local_model.catalog_source == "user-selected"
+        ):
+            selected_choice = _selected_local_model_choice(selected_local_model)
+            self._downloadable_local_model_choices[selected_choice.model_id] = selected_choice
+            self._local_model_choices[selected_choice.model_id] = selected_choice
         self._repository_plans: dict[tuple[str, str], LocalModelChoice] = {}
         self.model_repository = model_repository or HuggingFaceModelRepository(
             token=self.env.get("HF_TOKEN")
@@ -669,9 +678,9 @@ class SessionGateway:
         }
 
     def download_local_model(self, model_id: str) -> dict[str, object]:
-        """Start a recommended local-model download into project storage."""
-        self._require_local_model_runtime(model_id)
-        return self.local_model_manager.start(model_id).safe_dict()
+        """Start a known local-model download into project storage."""
+        choice = self._require_local_model_runtime(model_id)
+        return self.local_model_manager.start_model(choice.download_model()).safe_dict()
 
     def download_custom_local_model(
         self,
@@ -690,20 +699,13 @@ class SessionGateway:
         self,
         model_id: str,
     ) -> Path:
-        """Download, verify, and select a recommended local model."""
-        self._require_local_model_runtime(model_id)
-        try:
-            artifact = self.artifact_catalog.artifact(model_id)
-        except ModelArtifactError:
-            try:
-                snapshot = self.snapshot_catalog.snapshot(model_id)
-            except ModelSnapshotError as error:
-                raise ModelSnapshotError(f"unknown recommended local model: {model_id}") from error
-            path = download_model_snapshot(snapshot, cache_dir=self.model_cache_dir)
-            runtime_profile = snapshot.runtime_profile
+        """Download, verify, and select a known local model."""
+        model = self._require_local_model_runtime(model_id).download_model()
+        if isinstance(model, ModelArtifact):
+            path = download_artifact(model, cache_dir=self.model_cache_dir)
         else:
-            path = download_artifact(artifact, cache_dir=self.model_cache_dir)
-            runtime_profile = artifact.runtime_profile
+            path = download_model_snapshot(model, cache_dir=self.model_cache_dir)
+        runtime_profile = model.runtime_profile
         self._select_downloaded_local_model(model_id, path, runtime_profile)
         return path
 
@@ -1012,13 +1014,14 @@ class SessionGateway:
             reason = "The portable CPU runtime is not available on this deployment"
         return {**choice.safe_dict(), "available": available, "availability_reason": reason}
 
-    def _require_local_model_runtime(self, model_id: str) -> None:
+    def _require_local_model_runtime(self, model_id: str) -> LocalModelChoice:
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
-            raise ModelRepositoryError(f"unknown recommended local model: {model_id}")
+            raise ModelRepositoryError(f"unknown local model: {model_id}")
         if not self._local_runtime_available(choice.runtime):
             reason = self._local_model_choice_dict(choice)["availability_reason"]
             raise ModelRepositoryError(f"{choice.label} is unavailable: {reason}")
+        return choice
 
     def _local_runtime_available(self, runtime: str) -> bool:
         platform_id = self.config_store.load().platform_id
@@ -1053,8 +1056,8 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[5]
 
 
-def _selected_local_model_dict(selection: LocalModelSelection) -> dict[str, object]:
-    """Restore display metadata for a persisted user-selected model."""
+def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelChoice:
+    """Restore one normalized choice from persisted user-selected metadata."""
     if (
         selection.display_name is None
         or selection.source_repository is None
@@ -1071,25 +1074,32 @@ def _selected_local_model_dict(selection: LocalModelSelection) -> dict[str, obje
         runtime = (
             "llama-cpp" if (selection.source_path or "").casefold().endswith(".gguf") else "vllm"
         )
-    return {
-        "model_id": selection.artifact_id,
-        "label": selection.display_name,
-        "purpose": (
+    choice = LocalModelChoice(
+        model_id=selection.artifact_id,
+        label=selection.display_name,
+        purpose=(
             "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
             "license, or suitability."
         ),
-        "runtime": runtime,
-        "source_repository": selection.source_repository,
-        "source_revision": selection.source_revision,
-        "source_path": selection.source_path,
-        "size_bytes": selection.size_bytes,
-        "minimum_free_bytes": selection.minimum_free_bytes,
-        "license_posture": selection.license_posture,
-        "catalog_source": selection.catalog_source,
-        "artifact_sha256": selection.artifact_sha256,
-        "minimum_resource_envelope": selection.minimum_resource_envelope,
-        "recommended_resource_envelope": selection.recommended_resource_envelope,
-    }
+        runtime=cast(LocalModelRuntime, runtime),
+        source_repository=selection.source_repository,
+        source_revision=selection.source_revision,
+        source_path=selection.source_path,
+        size_bytes=selection.size_bytes,
+        minimum_free_bytes=selection.minimum_free_bytes,
+        license_posture=selection.license_posture,
+        catalog_source="user-selected",
+        artifact_sha256=selection.artifact_sha256,
+        minimum_resource_envelope=selection.minimum_resource_envelope,
+        recommended_resource_envelope=selection.recommended_resource_envelope,
+    )
+    choice.validate()
+    return choice
+
+
+def _selected_local_model_dict(selection: LocalModelSelection) -> dict[str, object]:
+    """Restore display metadata for a persisted user-selected model."""
+    return _selected_local_model_choice(selection).safe_dict()
 
 
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:

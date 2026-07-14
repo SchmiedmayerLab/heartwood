@@ -52,6 +52,7 @@ def test_repository_plan_prefers_standard_snapshot_when_gpu_runtime_is_available
         _file("config.json", 100),
         _file("model.safetensors", 10 * 1024**3, digest="a" * 64),
         _file("model-q4_k_m.gguf", 4 * 1024**3, digest="4" * 64),
+        _file(".gitattributes", 0),
     )
 
     plan = repository.plan(
@@ -93,6 +94,21 @@ def test_repository_plan_reports_unsupported_formats_and_runtime_mismatch() -> N
     with pytest.raises(ModelRepositoryError, match=r"does not yet support.*issues/new/choose"):
         tokenizer_only.plan(
             "example/not-a-model-snapshot",
+            cpu_available=False,
+            gpu_available=True,
+        )
+
+
+def test_repository_plan_rejects_snapshots_with_incomplete_size_metadata() -> None:
+    repository = _repository(
+        _file("config.json", 100),
+        _file("model.safetensors", 1024, digest="a" * 64),
+        SimpleNamespace(rfilename="tokenizer.json", size=None, lfs=None),
+    )
+
+    with pytest.raises(ModelRepositoryError, match=r"does not yet support.*issues/new/choose"):
+        repository.plan(
+            "example/incomplete-snapshot",
             cpu_available=False,
             gpu_available=True,
         )
