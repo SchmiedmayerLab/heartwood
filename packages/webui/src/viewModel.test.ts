@@ -156,4 +156,57 @@ describe("buildViewModel", () => {
     expect(viewModel.approvalControls).toEqual([]);
     expect(viewModel.activity.at(-1)?.detail).toBe("7");
   });
+
+  it("projects missing optional values into stable researcher-facing defaults", () => {
+    const viewModel = buildViewModel([
+      event(0, "tool_call.proposed", { tool_name: "terminal" }),
+      event(1, "tool.execution.recorded", {}),
+      event(2, "confirmation.requested", {
+        request: { tool_call_id: "toolcall-default" },
+      }),
+      event(3, "confirmation.resolved", {
+        tool_call_id: "toolcall-default",
+      }),
+      event(4, "model_call.decision.recorded", { decision: {} }),
+      event(5, "detection.proposed", { dataset: null, platform: [] }),
+      event(6, "audit.export.recorded", { event_count: "unknown" }),
+      event(7, "error.recorded", {}),
+    ]);
+
+    expect(viewModel.conversation).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Proposed tool: terminal",
+          detail: null,
+        }),
+        expect.objectContaining({
+          content: "Ran tool",
+          detail: "Exit unknown",
+        }),
+        expect.objectContaining({
+          content: "The task could not be completed",
+          detail: "Review Activity & audit, then try again.",
+        }),
+      ]),
+    );
+    expect(viewModel.approvalControls).toEqual([
+      {
+        decision: "approved",
+        label: "approved tool-call",
+        risk: null,
+        summary: null,
+        targetId: "toolcall-default",
+        targetType: "tool-call",
+        toolName: "",
+      },
+    ]);
+    expect(viewModel.context).toEqual({
+      dataset: null,
+      modelDecision: null,
+      modelEndpoint: null,
+      modelReason: null,
+      platform: null,
+    });
+    expect(viewModel.activity[6]?.detail).toBe("Scrubbed JSONL ready");
+  });
 });

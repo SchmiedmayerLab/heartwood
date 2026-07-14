@@ -69,6 +69,7 @@ class FakeEventSource {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   FakeWebSocket.instances = [];
   FakeEventSource.instances = [];
@@ -175,6 +176,44 @@ describe("GatewayClient", () => {
       "/proxy/8767/sessions/session-test/commands",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("uses optional request defaults and an empty event response", async () => {
+    const session = {
+      session_id: "session-test",
+      title: "Untitled session",
+      status: "empty",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      event_count: 0,
+    };
+    const validation = {
+      profile: {},
+      credential_status: "configured",
+      policy_decision: { decision: "allow" },
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(session)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(validation)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({})));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767/");
+
+    await client.createSession();
+    await client.validateModelProfile();
+    const response = await client.replayEvents("session-test");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/sessions",
+      expect.objectContaining({ body: "{}" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/validation",
+    );
+    expect(response.events).toEqual([]);
   });
 
   it("manages non-secret model profiles through settings routes", async () => {
@@ -599,6 +638,22 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("preserves gateway status when JSON errors omit a message", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient();
+
+    await expect(client.replayEvents("session-test")).rejects.toThrow(
+      "Gateway request failed with status 409",
+    );
+    await expect(client.getModelSettings()).rejects.toThrow(
+      "Gateway request failed with status 503",
+    );
+  });
+
   it("infers the Jupyter proxy base path from the browser location", async () => {
     window.history.pushState({}, "", "/user/synthetic/proxy/8767/");
     const fetch = vi.fn().mockResolvedValue(
@@ -613,6 +668,22 @@ describe("GatewayClient", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/user/synthetic/proxy/8767/sessions/session-test/events?after=0",
+    );
+  });
+
+  it("uses the configured gateway base path when one is provided", async () => {
+    vi.stubEnv("VITE_HEARTWOOD_GATEWAY_BASE", "/configured-gateway");
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ events: [] }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await new GatewayClient().replayEvents("session-test");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/configured-gateway/sessions/session-test/events",
     );
   });
 
@@ -656,6 +727,81 @@ describe("GatewayClient", () => {
       "/proxy/8767/sessions/session-test/events/stream?after=2",
     );
     expect(received[0]?.[0]?.kind).toBe("model_call.decision.recorded");
+  });
+
+  it("opens the fallback only once for repeated WebSocket failures", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const client = new GatewayClient("/proxy/8767");
+
+    const cleanup = client.streamEvents("session-test", undefined, vi.fn());
+    FakeWebSocket.instances[0]?.closeWith(1011);
+    FakeWebSocket.instances[0]?.fail();
+    FakeWebSocket.instances[0]?.closeWith(1000);
+    cleanup();
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("streams directly over server-sent events without WebSocket support", () => {
+    const websocketDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    Reflect.deleteProperty(globalThis, "WebSocket");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const received: SessionEvent[][] = [];
+
+    try {
+      const client = new GatewayClient("/proxy/8767");
+      const cleanup = client.streamEvents(
+        "session-test",
+        undefined,
+        (events) => {
+          received.push(events);
+        },
+      );
+      FakeEventSource.instances[0]?.emit([]);
+      cleanup();
+
+      expect(FakeEventSource.instances[0]?.url).toBe(
+        "/proxy/8767/sessions/session-test/events/stream",
+      );
+      expect(received).toEqual([[]]);
+    } finally {
+      if (websocketDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
+      }
+    }
+  });
+
+  it("returns a no-op cleanup when browser streaming is unavailable", () => {
+    const websocketDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    const eventSourceDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "EventSource",
+    );
+    Reflect.deleteProperty(globalThis, "WebSocket");
+    Reflect.deleteProperty(globalThis, "EventSource");
+
+    try {
+      const cleanup = new GatewayClient().streamEvents(
+        "session-test",
+        undefined,
+        vi.fn(),
+      );
+      expect(cleanup).not.toThrow();
+    } finally {
+      if (websocketDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
+      }
+      if (eventSourceDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "EventSource", eventSourceDescriptor);
+      }
+    }
   });
 
   it("streams events over WebSocket when the upgrade succeeds", () => {

@@ -80,6 +80,12 @@ describe("modelProfileLabel", () => {
     );
   });
 
+  it("preserves a preset model that does not use the expected prefix", () => {
+    expect(modelProfileLabel(profile("openai", "gateway/gpt"), settings)).toBe(
+      "OpenAI · gateway/gpt",
+    );
+  });
+
   it("preserves unknown profile and model identifiers", () => {
     expect(
       modelProfileLabel(profile("custom", "provider/model"), settings),

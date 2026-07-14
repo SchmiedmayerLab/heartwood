@@ -150,7 +150,7 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
     agent_dependencies = gateway["project"]["optional-dependencies"]["agent"]
     pins = dict(_exact_package_pin(requirement) for requirement in agent_dependencies)
 
-    assert pins == {"openhands-sdk": "1.33.0", "openhands-tools": "1.34.0"}
+    assert pins == {"openhands-sdk": "1.36.0", "openhands-tools": "1.36.0"}
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
     assert "openhands-agent-server" not in _read("uv.lock")
 
