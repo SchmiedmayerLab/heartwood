@@ -22,13 +22,13 @@ concurrency:
 jobs:
   reuse:
     name: REUSE Compliance
-    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.2.4
+    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.2.5
   actionlint:
     name: Lint GitHub Actions Workflows
-    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@v0.2.4
+    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@v0.2.5
   markdown-links:
     name: Check Markdown Links
-    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@v0.2.4
+    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@v0.2.5
   yamllint:
     name: Lint YAML
     runs-on: ubuntu-latest
