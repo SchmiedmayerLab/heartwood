@@ -15,13 +15,13 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
-CredentialKind: TypeAlias = Literal["environment", "file", "managed-identity", "none"]
-CapabilityTier: TypeAlias = Literal["autonomous", "experimental", "supervised"]
+type CredentialKind = Literal["environment", "file", "managed-identity", "none"]
+type CapabilityTier = Literal["autonomous", "experimental", "supervised"]
 
 _CREDENTIAL_KINDS = {"environment", "file", "managed-identity", "none"}
 _CAPABILITY_TIERS = {"autonomous", "experimental", "supervised"}
@@ -381,15 +381,6 @@ def model_profile_from_preset(preset_id: str, model_name: str) -> ModelProfile:
     )
     profile.validate()
     return profile
-
-
-def model_settings_path(workspace: Path, env: Mapping[str, str] | None = None) -> Path:
-    """Resolve the shared settings path for a session workspace."""
-    active_env = os.environ if env is None else env
-    configured = active_env.get("HEARTWOOD_MODEL_SETTINGS")
-    if configured:
-        return Path(configured)
-    return workspace.parent / "models.json"
 
 
 def model_settings_from_mapping(value: object) -> ModelSettings:

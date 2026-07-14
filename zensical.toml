@@ -17,10 +17,10 @@ extra_css = ["stylesheets/extra.css"]
 nav = [
     { "Home" = "index.md" },
     { "Get Started" = [
-        { "Using Heartwood" = "docs/using-heartwood.md" },
-        { "Model Connections" = "docs/model-connections.md" },
-        { "Local And Offline Models" = "docs/getting-started-offline.md" },
-        { "Researcher Web Interface" = "docs/web-interface.md" },
+        { "Use Heartwood" = "docs/using-heartwood.md" },
+        { "Choose a Model" = "docs/model-connections.md" },
+        { "Local and Offline Models" = "docs/getting-started-offline.md" },
+        { "Browser Interface" = "docs/web-interface.md" },
     ] },
     { "Platforms" = [
         { "Support Matrix" = "docs/platform-support.md" },
@@ -32,19 +32,21 @@ nav = [
         { "Container Images" = "docs/container-images.md" },
         { "Releases" = "docs/releases.md" },
     ] },
-    { "Design" = [
+    { "Technical Foundations" = [
         { "Overview" = "design/01-overview.md" },
         { "Platforms" = "design/02-platforms.md" },
-        { "Architecture" = "design/03-architecture.md" },
-        { "Skills And Auto-Detection" = "design/04-skills.md" },
-        { "Security And Compliance" = "design/05-security-compliance.md" },
-        { "Observability And Audit" = "design/06-observability-audit.md" },
-        { "Testing And Evaluation" = "design/07-testing-eval.md" },
+        { "System Architecture" = "design/03-architecture.md" },
+        { "Skills and Auto-Detection" = "design/04-skills.md" },
+        { "Security and Compliance" = "design/05-security-compliance.md" },
+        { "Observability and Audit" = "design/06-observability-audit.md" },
+        { "Testing and Evaluation" = "design/07-testing-eval.md" },
         { "Development Practices" = "design/08-development.md" },
     ] },
     { "Reference" = [
         { "Documentation Guide" = "docs/README.md" },
         { "Acronyms" = "ACRONYMS.md" },
+        { "Contributing" = "CONTRIBUTING.md" },
+        { "License" = "LICENSE" },
     ] },
 ]
 

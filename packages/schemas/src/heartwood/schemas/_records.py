@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, ClassVar, Literal, TypeAlias
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
@@ -29,9 +29,9 @@ __all__ = [
     "schema_names",
 ]
 
-CapabilityTier: TypeAlias = Literal["autonomous", "supervised", "experimental"]
-ActionConfirmationMode: TypeAlias = Literal["always-confirm", "confirm-risky"]
-Decision: TypeAlias = Literal["allow", "deny"]
+type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
+type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
+type Decision = Literal["allow", "deny"]
 
 
 class _HeartwoodRecord(BaseModel):

@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Heartwood CLI
 
-The `heartwood` command opens an interactive coding-agent session for research work. You can describe a task in natural language, follow the agent's responses and proposed actions, review each complete OpenHands action set, pause or resume work, and return to the persisted conversation later.
+The `heartwood` command opens an interactive coding-agent session for the current directory. The agent works on that directory and its descendants; Heartwood keeps configuration, conversations, downloaded models, Skills, logs, and audit records in a private `.heartwood/` directory beside the project files.
 
 Start the full-screen terminal interface:
 
@@ -18,7 +18,7 @@ Start the full-screen terminal interface:
 heartwood
 ```
 
-On first use, bare `heartwood` opens the setup flow instead. `heartwood doctor` reports environment, storage, accelerator, model-route, credential-reference, and policy readiness without changing state. `heartwood setup` configures a validated model route and **Ask Every Time** action confirmation, then later bare invocations open the conversation. A failed reconfiguration restores the complete prior settings state; readiness requires the detected platform, setup source, model, connection, policy, and action mode to agree.
+On first use, bare `heartwood` guides model selection and then opens the conversation. Later invocations resume the same project setup. A provider token entered at the prompt is held only for that process; platform-managed credential bindings can survive a restart without storing a secret in `.heartwood/`.
 
 Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
 
@@ -39,17 +39,17 @@ Heartwood automatically uses the line-oriented interface when a full-screen term
 heartwood chat --plain
 ```
 
+Run `heartwood` from the directory the agent should edit. Use `--session-id` to return to a named conversation:
+
+```bash
+cd /path/to/analysis
+heartwood --session-id cohort-review
+```
+
 For scripts or a single task, submit a prompt without opening an interactive session:
 
 ```bash
-heartwood chat --prompt "Inspect the workspace and summarize the analysis."
-```
-
-Use `--session-id` to return to a named conversation, and `--workspace` to choose where Heartwood stores local session state:
-
-```bash
-heartwood --session-id cohort-review chat
-heartwood --workspace /path/to/state --session-id cohort-review chat
+heartwood chat --prompt "Inspect this project and summarize the analysis."
 ```
 
 Before starting a model-backed conversation, inspect the available connections and select a model exposed by a local runtime, research environment, or configured provider:
@@ -60,4 +60,4 @@ heartwood models refresh local
 heartwood models connect local <model-id>
 ```
 
-Additional commands manage action-confirmation settings, Skills, session replay, audit export, environment detection, and the web interface. Run `heartwood --help` or `heartwood <command> --help` for the complete command reference.
+`heartwood doctor` checks project, platform, model, credential-binding, and compute readiness without changing state. Additional commands manage model downloads, action confirmation, Skills, replay, audit export, platform detection, local-runtime launch, and the web interface. Run `heartwood --help` or `heartwood <command> --help` for the complete command reference.

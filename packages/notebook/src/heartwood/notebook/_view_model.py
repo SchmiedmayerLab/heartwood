@@ -11,10 +11,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Literal
 
-from heartwood.gateway import ModelProfile, SessionGateway
+from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 
@@ -115,13 +114,13 @@ class NotebookSession:
     def __init__(
         self,
         *,
-        workspace: Path = Path(".heartwood") / "sessions",
+        project: ProjectContext | None = None,
         session_id: str = "session-local",
         gateway: SessionGateway | None = None,
     ) -> None:
-        self.workspace = workspace
+        self.project = ProjectContext.current() if project is None else project
         self.session_id = session_id
-        self.gateway = SessionGateway(workspace=workspace) if gateway is None else gateway
+        self.gateway = SessionGateway(project=self.project) if gateway is None else gateway
         self._next_command_sequence = len(self.gateway.replay_events(session_id=session_id))
 
     def detect(self) -> NotebookViewModel:

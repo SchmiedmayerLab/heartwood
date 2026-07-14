@@ -17,6 +17,7 @@ from heartwood.core_adapter import (
     BackendEventKind,
     DeterministicAgentBackend,
     FileSessionStore,
+    LocalWorkspaceAgentBackend,
     ProposedToolCall,
     SessionService,
     SessionStoreBoundaryError,
@@ -454,7 +455,8 @@ def test_local_workspace_backend_writes_only_after_allow_once(tmp_path: Path) ->
     service = SessionService.local_default(
         tmp_path,
         session_id="session-local",
-        env={"HEARTWOOD_AGENT_BACKEND": "local-workspace"},
+        env={},
+        backend=LocalWorkspaceAgentBackend(tmp_path / "session-local" / "agent-artifacts"),
         clock=lambda: "2026-01-01T00:00:00Z",
     )
     command = _command(CommandKind.CHAT, prompt="write summary").model_copy(
@@ -474,14 +476,6 @@ def test_local_workspace_backend_writes_only_after_allow_once(tmp_path: Path) ->
 
     assert artifact.is_file()
     assert "Persisted prompt content: none" in artifact.read_text(encoding="utf-8")
-
-
-def test_local_default_rejects_unknown_backend(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="unsupported HEARTWOOD_AGENT_BACKEND"):
-        SessionService.local_default(
-            tmp_path,
-            env={"HEARTWOOD_AGENT_BACKEND": "missing"},
-        )
 
 
 class _RecordingBackend:

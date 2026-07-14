@@ -8,11 +8,11 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Acronyms And Glossary
+# Acronyms and Glossary
 
 This glossary defines acronyms and specialized terms used in Heartwood documentation. Add an entry when introducing a term and remove entries that are no longer used.
 
-## Workflow Languages And Engines
+## Workflow Languages and Engines
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -33,7 +33,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | TES | Task Execution Service | Standard API to run one containerized task anywhere |
 | TRS | Tool Registry Service | Standard API for sharing tools/workflows (used by Dockstore) |
 
-## Health Data And Genomics Standards And Formats
+## Health Data and Genomics Standards and Formats
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -48,7 +48,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | VCF | Variant Call Format | Text format listing genomic variants |
 | BAM | Binary Alignment Map | Compressed file of sequencing reads aligned to a genome |
 
-## Compliance And Security
+## Compliance and Security
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -65,7 +65,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | SPDX | Software Package Data Exchange | Standard for per-file license/copyright metadata (used by REUSE) |
 | TLS | Transport Layer Security | Encryption protocol used to secure network connections |
 
-## Cloud And Infrastructure
+## Cloud and Infrastructure
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -104,7 +104,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | GHCR | GitHub Container Registry |
 | OCI | Open Container Initiative (open standard for images & artifacts) |
 
-## AI And Agent Stack
+## AI and Agent Stack
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -119,7 +119,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | LiteLLM / Ollama / llama.cpp | *(project names)* | Model-routing proxy / local model runners |
 | SKILL.md | *(file name)* | Portable directory format for agent instructions, scripts, references, and assets |
 
-## Programming And Interoperability
+## Programming and Interoperability
 
 | Term | Expansion | What it is |
 |---|---|---|
@@ -140,7 +140,7 @@ This glossary defines acronyms and specialized terms used in Heartwood documenta
 | UI | User Interface | The screens and controls a person uses to operate software |
 | UX | User Experience | The overall user workflow and interaction quality |
 
-## Platforms And Organizations
+## Platforms and Organizations
 
 | Term | Expansion | What it is |
 |---|---|---|

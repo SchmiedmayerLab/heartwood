@@ -20,6 +20,9 @@ from heartwood.gateway import (
     ModelCatalogError,
     ModelCatalogService,
     ModelConnection,
+    ProjectConfig,
+    ProjectConfigStore,
+    ProjectContext,
     ProviderModel,
     SessionGateway,
     custom_model_connection,
@@ -329,8 +332,8 @@ def test_gateway_discovers_all_platform_models_and_materializes_one_profile(
         compatibility=lambda _connection, _model: ("available", "verified", None, True)
     )
     gateway = SessionGateway(
-        workspace=tmp_path / "sessions",
-        env={"HEARTWOOD_POLICY_PROFILE": str(_write_policy(tmp_path))},
+        project=_catalog_project(tmp_path),
+        env={},
         model_connections=(*BUILT_IN_MODEL_CONNECTIONS, research),
         model_catalog_service=service,
     )
@@ -368,8 +371,22 @@ def test_gateway_authorizes_discovery_before_retaining_transient_token(
         openai_lister=lister,
         compatibility=lambda _connection, _model: ("available", "verified", None, True),
     )
+    denied_project = _project(tmp_path / "denied")
+    local_only_policy = PolicyProfile(
+        policy_id="local-only-test",
+        platform_id="generic",
+        allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
+        allowed_model_catalog_endpoints=("http://127.0.0.1:8765/v1/models",),
+        allowed_capability_tiers=("supervised", "experimental"),
+        allowed_action_confirmation_modes=("always-confirm",),
+        credential_allowlist=(),
+    )
+    ProjectConfigStore(
+        denied_project,
+        ProjectConfig(platform_id="generic", policy=local_only_policy),
+    ).save(ProjectConfig(platform_id="generic", policy=local_only_policy))
     denied = SessionGateway(
-        workspace=tmp_path / "denied" / "sessions",
+        project=denied_project,
         env={},
         model_catalog_service=service,
     )
@@ -379,13 +396,13 @@ def test_gateway_authorizes_discovery_before_retaining_transient_token(
     assert _records(denied.model_settings(), "connections")[1]["credential_status"] == "missing"
 
     allowed = SessionGateway(
-        workspace=tmp_path / "allowed" / "sessions",
-        env={"HEARTWOOD_POLICY_PROFILE": str(_write_policy(tmp_path))},
+        project=_catalog_project(tmp_path / "allowed"),
+        env={},
         model_catalog_service=service,
     )
     catalog = allowed.discover_models("openai", token="transient-secret")
     settings = allowed.connect_model("openai", "provider-model")
-    persisted = (tmp_path / "allowed" / "models.json").read_text(encoding="utf-8")
+    persisted = (tmp_path / "allowed" / ".heartwood" / "config.toml").read_text(encoding="utf-8")
 
     assert captured == ["transient-secret"]
     assert _record(catalog, "connection")["credential_status"] == "available"
@@ -414,8 +431,8 @@ def test_custom_api_manual_fallback_reuses_the_authorized_runtime_credential(
         compatibility=lambda _connection, _model: ("experimental", "unknown", None, None),
     )
     gateway = SessionGateway(
-        workspace=tmp_path / "custom" / "sessions",
-        env={"HEARTWOOD_POLICY_PROFILE": str(_write_policy(tmp_path))},
+        project=_catalog_project(tmp_path / "custom"),
+        env={},
         model_catalog_service=service,
     )
     base_url = "https://custom.example/v1"
@@ -437,14 +454,84 @@ def test_custom_api_manual_fallback_reuses_the_authorized_runtime_credential(
     assert settings["active_profile"] == "custom-api"
     assert _records(settings, "profiles")[0]["model"] == "openai/custom-coder"
     assert "transient-custom-secret" not in str(settings)
-    assert "transient-custom-secret" not in (tmp_path / "custom" / "models.json").read_text(
-        encoding="utf-8"
-    )
+    assert "transient-custom-secret" not in (
+        tmp_path / "custom" / ".heartwood" / "config.toml"
+    ).read_text(encoding="utf-8")
     with pytest.raises(ModelCatalogError, match="requires a token"):
         gateway.discover_models(
             "custom-api",
             base_url="https://other.example/v1",
         )
+
+
+def test_generic_project_authorizes_only_the_selected_custom_api_route(
+    tmp_path: Path,
+) -> None:
+    def lister(
+        _connection: ModelConnection,
+        _api_key: str | None,
+    ) -> tuple[ProviderModel, ...]:
+        return (ProviderModel("custom-coder"),)
+
+    project = _project(tmp_path / "generic-custom")
+    gateway = SessionGateway(
+        project=project,
+        env={},
+        model_catalog_service=ModelCatalogService(
+            openai_lister=lister,
+            compatibility=lambda _connection, _model: (
+                "experimental",
+                "unknown",
+                None,
+                None,
+            ),
+        ),
+    )
+
+    first = gateway.discover_models(
+        "custom-api",
+        token="first-transient-secret",
+        base_url="https://first.example/v1",
+    )
+    second = gateway.discover_models(
+        "custom-api",
+        token="second-transient-secret",
+        base_url="https://second.example/v1",
+    )
+    config = gateway.config_store.load()
+    persisted = project.config_path.read_text(encoding="utf-8")
+
+    assert _records(first, "models")[0]["model_id"] == "custom-coder"
+    assert _records(second, "models")[0]["model_id"] == "custom-coder"
+    assert config.policy.policy_id == "generic-custom-api"
+    assert "https://second.example/v1/chat/completions" in config.policy.allowed_model_endpoints
+    assert "https://second.example/v1/models" in config.policy.allowed_model_catalog_endpoints
+    assert "https://first.example/v1/chat/completions" not in config.policy.allowed_model_endpoints
+    assert "https://first.example/v1/models" not in config.policy.allowed_model_catalog_endpoints
+    assert "HEARTWOOD_CUSTOM_MODEL_API_KEY" in config.policy.credential_allowlist
+    assert "first-transient-secret" not in persisted
+    assert "second-transient-secret" not in persisted
+
+
+def test_managed_project_does_not_widen_policy_for_custom_api(tmp_path: Path) -> None:
+    project = _project(tmp_path / "managed-custom")
+    gateway = SessionGateway(
+        project=project,
+        env={"GOOGLE_PROJECT": "synthetic-terra-project"},
+        model_catalog_service=ModelCatalogService(
+            openai_lister=lambda _connection, _api_key: (ProviderModel("custom-coder"),)
+        ),
+    )
+
+    with pytest.raises(ModelCatalogError, match="denied"):
+        gateway.discover_models(
+            "custom-api",
+            token="transient-secret",
+            base_url="https://custom.example/v1",
+        )
+
+    assert gateway.config_store.load().policy.policy_id != "generic-custom-api"
+    assert not project.config_path.exists()
 
 
 def _openai_connection() -> ModelConnection:
@@ -463,11 +550,16 @@ def _anthropic_connection() -> ModelConnection:
     )
 
 
-def _write_policy(tmp_path: Path) -> Path:
-    path = tmp_path / "policy.json"
+def _project(root: Path) -> ProjectContext:
+    root.mkdir(parents=True, exist_ok=True)
+    return ProjectContext(root)
+
+
+def _catalog_project(root: Path) -> ProjectContext:
+    project = _project(root)
     policy = PolicyProfile(
         policy_id="catalog-test",
-        platform_id="test",
+        platform_id="generic",
         allowed_model_endpoints=(
             "https://api.openai.com/v1/chat/completions",
             "https://custom.example/v1/chat/completions",
@@ -485,8 +577,11 @@ def _write_policy(tmp_path: Path) -> Path:
             "managed-identity",
         ),
     )
-    path.write_text(policy.model_dump_json(indent=2), encoding="utf-8")
-    return path
+    ProjectConfigStore(
+        project,
+        ProjectConfig(platform_id="generic", policy=policy),
+    ).save(ProjectConfig(platform_id="generic", policy=policy))
+    return project
 
 
 def _records(value: dict[str, object], key: str) -> list[dict[str, object]]:

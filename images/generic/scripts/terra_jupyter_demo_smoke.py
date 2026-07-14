@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 
+from heartwood.gateway import ProjectContext
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
 GATEWAY_HOST = "127.0.0.1"
@@ -51,8 +52,9 @@ GATEWAY_PORT = _loopback_port("HEARTWOOD_TERRA_DEMO_GATEWAY_PORT")
 PROXY_PORT = _loopback_port("HEARTWOOD_TERRA_DEMO_PROXY_PORT", excluded=frozenset({GATEWAY_PORT}))
 SERVICE_PREFIX = os.environ.get("HEARTWOOD_TERRA_DEMO_SERVICE_PREFIX", "/user/synthetic/")
 SESSION_ID = os.environ.get("HEARTWOOD_TERRA_DEMO_SESSION_ID", "terra-demo-smoke")
-STATE_ROOT = Path(os.environ.get("HEARTWOOD_TERRA_DEMO_STATE_ROOT", "/tmp/heartwood-terra-demo"))
-WORKSPACE = STATE_ROOT / "sessions"
+PROJECT_ROOT = Path(
+    os.environ.get("HEARTWOOD_TERRA_DEMO_PROJECT_ROOT", "/tmp/heartwood-terra-demo")
+)
 WEB_ROOT = Path(os.environ.get("HEARTWOOD_WEB_ROOT", "/opt/heartwood/packages/webui/dist"))
 RUNTIME_ROOT = Path(os.environ.get("HEARTWOOD_RUNTIME_ROOT", "/opt/heartwood"))
 VERBOSE = os.environ.get("HEARTWOOD_TERRA_DEMO_VERBOSE") == "1"
@@ -65,14 +67,28 @@ def main() -> int:
     if not (WEB_ROOT / "index.html").exists():
         raise SystemExit(f"web UI assets not found: {WEB_ROOT}")
 
-    shutil.rmtree(STATE_ROOT, ignore_errors=True)
-    WORKSPACE.mkdir(parents=True, exist_ok=True)
-    input_root = STATE_ROOT / "workspaces" / SESSION_ID / "input"
+    shutil.rmtree(PROJECT_ROOT, ignore_errors=True)
+    input_root = PROJECT_ROOT / "input"
     input_root.mkdir(parents=True, exist_ok=True)
     fixture_root = RUNTIME_ROOT / "fixtures" / "synthetic" / "omop-like"
     for filename in ("person.csv", "condition_occurrence.csv"):
         source = fixture_root / filename
         shutil.copy2(source, input_root / source.name)
+    subprocess.run(
+        (
+            "heartwood",
+            "setup",
+            "--model-source",
+            "local",
+            "--model-id",
+            "heartwood-local-runtime",
+            "--non-interactive",
+            "--yes",
+        ),
+        check=True,
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.DEVNULL,
+    )
 
     gateway = _start_gateway()
     proxy: ThreadingHTTPServer | None = None
@@ -109,8 +125,6 @@ def _start_gateway() -> subprocess.Popen[str]:
     return subprocess.Popen(
         [
             "heartwood",
-            "--workspace",
-            str(WORKSPACE),
             "serve",
             "--host",
             GATEWAY_HOST,
@@ -124,6 +138,7 @@ def _start_gateway() -> subprocess.Popen[str]:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
         text=True,
+        cwd=PROJECT_ROOT,
     )
 
 
@@ -297,7 +312,7 @@ def _verify_gateway_session(external_base: str) -> None:
         raise AssertionError(
             f"gateway allow did not execute the pending OpenHands action: {sorted(allowed_kinds)}"
         )
-    artifact = STATE_ROOT / "workspaces" / SESSION_ID / "cohort-summary.json"
+    artifact = PROJECT_ROOT / "cohort-summary.json"
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     summary = payload["summary"]
     if (
@@ -314,7 +329,10 @@ def _verify_notebook_api() -> None:
     if jupyter_proxy_url(port=GATEWAY_PORT, env=env) != expected_proxy_url:
         raise AssertionError("notebook proxy URL did not match Terra-style service prefix")
 
-    session = NotebookSession(workspace=WORKSPACE, session_id=f"{SESSION_ID}-notebook")
+    session = NotebookSession(
+        project=ProjectContext(PROJECT_ROOT),
+        session_id=f"{SESSION_ID}-notebook",
+    )
     view_model = session.detect()
     if not any(item.kind == "detection.proposed" for item in view_model.activity):
         raise AssertionError("notebook API did not project detection events")

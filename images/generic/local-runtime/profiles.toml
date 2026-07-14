@@ -38,8 +38,8 @@ endpoint = "http://127.0.0.1:8765/v1/chat/completions"
 host = "127.0.0.1"
 port = 8765
 supported_platforms = ["linux/amd64", "linux/arm64"]
-startup = "Set HEARTWOOD_LOCAL_MODEL_PATH to a verified downloaded or mounted GGUF file and run images/generic/scripts/start_local_runtime.sh."
-artifact_cache = "HEARTWOOD_MODEL_CACHE, backed by a mounted volume or platform-persistent directory"
+startup = "Run heartwood models download <artifact-id>, then heartwood launch from the project directory."
+artifact_cache = "The selected project's .heartwood/models directory, backed by the project volume or platform-persistent storage."
 runtime_resolution = "Load only the path selected by the operator; reviewed catalog downloads verify immutable revision, byte size, and SHA-256 before use."
 ci_scope = "CI tests the OpenHands integration with a deterministic loopback fixture and tests artifact verification separately; CI never embeds weights in images."
 

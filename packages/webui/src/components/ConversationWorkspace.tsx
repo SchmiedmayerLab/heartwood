@@ -95,7 +95,7 @@ export const ConversationWorkspace = ({
             paused ? "Resume the session to continue"
             : !modelConfigured ?
               "Choose an authorized model to start"
-            : "Ask Heartwood to work in this workspace"
+            : "Ask Heartwood to work in this project"
           }
           value={prompt}
           onChange={(event) => onPrompt(event.target.value)}
@@ -266,7 +266,7 @@ const ApprovalRequest = ({
 };
 
 const TASK_STARTERS = [
-  "Inspect the workspace",
+  "Inspect the project",
   "Summarize the available files",
   "Identify the next safe step",
 ];

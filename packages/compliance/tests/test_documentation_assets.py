@@ -10,23 +10,26 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 
-def test_documentation_index_separates_current_design_and_project_tracking() -> None:
+def test_documentation_index_uses_progressive_disclosure_and_project_tracking() -> None:
     index = _read("docs/README.md")
     readme = _read("README.md")
     development = _read("design/08-development.md")
 
     for heading in (
-        "## Current Operational Documentation",
-        "## Design And Rationale",
+        "## Get Started",
+        "## Platforms",
+        "## Deployment",
+        "## Technical Foundations",
+        "## Documentation Status",
         "## Project Planning",
         "## Published Documentation",
-        "## Status Terms",
     ):
         assert heading in index
     for term in (
@@ -35,15 +38,15 @@ def test_documentation_index_separates_current_design_and_project_tracking() -> 
         "Live-validated",
         "Institution-approved",
         "Release-ready",
-        "Planned",
     ):
         assert term in index
     assert "[Documentation](docs/README.md)" in readme
+    assert "[Use Heartwood](docs/using-heartwood.md)" in readme
     assert "[Platform Support](docs/platform-support.md)" in readme
     assert "[documentation index](../docs/README.md)" in development
     assert "https://github.com/SchmiedmayerLab/heartwood/issues" in index
     assert "https://github.com/orgs/SchmiedmayerLab/projects/2" in index
-    assert "does not serve as a backlog or implementation diary" in index
+    assert "does not serve as a backlog, implementation diary, or decision transcript" in index
 
 
 def test_platform_support_distinguishes_ci_from_live_validation() -> None:
@@ -52,13 +55,11 @@ def test_platform_support_distinguishes_ci_from_live_validation() -> None:
     assert "## Support Matrix" in support
     assert "Generic Linux or Jupyter environment | Implemented" in support
     assert "Terra Jupyter | Implemented platform-derived image" in support
-    assert "All of Us or AnVIL through Terra | Design target only" in support
-    assert "Seven Bridges or Velsera | Design target only" in support
-    assert "DNAnexus or UK Biobank Research Analysis Platform | Design target only" in support
+    assert "Design target only" not in support
     assert "Real Terra workspace validation remains required" in support
     assert "does not establish a business associate agreement" in support
-    assert "synthetic OMOP data-source fixture" in support
-    assert "not a complete Terra runtime adapter" in support
+    assert "synthetic fixtures" in support
+    assert "does not infer authorization for workspace data" in support
     assert "concurrent independent processes writing the same session" in support
 
 
@@ -85,6 +86,9 @@ def test_planned_work_is_owned_by_github_tracking() -> None:
         assert "Delivery Roadmap" not in content
         assert "## Future " not in content
         assert "in the roadmap" not in content.lower()
+        assert re.search(r"github\.com/[^\s)]+/issues/\d+", content) is None
+        assert "TODO" not in content
+        assert "TBD" not in content
 
 
 def test_architecture_requires_upstream_reuse() -> None:
@@ -118,8 +122,8 @@ def test_web_experience_remains_a_gateway_projection() -> None:
     assert "gateway-owned session metadata" in architecture
     assert "Unknown or unconfigured state is explicit" in architecture
     assert "Endpoint validation or artifact integrity is not capability evidence" in testing
-    assert "gateway-owned session lifecycle" in readme
-    assert "Boundary and workflow labels require typed gateway evidence" in readme
+    assert "interactive terminal, a web interface, or a notebook" in readme
+    assert "private `.heartwood/` directory inside the project" in readme
 
 
 def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path) -> None:
@@ -131,16 +135,25 @@ def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path)
     assert (destination / "index.md").read_text(encoding="utf-8") == '--8<-- "README.md"\n'
     assert (destination / "docs" / "README.md").is_file()
     assert (destination / "docs" / "assets" / "web-reference-analysis.png").is_file()
-    assert (destination / "ACRONYMS.md").is_file()
-    assert (destination / "LICENSE").is_file()
+    for filename in (
+        "ACRONYMS.md",
+        "CONTRIBUTING.md",
+        "CONTRIBUTORS.md",
+        "LICENSE",
+        "NOTICE",
+    ):
+        assert (destination / filename).is_file()
     assert (destination / "stylesheets" / "extra.css").is_file()
     for index in range(1, 9):
         assert tuple((destination / "design").glob(f"{index:02d}-*.md"))
     assert not tuple((destination / "design").glob("09-*.md"))
 
     readme = (destination / "README.md").read_text(encoding="utf-8")
-    assert f"tree/{stager.declared_version(_repo_root())}/packages/gateway" in readme
-    assert "](packages/gateway)" not in readme
+    contributing = (destination / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    version = stager.declared_version(_repo_root())
+    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}" in readme
+    assert f"releases/download/{version}/heartwood-installer" in readme
+    assert f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}/AGENTS.md" in contributing
 
 
 def test_documentation_stager_rejects_destructive_output_paths() -> None:
@@ -158,11 +171,13 @@ def test_web_interface_documentation_uses_synthetic_system_screenshots() -> None
     package = json.loads(_read("packages/webui/package.json"))
     assets = _repo_root() / "docs" / "assets"
 
-    assert "synthetic reference analysis demonstrates one shared conversation" in web_interface
-    assert "including action review and persisted evidence" in web_interface
-    assert "not model quality or live Terra behavior" in web_interface
-    assert "npm run screenshots:docs" in web_interface
-    assert "responsive layout, not live Leonardo proxy" in terra
+    assert (
+        "same conversations, model selection, action review, Skills, and audit history"
+        in web_interface
+    )
+    assert "Allow all once" in web_interface
+    assert "documentation screenshots contain synthetic data only" in web_interface.lower()
+    assert "responsive layout used by the automated notebook-viewport test" in terra
     assert package["scripts"]["screenshots:docs"].endswith("../../docs/assets")
     for filename in ("web-reference-analysis.png", "web-notebook-viewport.png"):
         screenshot = assets / filename
@@ -195,13 +210,16 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
 
     assert notebook["nbformat"] == 4
     assert "Terra-Style Jupyter Demo" in sources[0]
-    assert "0.1.1-terra`" in combined
+    assert "0.2.0-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
     assert "NotebookSession" in combined
     assert "jupyter_proxy_url(port=8767)" in combined
-    assert "start_web_ui.sh" in combined
+    assert "heartwood serve" in combined
+    assert "os.chdir(project_root)" in combined
+    assert "--workspace" not in combined
+    assert "HEARTWOOD_WORKSPACE" not in combined
     assert "session.detect()" in combined
     assert "target-condition cohort" in combined
     assert "session.run(prompt)" in combined
@@ -216,7 +234,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
             assert cell["outputs"] == []
 
 
-def test_readme_and_model_guides_define_both_runtime_paths() -> None:
+def test_readme_and_model_guides_define_project_and_no_weight_runtime_paths() -> None:
     readme = _read("README.md")
     container = _read("docs/container-images.md")
     local = _read("docs/getting-started-offline.md")
@@ -224,27 +242,19 @@ def test_readme_and_model_guides_define_both_runtime_paths() -> None:
     for document in (readme, container, local):
         assert "model weights" in document.lower()
         assert "OpenHands" in document
-        assert "policy" in document.lower()
-    assert "heartwood models refresh local" in readme
-    assert "heartwood models connect local <model-id>" in readme
-    assert "heartwood models download" in readme
-    assert "environment variables, mounted files, managed identity" in readme
+        assert ".heartwood" in document
+    assert "current directory as the project" in readme
+    assert "heartwood models download" not in readme
+    assert "enter a token through the hidden terminal prompt" in readme
     assert "business associate agreement" in readme
-    assert "pushes each result by digest" in container
-    assert "persistent `-amd64` and `-arm64` helper tags" in container
-    assert "Public commit and moving tags are promotion outputs" in container
-    assert "publication jobs run only for the `main` ref" in container
-    assert "pull requests continue to run CI validation" in container
-    assert "checks the current `main` commit immediately before" in container
-    assert "candidate-validation failure leaves the candidate untagged" in container
-    assert "promotion failure may leave the validated immutable commit tag" in container
-    assert "Automated retention is not implemented" in container
-    assert "issues/47" in container
-    assert "HEARTWOOD_LOCAL_MODEL_PATH" in container
+    assert "easiest way to use the complete CLI and browser interface" in container
+    assert "one project mount" in container.lower()
+    assert "Semantic Version tags" in container
+    assert "HEARTWOOD_LOCAL_MODEL_PATH" not in container
     assert "deterministic loopback model fixture" in local
-    assert "allowed_model_catalog_endpoints" in local
-    assert "mounted capable-model test" in local
-    assert "capable_model_e2e.sh" in local
+    assert "reviewed download" in local
+    assert "one persistent project mount" in local
+    assert "`run_capable_model` option" in local
     assert "`AlwaysConfirm`" in local
     for stale in ("edge-smoke", "edge-providers", "edge-coder-7b", "edge-terra-smoke"):
         assert stale not in readme
@@ -258,45 +268,49 @@ def test_model_connection_guide_defines_shared_provider_and_platform_contracts()
     assert "heartwood.model-connections.v1" in guide
     assert "heartwood models refresh <connection-id>" in guide
     assert "heartwood models connect <connection-id> <model-id>" in guide
-    assert "Official OpenAI model-list operation" in guide
-    assert "Official Anthropic model-list operation" in guide
-    assert "HEARTWOOD_MODEL_CONNECTIONS" in guide
-    assert "allowed_model_catalog_endpoints" in guide
-    assert "allowed_model_endpoints" in guide
-    assert "api_version" in guide
-    assert "aws_region_name" in guide
-    assert "aws_profile_name" in guide
-    assert "The CLI has no token argument" in guide
+    assert "official OpenAI model-list operation" in guide
+    assert "official Anthropic model-list operation" in guide
+    assert "current project's `.heartwood/config.toml`" in guide
+    assert "A token entered in the terminal or web interface remains only" in guide
+    assert "managed research environment" in guide
+    assert "absolute HTTPS base URL" in guide
+    assert "CLI deliberately has no token command-line argument" in guide
+    assert "HEARTWOOD_MODEL_CONNECTIONS" not in guide
 
 
-def test_carina_runbook_uses_the_release_with_the_runtime_fixes() -> None:
+def test_carina_runbook_uses_project_local_release_workflow() -> None:
     runbook = _read("docs/carina-cli.md")
 
-    assert "HEARTWOOD_VERSION=0.1.1" in runbook
-    assert "first release with the corrected Carina" in runbook
+    assert "## Install Release 0.2.0" in runbook
+    assert "--version 0.2.0" in runbook
+    assert "project's private `.heartwood/` state" in runbook
+    assert "heartwood models download qwen25-7b-instruct-vllm" in runbook
+    assert "heartwood launch" in runbook
+    assert "HEARTWOOD_ROOT" not in runbook
+    assert "--model-root" not in runbook
 
 
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     runbook = _read("docs/terra-jupyter-demo.md")
 
-    assert "ghcr.io/schmiedmayerlab/heartwood:0.1.1-terra" in runbook
+    assert "ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra" in runbook
     assert "contains no model weights" in runbook
-    assert "Terra Jupyter Notebook base image" in runbook
+    assert "Terra Jupyter Python base" in runbook
     assert "application/vnd.docker.distribution.manifest.v2+json" in runbook
-    assert "Leonardo rejects an Open Container Initiative index" in runbook
-    assert "heartwood-workspace/models" in runbook
+    assert "rejects an Open Container Initiative index" in runbook
+    assert "current project's `.heartwood/models/`" in runbook
     assert "models refresh <connection-id>" in runbook
     assert "models connect" in runbook
-    assert "models refresh local" in runbook
-    assert "HEARTWOOD_MODEL_CONNECTIONS" in runbook
+    assert "HEARTWOOD_MODEL_CONNECTIONS" not in runbook
     assert "business associate agreement" in runbook
     assert "Allow all once" in runbook
     assert "Reject all" in runbook
-    assert "WORKSPACE_BUCKET" in runbook
     assert "24 synthetic people" in runbook
     assert "target-condition cohort" in runbook
-    assert "custom image and base image digests" in runbook
-    assert "real Terra workspace validation remains required" in runbook
+    assert "Heartwood image and Terra base image digests" in runbook
+    assert "real Terra workspace validation" in runbook
+    assert "heartwood serve" in runbook
+    assert "heartwood launch --web" in runbook
     assert "edge-terra-coder" not in runbook
     assert "edge-terra-smoke" not in runbook
 
@@ -313,7 +327,7 @@ def test_platform_extension_guide_defines_one_shared_mechanism() -> None:
         ".github/workflows/container-image.yml",
     ):
         assert path in guide
-    assert "Add Or Adapt A Platform Image" in guide
+    assert "Add or Adapt a Platform Image" in guide
     assert "same Heartwood payload" in guide
     assert "Keep model weights and credentials out of every layer" in guide
     assert "Keep `--set <target>.platform=<architecture>`" in guide

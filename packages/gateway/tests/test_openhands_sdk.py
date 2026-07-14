@@ -188,6 +188,7 @@ def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> No
         workspace=tmp_path / "workspace",
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
+        conversation_key="credential-test",
         env={},
         conversation_factory=cast(ConversationFactory, lambda _callback: _FakeConversation()),
     )
@@ -318,6 +319,7 @@ def test_openhands_backend_does_not_create_conversation_until_first_agent_operat
         workspace=tmp_path / "workspace",
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
+        conversation_key="lazy-test",
         env={},
         conversation_factory=cast(ConversationFactory, factory),
     )
@@ -561,6 +563,7 @@ def _backend(
         workspace=tmp_path / "workspace",
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
+        conversation_key="backend-test",
         action_confirmation_mode=mode,
         env={},
         conversation_factory=cast(ConversationFactory, factory),

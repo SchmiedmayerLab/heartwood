@@ -37,4 +37,4 @@ __all__ = [
     "assert_registry_adapter_conforms",
 ]
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"

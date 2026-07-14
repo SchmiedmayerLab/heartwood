@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
+from typing import Protocol
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.core_adapter import (
@@ -27,8 +29,6 @@ from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
     ActionSettings,
     ActionSettingsError,
-    ActionSettingsStore,
-    action_settings_path,
 )
 from heartwood.gateway._model_artifacts import (
     ModelArtifactCatalog,
@@ -47,16 +47,13 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     custom_model_connection,
     load_model_connections,
-    model_connections_path,
 )
 from heartwood.gateway._model_settings import (
     MODEL_PRESETS,
     ModelProfile,
     ModelSettings,
     ModelSettingsError,
-    ModelSettingsStore,
     model_profile_from_preset,
-    model_settings_path,
 )
 from heartwood.gateway._model_snapshots import (
     ModelSnapshotCatalog,
@@ -65,6 +62,13 @@ from heartwood.gateway._model_snapshots import (
     load_model_snapshot_catalog,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+from heartwood.gateway._project import ProjectContext
+from heartwood.gateway._project_config import (
+    ProjectActionSettingsStore,
+    ProjectConfig,
+    ProjectConfigStore,
+    ProjectModelSettingsStore,
+)
 from heartwood.gateway._session_catalog import SessionCatalog, SessionCatalogError
 from heartwood.gateway._skill_settings import SkillManager
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
@@ -73,6 +77,22 @@ from heartwood.schemas import PolicyProfile
 from heartwood.session import SessionCommand, SessionEvent
 
 SessionServiceFactory = Callable[[Path, str], SessionService]
+
+
+class _ModelSettingsStore(Protocol):
+    def load(self) -> ModelSettings:
+        """Load model settings."""
+
+    def save(self, settings: ModelSettings) -> None:
+        """Persist model settings."""
+
+
+class _ActionSettingsStore(Protocol):
+    def load(self) -> ActionSettings:
+        """Load action settings."""
+
+    def save(self, settings: ActionSettings) -> None:
+        """Persist action settings."""
 
 
 class _UnconfiguredAgentBackend:
@@ -165,31 +185,39 @@ class SessionGateway:
     def __init__(
         self,
         *,
-        workspace: Path,
+        project: ProjectContext | None = None,
         service_factory: SessionServiceFactory | None = None,
         env: Mapping[str, str] | None = None,
-        settings_store: ModelSettingsStore | None = None,
-        action_settings_store: ActionSettingsStore | None = None,
+        settings_store: _ModelSettingsStore | None = None,
+        action_settings_store: _ActionSettingsStore | None = None,
         artifact_catalog: ModelArtifactCatalog | None = None,
         snapshot_catalog: ModelSnapshotCatalog | None = None,
         model_connections: Sequence[ModelConnection] | None = None,
         model_catalog_service: ModelCatalogService | None = None,
+        backend_id: str = "auto",
     ) -> None:
-        self.workspace = workspace
+        self.project = ProjectContext.current() if project is None else project
+        self.project.initialize()
+        self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
-        self.settings_store = settings_store or ModelSettingsStore(
-            model_settings_path(workspace, self.env)
+        self.backend_id = backend_id
+        adapter = select_platform_adapter(self.env)
+        self.config_store = ProjectConfigStore(
+            self.project,
+            ProjectConfig(
+                platform_id=adapter.adapter_id,
+                policy=adapter.default_policy_profile(),
+            ),
         )
-        self.action_settings_store = action_settings_store or ActionSettingsStore(
-            action_settings_path(workspace, self.env)
+        self.settings_store = settings_store or ProjectModelSettingsStore(self.config_store)
+        self.action_settings_store = action_settings_store or ProjectActionSettingsStore(
+            self.config_store
         )
+        configured_connections = self.config_store.load().additional_connections
         loaded_connections = (
             tuple(model_connections)
             if model_connections is not None
-            else load_model_connections(
-                model_connections_path(self.env)
-                or _persisted_configuration_path(workspace, "model-connections.json")
-            )
+            else (*load_model_connections(None), *configured_connections)
         )
         for connection in loaded_connections:
             connection.validate(configurable=connection.connection_id == "custom-api")
@@ -202,50 +230,30 @@ class SessionGateway:
         self.model_catalog_service = model_catalog_service or ModelCatalogService()
         self._runtime_credentials: dict[str, str] = {}
         repository_root = _repository_root()
-        catalog_path = Path(
-            self.env.get(
-                "HEARTWOOD_MODEL_CATALOG",
-                str(
-                    repository_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
-                ),
-            )
+        catalog_path = (
+            repository_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
         )
         self.artifact_catalog = artifact_catalog or load_model_artifact_catalog(catalog_path)
-        snapshot_catalog_path = Path(
-            self.env.get(
-                "HEARTWOOD_MODEL_SNAPSHOT_CATALOG",
-                str(repository_root / "images" / "generic" / "local-runtime" / "snapshots.toml"),
-            )
+        snapshot_catalog_path = (
+            repository_root / "images" / "generic" / "local-runtime" / "snapshots.toml"
         )
         self.snapshot_catalog = snapshot_catalog or load_model_snapshot_catalog(
             snapshot_catalog_path
         )
-        self.model_cache_dir = Path(
-            self.env.get("HEARTWOOD_MODEL_CACHE", str(workspace.parent / "models"))
-        )
+        self.model_cache_dir = self.project.models_dir
         self.artifact_manager = ModelArtifactManager(
             catalog=self.artifact_catalog,
             cache_dir=self.model_cache_dir,
         )
-        bundled_skills_dir = Path(
-            self.env.get(
-                "HEARTWOOD_SKILLS_DIR",
-                str(repository_root / "skills" / "verified"),
-            )
-        )
-        self.installed_skills_dir = Path(
-            self.env.get(
-                "HEARTWOOD_INSTALLED_SKILLS_DIR",
-                str(workspace.parent / "skills"),
-            )
-        )
+        bundled_skills_dir = repository_root / "skills" / "verified"
+        self.installed_skills_dir = self.project.skills_dir
         self.skill_manager = SkillManager(
             bundled_dir=bundled_skills_dir,
             installed_dir=self.installed_skills_dir,
-            audit_path=workspace.parent / "skill-installations.jsonl",
+            audit_path=self.project.audit_dir / "skill-installations.jsonl",
         )
         self._service_factory = service_factory
-        self.session_catalog = SessionCatalog(workspace)
+        self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
         self._streams = EventStreamHub()
 
@@ -285,7 +293,7 @@ class SessionGateway:
     def audit_export(self, session_id: str) -> dict[str, object]:
         """Return a generated scrubbed audit export for browser delivery."""
         self.session_catalog.get(session_id)
-        store = FileSessionStore(self.workspace, session_id)
+        store = FileSessionStore(self.sessions_root, session_id)
         try:
             content = store.read_audit_export()
         except OSError as error:
@@ -426,7 +434,7 @@ class SessionGateway:
             description=f"{connection.label}: {entry.display_name}",
         )
         settings = self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
-        self.settings_store.save(settings)
+        self._save_model_selection(connection.connection_id, settings)
         self._reset_services()
         return self.model_settings()
 
@@ -465,21 +473,22 @@ class SessionGateway:
         """Configure and select a provider using gateway-owned preset defaults."""
         profile = model_profile_from_preset(preset_id, model_name)
         settings = self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
-        self.settings_store.save(settings)
+        self._save_model_selection(preset_id, settings)
         self._reset_services()
         return self.model_settings()
 
     def select_model_profile(self, profile_id: str) -> dict[str, object]:
         """Select a profile and reset active services."""
         settings = self.settings_store.load().selecting(profile_id)
-        self.settings_store.save(settings)
+        self._save_model_selection(profile_id, settings)
         self._reset_services()
         return self.model_settings()
 
     def remove_model_profile(self, profile_id: str) -> dict[str, object]:
         """Remove a profile and reset active services."""
         settings = self.settings_store.load().without_profile(profile_id)
-        self.settings_store.save(settings)
+        source = self.config_store.load().model_source
+        self._save_model_selection(None if source == profile_id else source, settings)
         self._reset_services()
         return self.model_settings()
 
@@ -520,24 +529,22 @@ class SessionGateway:
     def download_model_artifact_now(
         self,
         artifact_id: str,
-        *,
-        cache_dir: Path | None = None,
     ) -> Path:
-        """Download and verify an artifact synchronously for CLI and automation."""
+        """Download, verify, and select an artifact for this project."""
         artifact = self.artifact_catalog.artifact(artifact_id)
-        return download_artifact(
-            artifact,
-            cache_dir=self.model_cache_dir if cache_dir is None else cache_dir,
+        path = download_artifact(artifact, cache_dir=self.model_cache_dir)
+        self.config_store.select_local_model(
+            artifact_id=artifact_id,
+            path=path,
+            runtime=_runtime_kind(artifact.runtime_profile),
         )
+        return path
 
     def download_local_model_now(
         self,
         model_id: str,
-        *,
-        cache_dir: Path | None = None,
     ) -> Path:
-        """Download a reviewed single-file artifact or multi-file snapshot."""
-        destination = self.model_cache_dir if cache_dir is None else cache_dir
+        """Download, verify, and select a reviewed local model."""
         try:
             artifact = self.artifact_catalog.artifact(model_id)
         except ModelArtifactError:
@@ -545,8 +552,17 @@ class SessionGateway:
                 snapshot = self.snapshot_catalog.snapshot(model_id)
             except ModelSnapshotError as error:
                 raise ModelSnapshotError(f"unknown reviewed local model: {model_id}") from error
-            return download_model_snapshot(snapshot, cache_dir=destination)
-        return download_artifact(artifact, cache_dir=destination)
+            path = download_model_snapshot(snapshot, cache_dir=self.model_cache_dir)
+            runtime = _runtime_kind(snapshot.runtime_profile)
+        else:
+            path = download_artifact(artifact, cache_dir=self.model_cache_dir)
+            runtime = _runtime_kind(artifact.runtime_profile)
+        self.config_store.select_local_model(
+            artifact_id=model_id,
+            path=path,
+            runtime=runtime,
+        )
+        return path
 
     def skill_settings(self) -> dict[str, object]:
         """Return bundled and explicitly installed Skills."""
@@ -573,7 +589,7 @@ class SessionGateway:
         service = self._services.get(session_id)
         if service is None:
             if self._service_factory is not None:
-                service = self._service_factory(self.workspace, session_id)
+                service = self._service_factory(self.sessions_root, session_id)
             else:
                 service = self._default_service(session_id)
             self._services[session_id] = service
@@ -588,7 +604,7 @@ class SessionGateway:
             session_id=session_id,
         )
         return SessionService.local_default(
-            self.workspace,
+            self.sessions_root,
             session_id=session_id,
             backend=backend,
             policy_profile=self._policy_profile(),
@@ -602,13 +618,13 @@ class SessionGateway:
         action_settings: ActionSettings,
         session_id: str,
     ) -> AgentBackend:
-        backend_id = self.env.get("HEARTWOOD_AGENT_BACKEND", "auto")
+        backend_id = self.backend_id
         if backend_id in {"deterministic", "deterministic-local"}:
             return DeterministicAgentBackend(
                 action_confirmation_mode=action_settings.confirmation_mode
             )
         if backend_id not in {"auto", "openhands", "openhands-sdk"}:
-            msg = f"unsupported HEARTWOOD_AGENT_BACKEND: {backend_id}"
+            msg = f"unsupported agent backend: {backend_id}"
             raise ValueError(msg)
         try:
             profile = model_settings.profile()
@@ -616,10 +632,11 @@ class SessionGateway:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
         return OpenHandsSdkBackend(
             profile=profile,
-            workspace=self.workspace.parent / "workspaces" / session_id,
+            workspace=self.project.root,
             skills_dir=self.skill_manager.bundled_dir,
             additional_skills_dirs=(self.installed_skills_dir,),
-            persistence_dir=self.workspace.parent / "openhands",
+            persistence_dir=self.sessions_root / session_id / "openhands",
+            conversation_key=f"{self.project.root}#{session_id}",
             credential_environment_names=tuple(
                 configured_profile.api_key_env
                 for configured_profile in model_settings.profiles
@@ -631,13 +648,7 @@ class SessionGateway:
         )
 
     def _policy_profile(self) -> PolicyProfile:
-        return (
-            _policy_profile(
-                self.env,
-                fallback=_persisted_configuration_path(self.workspace, "policy.json"),
-            )
-            or select_platform_adapter(self.env).default_policy_profile()
-        )
+        return self.config_store.load().policy
 
     def _resolve_model_connection(
         self,
@@ -664,12 +675,46 @@ class SessionGateway:
         )
         has_token = bool(token) or bool(self.env.get(credential_name)) or bool(runtime_token)
         dynamic = custom_model_connection(base_url, has_token=has_token)
+        self._configure_generic_custom_policy(dynamic)
         if connection != dynamic:
             if connection.base_url != dynamic.base_url:
                 self._runtime_credentials.pop(credential_name, None)
             self._model_connections[connection_id] = dynamic
             self.model_catalog_service.invalidate(connection_id)
         return dynamic
+
+    def _configure_generic_custom_policy(self, connection: ModelConnection) -> None:
+        config = self.config_store.load()
+        if config.platform_id != "generic" or config.policy.policy_id not in {
+            "generic-default",
+            "generic-custom-api",
+        }:
+            return
+        if connection.catalog_endpoint is None or connection.policy_endpoint is None:
+            raise ModelCatalogError("Custom API requires catalog and completion endpoints")
+        default_policy = select_platform_adapter({}).default_policy_profile()
+        credential_allowlist = default_policy.credential_allowlist
+        if connection.credential_reference is not None:
+            credential_allowlist = (
+                *credential_allowlist,
+                connection.credential_reference,
+            )
+        policy = default_policy.model_copy(
+            update={
+                "policy_id": "generic-custom-api",
+                "allowed_model_endpoints": (
+                    *default_policy.allowed_model_endpoints,
+                    connection.policy_endpoint,
+                ),
+                "allowed_model_catalog_endpoints": (
+                    *default_policy.allowed_model_catalog_endpoints,
+                    connection.catalog_endpoint,
+                ),
+                "credential_allowlist": tuple(dict.fromkeys(credential_allowlist)),
+                "notes": "Generic project policy for one explicitly selected Custom API route.",
+            }
+        )
+        self.config_store.save(replace(config, policy=policy))
 
     def _authorize_model_catalog(self, connection: ModelConnection) -> None:
         if connection.catalog_endpoint is None:
@@ -705,26 +750,12 @@ class SessionGateway:
             service.close()
         self._services.clear()
 
-
-def _policy_profile(
-    env: Mapping[str, str],
-    *,
-    fallback: Path | None = None,
-) -> PolicyProfile | None:
-    configured = env.get("HEARTWOOD_POLICY_PROFILE")
-    path = Path(configured) if configured else fallback
-    if path is None or not path.is_file():
-        return None
-    try:
-        return PolicyProfile.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        msg = f"unable to load policy profile {path}: {error}"
-        raise ValueError(msg) from error
-
-
-def _persisted_configuration_path(workspace: Path, name: str) -> Path | None:
-    path = workspace.parent / name
-    return path if path.is_file() else None
+    def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:
+        if isinstance(self.settings_store, ProjectModelSettingsStore):
+            self.settings_store.save_selection(source, settings)
+            return
+        self.settings_store.save(settings)
+        self.config_store.select_model_source(source, settings)
 
 
 def _repository_root() -> Path:
@@ -737,3 +768,11 @@ def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:
         if selected in {entry.model_id, entry.execution_model}:
             return entry
     raise ModelCatalogError(f"model is not present in the discovered catalog: {model_id}")
+
+
+def _runtime_kind(profile: str) -> str:
+    if profile.startswith("llama-cpp"):
+        return "llama-cpp"
+    if profile.startswith("vllm"):
+        return "vllm"
+    raise ModelArtifactError(f"unsupported local runtime profile: {profile}")

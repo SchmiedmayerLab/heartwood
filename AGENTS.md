@@ -25,10 +25,10 @@ When project direction changes, update the relevant design document first, then 
 | Product summary and documentation index | [README.md](README.md) |
 | Documentation roles and status vocabulary | [docs/README.md](docs/README.md) |
 | Current platform implementation and validation status | [docs/platform-support.md](docs/platform-support.md) |
-| Researcher web workflow, model setup, actions, audit, CLI parity, and notebook layout | [docs/web-interface.md](docs/web-interface.md) |
+| Browser workflow, model setup, actions, audit, CLI parity, and notebook layout | [docs/web-interface.md](docs/web-interface.md) |
 | Project scope, users, and reference workflow | [design/01-overview.md](design/01-overview.md) |
 | Target platforms and deployment assumptions | [design/02-platforms.md](design/02-platforms.md) |
-| Core architecture, session gateway, adapter SPI, interaction surfaces, and data flow | [design/03-architecture.md](design/03-architecture.md) |
+| Project and state contract, core architecture, session gateway, adapter SPI, interaction surfaces, and data flow | [design/03-architecture.md](design/03-architecture.md) |
 | `SKILL.md` packaging, metadata, detection, and sharing model | [design/04-skills.md](design/04-skills.md) |
 | Security model, PHI handling, skill trust, and compliance kit | [design/05-security-compliance.md](design/05-security-compliance.md) |
 | Audit log, tamper-evidence, activity view, and improvement loop | [design/06-observability-audit.md](design/06-observability-audit.md) |
@@ -49,6 +49,7 @@ When project direction changes, update the relevant design document first, then 
 
 - Read the relevant design doc before editing implementation code in that area.
 - Prefer the existing architecture: typed contracts, adapters at platform boundaries, deterministic fake providers for tests, one shared session command/event model for all interfaces, OpenHands-owned conversations and coding tools, and a gateway-owned OpenHands adapter as the only agent path.
+- Until Heartwood reaches `1.0.0`, prefer one clean, coherent contract over backward compatibility with unreleased commands, flags, environment variables, state layouts, APIs, or internal abstractions. Remove superseded paths completely and update implementation, tests, documentation, and release notes together; add a compatibility layer only when a documented data-integrity, security, or deployment requirement makes it necessary.
 - Keep changes scoped to the requested behavior. Avoid unrelated refactors, metadata churn, or parallel architecture tracks.
 - Add or update tests when changing detector logic, policy decisions, adapter behavior, skill validation, audit records, attestation export, CLI output, notebook view models, or web-UI view models.
 - Keep security and compliance claims evidence-backed. If a claim cannot be tested, audited, or linked to a platform control, document it as a limitation.

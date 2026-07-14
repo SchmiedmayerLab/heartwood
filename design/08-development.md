@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # 08 — Development Practices
 
-## Languages And Toolchain
+## Languages and Toolchain
 
 - **Python 3.12 runtime.** The core, gateway, OpenHands adapter, model settings, detector, policy, audit, CLI, notebook bridge, and image scripts use the locked `uv` workspace. Ruff, strict mypy, pytest with branch coverage, and Pydantic are the implemented quality tools.
 - **TypeScript web UI.** The Stanford Spezi web stack, React, Vite, strict TypeScript, ESLint, Prettier, Vitest, Testing Library, and Playwright implement and verify the conversation interface.
@@ -22,6 +22,12 @@ SPDX-License-Identifier: MIT
 Use short-lived branches, reviewed pull requests, locked dependencies, synthetic fixtures, SPDX headers, and narrowly scoped changes. Organization community-health files and reusable validation workflows remain the canonical contribution layer. One dependency-based `Main Validation` workflow orchestrates reusable component workflows on pull requests and `main`; its final release-readiness job succeeds only when every event-appropriate component succeeds. Component workflows remain manually dispatchable for diagnostics. Required checks block merges and releases rather than live sessions.
 
 Dependencies are admitted only when they provide a maintained capability that is impractical to implement safely in the existing stack. Agent behavior must use the pinned OpenHands SDK and tools; provider compatibility must use LiteLLM; local artifact retrieval must use the Hugging Face client; notebook routing must use Jupyter infrastructure; and container publication must use standard Docker and OCI tooling. Dependency-specific behavior belongs behind one adapter with conformance tests so upgrades do not spread version assumptions through the product.
+
+## Pre-1.0 Change Policy
+
+Before `1.0.0`, Heartwood optimizes for a small, internally consistent product rather than compatibility with unreleased interfaces. A replacement removes obsolete command forms, environment-variable configuration, state layouts, schemas, and internal APIs instead of retaining aliases, dual readers, or parallel execution paths. The same change must update every interface, platform adapter, test, and current operational document that uses the replaced contract.
+
+A breaking change must still fail clearly and protect user data. Heartwood must not silently reinterpret incompatible state, overwrite an existing project, expose credentials, or claim that an old layout was migrated when no tested migration exists. Release notes identify user-visible breaks and the supported clean setup. Compatibility or migration code requires a concrete data-integrity, security, or deployment need recorded in the owning issue; anticipated post-`1.0.0` compatibility is not sufficient reason to carry it now.
 
 ## Implemented Continuous Integration
 
@@ -36,16 +42,16 @@ Dependencies are admitted only when they provide a maintained capability that is
 
 The workflows use least-privilege permissions and do not expose repository secrets to pull-request jobs. Package publication uses `GITHUB_TOKEN` only in the main publication workflow.
 
-## Licensing And Attribution
+## Licensing and Attribution
 
-The repository is MIT licensed and REUSE compliant. Every tracked source file carries SPDX metadata, and the web workflow checks npm package licenses. GitHub dependency review adds license and vulnerability context when the repository is public. Python dependency inventory and generated third-party notices are not published; [Issue #48](https://github.com/SchmiedmayerLab/heartwood/issues/48) owns that release-assurance requirement.
+The repository is MIT licensed and REUSE compliant. Every tracked source file carries SPDX metadata, and the web workflow checks npm package licenses. GitHub dependency review adds license and vulnerability context when the repository is public. Python dependency inventory and generated third-party notices are not published.
 
-## Testing And Documentation
+## Testing and Documentation
 
 Pure-code safety paths have enforced coverage, while CLI, notebook, REST, transport, web, and image behavior use contract and integration tests described in [07](07-testing-eval.md). All public fixtures and traces are synthetic. The [documentation index](../docs/README.md) defines document roles and status vocabulary: `docs/` owns current operational guidance and platform evidence, `design/01` through `design/08` own durable rationale, and [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) with the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) own planned implementation and delivery status. Documentation checks must reject broken internal links, obsolete image tags, unsupported-platform claims, version-relative implementation narrative, and planned work presented as implemented behavior.
 
 ## Supply Chain
 
-Application dependencies are hash-locked, image base versions and downloaded runtime archives are pinned, and optional model artifacts require immutable revisions, byte sizes, SHA-256 digests, and license metadata. Published images contain no credentials or model weights. BuildKit attestations are implemented for the generic image. Failed staging digests remain untagged and cannot move a public channel. Graph-aware GHCR retention is tracked in [Issue #47](https://github.com/SchmiedmayerLab/heartwood/issues/47), and the unimplemented signing, notices, support, and governance controls are tracked in [Issue #48](https://github.com/SchmiedmayerLab/heartwood/issues/48).
+Application dependencies are hash-locked, image base versions and downloaded runtime archives are pinned, and optional model artifacts require immutable revisions, byte sizes, SHA-256 digests, and license metadata. Published images contain no credentials or model weights. BuildKit attestations are implemented for the generic image. Failed staging digests remain untagged and cannot move a public channel. Graph-aware GHCR retention, cryptographic signing, generated notices, and formal support governance are not implemented.
 
 Native installation assets are built from the exact release candidate by GitHub Actions. Pull requests and every `main` commit build the same bundle and exercise verification and dry-run installation without publishing. The protected release workflow rebuilds the bundle with the approved Semantic Version, exercises the installation smoke test, attests the files, and attaches the fixed-name source bundle, standalone installer, and SHA-256 manifest to the release. The installer rejects a missing or mismatched manifest and supports an explicitly supplied local bundle for restricted-network transfer workflows.

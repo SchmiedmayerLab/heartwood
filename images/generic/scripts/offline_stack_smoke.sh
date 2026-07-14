@@ -12,42 +12,39 @@ if ! command -v jq >/dev/null; then
   exit 69
 fi
 
-workspace="${HEARTWOOD_SMOKE_WORKSPACE:-/tmp/heartwood-sessions}"
-state_root="$(dirname "${workspace}")"
+project="${HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project}"
+state_root="${project}/.heartwood"
+workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-offline-stack}"
 rejected_session_id="${session_id}-rejected"
 automatic_session_id="${session_id}-automatic"
 risky_session_id="${session_id}-risky"
-settings="${HEARTWOOD_MODEL_SETTINGS:-/tmp/heartwood-models.json}"
-action_settings="${HEARTWOOD_ACTION_SETTINGS:-/tmp/heartwood-actions.json}"
 request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.jsonl}"
 audit_copy="${HEARTWOOD_AUDIT_EXPORT:-/tmp/heartwood-audit-export.jsonl}"
 transcript="${HEARTWOOD_TRANSCRIPT:-/tmp/heartwood-offline-transcript.txt}"
 automatic_transcript="${HEARTWOOD_AUTOMATIC_TRANSCRIPT:-/tmp/heartwood-automatic-transcript.txt}"
 risky_transcript="${HEARTWOOD_RISKY_TRANSCRIPT:-/tmp/heartwood-risky-transcript.txt}"
 heartwood_python="${HEARTWOOD_PYTHON:-python}"
-runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(pwd)}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+runtime_root="$(cd "${script_dir}/../../.." && pwd)"
 
-export HEARTWOOD_AGENT_BACKEND="openhands-sdk"
-export HEARTWOOD_WORKSPACE="${workspace}"
 export HEARTWOOD_SESSION_ID="${session_id}"
-export HEARTWOOD_MODEL_SETTINGS="${settings}"
-export HEARTWOOD_ACTION_SETTINGS="${action_settings}"
 export HEARTWOOD_MODEL_REQUEST_LOG="${request_log}"
 export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export HEARTWOOD_UNUSED_MODEL_API_KEY="synthetic-unused-model-key"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
 
-rm -rf "${workspace}" "${state_root}/openhands" "${state_root}/workspaces"
-rm -f "${settings}" "${action_settings}" "${request_log}" "${audit_copy}" "${transcript}" \
+rm -rf "${project}"
+rm -f "${request_log}" "${audit_copy}" "${transcript}" \
   "${automatic_transcript}" "${risky_transcript}"
-mkdir -p "${state_root}/workspaces/${session_id}/input"
+mkdir -p "${project}/input"
 cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv \
-  "${state_root}/workspaces/${session_id}/input/"
+  "${project}/input/"
+cd "${project}"
 
 HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback \
-  bash images/generic/scripts/start_local_runtime.sh &
+  bash "${runtime_root}/images/generic/scripts/start_local_runtime.sh" &
 model_pid="$!"
 
 cleanup() {
@@ -70,44 +67,47 @@ while time.time() < deadline:
 raise SystemExit("loopback model fixture did not become ready")
 PY
 
-heartwood --workspace "${workspace}" models refresh local | tee -a "${transcript}"
-heartwood --workspace "${workspace}" models connect local heartwood-local-runtime \
+heartwood models refresh local | tee -a "${transcript}"
+heartwood models connect local heartwood-local-runtime \
   | tee -a "${transcript}"
-heartwood --workspace "${workspace}" models add inactive-smoke \
+heartwood models add inactive-smoke \
   --model openai/heartwood-inactive-runtime \
   --base-url http://127.0.0.1:8765/v1 \
   --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
   --credential-kind environment \
   --api-key-env HEARTWOOD_UNUSED_MODEL_API_KEY | tee -a "${transcript}"
-heartwood --workspace "${workspace}" models validate local | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${session_id}" detect | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${session_id}" chat \
+heartwood models validate local | tee -a "${transcript}"
+heartwood --session-id "${session_id}" detect | tee -a "${transcript}"
+heartwood --session-id "${session_id}" chat \
   --prompt "Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Use the localized OMOP reference tables, minimum age 18, aggregate count floor 20, and write cohort-summary.json. Report the cohort definition and quality checks without row-level values." \
   | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${session_id}" allow \
+heartwood --session-id "${session_id}" allow \
   call-heartwood-reference-analysis | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${rejected_session_id}" chat \
+heartwood --session-id "${rejected_session_id}" chat \
   --prompt "Propose the bounded synthetic action for rejection." | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${rejected_session_id}" reject \
+heartwood --session-id "${rejected_session_id}" reject \
   call-heartwood-offline-smoke | tee -a "${transcript}"
-heartwood --workspace "${workspace}" actions set auto-approve-low-risk | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${automatic_session_id}" chat \
+heartwood actions set auto-approve-low-risk | tee -a "${transcript}"
+heartwood --session-id "${automatic_session_id}" chat \
   --prompt "Run the bounded low-risk automatic integration check." \
   | tee "${automatic_transcript}" | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${risky_session_id}" chat \
+heartwood --session-id "${risky_session_id}" chat \
   --prompt "Propose the medium-risk network check for review." \
   | tee "${risky_transcript}" | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${risky_session_id}" reject \
+heartwood --session-id "${risky_session_id}" reject \
   call-heartwood-offline-smoke | tee -a "${risky_transcript}" | tee -a "${transcript}"
-heartwood --workspace "${workspace}" --session-id "${session_id}" audit export \
+heartwood --session-id "${session_id}" audit export \
   --output "${audit_copy}" | tee -a "${transcript}"
 
 "${heartwood_python}" - <<'PY'
+import os
 from pathlib import Path
 
 from openhands.sdk.skills import load_skills_from_dir
 
-repository, knowledge, agent = load_skills_from_dir(Path("skills/verified"))
+repository, knowledge, agent = load_skills_from_dir(
+    Path(os.environ["HEARTWOOD_RUNTIME_ROOT"]) / "skills" / "verified"
+)
 names = set(repository) | set(knowledge) | set(agent)
 expected = {"aggregate-export", "baseline-model", "omop-cohort-summary"}
 if not expected.issubset(names):
@@ -138,7 +138,7 @@ import json
 import os
 from pathlib import Path
 
-workspace = Path(os.environ.get("HEARTWOOD_WORKSPACE", "/tmp/heartwood-sessions"))
+workspace = Path.cwd() / ".heartwood" / "sessions"
 session_id = os.environ.get("HEARTWOOD_SESSION_ID", "session-offline-stack") + "-automatic"
 events = [
     json.loads(line)
@@ -158,9 +158,10 @@ import json
 import os
 from pathlib import Path
 
-workspace = Path(os.environ.get("HEARTWOOD_WORKSPACE", "/tmp/heartwood-sessions"))
+project = Path.cwd()
+workspace = project / ".heartwood" / "sessions"
 session_id = os.environ.get("HEARTWOOD_SESSION_ID", "session-offline-stack")
-artifact = workspace.parent / "workspaces" / session_id / "cohort-summary.json"
+artifact = project / "cohort-summary.json"
 payload = json.loads(artifact.read_text(encoding="utf-8"))
 summary = payload["summary"]
 checks = payload["quality_checks"]
@@ -176,6 +177,7 @@ if checks["row_values_exported"] is not False or not payload["export_guard"]["ex
     raise SystemExit("reference analysis violated aggregate output expectations")
 PY
 test -s "${audit_copy}"
-heartwood --workspace "${workspace}" actions set ask-every-time | tee -a "${transcript}"
-"${heartwood_python}" images/generic/scripts/terra_jupyter_demo_smoke.py | tee -a "${transcript}"
+heartwood actions set ask-every-time | tee -a "${transcript}"
+"${heartwood_python}" "${runtime_root}/images/generic/scripts/terra_jupyter_demo_smoke.py" \
+  | tee -a "${transcript}"
 grep -q "Terra-style Jupyter demo smoke: ok" "${transcript}"

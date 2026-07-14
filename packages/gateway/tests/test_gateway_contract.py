@@ -21,6 +21,7 @@ from heartwood.gateway import (
     ModelCatalogService,
     ModelSnapshot,
     ModelSnapshotError,
+    ProjectContext,
     ProviderModel,
     RestGateway,
     RestRequest,
@@ -50,7 +51,28 @@ def _events(response: RestResponse) -> list[Mapping[str, JsonValue]]:
 
 
 def _gateway(workspace: Path) -> SessionGateway:
-    return SessionGateway(workspace=workspace, env={"HEARTWOOD_AGENT_BACKEND": "deterministic"})
+    workspace.mkdir(parents=True, exist_ok=True)
+    return SessionGateway(
+        project=ProjectContext(workspace),
+        env={},
+        backend_id="deterministic",
+    )
+
+
+def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -> None:
+    first = _gateway(tmp_path / "first-project")
+    second = _gateway(tmp_path / "second-project")
+
+    first_session = first.create_session("First project session")
+    first.select_action_confirmation_mode("confirm-risky")
+    (first.project.models_dir / "project-marker").write_text("first\n", encoding="utf-8")
+
+    assert first.sessions() == {"sessions": [first_session]}
+    assert second.sessions() == {"sessions": []}
+    assert first.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert second.action_settings()["confirmation_mode"] == "always-confirm"
+    assert not (second.project.models_dir / "project-marker").exists()
+    assert first.project.config_path != second.project.config_path
 
 
 def test_rest_command_routes_through_session_service_and_streams_events(tmp_path: Path) -> None:
@@ -108,7 +130,7 @@ def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) 
             "letters, numbers, dots, hyphens, or underscores"
         )
     }
-    assert list(tmp_path.iterdir()) == []
+    assert list((tmp_path / ".heartwood" / "sessions").iterdir()) == []
 
 
 def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
@@ -122,7 +144,11 @@ def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
         )
     )
 
-    audit_lines = (tmp_path / "session-1" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    audit_lines = (
+        (tmp_path / ".heartwood" / "sessions" / "session-1" / "audit.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     assert response.status_code == 200
     assert len(audit_lines) == 2
 
@@ -206,7 +232,7 @@ def test_task_streams_confirmation_request_after_route_authorization(tmp_path: P
 
 
 def test_unconfigured_model_fails_without_allowing_a_synthetic_route(tmp_path: Path) -> None:
-    gateway = SessionGateway(workspace=tmp_path, env={})
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
     rest = RestGateway(gateway)
 
     response = rest.handle(
@@ -340,10 +366,9 @@ def test_rest_rejects_malformed_action_confirmation_selection(tmp_path: Path) ->
 
 
 def test_rest_reports_malformed_persisted_settings(tmp_path: Path) -> None:
-    workspace = tmp_path / "sessions"
-    (tmp_path / "actions.json").write_text("{", encoding="utf-8")
-    (tmp_path / "models.json").write_text("{", encoding="utf-8")
-    rest = RestGateway(_gateway(workspace))
+    gateway = _gateway(tmp_path)
+    (tmp_path / ".heartwood" / "config.toml").write_text("{", encoding="utf-8")
+    rest = RestGateway(gateway)
 
     action_response = rest.handle(RestRequest(method="GET", path="/settings/actions"))
     model_response = rest.handle(RestRequest(method="GET", path="/settings/models"))
@@ -355,7 +380,7 @@ def test_rest_reports_malformed_persisted_settings(tmp_path: Path) -> None:
 
 
 def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> None:
-    gateway = _gateway(tmp_path / "sessions")
+    gateway = _gateway(tmp_path)
     rest = RestGateway(gateway)
     profile = {
         "profile_id": "local",
@@ -442,8 +467,9 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
         ),
     )
     gateway = SessionGateway(
-        workspace=tmp_path / "sessions",
-        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
         model_catalog_service=service,
     )
     rest = RestGateway(gateway)
@@ -479,6 +505,10 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
     assert connected.body["active_profile"] == "local"
     profiles = cast(list[dict[str, JsonValue]], connected.body["profiles"])
     assert profiles[0]["model"] == "openai/local-coder"
+    assert gateway.config_store.load().model_source == "local"
+    restarted = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
+    assert restarted.model_settings()["active_profile"] == "local"
+    assert restarted.config_store.load().model_source == "local"
 
 
 def test_rest_starts_artifact_download_and_validates_payloads(
@@ -526,7 +556,7 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gateway = _gateway(tmp_path / "sessions")
+    gateway = _gateway(tmp_path)
     observed: list[tuple[str, str, Path]] = []
 
     def artifact_download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
@@ -543,17 +573,14 @@ def test_gateway_downloads_reviewed_artifacts_and_snapshots_through_one_interfac
     monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
 
     artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
-    snapshot_cache = tmp_path / "snapshot-cache"
-    snapshot = gateway.download_local_model_now(
-        "qwen25-7b-instruct-vllm",
-        cache_dir=snapshot_cache,
-    )
+    snapshot = gateway.download_local_model_now("qwen25-7b-instruct-vllm")
 
-    assert artifact == tmp_path / "models" / "llama-cpp-stories260k-ci"
-    assert snapshot == snapshot_cache / "qwen25-7b-instruct-vllm"
+    model_cache = tmp_path / ".heartwood" / "models"
+    assert artifact == model_cache / "llama-cpp-stories260k-ci"
+    assert snapshot == model_cache / "qwen25-7b-instruct-vllm"
     assert observed == [
-        ("artifact", "llama-cpp-stories260k-ci", tmp_path / "models"),
-        ("snapshot", "qwen25-7b-instruct-vllm", snapshot_cache),
+        ("artifact", "llama-cpp-stories260k-ci", model_cache),
+        ("snapshot", "qwen25-7b-instruct-vllm", model_cache),
     ]
     with pytest.raises(ModelSnapshotError, match="unknown reviewed local model: missing"):
         gateway.download_local_model_now("missing")
@@ -644,11 +671,12 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
 
 def test_gateway_rejects_unknown_backend_configuration(tmp_path: Path) -> None:
     gateway = SessionGateway(
-        workspace=tmp_path,
-        env={"HEARTWOOD_AGENT_BACKEND": "unknown"},
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="unknown",
     )
 
-    with pytest.raises(ValueError, match="unsupported HEARTWOOD_AGENT_BACKEND"):
+    with pytest.raises(ValueError, match="unsupported agent backend"):
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
 
 

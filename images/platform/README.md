@@ -14,7 +14,7 @@ This directory defines the implemented platform-image mechanism and Terra target
 
 The platform Dockerfile adds the same Heartwood application payload as the generic image to a controlled platform base while preserving the platform user, home, Jupyter runtime, entrypoint, service routes, and proxy behavior. The implemented target is Terra.
 
-The public Terra tags are `edge-terra` and `sha-<git-sha>-terra`. They contain no model weights or credentials. Optional local artifacts belong in `/home/jupyter/heartwood-workspace/models`; hosted or managed model services are configured through the same non-secret profile contract as the generic image.
+The public Terra tags are `edge-terra` and `sha-<git-sha>-terra`. They contain no model weights or credentials. The directory where the researcher starts Heartwood is the project; its `.heartwood/` directory holds configuration, sessions, optional local models, Skills, logs, and audit records. Hosted and managed model services use the same non-secret connection contract as the generic image.
 
 Terra tags are `linux/amd64` Docker schema-2 manifests because the selected Terra base is AMD64-only and Leonardo does not accept an Open Container Initiative index during image auto-detection. Main publication stages one untagged digest, validates its registry and runtime configuration, runs the Jupyter contract, inherited entrypoint, Leonardo route, OpenHands, and mounted local-inference smokes against that digest, creates and verifies the immutable commit tag, and moves `edge-terra` last.
 

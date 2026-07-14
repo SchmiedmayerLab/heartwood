@@ -9,12 +9,13 @@ set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
 port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 HEARTWOOD_LOCAL_MODEL_PATH="${model_path}" \
 HEARTWOOD_LOCAL_MODEL_CONTEXT=256 \
 HEARTWOOD_LOCAL_MODEL_THREADS=2 \
 HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" \
-  bash images/generic/scripts/start_local_runtime.sh >/tmp/heartwood-llama-smoke.log 2>&1 &
+  bash "${script_dir}/start_local_runtime.sh" >/tmp/heartwood-llama-smoke.log 2>&1 &
 runtime_pid="$!"
 
 cleanup() {

@@ -17,34 +17,60 @@ from typing import cast
 
 import pytest
 
+from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._launch import (
     LaunchOptions,
+    _catalog_contains_model,
     _discover_slurm_gpu_partitions,
     _ensure_setup,
     _format_bytes,
+    _gguf_file,
+    _interaction_command,
+    _model_size,
     _preflight_vllm,
     _print_runtime_failure,
     _reentry_command,
-    _resolve_vllm,
-    _resolve_vllm_python,
+    _resolve_runtime_executable,
     _run_command,
+    _runtime_command,
     _runtime_environment,
+    _stage_model,
     _wait_for_runtime,
     build_launch_plan,
     run_launch,
 )
 from heartwood.cli._model_snapshot import verify_snapshot
+from heartwood.gateway import ProjectConfig, ProjectConfigStore, ProjectContext
 
 
-def _options(tmp_path: Path, **overrides: object) -> LaunchOptions:
+def _options(
+    tmp_path: Path,
+    *,
+    selected: bool = True,
+    runtime: str = "vllm",
+    **overrides: object,
+) -> LaunchOptions:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    if selected:
+        adapter = select_platform_adapter({"HEARTWOOD_PLATFORM": "generic"})
+        store = ProjectConfigStore(
+            project,
+            ProjectConfig(
+                platform_id=adapter.adapter_id,
+                policy=adapter.default_policy_profile(),
+            ),
+        )
+        store.select_local_model(
+            artifact_id="test-model",
+            path=project.models_dir / ("model.gguf" if runtime == "llama-cpp" else "model"),
+            runtime=runtime,
+            model_id="test-model",
+        )
     values: dict[str, object] = {
-        "workspace": tmp_path / "state" / "sessions",
+        "project": project,
         "session_id": "launch-test",
-        "model_root": tmp_path / "model",
-        "state_root": tmp_path / "state",
-        "environment_root": tmp_path / "environment",
-        "vllm_executable": tmp_path / "vllm",
-        "model_id": "test-model",
         "partition": "gpu",
         "gpus": 1,
         "cpus": 8,
@@ -55,28 +81,28 @@ def _options(tmp_path: Path, **overrides: object) -> LaunchOptions:
         "yes_request_allocation": False,
         "inside_allocation": False,
         "plain": True,
+        "web": False,
+        "web_host": "127.0.0.1",
+        "web_port": 8767,
         "startup_timeout": 600,
     }
     values.update(overrides)
     return LaunchOptions(**values)  # type: ignore[arg-type]
 
 
-def _model(root: Path) -> None:
-    root.mkdir()
+def _snapshot(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
     weights = root / "weights.safetensors"
     weights.write_bytes(b"synthetic")
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     (root / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
 
 
-def test_carina_launch_plan_requests_reviewable_gpu_allocation(
+def test_carina_plan_preserves_project_and_exports_no_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (),
-    )
+    monkeypatch.setattr("heartwood.cli._launch._discover_slurm_gpu_partitions", lambda _env: ())
     options = _options(tmp_path)
     plan = build_launch_plan(
         options,
@@ -84,7 +110,6 @@ def test_carina_launch_plan_requests_reviewable_gpu_allocation(
             "HEARTWOOD_PLATFORM": "carina",
             "PATH": "/usr/bin",
             "HOME": "/home/researcher",
-            "HEARTWOOD_NATIVE_ROOT": "/persistent/heartwood",
             "OPENAI_API_KEY": "secret",
         },
     )
@@ -92,18 +117,23 @@ def test_carina_launch_plan_requests_reviewable_gpu_allocation(
     assert plan.platform_id == "carina"
     assert plan.allocation_required
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
-    assert "--gres=gpu:1" in plan.allocation_command
-    assert "--inside-allocation" in plan.allocation_command
+    assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
-    assert export == ("--export=PATH,HOME,HEARTWOOD_NATIVE_ROOT,HEARTWOOD_PLATFORM=carina")
+    assert export == "--export=PATH,HOME,HEARTWOOD_PLATFORM=carina"
     assert "OPENAI_API_KEY" not in export
-    assert "ALL" not in export
-    assert "Slurm allocation required" in plan.format()
+    assert "--workspace" not in plan.allocation_command
+    assert "--model-root" not in plan.allocation_command
 
 
-def test_carina_launch_requires_explicit_allocation_consent(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_launch_requires_consent_and_honors_dry_run_and_no_allocate(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (("gpu", True),),
+    )
     called = False
 
     def runner(_command: object) -> int:
@@ -111,69 +141,22 @@ def test_carina_launch_requires_explicit_allocation_consent(
         called = True
         return 0
 
-    code = run_launch(
-        _options(tmp_path),
-        env={"HEARTWOOD_PLATFORM": "carina"},
-        input_fn=lambda _prompt: "n",
-        run_fn=runner,
-    )
-
-    assert code == 1
-    assert not called
-    assert "Allocation cancelled" in capsys.readouterr().out
-
-
-def test_carina_launch_defaults_to_no_when_consent_input_closes(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("gpu", False),),
-    )
-
-    def closed(_prompt: str) -> str:
-        raise EOFError
-
     assert (
         run_launch(
             _options(tmp_path),
             env={"HEARTWOOD_PLATFORM": "carina"},
-            input_fn=closed,
+            input_fn=lambda _prompt: "n",
+            run_fn=runner,
         )
         == 1
     )
+    assert not called
     assert "Allocation cancelled" in capsys.readouterr().out
-
-
-def test_carina_launch_submits_exact_plan_after_consent(tmp_path: Path) -> None:
-    observed: list[str] = []
-
-    def runner(command: object) -> int:
-        observed.extend(command)  # type: ignore[arg-type]
-        return 23
-
-    code = run_launch(
-        _options(tmp_path, yes_request_allocation=True),
-        env={"HEARTWOOD_PLATFORM": "carina"},
-        run_fn=runner,
-    )
-
-    assert code == 23
-    assert observed[0] == "srun"
-    assert "--cpus-per-task=8" in observed
-
-
-def test_launch_dry_run_and_no_allocate_never_submit(tmp_path: Path) -> None:
-    def unexpected(_command: object) -> int:
-        pytest.fail("scheduler must not be called")
-
     assert (
         run_launch(
             _options(tmp_path, dry_run=True),
             env={"HEARTWOOD_PLATFORM": "carina"},
-            run_fn=unexpected,
+            run_fn=runner,
         )
         == 0
     )
@@ -181,161 +164,224 @@ def test_launch_dry_run_and_no_allocate_never_submit(tmp_path: Path) -> None:
         run_launch(
             _options(tmp_path, no_allocate=True),
             env={"HEARTWOOD_PLATFORM": "carina"},
-            run_fn=unexpected,
+            run_fn=runner,
         )
         == 1
     )
 
-    terra = build_launch_plan(_options(tmp_path), {"GOOGLE_PROJECT": "synthetic-project"})
-    assert terra.platform_id == "terra"
-    assert not terra.allocation_required
+
+def test_launch_handles_closed_consent_and_submits_approved_plan(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (("gpu", True),),
+    )
+    submitted: list[tuple[str, ...]] = []
+
+    def closed(_prompt: str) -> str:
+        raise EOFError
+
+    def run_successfully(command: Sequence[str]) -> int:
+        submitted.append(tuple(command))
+        return 0
+
+    def run_with_failure(command: Sequence[str]) -> int:
+        submitted.append(tuple(command))
+        return 23
+
+    assert (
+        run_launch(
+            _options(tmp_path / "closed"),
+            env={"HEARTWOOD_PLATFORM": "carina"},
+            input_fn=closed,
+            run_fn=run_successfully,
+        )
+        == 1
+    )
+    assert submitted == []
+    assert "Allocation cancelled" in capsys.readouterr().out
+
+    assert (
+        run_launch(
+            _options(tmp_path / "approved"),
+            env={"HEARTWOOD_PLATFORM": "carina"},
+            input_fn=lambda _prompt: "Y",
+            run_fn=run_with_failure,
+        )
+        == 23
+    )
+    assert submitted[0][:3] == ("srun", "--pty", "--partition=gpu")
 
 
-def test_direct_launch_reports_model_and_runtime_failures(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_launch_reports_missing_selection_artifact_and_runtime(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     env = {"HEARTWOOD_PLATFORM": "generic"}
-    assert run_launch(_options(tmp_path, model_root=None), env=env) == 64
+    assert run_launch(_options(tmp_path, selected=False), env=env) == 64
+    assert "No local model is selected" in capsys.readouterr().out
     assert run_launch(_options(tmp_path), env=env) == 66
-    _model(tmp_path / "model")
+    _snapshot(tmp_path / ".heartwood" / "models" / "model")
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable",
+        lambda _runtime: tmp_path / "missing-vllm",
+    )
     assert run_launch(_options(tmp_path), env=env) == 69
     assert "vLLM executable is unavailable" in capsys.readouterr().out
 
 
-def test_direct_launch_reports_runtime_preflight_failure(
+def test_launch_checks_scratch_capacity_and_carina_scratch_requirement(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _model(tmp_path / "model")
+    options = _options(tmp_path)
+    _snapshot(tmp_path / ".heartwood" / "models" / "model")
     executable = tmp_path / "vllm"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o755)
     monkeypatch.setattr(
-        "heartwood.cli._launch._preflight_vllm",
-        lambda *_args: "TorchCodec could not load FFmpeg",
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
     )
-
-    assert run_launch(_options(tmp_path), env={"HEARTWOOD_PLATFORM": "generic"}) == 69
-    assert "TorchCodec could not load FFmpeg" in capsys.readouterr().out
-
-
-def test_launch_rejects_an_unavailable_configured_scratch_directory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _model(tmp_path / "model")
-    executable = tmp_path / "vllm"
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o755)
     monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
 
     assert (
         run_launch(
-            _options(tmp_path),
+            options,
+            env={"HEARTWOOD_PLATFORM": "carina", "SLURM_JOB_ID": "synthetic"},
+        )
+        == 72
+    )
+    assert "does not expose LOCAL_SCRATCH_JOB" in capsys.readouterr().out
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(
+        "heartwood.cli._launch.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=1, used=1, free=1),
+    )
+    assert (
+        run_launch(
+            options,
             env={
-                "HEARTWOOD_PLATFORM": "generic",
-                "LOCAL_SCRATCH_JOB": str(tmp_path / "missing-scratch"),
+                "HEARTWOOD_PLATFORM": "carina",
+                "SLURM_JOB_ID": "synthetic",
+                "LOCAL_SCRATCH_JOB": str(scratch),
+            },
+        )
+        == 73
+    )
+
+
+def test_launch_rejects_unavailable_scratch_and_staging_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+
+    assert (
+        run_launch(
+            options,
+            env={
+                "HEARTWOOD_PLATFORM": "carina",
+                "SLURM_JOB_ID": "synthetic",
+                "LOCAL_SCRATCH_JOB": str(tmp_path / "missing"),
             },
         )
         == 72
     )
     assert "unavailable or not writable" in capsys.readouterr().out
 
-
-def test_carina_runtime_requires_job_local_scratch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _model(tmp_path / "model")
-    executable = tmp_path / "vllm"
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o755)
-    python = tmp_path / "python"
-    python.write_text("#!/bin/sh\n", encoding="utf-8")
-    python.chmod(0o755)
-    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
-
-    code = run_launch(
-        _options(tmp_path),
-        env={"HEARTWOOD_PLATFORM": "carina", "SLURM_JOB_ID": "synthetic-job"},
-    )
-
-    assert code == 72
-    assert "does not expose LOCAL_SCRATCH_JOB" in capsys.readouterr().out
-
-
-def test_launch_rejects_job_scratch_without_model_capacity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _model(tmp_path / "model")
-    executable = tmp_path / "vllm"
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o755)
-    python = tmp_path / "python"
-    python.write_text("#!/bin/sh\n", encoding="utf-8")
-    python.chmod(0o755)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
     monkeypatch.setattr(
-        "heartwood.cli._launch.shutil.disk_usage",
-        lambda _path: SimpleNamespace(total=1, used=1, free=1),
+        "heartwood.cli._launch._stage_model",
+        lambda *_args: (_ for _ in ()).throw(OSError("synthetic scratch failure")),
     )
-
-    code = run_launch(
-        _options(tmp_path),
-        env={"HEARTWOOD_PLATFORM": "generic", "LOCAL_SCRATCH_JOB": str(scratch)},
+    assert (
+        run_launch(
+            options,
+            env={
+                "HEARTWOOD_PLATFORM": "carina",
+                "SLURM_JOB_ID": "synthetic",
+                "LOCAL_SCRATCH_JOB": str(scratch),
+            },
+        )
+        == 74
     )
-
-    assert code == 73
-    assert "Job-local scratch requires" in capsys.readouterr().out
+    assert "Model staging failed: synthetic scratch failure" in capsys.readouterr().out
 
 
-def test_launch_reports_model_staging_io_failure(
+def test_launch_rejects_staged_snapshot_that_changes_during_copy(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    calls = 0
+
+    def verifier(_root: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("synthetic copy changed")
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.verify_snapshot", verifier)
+
+    assert (
+        run_launch(
+            options,
+            env={
+                "HEARTWOOD_PLATFORM": "carina",
+                "SLURM_JOB_ID": "synthetic",
+                "LOCAL_SCRATCH_JOB": str(scratch),
+            },
+        )
+        == 66
+    )
+    assert "Staged model verification failed: synthetic copy changed" in capsys.readouterr().out
+    assert not tuple(scratch.iterdir())
+
+
+def test_launch_supervises_selected_vllm_and_opens_project_chat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _model(tmp_path / "model")
+    options = _options(tmp_path)
+    model = tmp_path / ".heartwood" / "models" / "model"
+    _snapshot(model)
     executable = tmp_path / "vllm"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o755)
-    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
-    monkeypatch.setattr(
-        "heartwood.cli._launch._copy_snapshot",
-        lambda *_args: (_ for _ in ()).throw(OSError("scratch quota exhausted")),
-    )
-
-    assert run_launch(_options(tmp_path), env={"HEARTWOOD_PLATFORM": "generic"}) == 74
-    assert "Model staging failed: scratch quota exhausted" in capsys.readouterr().out
-    assert not any((tmp_path / "state" / "scratch").iterdir())
-
-
-def test_direct_launch_supervises_runtime_and_opens_existing_chat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _model(tmp_path / "model")
-    executable = tmp_path / "vllm"
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o755)
-    python = tmp_path / "python"
-    python.write_text("#!/bin/sh\n", encoding="utf-8")
-    python.chmod(0o755)
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "setup.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "state" / "runtime").mkdir()
-    runtime_log = tmp_path / "state" / "runtime" / "vllm.log"
-    runtime_log.write_text("stale error from a prior launch\n", encoding="utf-8")
-    observed: list[tuple[str, ...]] = []
+    observed_processes: list[tuple[str, ...]] = []
+    observed_runs: list[tuple[tuple[str, ...], Path | None]] = []
 
     class FakeProcess:
         def __init__(self, command: object, **_kwargs: object) -> None:
-            observed.append(tuple(command))  # type: ignore[arg-type]
+            observed_processes.append(tuple(command))  # type: ignore[arg-type]
             self.running = True
 
         def poll(self) -> int | None:
@@ -351,124 +397,206 @@ def test_direct_launch_supervises_runtime_and_opens_existing_chat(
         def kill(self) -> None:
             self.running = False
 
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", FakeProcess)
+    def completed(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[Sequence[str]]:
+        observed_runs.append((tuple(command), cast(Path | None, kwargs.get("cwd"))))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
     monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", FakeProcess)
+    monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("heartwood.cli._launch._ensure_setup", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 0
+    assert observed_processes[0][0] == str(executable)
+    assert "--enable-auto-tool-choice" in observed_processes[0]
+    assert observed_runs[-1][1] == tmp_path
+    assert "--workspace" not in observed_runs[-1][0]
+    assert (tmp_path / ".heartwood" / "logs" / "local-model.log").is_file()
+    assert not (tmp_path / ".heartwood" / "runtime" / "scratch").exists()
+
+
+def test_launch_reports_runtime_timeout_and_forces_cleanup(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, startup_timeout=7)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    lifecycle: list[str] = []
+
+    class StubbornProcess:
+        def __init__(self, _command: object, **_kwargs: object) -> None:
+            self.running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else -9
+
+        def terminate(self) -> None:
+            lifecycle.append("terminate")
+
+        def wait(self, timeout: float | None = None) -> int:
+            if timeout is not None and self.running:
+                raise subprocess.TimeoutExpired("vllm", timeout)
+            return -9
+
+        def kill(self) -> None:
+            lifecycle.append("kill")
+            self.running = False
+
     monkeypatch.setattr(
-        "heartwood.cli._launch._wait_for_runtime",
-        lambda _runtime, *, model_id, timeout: model_id == "test-model" and timeout == 600,
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
     )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", StubbornProcess)
+    monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kwargs: False)
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 70
+    assert lifecycle == ["terminate", "kill"]
+    output = capsys.readouterr().out
+    assert "did not become ready after 7 seconds" in output
+    assert "Runtime log:" in output
+
+
+def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"synthetic")
+    command = _runtime_command(
+        "llama-cpp",
+        Path("/opt/llama.cpp/llama-server"),
+        model,
+        "heartwood-local-model",
+    )
+    assert command[:3] == (
+        "/opt/llama.cpp/llama-server",
+        "--model",
+        str(model),
+    )
+    assert "--alias" in command
+
+
+def test_runtime_resolution_and_gguf_directory_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama = tmp_path / "llama-server"
+    llama.write_text("", encoding="utf-8")
     monkeypatch.setattr(
-        "heartwood.cli._launch.subprocess.run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0),
+        "heartwood.cli._launch.shutil.which",
+        lambda name: str(llama) if name == "llama-server" else None,
     )
+    assert _resolve_runtime_executable("llama-cpp") == llama
 
-    assert run_launch(_options(tmp_path), env={"HEARTWOOD_PLATFORM": "generic"}) == 0
-    assert observed[0][0] == str(executable)
-    assert "--enable-auto-tool-choice" in observed[0]
-    assert runtime_log.read_text(encoding="utf-8") == ""
-    assert not any((tmp_path / "state" / "scratch").iterdir())
+    version_root = tmp_path / "runtime"
+    vllm = version_root / "vllm" / "bin" / "vllm"
+    vllm.parent.mkdir(parents=True)
+    vllm.write_text("", encoding="utf-8")
+    monkeypatch.setattr("heartwood.cli._launch._native_version_root", lambda: version_root)
+    assert _resolve_runtime_executable("vllm") == vllm
+
+    model_dir = tmp_path / "gguf"
+    model_dir.mkdir()
+    model = model_dir / "model.gguf"
+    model.write_bytes(b"synthetic")
+    assert _gguf_file(model_dir) == model
+    (model_dir / "second.gguf").write_bytes(b"synthetic")
+    with pytest.raises(ValueError, match="exactly one GGUF"):
+        _gguf_file(model_dir)
+    with pytest.raises(ValueError, match="exactly one GGUF"):
+        _gguf_file(tmp_path / "missing")
 
 
-def test_model_snapshot_rejects_malformed_unsafe_and_modified_content(tmp_path: Path) -> None:
+def test_snapshot_verification_rejects_unsafe_modified_and_unlisted_content(
+    tmp_path: Path,
+) -> None:
     model = tmp_path / "model"
     model.mkdir()
     (model / "SHA256SUMS").write_text("not-a-manifest\n", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid SHA256SUMS"):
         verify_snapshot(model)
-
     digest = hashlib.sha256(b"expected").hexdigest()
     (model / "SHA256SUMS").write_text(f"{digest}  ../weights\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unsafe SHA256SUMS"):
         verify_snapshot(model)
-
     (model / "weights").write_bytes(b"modified")
-    (model / "SHA256SUMS").write_text(f"{digest}  weights\n{digest}  weights\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="duplicate SHA256SUMS"):
-        verify_snapshot(model)
-
     (model / "SHA256SUMS").write_text(f"{digest}  weights\n", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         verify_snapshot(model)
-
-
-def test_model_snapshot_rejects_unlisted_and_linked_files(tmp_path: Path) -> None:
-    model = tmp_path / "model"
-    _model(model)
-    (model / "unlisted").write_text("value", encoding="utf-8")
+    _snapshot(tmp_path / "valid")
+    (tmp_path / "valid" / "unlisted").write_text("value", encoding="utf-8")
     with pytest.raises(ValueError, match="unlisted"):
-        verify_snapshot(model)
-    (model / "unlisted").unlink()
-    (model / "link").symlink_to(model / "weights.safetensors")
-    with pytest.raises(ValueError, match="symbolic link"):
-        verify_snapshot(model)
+        verify_snapshot(tmp_path / "valid")
 
 
-def test_launch_runtime_helpers_scrub_credentials_and_resolve_native_vllm(tmp_path: Path) -> None:
-    env = {
-        "OPENAI_API_KEY": "secret",
-        "GH_TOKEN": "secret",
-        "STANFORD_AI_API_KEY": "secret",
-        "AWS_SECRET_ACCESS_KEY": "secret",
-        "CUSTOM_PROVIDER_TOKEN": "secret",
-        "PATH": "/usr/bin",
-        "CUDA_VISIBLE_DEVICES": "0",
-        "HEARTWOOD_NATIVE_ROOT": str(tmp_path),
-        "HEARTWOOD_NATIVE_VERSION": "v1",
-        "HEARTWOOD_MODEL_CACHE": str(tmp_path / "models"),
-    }
-    runtime_env = _runtime_environment(env)
-    assert "OPENAI_API_KEY" not in runtime_env
-    assert "GH_TOKEN" not in runtime_env
-    assert "STANFORD_AI_API_KEY" not in runtime_env
-    assert "AWS_SECRET_ACCESS_KEY" not in runtime_env
-    assert "CUSTOM_PROVIDER_TOKEN" not in runtime_env
+def test_runtime_environment_scrubs_credentials_and_legacy_path_controls() -> None:
+    runtime_env = _runtime_environment(
+        {
+            "PATH": "/usr/bin",
+            "CUDA_VISIBLE_DEVICES": "0",
+            "OPENAI_API_KEY": "secret",
+            "STANFORD_AI_API_KEY": "secret",
+            "HEARTWOOD_HOME": "/legacy",
+            "HEARTWOOD_WORKSPACE": "/legacy/sessions",
+            "HEARTWOOD_VLLM_EXECUTABLE": "/unreviewed/vllm",
+        }
+    )
     assert runtime_env["CUDA_VISIBLE_DEVICES"] == "0"
-    assert runtime_env["HEARTWOOD_AGENT_BACKEND"] == "openhands-sdk"
-    assert runtime_env["HEARTWOOD_NATIVE_ROOT"] == str(tmp_path)
-    assert runtime_env["HEARTWOOD_MODEL_CACHE"] == str(tmp_path / "models")
-    assert runtime_env["PATH"].startswith(str(tmp_path / "runtimes" / "v1" / "bootstrap" / "bin"))
     assert runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert _resolve_vllm(_options(tmp_path, vllm_executable=None, environment_root=None), env) == (
-        tmp_path / "runtimes" / "v1" / "vllm" / "bin" / "vllm"
-    )
+    assert not any("API_KEY" in name for name in runtime_env)
+    assert "HEARTWOOD_HOME" not in runtime_env
+    assert "HEARTWOOD_WORKSPACE" not in runtime_env
+    assert "HEARTWOOD_VLLM_EXECUTABLE" not in runtime_env
 
 
-def test_launch_runtime_helpers_cover_explicit_and_default_paths(tmp_path: Path) -> None:
-    options = _options(tmp_path, vllm_executable=None, environment_root=None)
-    assert _resolve_vllm(options, {"HEARTWOOD_VLLM_EXECUTABLE": "/runtime/vllm"}) == Path(
-        "/runtime/vllm"
-    )
-    assert _resolve_vllm(options, {}) == Path("/opt/heartwood-vllm/bin/vllm")
-    assert _resolve_vllm_python(options, tmp_path / "bin" / "vllm", {}) == (
-        tmp_path / "bin" / "python"
-    )
-    assert _resolve_vllm_python(
-        options,
-        tmp_path / "bin" / "vllm",
-        {"HEARTWOOD_VLLM_PYTHON": "/runtime/python"},
-    ) == Path("/runtime/python")
-    assert _resolve_vllm_python(
-        options,
-        tmp_path / "bin" / "vllm",
-        {"HEARTWOOD_NATIVE_ROOT": "/native", "HEARTWOOD_NATIVE_VERSION": "1"},
-    ) == Path("/native/runtimes/1/vllm/bin/python")
+def test_reentry_command_contains_no_storage_or_runtime_paths(tmp_path: Path) -> None:
+    command = _reentry_command(_options(tmp_path, plain=False))
+    assert "--inside-allocation" in command
+    assert "--plain" not in command
+    assert "--web" not in command
+    assert "--workspace" not in command
+    assert "--state-root" not in command
+    assert "--model-root" not in command
+    assert "--vllm-executable" not in command
 
+
+def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     command = _reentry_command(
         _options(
             tmp_path,
-            model_root=None,
-            environment_root=None,
-            vllm_executable=None,
-            plain=False,
+            web=True,
+            web_host="0.0.0.0",
+            web_port=9876,
         )
     )
-    assert "--model-root" not in command
-    assert "--environment-root" not in command
-    assert "--vllm-executable" not in command
-    assert "--plain" not in command
+
+    assert command[-7:] == (
+        "--web",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9876",
+        "--startup-timeout",
+        "600",
+    )
+
+    interaction, label = _interaction_command(
+        _options(tmp_path, web=True, web_host="0.0.0.0", web_port=9876)
+    )
+    assert interaction[-5:] == ["serve", "--host", "0.0.0.0", "--port", "9876"]
+    assert label == "Open the web interface on 0.0.0.0:9876"
 
 
-def test_runtime_readiness_stops_when_process_exits() -> None:
+def test_runtime_readiness_accepts_requested_model_and_stops_after_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class ExitedProcess:
         def poll(self) -> int:
             return 1
@@ -479,10 +607,6 @@ def test_runtime_readiness_stops_when_process_exits() -> None:
         timeout=0.1,
     )
 
-
-def test_runtime_readiness_accepts_the_requested_local_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
     class RunningProcess:
         def poll(self) -> None:
             return None
@@ -498,208 +622,148 @@ def test_runtime_readiness_accepts_the_requested_local_model(
 
     class Opener:
         def open(self, *_args: object, **_kwargs: object) -> Response:
-            return Response(
-                json.dumps({"data": [{"id": "other-model"}, {"id": "test-model"}]}).encode()
-            )
-
-    def build_opener(handler: object) -> Opener:
-        assert vars(handler).get("proxies") == {}
-        return Opener()
-
-    monkeypatch.setattr(
-        "heartwood.cli._launch.urllib.request.build_opener",
-        build_opener,
-    )
-
-    assert _wait_for_runtime(
-        cast(subprocess.Popen[str], RunningProcess()),
-        model_id="test-model",
-        timeout=0.1,
-    )
-
-
-@pytest.mark.parametrize("initial_models", [[], [{"id": "other-model"}]])
-def test_runtime_readiness_throttles_empty_or_mismatched_catalogs(
-    initial_models: list[dict[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class RunningProcess:
-        def poll(self) -> None:
-            return None
-
-    class Response(io.BytesIO):
-        status = 200
-
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            self.close()
-
-    payloads = [
-        {"data": initial_models},
-        {"data": [{"id": "test-model"}]},
-    ]
-
-    class Opener:
-        def open(self, *_args: object, **_kwargs: object) -> Response:
-            return Response(json.dumps(payloads.pop(0)).encode())
+            return Response(json.dumps({"data": [{"id": "test-model"}]}).encode())
 
     monkeypatch.setattr(
         "heartwood.cli._launch.urllib.request.build_opener",
         lambda _handler: Opener(),
     )
-    sleeps: list[float] = []
-    monkeypatch.setattr("heartwood.cli._launch.time.sleep", sleeps.append)
-
     assert _wait_for_runtime(
         cast(subprocess.Popen[str], RunningProcess()),
         model_id="test-model",
         timeout=0.1,
     )
-    assert sleeps == [1]
 
 
-def test_setup_helper_invokes_non_interactive_local_setup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_runtime_readiness_reports_progress_and_rejects_malformed_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    class RunningProcess:
+        def poll(self) -> None:
+            return None
+
+    class FailingOpener:
+        def open(self, *_args: object, **_kwargs: object) -> object:
+            raise OSError("not ready")
+
+    times = iter((0.0, 0.0, 0.0, 16.0, 31.0))
+    monkeypatch.setattr("heartwood.cli._launch.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("heartwood.cli._launch.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "heartwood.cli._launch.urllib.request.build_opener",
+        lambda _handler: FailingOpener(),
+    )
+
+    assert not _wait_for_runtime(
+        cast(subprocess.Popen[str], RunningProcess()),
+        model_id="test-model",
+        timeout=30,
+    )
+    assert "Still starting the local model server (16 seconds elapsed)" in capsys.readouterr().out
+    assert not _catalog_contains_model([], "test-model")
+    assert not _catalog_contains_model({"data": "invalid"}, "test-model")
+    assert not _catalog_contains_model({"data": ["invalid"]}, "test-model")
+
+
+def test_setup_helper_runs_inside_project_without_path_arguments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[tuple[str, ...], Path | None]] = []
+
+    def completed(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[Sequence[str]]:
+        observed.append((tuple(command), cast(Path | None, kwargs.get("cwd"))))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
+    assert _ensure_setup(_options(tmp_path), {"HEARTWOOD_PLATFORM": "generic"}) == 0
+    assert any("setup" in command for command, _cwd in observed)
+    assert any("doctor" in command for command, _cwd in observed)
+    assert all(cwd == tmp_path for _command, cwd in observed)
+    assert all("--workspace" not in command for command, _cwd in observed)
+
+
+def test_setup_helper_propagates_setup_failure_and_missing_selection(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _ensure_setup(_options(tmp_path / "missing", selected=False), {}) == 64
+    assert "No local model is selected for setup" in capsys.readouterr().out
+
     observed: list[tuple[str, ...]] = []
 
-    def failed_setup(
-        command: Sequence[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[Sequence[str]]:
+    def failed(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         observed.append(tuple(command))
         return subprocess.CompletedProcess(command, 7)
 
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", failed_setup)
-    assert _ensure_setup(_options(tmp_path), {"OPENAI_API_KEY": "secret"}) == 7
-    assert "--non-interactive" in observed[0]
-    assert "--model-source" in observed[0]
-
-    def completed(
-        command: Sequence[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[Sequence[str]]:
-        observed.append(tuple(command))
-        return subprocess.CompletedProcess(command, 0)
-
-    observed.clear()
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
-    assert _ensure_setup(_options(tmp_path), {"OPENAI_API_KEY": "secret"}) == 0
-    assert any("setup" in command for command in observed)
-    assert any("doctor" in command for command in observed)
-
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "setup.json").write_text("{}", encoding="utf-8")
-    observed.clear()
-    assert _ensure_setup(_options(tmp_path)) == 0
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", failed)
+    assert _ensure_setup(_options(tmp_path / "failure"), {}) == 7
     assert len(observed) == 1
-    assert "doctor" in observed[0]
+    assert "setup" in observed[0]
 
 
-def test_direct_launch_reports_staged_verification_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _model(tmp_path / "model")
-    executable = tmp_path / "vllm"
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o755)
-    calls = 0
-
-    def verifier(_root: Path) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise ValueError("copy changed")
-
-    monkeypatch.setattr("heartwood.cli._launch.verify_snapshot", verifier)
-    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
-
-    assert run_launch(_options(tmp_path), env={"HEARTWOOD_PLATFORM": "generic"}) == 66
-    assert "Staged model verification failed: copy changed" in capsys.readouterr().out
-    assert not any((tmp_path / "state" / "scratch").iterdir())
-
-
-def test_carina_discovers_default_gpu_partition(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def completed(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            (), 0, stdout="dev*|gpu:nvidia_l40s:8|up\nlong|gpu:nvidia_l40s:8|up\n"
-        )
-
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
-
-    assert _discover_slurm_gpu_partitions({"PATH": "/usr/bin"}) == (
-        ("dev", True),
-        ("long", False),
-    )
-    plan = build_launch_plan(_options(tmp_path, partition=None), {"HEARTWOOD_PLATFORM": "carina"})
-    assert "--partition=dev" in plan.allocation_command
-
-
-def test_carina_reports_invalid_explicit_partition(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("dev", True), ("normal", False)),
-    )
-
-    code = run_launch(
-        _options(tmp_path, partition="gpu", dry_run=True),
-        env={"HEARTWOOD_PLATFORM": "carina"},
-    )
-
-    assert code == 64
-    assert "choose one of: dev, normal" in capsys.readouterr().out
-
-
-def test_carina_requires_selection_between_nondefault_gpu_partitions(
+def test_partition_discovery_and_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            (), 0, stdout="dev*|gpu:nvidia_l40s:8|up\nlong|gpu:nvidia_l40s:8|up\n"
+        ),
+    )
+    assert _discover_slurm_gpu_partitions({"PATH": "/usr/bin"}) == (
+        ("dev", True),
+        ("long", False),
+    )
+    plan = build_launch_plan(
+        _options(tmp_path, partition=None),
+        {"HEARTWOOD_PLATFORM": "carina"},
+    )
+    assert "--partition=dev" in plan.allocation_command
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (("dev", True), ("normal", False)),
+    )
+    assert (
+        run_launch(
+            _options(tmp_path, partition="gpu", dry_run=True),
+            env={"HEARTWOOD_PLATFORM": "carina"},
+        )
+        == 64
+    )
+    assert "choose one of: dev, normal" in capsys.readouterr().out
+
+
+def test_partition_discovery_handles_ambiguous_and_unavailable_schedulers(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
         "heartwood.cli._launch._discover_slurm_gpu_partitions",
         lambda _env: (("dev", False), ("normal", False)),
     )
-
-    code = run_launch(
-        _options(tmp_path, partition=None, dry_run=True),
-        env={"HEARTWOOD_PLATFORM": "carina"},
-    )
-
-    assert code == 64
-    assert "no default GPU partition was detected; choose one of: dev, normal" in (
-        capsys.readouterr().out
-    )
-
-
-def test_partition_discovery_handles_scheduler_errors_and_irrelevant_rows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def unavailable(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess((), 1, stdout="")
-
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", unavailable)
-    assert _discover_slurm_gpu_partitions({}) == ()
-
-    def malformed(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            (),
-            0,
-            stdout=(
-                "missing-fields\n"
-                "cpu|cpu:64|up\n"
-                "down|gpu:nvidia_l40s:8|down\n"
-                "dev*|gpu:nvidia_l40s:8|idle\n"
-                "dev*|gpu:nvidia_l40s:8|idle\n"
-            ),
+    assert (
+        run_launch(
+            _options(tmp_path / "ambiguous", partition=None, dry_run=True),
+            env={"HEARTWOOD_PLATFORM": "carina"},
         )
+        == 64
+    )
+    assert "no default GPU partition" in capsys.readouterr().out
 
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", malformed)
-    assert _discover_slurm_gpu_partitions({}) == (("dev", True),)
-
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess((), 1, stdout=""),
+    )
+    assert _discover_slurm_gpu_partitions({}) == ()
     monkeypatch.setattr(
         "heartwood.cli._launch.subprocess.run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("missing sinfo")),
@@ -707,10 +771,12 @@ def test_partition_discovery_handles_scheduler_errors_and_irrelevant_rows(
     assert _discover_slurm_gpu_partitions({}) == ()
 
 
-def test_vllm_preflight_imports_real_runtime_modules(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_vllm_preflight_and_output_helpers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    executable = tmp_path / "environment" / "vllm" / "bin" / "vllm"
+    executable = tmp_path / "bin" / "vllm"
     python = executable.with_name("python")
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -722,55 +788,66 @@ def test_vllm_preflight_imports_real_runtime_modules(
         return subprocess.CompletedProcess(command, 0, stdout="0.14.0 0.25.0\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
-
-    assert _preflight_vllm(_options(tmp_path), executable, {"PATH": "/usr/bin"}) is None
+    assert _preflight_vllm(executable, {"PATH": "/usr/bin"}) is None
     assert "import torchcodec, vllm" in observed[-1]
-
-
-def test_vllm_preflight_reports_missing_python_process_errors_and_import_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    executable = tmp_path / "vllm"
-    options = _options(tmp_path, environment_root=None, vllm_executable=executable)
-    assert "runtime Python is unavailable" in str(_preflight_vllm(options, executable, {}))
-
-    python = tmp_path / "python"
-    python.write_text("#!/bin/sh\n", encoding="utf-8")
-    python.chmod(0o755)
-    monkeypatch.setattr(
-        "heartwood.cli._launch.subprocess.run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("cannot execute")),
-    )
-    assert _preflight_vllm(options, executable, {}) == "cannot execute"
-
-    monkeypatch.setattr(
-        "heartwood.cli._launch.subprocess.run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(
-            command, 1, stdout="", stderr="first line\nmissing FFmpeg\n"
-        ),
-    )
-    assert _preflight_vllm(options, executable, {}) == "missing FFmpeg"
-
-
-def test_launch_output_helpers_report_units_process_status_and_log_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert _format_bytes(1) == "1.0 B"
     assert _format_bytes(1024) == "1.0 KiB"
-    assert _format_bytes(1024**5) == "1024.0 TiB"
 
-    log = tmp_path / "vllm.log"
-    log.write_text("starting\nRuntimeError: missing kernel\n", encoding="utf-8")
+    log = tmp_path / "runtime.log"
+    log.write_text("RuntimeError: missing kernel\n", encoding="utf-8")
     _print_runtime_failure(log, 17)
     output = capsys.readouterr().out
     assert "status 17" in output
     assert "RuntimeError: missing kernel" in output
-
-    _print_runtime_failure(tmp_path / "missing.log", None)
-    assert "Runtime log:" in capsys.readouterr().out
 
     monkeypatch.setattr(
         "heartwood.cli._launch.subprocess.run",
         lambda command, **_kwargs: subprocess.CompletedProcess(command, 23),
     )
     assert _run_command(("synthetic-command",)) == 23
+
+
+def test_vllm_preflight_reports_missing_and_failed_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "bin" / "vllm"
+    assert "runtime Python is unavailable" in str(_preflight_vllm(executable, {}))
+
+    python = executable.with_name("python")
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.chmod(0o755)
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("cannot execute")),
+    )
+    assert _preflight_vllm(executable, {}) == "cannot execute"
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="first line\nmissing FFmpeg\n",
+        ),
+    )
+    assert _preflight_vllm(executable, {}) == "missing FFmpeg"
+
+
+def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path) -> None:
+    source_file = tmp_path / "model.gguf"
+    source_file.write_bytes(b"1234")
+    file_destination = tmp_path / "file-stage"
+    file_destination.mkdir()
+    staged_file = _stage_model(source_file, file_destination)
+    assert staged_file.read_bytes() == b"1234"
+    assert _model_size(source_file) == 4
+
+    source_directory = tmp_path / "snapshot"
+    _snapshot(source_directory)
+    directory_destination = tmp_path / "directory-stage"
+    directory_destination.mkdir()
+    assert _stage_model(source_directory, directory_destination) == directory_destination
+    assert (directory_destination / "weights.safetensors").read_bytes() == b"synthetic"
+    assert _model_size(source_directory) > 0

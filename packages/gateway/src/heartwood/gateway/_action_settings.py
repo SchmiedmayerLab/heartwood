@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -104,15 +103,6 @@ class ActionSettingsStore:
             temporary_path.replace(self.path)
         finally:
             temporary_path.unlink(missing_ok=True)
-
-
-def action_settings_path(workspace: Path, env: Mapping[str, str] | None = None) -> Path:
-    """Resolve the shared action settings path for a session workspace."""
-    active_env = os.environ if env is None else env
-    configured = active_env.get("HEARTWOOD_ACTION_SETTINGS")
-    if configured:
-        return Path(configured)
-    return workspace.parent / "actions.json"
 
 
 def action_settings_from_mapping(value: object) -> ActionSettings:

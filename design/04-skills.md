@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 04 — Skills And Auto-Detection
+# 04 — Skills and Auto-Detection
 
 ## Format: `SKILL.md`
 
@@ -37,9 +37,9 @@ Detection is a fast, auditable, offline-testable pipeline that reports evidence 
 2. **Dataset** — the current integration fixture produces a deterministic synthetic OMOP fingerprint. A normal unconfigured runtime must report no detected dataset until a real data-source adapter supplies schema or format evidence such as OMOP table-name sets in `INFORMATION_SCHEMA`, VCF/BAM/DICOM magic bytes, or FHIR NDJSON structure.
 3. **Selection boundary** — the runtime currently makes the small checked-in bundle available to OpenHands without dataset filtering. A dataset-aware selector must emit a visible, logged proposal with a researcher correction path and cannot bypass installation-time approval for community or experimental Skills.
 
-Detection uses no model call. OpenHands receives repository-verified Skill metadata at startup and loads full bodies on activation through native progressive disclosure. Dataset-aware narrowing is not implemented and must not bypass the extension trust gate; [Issue #43](https://github.com/SchmiedmayerLab/heartwood/issues/43) owns its reference-workflow integration.
+Detection uses no model call. OpenHands receives repository-verified Skill metadata at startup and loads full bodies on activation through native progressive disclosure. Dataset-aware narrowing is not implemented and cannot be represented as a current capability.
 
-## Current Packaging And Trust
+## Current Packaging and Trust
 
 - **Current bundle.** `skills/bundle.toml` selects checked-in `SKILL.md` directories. The repository gate validates metadata consistency, declared tools, network posture, entrypoint confinement, deterministic tests, and provenance-field shape before the image includes them. OpenHands loads the resulting read-only bundle without runtime network access.
 - **Reference analysis.** `omop-cohort-summary` defines an adult target-condition cohort and aggregate quality checks, `baseline-model` fits an age-only logistic baseline for recorded condition history and reports training diagnostics without holdout claims, and `aggregate-export` suppresses results below the configured count floor. These Skills are deterministic synthetic integration implementations; their outputs are not clinical, statistical, export, or institutional approval.
@@ -54,4 +54,4 @@ The gateway gives OpenHands both the read-only bundled directory and the persist
 
 ## External Distribution Boundary
 
-Remote Skill acquisition, release channels, and cross-publication are unavailable. [Issue #46](https://github.com/SchmiedmayerLab/heartwood/issues/46) owns immutable source resolution, digest and signature verification, review provenance, revocation, and compatibility evidence. Sub-agent bundles remain outside the current single-agent contract.
+Remote Skill acquisition, release channels, cross-publication, cryptographic source verification, and revocation are unavailable. Sub-agent bundles remain outside the current single-agent contract.

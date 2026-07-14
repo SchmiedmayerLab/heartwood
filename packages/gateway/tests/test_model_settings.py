@@ -23,7 +23,6 @@ from heartwood.gateway import (
     model_profile_from_mapping,
     model_profile_from_preset,
     model_settings_from_mapping,
-    model_settings_path,
 )
 
 
@@ -213,15 +212,6 @@ def test_managed_identity_has_one_stable_policy_reference() -> None:
     profile.validate()
 
     assert profile.credential_reference == "managed-identity"
-
-
-def test_settings_path_can_be_overridden_without_using_home(tmp_path: Path) -> None:
-    workspace = tmp_path / "state" / "sessions"
-
-    assert model_settings_path(workspace, {}) == workspace.parent / "models.json"
-    assert model_settings_path(
-        workspace, {"HEARTWOOD_MODEL_SETTINGS": "/run/heartwood/models.json"}
-    ) == Path("/run/heartwood/models.json")
 
 
 @pytest.mark.parametrize(

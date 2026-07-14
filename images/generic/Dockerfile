@@ -41,14 +41,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OPENHANDS_SUPPRESS_BANNER=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    HEARTWOOD_LOCAL_RUNTIME_PROFILE=llama-cpp-cpu \
-    HEARTWOOD_AGENT_BACKEND=auto \
-    HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified \
-    HEARTWOOD_MODEL_CATALOG=/opt/heartwood/images/generic/local-runtime/model-catalog.toml \
-    HEARTWOOD_HOME=/home/heartwood/.local/share/heartwood \
-    HEARTWOOD_WORKSPACE=/home/heartwood/.local/share/heartwood/sessions \
-    HEARTWOOD_MODEL_CACHE=/home/heartwood/.cache/heartwood/models \
-    HEARTWOOD_WEB_ROOT=/opt/heartwood/packages/webui/dist \
     LD_LIBRARY_PATH=/opt/llama.cpp \
     PATH="/opt/llama.cpp:/opt/heartwood/.venv/bin:${PATH}"
 
@@ -57,10 +49,9 @@ RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
     && mkdir -p \
       /opt/heartwood \
       /opt/heartwood-vllm \
-      /home/heartwood/.cache/heartwood/models \
-      /home/heartwood/.local/share/heartwood \
+      /workspace \
       /home/heartwood/.openhands \
-    && chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /home/heartwood \
+    && chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /workspace /home/heartwood \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates \
@@ -88,8 +79,6 @@ RUN set -eux; \
     tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
     rm /tmp/llama.cpp.tar.gz; \
     chown -R heartwood:heartwood /opt/llama.cpp
-
-ENV HF_HOME=/home/heartwood/.cache/heartwood/models/.huggingface
 
 WORKDIR /opt/heartwood
 
@@ -125,5 +114,7 @@ FROM heartwood-runtime-base AS gpu-ci-validate
 RUN /opt/heartwood/images/gpu/verify_runtime.sh
 
 FROM heartwood-runtime-base AS runtime-image
+
+WORKDIR /workspace
 
 CMD ["heartwood", "--help"]

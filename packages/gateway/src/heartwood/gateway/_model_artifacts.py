@@ -16,10 +16,10 @@ from dataclasses import asdict, dataclass
 from importlib import import_module
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal, Protocol, TypeAlias, cast
+from typing import Any, Literal, Protocol, cast
 
-DownloadStatus: TypeAlias = Literal["downloading", "error", "ready"]
-ProgressCallback: TypeAlias = Callable[[int, int], None]
+type DownloadStatus = Literal["downloading", "error", "ready"]
+type ProgressCallback = Callable[[int, int], None]
 
 
 class _DownloadProgress:

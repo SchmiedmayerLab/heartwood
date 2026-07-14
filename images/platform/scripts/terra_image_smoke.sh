@@ -20,17 +20,17 @@ test -f "${runtime_root}/docs/terra-jupyter-demo.ipynb"
 test -f "${runtime_root}/docs/terra-jupyter-demo.md"
 test -d "${runtime_root}/packages/webui/dist"
 test -f "${runtime_root}/images/generic/scripts/offline_stack_smoke.sh"
-test -f "${runtime_root}/images/generic/scripts/start_web_ui.sh"
+test -f "${runtime_root}/packages/webui/dist/index.html"
+heartwood serve --help >/dev/null
 test -d "${platform_home}"
 
 heartwood --version
 "${heartwood_python}" - <<'PY'
-from pathlib import Path
-
+from heartwood.gateway import ProjectContext
 from heartwood.notebook import NotebookSession, jupyter_proxy_url
 
-workspace = Path("/tmp/heartwood-platform-smoke")
-session = NotebookSession(workspace=workspace, session_id="terra-image-smoke")
+project = ProjectContext.current()
+session = NotebookSession(project=project, session_id="terra-image-smoke")
 view = session.detect()
 assert view.session_id == "terra-image-smoke"
 assert jupyter_proxy_url(port=8767).endswith("/proxy/8767/")

@@ -26,6 +26,13 @@ _DESIGN_FILES = tuple(
         (8, "development"),
     )
 )
+_REFERENCE_FILES = (
+    "ACRONYMS.md",
+    "CONTRIBUTING.md",
+    "CONTRIBUTORS.md",
+    "LICENSE",
+    "NOTICE",
+)
 _REPOSITORY_DIRECTORIES = (
     "evals",
     "fixtures",
@@ -69,13 +76,20 @@ def stage_documentation(source_root: Path, output_root: Path) -> None:
 
     readme = (source_root / "README.md").read_text(encoding="utf-8")
     repository_base = f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}"
-    for relative_path in _REPOSITORY_DIRECTORIES:
+    for relative_path in (*_REPOSITORY_DIRECTORIES, "AGENTS.md"):
         readme = readme.replace(f"]({relative_path})", f"]({repository_base}/{relative_path})")
+
+    contributing = (source_root / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    contributing = contributing.replace(
+        "](AGENTS.md)",
+        f"]({repository_base}/AGENTS.md)",
+    )
 
     (temporary_root / "README.md").write_text(readme, encoding="utf-8")
     (temporary_root / "index.md").write_text('--8<-- "README.md"\n', encoding="utf-8")
-    shutil.copy2(source_root / "ACRONYMS.md", temporary_root / "ACRONYMS.md")
-    shutil.copy2(source_root / "LICENSE", temporary_root / "LICENSE")
+    for filename in _REFERENCE_FILES:
+        shutil.copy2(source_root / filename, temporary_root / filename)
+    (temporary_root / "CONTRIBUTING.md").write_text(contributing, encoding="utf-8")
     shutil.copytree(source_root / "docs", temporary_root / "docs")
 
     design_root = temporary_root / "design"

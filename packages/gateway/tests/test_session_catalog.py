@@ -17,6 +17,7 @@ import pytest
 
 from heartwood.core_adapter import FileSessionStore
 from heartwood.gateway import (
+    ProjectContext,
     RestGateway,
     RestRequest,
     SessionCatalog,
@@ -146,8 +147,9 @@ def test_catalog_rejects_invalid_titles_and_unknown_renames(tmp_path: Path) -> N
 def test_rest_exposes_session_creation_listing_and_rename(tmp_path: Path) -> None:
     rest = RestGateway(
         SessionGateway(
-            workspace=tmp_path,
-            env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+            project=ProjectContext(tmp_path),
+            env={},
+            backend_id="deterministic",
         )
     )
 
@@ -196,7 +198,7 @@ def test_rest_validates_session_metadata_requests(
     body: str,
     status_code: int,
 ) -> None:
-    rest = RestGateway(SessionGateway(workspace=tmp_path, env={}))
+    rest = RestGateway(SessionGateway(project=ProjectContext(tmp_path), env={}))
 
     response = rest.handle(RestRequest(method=method, path=path, body=body))
 

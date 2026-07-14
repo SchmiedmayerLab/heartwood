@@ -69,7 +69,7 @@ jobs:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: >-
           docker run --rm
-          --volume heartwood-ci-model:/home/heartwood/.cache/heartwood/models
+          --volume heartwood-ci-project:/workspace
           heartwood-runtime-smoke:local
           heartwood models download llama-cpp-stories260k-ci
       - name: Run mounted local inference without network
@@ -77,9 +77,9 @@ jobs:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: >-
           docker compose -f images/generic/compose.yaml run --rm --no-deps
-          --volume heartwood-ci-model:/models:ro
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
-          heartwood bash images/generic/scripts/local_inference_smoke.sh
+          --volume heartwood-ci-project:/workspace
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/workspace/.heartwood/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
+          heartwood bash /opt/heartwood/images/generic/scripts/local_inference_smoke.sh
 
   capable-model:
     name: Capable Model OpenHands Acceptance (linux/amd64)
@@ -100,30 +100,30 @@ jobs:
           docker buildx build --load --platform linux/amd64
           --tag heartwood-capable:local
           --file images/generic/Dockerfile .
-      - name: Prepare external model storage
+      - name: Prepare persistent project storage
         run: |
-          sudo mkdir -p /tmp/heartwood-models
-          sudo chown 10001:10001 /tmp/heartwood-models
+          sudo mkdir -p /tmp/heartwood-project
+          sudo chown 10001:10001 /tmp/heartwood-project
       - name: Download and verify reviewed agent model
         run: >-
           docker run --rm --platform linux/amd64
-          --volume /tmp/heartwood-models:/models
-          --env HEARTWOOD_MODEL_CACHE=/models
+          --volume /tmp/heartwood-project:/workspace
           heartwood-capable:local
-          heartwood models download qwen25-7b-instruct-q4_k_m --cache /models
+          heartwood models download qwen25-7b-instruct-q4_k_m
       - name: Run mounted capable model without network
         run: >-
           docker run --rm --platform linux/amd64 --network none --read-only
-          --volume /tmp/heartwood-models:/models:ro
+          --volume /tmp/heartwood-project:/workspace
           --tmpfs /tmp:rw,nosuid,nodev,size=4g
           --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
           --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
           --cap-drop ALL
           --security-opt no-new-privileges:true
           --pids-limit 512
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+          --env HEARTWOOD_CAPABLE_PROJECT=/workspace
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/workspace/.heartwood/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
           heartwood-capable:local
-          bash images/generic/scripts/capable_model_e2e.sh
+          bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
 
   terra-smoke:
     name: Terra image smoke test (linux/amd64)
@@ -176,17 +176,18 @@ jobs:
         run: >-
           docker run --rm --platform linux/amd64
           --entrypoint heartwood
-          --volume heartwood-terra-ci-model:/home/jupyter/heartwood-workspace/models
+          --workdir /home/jupyter/heartwood-project
+          --volume heartwood-terra-ci-project:/home/jupyter/heartwood-project
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           models download llama-cpp-stories260k-ci
       - name: Run Terra mounted local inference without network
         run: >-
           docker run --rm --platform linux/amd64 --network none
-          --workdir /opt/heartwood --entrypoint bash
-          --volume heartwood-terra-ci-model:/models:ro
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
+          --workdir /home/jupyter/heartwood-project --entrypoint bash
+          --volume heartwood-terra-ci-project:/home/jupyter/heartwood-project
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/heartwood-project/.heartwood/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
-          images/generic/scripts/local_inference_smoke.sh
+          /opt/heartwood/images/generic/scripts/local_inference_smoke.sh
       - name: Run Terra Jupyter launch smoke
         run: >-
           bash images/platform/scripts/terra_jupyter_launch_smoke.sh

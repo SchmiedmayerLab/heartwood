@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# 03 — Architecture
+# 03 — System Architecture
 
 ## Principles
 
@@ -20,6 +20,7 @@ SPDX-License-Identifier: MIT
 6. Make the common researcher path conversation-first; detection, skills, policy status, and audit remain visible without becoming separate workflows.
 7. Treat offline and in-perimeter operation as first-class deployment modes, not separate products.
 8. Prefer upstream OpenHands and LiteLLM capabilities over Heartwood-owned provider clients, agent loops, tool schemas, skill loaders, or confirmation engines.
+9. Treat the directory from which Heartwood starts as the project and agent working directory; keep Heartwood-owned configuration and durable state in its `.heartwood/` subdirectory.
 
 ## Upstream Reuse Rule
 
@@ -42,7 +43,7 @@ An OpenHands upgrade is accepted only when the adapter unit tests, native Skill 
 | Capability | Owner | Heartwood responsibility |
 |---|---|---|
 | Conversation loop, tool execution, pause/resume, persistence, and action confirmation | OpenHands Software Agent SDK | Configure the SDK, translate its events, and keep the dependency behind a narrow adapter. |
-| Provider compatibility and model request formatting | OpenHands `LLM` and LiteLLM | Store non-secret model profiles, resolve secret references at runtime, and authorize the selected endpoint before task submission or any approved or resumed continuation that may call the model. |
+| Provider compatibility and model request formatting | OpenHands `LLM` and LiteLLM | Store non-secret model profiles, resolve credential bindings at runtime, and authorize the selected endpoint before task submission or any approved or resumed continuation that may call the model. |
 | Model catalog discovery | Official provider SDKs, OpenAI-compatible model-list endpoints, and platform configuration | Expose one normalized catalog contract, authorize discovery before network access, annotate entries with upstream OpenHands and LiteLLM metadata, and materialize the selected entry as a model profile. |
 | Local inference | External OpenAI-compatible runtime or the packaged llama.cpp runtime | Configure the endpoint and optionally download a reviewed artifact into a mounted cache; do not place weights in an image layer. |
 | Skills | OpenHands `SKILL.md` loader | Verify, curate, bundle, and select biomedical skills before passing them to `AgentContext`. |
@@ -51,7 +52,7 @@ An OpenHands upgrade is accepted only when the adapter unit tests, native Skill 
 | User interfaces | Heartwood | Render the same session contract in a coding-agent-style CLI and conversation-first web UI. |
 | Terminal presentation | Textual | Wire Textual into Heartwood's framework-neutral interaction controller for rendering, input, and workers while leaving conversation and agent state in the gateway. |
 
-The current runtime satisfies this ownership boundary for the agent loop and interfaces. Platform and data-source adaptation is not complete: runtime construction currently uses `GenericPlatformAdapter` and the synthetic OMOP data-source adapter unless a caller injects alternatives. A real platform adapter must replace those defaults before controlled workspace data is described as detected or supported.
+The current runtime satisfies this ownership boundary for the agent loop and interfaces. Runtime construction selects the detected generic, Terra, or Carina platform adapter and applies the project policy, but data-source adaptation is not complete: session detection still uses the synthetic OMOP data-source adapter unless a caller injects another implementation. A real data-source adapter must replace that fixture before controlled project data is described as detected or supported.
 
 ## Runtime Shape
 
@@ -80,21 +81,46 @@ flowchart TB
 
 The default deployment uses an in-process OpenHands SDK conversation because it is the smallest reliable integration for one researcher inside one trusted interactive container. The gateway remains the public API and event-translation boundary. An OpenHands remote workspace or agent-server is an adapter choice for deployments that require process or host isolation; it is not a second product path and clients never depend on its private API.
 
-## Model Connections And Profiles
+## Project and State Contract
 
-A model connection is a non-secret description of one selectable model source: a stable connection id, display label, provider protocol, model prefix, catalog endpoint, completion endpoint, base URL and existing provider profile options when needed, credential reference, and source such as built-in, platform-provided, or user-configured. A connection may expose one or many models. Platform-provided research services therefore remain one connection even when their current identity can access several model identifiers.
+Heartwood resolves the process working directory once at startup and treats it as the project root. It does not search parent directories, infer a root from Git metadata, or require a workspace option. OpenHands file and terminal tools start in that project, and project-relative actions may address the project root or its descendants except for the reserved `.heartwood/` control directory. Heartwood file APIs reject paths that resolve outside the project or inside `.heartwood/`; a hard boundary for arbitrary terminal processes remains the responsibility of a supported OpenHands remote workspace or platform sandbox.
+
+Every interface receives one typed project context from the gateway. The CLI, web interface, notebook bridge, container entrypoint, and platform launcher do not independently select session, model, cache, or policy roots. Scheduler and container transitions preserve the directory in which the user invoked Heartwood as the logical project root.
+
+Heartwood owns one project-local control directory:
+
+```text
+.heartwood/
+├── config.toml
+├── state.json
+├── sessions/
+├── models/
+├── skills/
+├── audit/
+├── runtime/
+├── logs/
+└── cache/
+```
+
+`config.toml` is the typed user-facing configuration for model connections and selection, local runtime choices, action confirmation, and platform-supplied defaults. `state.json` records the state schema. The remaining directories contain only Heartwood-owned persistence. Heartwood creates the control directory with restrictive permissions, places an internal Git ignore rule at its root, writes mutable configuration atomically, rejects symbolic-link escapes in its file APIs, and excludes `.heartwood/` from Heartwood-owned project paths and agent instructions. Researchers manage it through Heartwood commands rather than by passing paths between commands. Arbitrary terminal commands still run with the process user's filesystem permissions and require a platform sandbox when instruction-level exclusion is insufficient.
+
+Researcher-facing runtime configuration does not depend on `HEARTWOOD_*` path or state variables. Build parameters, test controls, platform detection, and private process-to-process wiring may still use environment variables as implementation details, but they are not a supported project setup interface. Provider secrets remain outside project configuration: the gateway accepts a session-only token or resolves a non-secret binding to an environment-backed platform secret, mounted file, or managed identity. It does not expose the secret through command arguments, project configuration, API responses, logs, session events, or audit exports. Terminal subprocess environments blank every configured environment-backed provider key, while stronger same-user isolation remains a deployment responsibility.
+
+## Model Connections and Profiles
+
+A model connection is a non-secret description of one selectable model source: a stable connection id, display label, provider protocol, model prefix, catalog endpoint, completion endpoint, base URL and existing provider profile options when needed, credential binding, and source such as built-in, platform-provided, or user-configured. A connection may expose one or many models. Platform-provided research services therefore remain one connection even when their current identity can access several model identifiers.
 
 The gateway owns one model-catalog service. OpenAI and Anthropic catalogs use their maintained SDK model-list operations, OpenAI-compatible services use the maintained OpenAI client against the configured base URL, and local reviewed artifacts and active runtimes use their existing Heartwood managers. Heartwood does not maintain cloud model identifiers, provider request construction, pagination, or capability tables. The gateway normalizes upstream records, preserves exact identifiers, uses provider display names only when supplied, and annotates compatibility from the pinned OpenHands and LiteLLM stack. Unknown models remain visible as experimental, while models known to be unsuitable for the OpenHands conversation are visible but unavailable. A platform that must suppress identifiers exposes only the policy-approved subset through its catalog endpoint or static connection manifest.
 
-A model profile remains the single non-secret execution configuration consumed by policy and OpenHands: a stable profile id, LiteLLM model identifier, base URL when needed, declared normalized completion endpoint, capability tier, and one credential reference. Selecting a catalog entry materializes or replaces one profile for that connection. Existing advanced profiles remain supported for operators and automation, but researcher interfaces do not require profile ids, environment-variable names, policy endpoints, or LiteLLM prefixes.
+A model profile remains the single non-secret execution configuration consumed by policy and OpenHands: a stable profile id, LiteLLM model identifier, base URL when needed, declared normalized completion endpoint, capability tier, and one credential binding. Selecting a catalog entry materializes or replaces one profile for that connection. Researcher interfaces do not require profile ids, credential-storage details, policy endpoints, or LiteLLM prefixes.
 
-Credential references point to an environment variable, mounted file, or platform-managed identity. A same-origin web request may submit a provider token for the lifetime of the running gateway; the gateway associates it with the connection's existing environment reference in memory and never returns, logs, audits, or writes the value to settings. Restart persistence continues to require a deployment-provided environment variable, mounted secret, or managed identity. The CLI uses the same catalog and profile operations and reads durable credentials through those references; it never accepts a token as a command-line argument.
+A credential binding identifies a managed identity, environment-backed platform secret, mounted file, or session-only value. Project configuration stores the binding, never the secret. The CLI and same-origin web interface use the same gateway operation to establish a selection; a submitted token is never returned, logged, audited, written to project state, or accepted as a command-line argument. Session-only values must be entered again after the gateway restarts; durable bindings are owned and protected by the deployment.
 
-Catalog discovery is an egress operation separate from model completion. The deployment policy lists exact allowed catalog endpoints independently from completion endpoints. The gateway authorizes the catalog endpoint and non-secret credential reference before invoking an upstream SDK. Static platform catalogs and local artifact metadata require no network call, but selecting any entry still requires the normal completion-route decision. Catalog responses remain in the gateway's bounded memory cache and are not copied into model settings or session audit records; subsequent model-route records identify the selected non-secret profile and route decision.
+Catalog discovery is an egress operation separate from model completion. The deployment policy lists exact allowed catalog endpoints independently from completion endpoints. The gateway authorizes the catalog endpoint and non-secret credential binding before invoking an upstream SDK. Static platform catalogs and local artifact metadata require no network call, but selecting any entry still requires the normal completion-route decision. Catalog responses remain in the gateway's bounded memory cache and are not copied into model settings or session audit records; subsequent model-route records identify the selected non-secret profile and route decision.
 
-The selected profile is resolved before initial task submission and before an approved or resumed continuation that may call the model. Heartwood evaluates its declared policy endpoint, capability tier, action-confirmation mode, and non-secret credential reference against the active platform policy and records the decision without the credential value. Rejecting a pending action set does not continue the model and therefore remains available without authorizing a route. A missing credential reference fails before a route decision, and a denied profile cannot submit or continue a model turn or make a model request. An allowed profile is converted directly to OpenHands `LLM` configuration with a bounded provider-neutral timeout and retry budget suitable for an interactive session. CPU-local profiles receive a longer bounded request timeout than hosted profiles because prompt evaluation can exceed hosted API latency; OpenHands and LiteLLM continue to own provider-specific request formatting, retry execution, tool calling, and response parsing. When a custom base URL is present, it must share the policy endpoint's origin. For provider-native routes without a custom base URL, the policy endpoint is an audited deployment assertion rather than a network interceptor; platform network controls remain the authoritative enforcement boundary for actual traffic.
+The selected profile is resolved before initial task submission and before an approved or resumed continuation that may call the model. Heartwood evaluates its declared policy endpoint, capability tier, action-confirmation mode, and non-secret credential binding against the active platform policy and records the decision without the credential value. Rejecting a pending action set does not continue the model and therefore remains available without authorizing a route. A missing credential binding fails before a route decision, and a denied profile cannot submit or continue a model turn or make a model request. An allowed profile is converted directly to OpenHands `LLM` configuration with a bounded provider-neutral timeout and retry budget suitable for an interactive session. CPU-local profiles receive a longer bounded request timeout than hosted profiles because prompt evaluation can exceed hosted API latency; OpenHands and LiteLLM continue to own provider-specific request formatting, retry execution, tool calling, and response parsing. When a custom base URL is present, it must share the policy endpoint's origin. For provider-native routes without a custom base URL, the policy endpoint is an audited deployment assertion rather than a network interceptor; platform network controls remain the authoritative enforcement boundary for actual traffic.
 
-When the selected model credential is an environment-variable reference, Heartwood resolves it into the in-process OpenHands `LLM`. Every environment-variable reference in the configured model profiles is overridden with an empty value in OpenHands terminal subprocesses, including inactive profiles. This removes direct child-environment inheritance for configured model keys, but it is not general process isolation: same-user process inspection, a readable credential file, and a platform-managed identity intentionally available to analysis code remain within reach of workspace code. Deployments that require model-only credentials to be inaccessible to tools must provide process or workspace isolation through a supported OpenHands remote workspace or platform-native boundary.
+After policy authorizes a credential binding, the gateway resolves it and supplies the value directly to the in-process OpenHands `LLM`. Provider credentials are not inherited by OpenHands terminal subprocesses. This is not general process isolation: same-user process inspection, a readable platform secret, and a managed identity intentionally available to analysis code may remain within reach of workspace code. Deployments that require model-only credentials to be inaccessible to tools must provide process or workspace isolation through a supported OpenHands remote workspace or platform-native boundary.
 
 Local profiles use the same contract. The local connection lists models reported by an active Ollama, vLLM, SGLang, llama.cpp, or other OpenAI-compatible runtime and presents reviewed artifacts from the existing artifact manager. The image may include a portable llama.cpp server binary, but model artifacts live in a mounted cache or platform disk and are selected explicitly. The reviewed artifact catalog is guidance and reproducible download metadata, not a set of weights embedded in the image. Background downloads report transferred and expected bytes through the gateway; the web UI polls only while a transfer is active and displays integrity verification failures without treating download completion as runtime readiness or model capability.
 
@@ -108,7 +134,7 @@ The normal workflow has three distinct decisions:
 2. **Extension trust:** repository-verified bundled Skills load automatically; community or experimental Skills require explicit installation approval and verification before they enter the runtime Skill directory. Skill activation is recorded but does not repeatedly ask the researcher to approve the same repository-verified capability.
 3. **Action confirmation:** OpenHands proposes concrete tool actions. **Ask Every Time** maps to OpenHands `AlwaysConfirm` and remains the default. **Auto-Approve Low Risk** maps to OpenHands `ConfirmRisky` with a `MEDIUM` threshold and `confirm_unknown=True`; low-risk actions execute, while medium-, high-, and unknown-risk actions require review. The OpenHands public conversation API exposes all unmatched actions from one confirmation stop as one pending set: continuing approves the set and `reject_pending_actions()` rejects the set. Heartwood therefore persists and displays every member, then presents one **Allow all once** or **Reject all** decision in the CLI, web UI, and notebook projection. It does not mutate OpenHands state to claim unsupported selective member execution. A tool-call or legacy request identifier may address the set for automation, but normal interaction requires no identifier. While a confirmation is pending, the session service rejects new tasks and resume commands so only the explicit set decision can continue or reject the work. Both modes use the upstream `EnsembleSecurityAnalyzer` with `PolicyRailSecurityAnalyzer`, `PatternSecurityAnalyzer`, and `LLMSecurityAnalyzer` in strict unknown-propagation mode. The deterministic analyzers provide local action-boundary checks, and the model assessment adds context; Heartwood does not implement a parallel risk engine.
 
-The active platform policy lists the confirmation modes that a deployment permits. Generic synthetic development permits both modes; managed deployments default to **Ask Every Time** until their workspace isolation and review evidence justify risk-based execution. OpenHands `NeverConfirm` is not exposed through researcher settings because the current trusted interactive container is not a hardened unattended-execution boundary. A future remote or sandboxed backend may support it only as deployment-owned configuration with dedicated tests and evidence.
+The active platform policy lists the confirmation modes that a deployment permits. Generic synthetic development permits both modes; managed deployments default to **Ask Every Time** until their workspace isolation and review evidence justify risk-based execution. OpenHands `NeverConfirm` is outside the researcher-facing contract because the current trusted interactive container is not a hardened unattended-execution boundary.
 
 Exports remain explicit user commands and are subject to platform export controls. Model-route authorization, skill trust, action confirmation, and export authorization must not be represented as one generic approval type because they have different owners and lifetimes.
 
@@ -122,9 +148,9 @@ The CLI and web UI expose the same core conversation actions: address a persiste
 
 The default CLI is a full-screen Textual application over a framework-neutral terminal controller and the gateway command/event contract. Textual supplies terminal rendering, keyboard input, background workers, and headless application tests; it does not own conversation state or agent behavior. The line-oriented client remains available for basic terminals and automation, and one-shot commands remain stable for scripts and CI. Heartwood does not import the OpenHands CLI application's private widgets or conversation manager: those components own a separate OpenHands conversation and settings lifecycle, are not a supported frontend library, and currently resolve a different SDK dependency set. The terminal adapter follows the upstream interaction pattern while the Heartwood gateway remains the only conversation owner.
 
-Gateway commands currently return a completed event batch. Terminal clients execute that blocking operation in a worker so input rendering and status remain responsive, but they must not imply token streaming or mid-turn cancellation. [Issue #24](https://github.com/SchmiedmayerLab/heartwood/issues/24) tracks incremental durable events, OpenHands lifecycle state, and interruption; the terminal controller is deliberately independent of Textual so the same transition can serve SSH, Carina, and future remote-gateway clients without another command path.
+Gateway commands return a completed event batch. Terminal clients execute that blocking operation in a worker so input rendering and elapsed-time status remain responsive, but they do not imply token streaming or mid-turn cancellation. The terminal controller is independent of Textual so SSH, Carina, and other clients can reuse the same command path.
 
-The session-oriented researcher experience below defines the presentation contract. The web UI uses gateway-owned session metadata, progressive disclosure, typed event projections, responsive overlays, and the same command vocabulary as the CLI. Boundary evidence, workflow progress, and other states require typed gateway records and are omitted when those records are absent; [Issue #41](https://github.com/SchmiedmayerLab/heartwood/issues/41) tracks the remaining interface evidence and target-user validation.
+The session-oriented researcher experience below defines the presentation contract. The web UI uses gateway-owned session metadata, progressive disclosure, typed event projections, responsive overlays, and the same command vocabulary as the CLI. Boundary evidence, workflow progress, and other states require typed gateway records and are omitted when those records are absent.
 
 The web UI opens on the conversation and follows one information architecture:
 
@@ -138,7 +164,7 @@ The web UI opens on the conversation and follows one information architecture:
 
 Every interactive state is projected from the gateway contract. The browser does not synthesize action outcomes, workflow completion, policy decisions, Skill verification, model capability, or audit integrity. Model connections, normalized catalog entries, and artifact entries are gateway-supplied data rather than vendor-specific interface code.
 
-The desktop layout uses a compact session rail and modal secondary sheets; smaller viewports collapse the session rail into a left sheet while preserving the conversation and composer. Semantic landmarks, accessible names, focus trapping, transcript and status announcements, text reflow, and narrow Jupyter-proxy layout are automated interface requirements. A keyboard and assistive-technology acceptance pass with representative users remains required before release.
+The desktop layout uses a compact session rail and modal secondary sheets; smaller viewports collapse the session rail into a left sheet while preserving the conversation and composer. Automated checks cover semantic landmarks, accessible names, focus trapping, transcript and status announcements, text reflow, and the narrow Jupyter-proxy layout. Repository evidence does not include acceptance testing with representative assistive-technology users.
 
 Notebook support reuses the gateway and web UI through the platform's authenticated proxy. Notebook widgets remain a compact status and launch bridge rather than a third full interaction design.
 
@@ -151,7 +177,7 @@ Notebook support reuses the gateway and web UI through the platform's authentica
 
 Provider-specific execution adapters are not part of the default architecture. A platform adapter may supply identity, endpoint, visibility, and static-catalog metadata. Narrow catalog adapters call maintained SDK listing operations only; OpenHands and LiteLLM remain the provider execution and compatibility layer.
 
-### Installation And Launch Lifecycle
+### Installation and Launch Lifecycle
 
 Native deployments use a small standalone installer only before the `heartwood` command exists. The installer verifies a versioned GitHub Release bundle, places its immutable source payload under a versioned installation root, creates locked runtime environments, and publishes a stable command link. It never downloads model weights, stores credentials, submits compute jobs, or selects a data route.
 
@@ -159,11 +185,11 @@ After installation, `heartwood launch` owns the common lifecycle contract. A pla
 
 Carina implements scheduler acquisition through Slurm. Terra and generic container environments report already-provisioned compute and use the same post-allocation lifecycle without invoking Slurm. The `heartwood launch` command is the only researcher-facing launch path; release bootstrap internals do not own model policy, session state, compute acquisition, or agent execution.
 
-## Audit And Durability
+## Audit and Durability
 
 OpenHands persists the operational conversation state needed for resume. Heartwood records researcher and agent messages in its in-boundary session event stream so every client can reconstruct the same transcript, and derives a separate hash-chained audit record from the session events. The audit record stores route ids, endpoint decisions, tool names, risk levels, result status, activated Skill ids, and human decisions. Prompt text, model response text, action summaries, filesystem paths, row values, and secrets are excluded from exported records; message content and action summaries remain available only in the in-boundary conversation and session event stores.
 
-Session state and downloaded model artifacts live on the workspace or platform disk so they survive container replacement and platform autopause. Generic deployments mount durable storage at the state and model-cache roots and may map those roots to one or separate volumes; action and model settings, sessions, installed Skills, OpenHands state, workspaces, and audit data resolve from the state root. No external Heartwood database is required for the single-user interactive deployment.
+Session state and downloaded model artifacts live under the project's `.heartwood/` directory so they survive process restart, container replacement, and platform autopause. A deployment makes the project directory durable and may mount separate platform storage at `.heartwood/models/` without changing the logical layout. Configuration, sessions, installed Skills, OpenHands persistence, runtime records, logs, caches, and audit data resolve from the same project context. No external Heartwood database is required for the single-user interactive deployment.
 
 ## Data Flow
 

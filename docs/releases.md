@@ -10,16 +10,16 @@ SPDX-License-Identifier: MIT
 
 # Releases
 
-Heartwood releases use Semantic Versioning without a `v` prefix. Examples include `0.1.1`, `1.0.0`, and `1.2.0-rc.1`. The Git tag, GitHub Release, native installer version, and primary container tag use the same version. Because Open Container Initiative tag syntax does not permit `+`, build metadata uses `_` only in container tags; for example, Git release `1.2.0+build.3` maps to image tag `1.2.0_build.3`.
+Heartwood releases use Semantic Versioning without a `v` prefix. Examples include `0.2.0`, `1.0.0`, and `1.2.0-rc.1`. The Git tag, GitHub Release, native installer version, and primary container tag use the same version. Because Open Container Initiative tag syntax does not permit `+`, build metadata uses `_` only in container tags; for example, Git release `1.2.0+build.3` maps to image tag `1.2.0_build.3`.
 
-## Create A Release
+## Create a Release
 
 `VERSION.toml` is the canonical release version. Prepare a release through a reviewed pull request that updates this value, every workspace and web package version, runtime version constants, lockfiles, and versioned user-guide examples together. CI rejects inconsistent package or guide versions, and the release workflow refuses an input that differs from the canonical source version.
 
 Start the protected workflow from the current `main` branch:
 
 ```bash
-gh workflow run create-release.yml --ref main -f version=0.1.1
+gh workflow run create-release.yml --ref main -f version=0.2.0
 ```
 
 Every `main` commit runs the `Main Validation` workflow. Its dependency graph calls the repository validation, CodeQL, Python, web, secret scan, container smoke, native asset, CPU image, and GPU image workflows and emits `Release Candidate Ready` only after every dependency succeeds. The release workflow accepts only strict Semantic Versioning, requires every packaged source version to match, refuses an existing tag or published release, and binds the candidate to the current `main` commit. It checks `Release Candidate Ready` once for that exact commit and fails immediately when main validation is absent, incomplete, skipped, cancelled, or failed. It then verifies the immutable generic, Terra, generic GPU, and Terra GPU images and rebuilds and tests the versioned native installation bundle.
@@ -37,7 +37,7 @@ The publication job creates these immutable version tags from the verified commi
 
 The workflow attests `heartwood-installer`, `heartwood-native.tar.gz`, and `SHA256SUMS` before creating the editable draft. After approval, it publishes the versioned images and the Git tag and immutable GitHub Release from the exact commit. Repository rules protect tags against update, force-move, and deletion, with organization-administrator bypass retained only for recovery before publication; immutable-release enforcement locks the published tag and assets. The workflow refuses a pre-existing tag, so the approved GitHub Actions release job remains the supported publication path. Restricting creation itself would require a separately managed GitHub App because the repository `GITHUB_TOKEN` cannot bypass an Actions-only creation rule; Heartwood does not introduce a long-lived maintainer token for this purpose.
 
-## Maintain The Gate
+## Maintain the Gate
 
 Release-required workflows are declared as jobs in `.github/workflows/main-validation.yml` and as dependencies of its `release-ready` job. When a release requirement is added, removed, or renamed, update both parts of that dependency graph in the same pull request. `Main Validation` is the sole orchestrator on pull requests and `main`, so each component executes once and the same dependency graph governs merge and release readiness. Pull requests skip only main-only image publication while retaining container smoke and GPU candidate validation. Component workflows remain independently dispatchable for diagnostics. The main ruleset requires `Release Candidate Ready` plus the default CodeQL language analyses, CodeRabbit, and dependency review, which execute outside the graph; it does not duplicate internal component job names.
 
@@ -46,7 +46,7 @@ The release workflow is intentionally serialized. If publication is interrupted 
 If only the Pages deployment fails after the latest release is public, rerun it from `main` without changing the release:
 
 ```bash
-gh workflow run publish-documentation.yml --ref main -f version=0.1.1
+gh workflow run publish-documentation.yml --ref main -f version=0.2.0
 ```
 
 The recovery workflow verifies the canonical version, Git tag, release state, target commit, and latest-release designation before it can update the site. It rejects older releases so recovery cannot roll the public documentation back.

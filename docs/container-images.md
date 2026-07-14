@@ -8,134 +8,117 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Container Images
+# Run Heartwood in a Container
 
-Heartwood publishes one generic runtime and thin platform-derived runtimes. Every published image contains the same Heartwood application, OpenHands SDK adapter, repository-verified Skills, CLI, notebook bridge, web UI, policy controls, audit implementation, and optional `llama-server` runtime. Images never contain model weights or credentials.
+The generic Heartwood image is the easiest way to use the complete CLI and browser interface without installing Python, Node.js, OpenHands, or a local inference server on the host. It contains the Heartwood application, web assets, repository-verified Skills, OpenHands SDK, and CPU llama.cpp runtime. It contains no model weights and no credentials.
 
-This document describes current image and publication behavior. [Platform Support](platform-support.md) records which paths are implemented, CI-validated, or still awaiting live-platform evidence. Planned image and release work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
+Use the Terra-derived image when Terra must retain ownership of Jupyter, the notebook route, user identity, and persistent disk. Use the native installer on environments such as Carina where the scheduler and shared filesystem are more important than container portability.
 
-## Current Published Tags
+## Choose an Image
 
-| Tag | Platform | Purpose |
+| Image | Platforms | Purpose |
 |---|---|---|
-| `edge` | `linux/amd64`, `linux/arm64` | Moving main-branch generic runtime. |
-| `sha-<git-sha>` | `linux/amd64`, `linux/arm64` | Immutable generic runtime for one commit. |
-| `edge-terra` | `linux/amd64` | Moving main-branch runtime derived from the pinned Terra Jupyter base. |
-| `sha-<git-sha>-terra` | `linux/amd64` | Immutable Terra-derived runtime for one commit. |
-| `edge-gpu-nvidia` | `linux/amd64` | Moving generic NVIDIA runtime with isolated vLLM and no weights. |
-| `sha-<git-sha>-gpu-nvidia` | `linux/amd64` | Immutable generic NVIDIA runtime. |
-| `edge-terra-gpu-nvidia` | `linux/amd64` | Moving Terra-derived NVIDIA runtime with isolated vLLM and no weights. |
-| `sha-<git-sha>-terra-gpu-nvidia` | `linux/amd64` | Immutable Terra-derived NVIDIA runtime. |
-| `<semver>` | `linux/amd64`, `linux/arm64` | Protected release of the verified generic runtime. |
-| `<semver>-terra` | `linux/amd64` | Protected release of the verified Terra-derived runtime. |
-| `<semver>-gpu-nvidia` | `linux/amd64` | Protected release of the verified generic NVIDIA runtime. |
-| `<semver>-terra-gpu-nvidia` | `linux/amd64` | Protected release of the verified Terra-derived NVIDIA runtime. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0` | AMD64 and ARM64 | Stable generic runtime and the normal container starting point. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
+| `edge` and `edge-*` | Flavor-specific | Latest validated `main` build for development, not a stable release. |
+| `sha-<git-sha>` and `sha-<git-sha>-*` | Flavor-specific | Immutable images for one repository commit. |
 
-Do not publish `latest` before the first stable release. Model names, provider names, branch names, and architecture-helper suffixes are not public flavor tags.
+The portable generic image remains the default. A GPU image still requires compatible host drivers, a suitable model, enough accelerator memory, and deployment-specific validation.
 
-## Release Tags
+## Start a Project
 
-The protected release workflow publishes strict Semantic Version tags without a `v` prefix only after every declared check passes on the exact current `main` commit and the designated maintainer approves publication. Version tags copy verified immutable commit manifests and refuse an existing tag with a different digest. Build metadata uses `_` instead of `+` only in the container tag because OCI tag syntax does not permit `+`. See [Releases](releases.md) for the gate and artifact contract. Image signing, retention automation, generated notices, and a formal compatibility and support policy remain release-assurance work.
-
-Main publication separates staging from promotion. The publication jobs run only for the `main` ref; pull requests continue to run CI validation without publishing candidates or tags. A build may push content-addressed candidate manifests by digest, but it does not create or move a public tag until the exact candidate has passed its required checks. The immutable commit tag is created first and verified; a rerun may reuse it only when its digest or normalized manifest matches and must fail rather than overwrite a different artifact. The moving `edge` tag is updated last from that verified commit tag. The promotion step checks the current `main` commit immediately before moving the channel and refuses promotion if the branch has already advanced. A staging or candidate-validation failure leaves the candidate untagged and the previous moving tag unchanged. A later freshness or promotion failure may leave the validated immutable commit tag publicly reachable, but it cannot expose an unvalidated candidate under a public tag.
-
-The generic workflow builds on native AMD64 and ARM64 GitHub runners and pushes each result by digest without a tag. Each runner pulls its exact staged digest and runs the no-network OpenHands and mounted llama.cpp smokes before uploading a digest marker. The promotion job accepts markers only from successful jobs, dry-runs and validates the combined index, creates and verifies `sha-<git-sha>`, and then copies that manifest to `edge`. This avoids persistent `-amd64` and `-arm64` helper tags while retaining software bill of materials and provenance attestations.
-
-Terra is intentionally separate. Leonardo image auto-detection requires a single-platform Docker schema-2 manifest and does not accept the generic multi-platform Open Container Initiative index. Terra publication stages an untagged digest with `application/vnd.docker.distribution.manifest.v2+json`, disables attestations that would wrap the image in an index, and validates anonymous registry access, media type, platform, user, workdir, entrypoint, ports, required environment, Jupyter launch modes, OpenHands, and mounted local inference before creating `sha-<git-sha>-terra`. It then verifies the immutable tag and moves `edge-terra` last while preserving the single-manifest format.
-
-## Model And Credential Policy
-
-No Dockerfile accepts a model path or model manifest build argument, and no build step downloads weights. `images/generic/image-flavors.toml`, `images/platforms.toml`, and static tests enforce this contract.
-
-Provider configuration is runtime state:
-
-- `model` is a LiteLLM provider/model identifier consumed by OpenHands.
-- `base_url` points to a custom or local OpenAI-compatible service when needed and must share the policy endpoint's origin.
-- `policy_endpoint` is the declared normalized route Heartwood authorizes before initial task submission and before an approved or resumed continuation that may call the model. For provider-native routing without `base_url`, platform network controls must independently enforce the actual destination.
-- `credential_kind` is `environment`, `file`, `managed-identity`, or `none` for loopback-only endpoints.
-- `api_key_env` and `api_key_file` are references. Secret values are resolved only in memory.
-
-Model profiles and the selected action-confirmation mode are stored in separate mode-`0600` JSON files outside session directories. Neither file contains credential values. Deployment policy must allow the selected capability tier, confirmation mode, and non-secret credential reference in addition to the endpoint. `credential_allowlist` uses environment-variable names, absolute mounted-file paths, or `managed-identity`. Valid settings cannot bypass a policy denial.
-
-For an environment-referenced provider key, Heartwood passes only the active value to the in-process OpenHands model client and blanks every configured model-key environment reference in OpenHands terminal subprocesses. A mounted credential file or platform-managed identity available to the container user is not isolated from agent-executed code by this interactive-container architecture. Use least-privilege identities and a deployment-owned process, remote-workspace, or platform boundary when a model credential must be inaccessible to coding tools.
-
-For local models, use one of three equivalent deployment patterns:
-
-1. Run Ollama, vLLM, SGLang, llama.cpp, or another OpenAI-compatible service beside Heartwood and configure its endpoint.
-2. Mount an existing model artifact and set `HEARTWOOD_LOCAL_MODEL_PATH` before starting `images/generic/scripts/start_local_runtime.sh`.
-3. Explicitly download a reviewed catalog artifact into mounted storage with `heartwood models download <artifact-id>`, then pass the printed path to the local runtime launcher.
-
-The reviewed downloader pins the Hugging Face repository revision, byte size, SHA-256 digest, format, and license posture. Download success is an integrity check, not a model-quality or biomedical-suitability claim.
-
-## Generic Runtime
-
-Start the unconfigured web interface with persistent state and model cache volumes:
+Create or enter the directory the agent may edit, then mount that directory at `/workspace`:
 
 ```bash
-docker run --rm -p 127.0.0.1:8767:8767 \
-  -v heartwood-state:/home/heartwood/.local/share/heartwood \
-  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  ghcr.io/schmiedmayerlab/heartwood:edge \
-  bash images/generic/scripts/start_demo_stack.sh
+mkdir heartwood-demo
+cd heartwood-demo
+
+docker run --rm -it \
+  -p 127.0.0.1:8767:8767 \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood serve --host 0.0.0.0
 ```
 
-The service starts without a secret or model. Configure a profile from the web settings panel or the CLI. Action confirmation defaults to **Ask Every Time**; generic synthetic development can select **Auto-Approve Low Risk** through the same panel or `heartwood actions`. To use a runtime credential, pass an environment variable or mount a secret file at container start. Never use Docker `ARG` or Dockerfile `ENV` for a secret value.
+Open `http://127.0.0.1:8767/`. Heartwood treats `/workspace` as the project and creates `/workspace/.heartwood/`. One project mount therefore preserves source files, configuration, sessions, downloaded models, Skills, logs, and audit records across replacement containers.
 
-The state volume contains sessions, non-secret model and action settings, installed Skills, OpenHands state, workspaces, and audit data. The separate model volume allows large weights to use a different quota and retention policy and also owns Hugging Face transfer metadata through `HF_HOME`. Override `HEARTWOOD_MODEL_CACHE` and `HF_HOME` together when mounting a different model path. [Issue #22](https://github.com/SchmiedmayerLab/heartwood/issues/22) tracks a canonical versioned root and one-volume default while preserving the split cache as an advanced option; the current two-volume layout remains the supported contract until that migration is implemented and restart-tested.
+The image runs as non-root user `10001:10001`. On Linux, make the mounted project writable by that identity or run the container with a reviewed user mapping that can write the project. Do not make the application root writable merely to avoid a host-permission problem.
 
-Native environments use the same application and dependency locks through GitHub Release assets rather than a platform image. The release publishes `heartwood-installer`, `heartwood-native.tar.gz`, and `SHA256SUMS`; pull requests and `main` build and dry-run the same assets without publishing. Native installation contains no model weights or credentials and does not request compute. The installed `heartwood launch` command owns platform-aware compute planning and runtime startup.
-
-Run an explicitly mounted local model in the same container:
+The same project can use the terminal interface instead:
 
 ```bash
-docker run --rm -p 127.0.0.1:8767:8767 \
-  -v heartwood-state:/home/heartwood/.local/share/heartwood \
-  -v heartwood-models:/home/heartwood/.cache/heartwood/models \
-  -e HEARTWOOD_DEMO_START_LOCAL_RUNTIME=1 \
-  -e HEARTWOOD_LOCAL_MODEL_PATH=/home/heartwood/.cache/heartwood/models/<artifact-id>/<file>.gguf \
-  ghcr.io/schmiedmayerlab/heartwood:edge \
-  bash images/generic/scripts/start_demo_stack.sh
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood
 ```
 
-The local server binds to loopback by default. Use `heartwood models refresh local` and `heartwood models connect local <model-id>` to select the identifier reported by its OpenAI-compatible model-list route.
+## Use a Hosted or Existing Model Service
 
-CPU and memory requirements are determined by the selected model and runtime, not the Heartwood image. The catalog records a reviewed envelope for each optional artifact. GPU acceleration requires a separately installed and tested GPU-capable runtime; attaching a GPU does not make the baseline CPU `llama-server` use it.
+Start `heartwood serve`, open **Settings**, and select a platform connection, OpenAI, Anthropic, or Custom API. A token entered in the browser remains only in the gateway process. Heartwood stores the selected model and non-secret binding in the project, not the token.
 
-Use an explicit NVIDIA variant when the deployment needs an in-image GPU server. It installs vLLM in `/opt/heartwood-vllm`, separate from the Heartwood environment, from a version- and artifact-hash-locked requirements set, and uses `images/gpu/start_vllm.sh` with an externally mounted Hugging Face snapshot. The launcher binds to loopback and enables automatic tool choice; no image downloads or contains a model. The portable images remain the public defaults because they support AMD64 and ARM64 without a vendor driver contract.
+The deployment must allow the selected catalog and completion routes. A container connection does not establish that a provider is suitable for protected data; the exact agreement, covered service, identity, retention, region, and network controls remain deployment decisions.
 
-## Terra Runtime
+For production automation, provide credentials through a platform secret facility, mounted credential file, or managed identity and configure the corresponding non-secret binding. Do not bake credentials into a Dockerfile, image layer, label, build argument, or project file.
 
-The Terra Dockerfile starts from `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6` and adds Heartwood under `/opt/heartwood`. It deliberately preserves:
+## Download and Run a Local Model
 
-- user `jupyter` and home `/home/jupyter`;
-- the platform Jupyter environment ahead of Heartwood on `PATH`;
-- the inherited Jupyter notebook entrypoint and port `8000`;
-- the Leonardo `/notebooks/...` launch behavior;
-- a separate registered `Python 3 (Heartwood)` kernel;
-- persistent Heartwood state and model cache paths under `/home/jupyter/heartwood-workspace`.
+List the reviewed artifacts, then explicitly download one into the project's `.heartwood/models/` directory:
 
-The Terra runtime is no-weight for the same reason as the generic image. Use workspace-persistent storage for optional local artifacts or configure an institution-authorized endpoint. A hosted service is appropriate for regulated data only when the institution has verified its agreement, covered product, identity, regional, logging, retention, and network configuration.
+```bash
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood models artifacts
 
-The image and publication contract are implemented and CI-validated. Live synthetic validation in the Terra control plane remains outstanding, so the repository does not yet claim live Terra support for a specific institutional deployment.
+docker run --rm -it \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood models download qwen25-7b-instruct-q4_k_m
+```
 
-## Continuous Integration
+The download requires network access and sufficient project storage. Heartwood shows transfer progress, verifies the pinned revision and digest, and records the selected runtime without copying the model into an image layer.
 
-Pull requests run:
+Start the model and browser together:
 
-- Docker Buildx checks for both Dockerfiles;
-- the generic runtime on native AMD64 and ARM64 runners;
-- a no-network Compose smoke that uses the deterministic OpenAI-compatible fixture through a real OpenHands `Conversation`;
-- fresh named-volume creation and cross-container recovery for state and model storage;
-- OpenHands native loading of every repository-verified Skill;
-- model connection, catalog, profile, and artifact integrity tests;
-- dedicated generic and Terra GPU validation stages that reuse the hash-locked vLLM dependency layer, keep uv archives in non-persistent BuildKit cache mounts, import TorchCodec and vLLM, and reject embedded model artifacts through a cache-only BuildKit output; the verifier permits only the exact Hadamard transform tensor installed by the hash-locked `compressed-tensors` dependency;
-- a no-weight Terra CI image built through the production platform Dockerfile;
-- Terra Jupyter contract, platform payload, inherited entrypoint, Leonardo route, and OpenHands loopback smokes.
+```bash
+docker run --rm -it \
+  -p 127.0.0.1:8767:8767 \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood launch --web --host 0.0.0.0
+```
 
-The cache-only pull-request path executes every production filesystem instruction and the shared in-image GPU verifier without exporting the large candidate into the runner's Docker store. Main publication still pulls and runs that verifier against each exact untagged, content-addressed GPU candidate before immutable or moving tags are created. Main also repeats the integration checks against untagged, content-addressed generic and real Terra-derived CPU candidates. Public commit and moving tags are promotion outputs, not test inputs. The CI fixture validates orchestration, policy, audit, and interface wiring; it makes no model capability claim.
+For a no-network terminal demonstration after the artifact is present:
 
-## Registry Maintenance
+```bash
+docker run --rm -it \
+  --network none \
+  -v "$PWD:/workspace" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood launch --plain
+```
 
-Protect moving tags, retained commit tags, stable release tags, generic attestations, and manifests referenced by a multi-platform index. The digest-based build does not create architecture helper tags. Failed candidates remain untagged and cannot replace a public tag. Publication does not delete them because valid tagged indexes may depend on untagged child and attestation manifests. Automated retention is not implemented; [Issue #47](https://github.com/SchmiedmayerLab/heartwood/issues/47) owns graph-aware reporting and deletion safeguards.
+The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant, download the reviewed `qwen25-7b-instruct-vllm` snapshot with that image, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. The image supplies vLLM but still downloads model weights only after that explicit project-level command.
 
-See the [Platform Image Extension Guide](platform-images.md) for adding another platform-derived runtime.
+## Runtime Security Controls
+
+The image supports a read-only application filesystem, dropped Linux capabilities, `no-new-privileges`, a bounded process limit, and writable project and temporary mounts. The exact controls depend on the deployment because Heartwood must still reach an authorized hosted model or expose the browser port when those features are selected.
+
+Provider credentials are supplied directly to the in-process OpenHands model client after route authorization. Heartwood removes configured provider-key values from terminal subprocess environments. This is not a hard same-user process boundary; use an OpenHands remote workspace or platform-native isolation when tools must be unable to access the model identity.
+
+## Terra Images
+
+The Terra image starts from the pinned Terra Jupyter Python base and preserves its `jupyter` user, home directory, notebook server, kernel setup, entrypoint, port `8000`, and Leonardo route behavior. Heartwood is installed under `/opt/heartwood`; a separate `Python 3 (Heartwood)` kernel is registered without replacing Terra's environment.
+
+Terra tags are intentionally AMD64 Docker schema-2 manifests. Leonardo image auto-detection rejects the multi-platform Open Container Initiative index used by the generic tag. Follow [Heartwood on Terra](terra-jupyter-demo.md) for project storage, notebook proxy, and synthetic validation.
+
+## Publication and Validation
+
+Pull requests build and validate the generic AMD64 and ARM64 images, Terra-compatible image, GPU dependency stages, no-weight contract, real OpenHands loopback flow, grouped action confirmation, local llama.cpp inference, project persistence, Jupyter routes, and notebook proxy behavior with synthetic data.
+
+Publication builds candidates by digest, tests the exact staged descriptors, creates immutable commit tags, and moves `edge` only after validation. Release promotion copies those verified descriptors to the Semantic Version tags. Generic architecture manifests include supply-chain attestations. Terra disables index-producing attestations to preserve Leonardo's required single-manifest format.
+
+See [Platform Images](platform-images.md) for the extension contract and [Platform Support](platform-support.md) for the distinction between implementation, continuous-integration validation, live validation, and institutional approval.

@@ -41,7 +41,7 @@ Platform network, identity, storage, and data-access controls remain authoritati
 - Heartwood does not implement another agent framework, provider client, tool protocol, confirmation engine, risk classifier, or conversation store.
 - Heartwood does not provide a general-purpose Skill registry. It curates a bounded biomedical bundle and supports validated installation from mounted sources.
 - Heartwood does not authorize external processing of controlled participant-level data. Provider use is governed by deployment policy, platform controls, dataset terms, and institutional approval.
-- Heartwood does not implement a workflow engine. Batch export, if introduced under [Issue #49](https://github.com/SchmiedmayerLab/heartwood/issues/49), must target established CWL, WDL, or Nextflow execution infrastructure.
+- Heartwood does not implement a workflow engine. Any batch export belongs in established CWL, WDL, or Nextflow execution infrastructure rather than the interactive agent runtime.
 - Heartwood's web UI is a thin researcher-facing projection of the shared session contract, not a parallel implementation of OpenHands agent behavior.
 
 ## Users
@@ -54,10 +54,10 @@ Platform network, identity, storage, and data-access controls remain authoritati
 
 The repository implements the OpenHands conversation and workspace tools, equivalent CLI and web interaction over one session contract, notebook projection, configurable local or institution-authorized model profiles, platform detection, repository-verified Skill loading, explicit extension installation, two OpenHands confirmation modes, content-minimized audit records, generic images, and a Terra-derived image. Public tests, examples, and evidence use synthetic data only.
 
-The runtime has no live Terra adapter or real biomedical data-source adapter. Its default `SessionService` uses the generic platform policy and a synthetic OMOP fingerprint, so current detection and reference-workflow results are integration fixtures rather than claims about workspace data. [Platform Support](../docs/platform-support.md) records the precise validation status; [Issue #37](https://github.com/SchmiedmayerLab/heartwood/issues/37) owns explicit runtime evidence and [Issue #43](https://github.com/SchmiedmayerLab/heartwood/issues/43) owns the real reference workflow.
+The runtime selects the detected generic, Terra, or Carina platform policy, but it does not include a real biomedical data-source adapter. Its default `SessionService` uses a synthetic OMOP fingerprint, so detection and reference-workflow results are integration fixtures rather than claims about project data. [Platform Support](../docs/platform-support.md) records the precise validation status.
 
 ## Reference Workflow
 
 The first supported biomedical workflow is natural language to in-boundary code execution to aggregate results over OMOP on BigQuery: cohort definition, data-quality checks, a baseline model, aggregate output, count-floor enforcement, and an egress attestation for review. The same session must remain usable from the CLI, web UI, and notebook bridge and must survive the platform's normal persistence and autopause behavior.
 
-The repository currently demonstrates this sequence with a localized 24-person synthetic CSV analogue of the required OMOP tables. The reference Skills define an adult target-condition cohort, report aggregate quality checks, fit an explicitly training-only age baseline, and apply an aggregate count floor; browser, CLI, replay, and container tests require the aggregate outputs to agree. Live Terra validation is tracked in [Issue #42](https://github.com/SchmiedmayerLab/heartwood/issues/42), and real BigQuery OMOP integration and biomedical review are tracked in [Issue #43](https://github.com/SchmiedmayerLab/heartwood/issues/43).
+The repository demonstrates this sequence with a localized 24-person synthetic CSV analogue of the required OMOP tables. The reference Skills define an adult target-condition cohort, report aggregate quality checks, fit an explicitly training-only age baseline, and apply an aggregate count floor; browser, CLI, replay, and container tests require the aggregate outputs to agree. This fixture is not evidence of BigQuery integration, live-platform behavior, or biomedical review.

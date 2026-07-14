@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 
 from heartwood.core_adapter import SessionResult
-from heartwood.gateway import ModelProfile, SessionGateway
+from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway
 from heartwood.notebook import (
     NotebookSession,
     build_view_model,
@@ -180,7 +180,7 @@ def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
 ) -> None:
     gateway = _CountingGateway()
     session = NotebookSession(
-        workspace=tmp_path,
+        project=ProjectContext(tmp_path),
         session_id="notebook-counting",
         gateway=cast(SessionGateway, gateway),
     )
@@ -197,7 +197,7 @@ def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
 
 
 def test_notebook_pause_resume_updates_view_state(tmp_path: Path) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-lifecycle")
+    session = NotebookSession(project=ProjectContext(tmp_path), session_id="notebook-lifecycle")
 
     paused = session.pause()
     resumed = session.resume()
@@ -232,7 +232,7 @@ def test_widget_rendering_falls_back_without_ipywidgets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = NotebookSession(workspace=tmp_path, session_id="notebook-fallback")
+    session = NotebookSession(project=ProjectContext(tmp_path), session_id="notebook-fallback")
     view_model = session.detect()
 
     monkeypatch.setattr("heartwood.notebook._widgets._load_widgets", lambda: None)
@@ -244,8 +244,11 @@ def test_widget_rendering_falls_back_without_ipywidgets(
 
 
 def _deterministic_session(workspace: Path, session_id: str) -> NotebookSession:
+    workspace.mkdir(parents=True, exist_ok=True)
+    project = ProjectContext(workspace)
     gateway = SessionGateway(
-        workspace=workspace,
-        env={"HEARTWOOD_AGENT_BACKEND": "deterministic"},
+        project=project,
+        env={},
+        backend_id="deterministic",
     )
-    return NotebookSession(workspace=workspace, session_id=session_id, gateway=gateway)
+    return NotebookSession(project=project, session_id=session_id, gateway=gateway)

@@ -15,7 +15,7 @@ runtime_home = "/opt/heartwood"
 web_port = 8767
 web_host = "127.0.0.1"
 entrypoint_policy = "Preserve the platform base image entrypoint; CI smoke tests override entrypoint only when running Heartwood validation scripts."
-secret_policy = "Credentials are runtime environment references, mounted files, or managed identity; never bake secret values into images, settings, labels, or examples."
+secret_policy = "Credentials are session-only values or bindings to platform secrets, mounted files, or managed identity; never bake secret values into images, project configuration, labels, or examples."
 model_weight_policy = "Never bake model weights into platform images; use persistent mounted storage or an authorized provider endpoint."
 
 [platforms.terra]
@@ -55,7 +55,7 @@ commit_runtime_tag = "sha-<git-sha>-terra"
 commit_gpu_runtime_tag = "sha-<git-sha>-terra-gpu-nvidia"
 bundles_model_artifact = false
 gpu_runtime = "vllm==0.25.0"
-model_cache = "/home/jupyter/heartwood-workspace/models"
+model_cache = "<project>/.heartwood/models"
 ci_required = true
 live_workspace_validation_required = true
 
@@ -75,15 +75,3 @@ description = "Build the no-weight runtime from the real Terra base as an untagg
 [[platforms.terra.required_evidence]]
 name = "live-terra-smoke"
 description = "Launch the published Terra image in a synthetic workspace, configure an authorized model profile, use the web UI and CLI against one session, and record image digest, proxy behavior, and scrubbed audit export."
-
-[future_platforms.seven_bridges]
-base_image = "to-be-selected"
-platform_home = "to-be-validated"
-proxy = "jupyter-server-proxy under Data Studio"
-required_before_implementation = ["base image selection", "registry access policy", "workspace smoke path", "identity and proxy validation"]
-
-[future_platforms.dnanexus]
-base_image = "to-be-selected"
-platform_home = "to-be-validated"
-proxy = "jupyter-server-proxy first; httpsApp as a platform-native upgrade"
-required_before_implementation = ["base image selection", "Docker asset path", "workspace smoke path", "identity and proxy validation"]

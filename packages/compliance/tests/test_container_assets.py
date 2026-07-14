@@ -34,23 +34,29 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "uv sync --locked --no-dev --all-extras" in dockerfile
     assert "USER heartwood" in dockerfile
     assert 'CMD ["heartwood", "--help"]' in dockerfile
-    assert "HEARTWOOD_AGENT_BACKEND=auto" in dockerfile
-    assert "HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified" in dockerfile
-    assert "HEARTWOOD_MODEL_CATALOG=" in dockerfile
-    assert "HEARTWOOD_MODEL_CACHE=" in dockerfile
-    assert "HF_HOME=/home/heartwood/.cache/heartwood/models/.huggingface" in dockerfile
+    assert "WORKDIR /workspace" in dockerfile
+    assert "/workspace" in dockerfile
     assert "LITELLM_LOCAL_MODEL_COST_MAP=True" in dockerfile
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.tar.gz" in dockerfile
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz" in dockerfile
     assert "      jq \\" in dockerfile
     assert "sha256sum --check" in dockerfile
-    assert "/home/heartwood/.local/share/heartwood" in dockerfile
-    assert "/home/heartwood/.cache/heartwood/models" in dockerfile
     assert (
-        "chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /home/heartwood"
+        "chown -R heartwood:heartwood /opt/heartwood /opt/heartwood-vllm /workspace /home/heartwood"
         in dockerfile
     )
+    for legacy_setting in (
+        "HEARTWOOD_AGENT_BACKEND=",
+        "HEARTWOOD_HOME=",
+        "HEARTWOOD_WORKSPACE=",
+        "HEARTWOOD_MODEL_CACHE=",
+        "HEARTWOOD_MODEL_SETTINGS=",
+        "HEARTWOOD_ACTION_SETTINGS=",
+        "HEARTWOOD_SKILLS_DIR=",
+        "HF_HOME=",
+    ):
+        assert legacy_setting not in dockerfile
     _assert_no_embedded_model_contract(dockerfile)
 
 
@@ -87,12 +93,6 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         assert source in generic
         assert source in platform
     for runtime_setting in (
-        "HEARTWOOD_AGENT_BACKEND=auto",
-        "HEARTWOOD_SKILLS_DIR=/opt/heartwood/skills/verified",
-        "HEARTWOOD_MODEL_CATALOG=",
-        "HEARTWOOD_MODEL_CACHE=",
-        "HF_HOME=",
-        "HEARTWOOD_WEB_ROOT=",
         "ARG LLAMA_CPP_VERSION=b9937",
         "LITELLM_LOCAL_MODEL_COST_MAP=True",
         "OPENHANDS_SUPPRESS_BANNER=1",
@@ -108,10 +108,21 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "      jq \\" in platform
     assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
     assert "ipykernel install" in platform
-    assert '"${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/models"' in platform
-    assert '"${HEARTWOOD_PLATFORM_HOME}/heartwood-workspace/sessions"' in platform
+    assert "heartwood-workspace" not in platform
+    assert 'mkdir -p "${HEARTWOOD_PLATFORM_HOME}/heartwood-project"' in platform
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
     assert "WORKDIR ${HEARTWOOD_PLATFORM_HOME}" in platform
+    for legacy_setting in (
+        "HEARTWOOD_AGENT_BACKEND=",
+        "HEARTWOOD_HOME=",
+        "HEARTWOOD_WORKSPACE=",
+        "HEARTWOOD_MODEL_CACHE=",
+        "HEARTWOOD_MODEL_SETTINGS=",
+        "HEARTWOOD_ACTION_SETTINGS=",
+        "HEARTWOOD_SKILLS_DIR=",
+        "HF_HOME=",
+    ):
+        assert legacy_setting not in platform
     _assert_no_embedded_model_contract(platform)
 
     assert terra["runtime_target"] == "terra-runtime"
@@ -337,7 +348,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "LOCAL_SCRATCH_JOB" in launch_runtime
     assert "--inside-allocation" in launch_runtime
     assert "HEARTWOOD_PLATFORM=carina" in launch_runtime
-    assert "verify_snapshot(options.model_root)" in launch_runtime
+    assert "verify_snapshot(model_root)" in launch_runtime
     assert 'env.get("LOCAL_SCRATCH_JOB"' in launch_runtime
     assert "allowed_names" in launch_runtime
     assert "result = {name: env[name] for name in allowed_names if name in env}" in launch_runtime
@@ -387,7 +398,10 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "sha256sum --check --strict" in installer
     assert "--bundle" in installer
     assert "--dry-run" in installer
-    assert "HEARTWOOD_INSTALL_ROOT" in installer
+    assert "HEARTWOOD_INSTALL_ROOT" not in installer
+    assert "HEARTWOOD_HOME" not in installer
+    assert "HEARTWOOD_MODEL_CACHE" not in installer
+    assert "exec %q" in installer
     assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
     assert "git archive --format=tar HEAD" in packager
@@ -489,13 +503,13 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "- ALL" in compose
     assert "no-new-privileges:true" in compose
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in compose
-    assert "HEARTWOOD_AGENT_BACKEND: openhands-sdk" in compose
+    assert "HEARTWOOD_AGENT_BACKEND" not in compose
     assert "image: heartwood-runtime-smoke:local" in compose
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
-    assert "HEARTWOOD_SMOKE_WORKSPACE:-/tmp/heartwood-sessions" in smoke
-    assert "HEARTWOOD_CAPABLE_WORKSPACE:-/tmp/heartwood-capable/sessions" in capable
-    assert '"${state_root}/openhands"' in smoke
-    assert '"${state_root}/workspaces"' in smoke
+    assert "HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project" in smoke
+    assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
+    assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
+    assert 'cohort_path="${project}/cohort-summary.json"' in capable
     assert "models refresh local" in smoke
     assert "models connect local heartwood-local-runtime" in smoke
     assert "models add inactive-smoke" in smoke
@@ -525,9 +539,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         "images/generic/scripts/offline_stack_smoke.sh",
         "images/generic/scripts/container_persistence_smoke.sh",
         "images/generic/scripts/local_inference_smoke.sh",
-        "images/generic/scripts/start_demo_stack.sh",
         "images/generic/scripts/start_local_runtime.sh",
-        "images/generic/scripts/start_web_ui.sh",
         "images/platform/scripts/terra_image_smoke.sh",
         "images/platform/scripts/terra_jupyter_contract_smoke.sh",
         "images/platform/scripts/terra_jupyter_launch_smoke.sh",
@@ -542,11 +554,11 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         assert completed.returncode == 0, f"{script}: {completed.stderr}"
 
     local_runtime = _read("images/generic/scripts/start_local_runtime.sh")
-    demo = _read("images/generic/scripts/start_demo_stack.sh")
     assert 'model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"' in local_runtime
+    assert '"${runtime_root}/images/generic/scripts/local_model_stub.py"' in local_runtime
     assert "mounted or downloaded GGUF file" in local_runtime
-    assert "HEARTWOOD_DEMO_START_LOCAL_RUNTIME:-0" in demo
-    assert "start_agent_server" not in demo
+    assert not (_repo_root() / "images/generic/scripts/start_demo_stack.sh").exists()
+    assert not (_repo_root() / "images/generic/scripts/start_web_ui.sh").exists()
 
     jupyter_smoke = _read("images/generic/scripts/terra_jupyter_demo_smoke.py")
     assert '"chat"' in jupyter_smoke
@@ -631,10 +643,10 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "container_persistence_smoke.sh" in smoke
     assert "Download and verify CI-only model fixture" in smoke
     assert "heartwood models download llama-cpp-stories260k-ci" in smoke
-    assert "--volume heartwood-ci-model:/home/heartwood/.cache/heartwood/models" in smoke
-    assert "--volume heartwood-ci-model:/models:ro" in smoke
-    assert "--volume heartwood-terra-ci-model:/home/jupyter/heartwood-workspace/models" in smoke
-    assert "--volume heartwood-terra-ci-model:/models:ro" in smoke
+    assert "--volume heartwood-ci-project:/workspace" in smoke
+    assert "--volume heartwood-terra-ci-project:/home/jupyter/heartwood-project" in smoke
+    assert "/workspace/.heartwood/models/llama-cpp-stories260k-ci" in smoke
+    assert "/home/jupyter/heartwood-project/.heartwood/models/llama-cpp-stories260k-ci" in smoke
     assert smoke.count("local_inference_smoke.sh") == 2
     assert 'f"http://127.0.0.1:{port}/health"' in _read(
         "images/generic/scripts/local_inference_smoke.sh"
@@ -646,7 +658,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "--network none --read-only" in smoke
     assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
-    assert offline_guide.count("uid=10001,gid=10001,mode=0700") == 2
+    assert offline_guide.count("-v heartwood-project:/workspace") == 2
+    assert "download is written under `.heartwood/models/`" in offline_guide
     assert "not 1 <= len(terminal_executions) <= 3" in capable_model
     assert "not 1 <= len(tool_executions) <= 3" in capable_model
     assert "&& cat cohort-summary.json" in capable_model
@@ -846,6 +859,10 @@ def _assert_no_embedded_model_contract(dockerfile: str) -> None:
         "HEARTWOOD_LOCAL_MODEL_MANIFEST",
         "download_model_artifact.py",
         "HEARTWOOD_LOCAL_MODEL_PATH=",
+        "HEARTWOOD_AGENT_BACKEND=",
+        "HEARTWOOD_HOME=",
+        "HEARTWOOD_WORKSPACE=",
+        "HEARTWOOD_MODEL_CACHE=",
         "HEARTWOOD_PROVIDER_CONFIG",
         "HEARTWOOD_AGENT_SERVER",
         "agent-server",

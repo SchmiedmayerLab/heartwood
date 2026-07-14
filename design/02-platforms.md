@@ -10,14 +10,14 @@ SPDX-License-Identifier: MIT
 
 # 02 — Platforms
 
-This document records platform rationale, common deployment assumptions, and design targets. Current implementation and validation status is maintained separately in [Platform Support](../docs/platform-support.md); planned implementation and acceptance criteria are maintained in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues).
+This document records platform rationale, common deployment assumptions, and interoperability boundaries. Current implementation and validation status is maintained separately in [Platform Support](../docs/platform-support.md).
 
 ## Shared Model
 
 Every target environment splits into a **control plane** (web app, data catalog, auth) and a **compute plane** (VMs that run code). The compute plane has two lanes, and Docker is the unit in both:
 
 - **Interactive lane** — a long-lived VM that boots a container used through Jupyter, RStudio, or a shell; state persists on an attached disk and may autopause when idle. Heartwood runs here: its session gateway, OpenHands SDK conversation, coding tools, and researcher web UI run inside this container and are reached through the platform's authenticated proxy; no nested Docker is required.
-- **Batch lane** — a workflow engine such as Cromwell, a CWL executor, or Nextflow runs an ephemeral container per task. Heartwood does not currently emit batch workflows; any such extension must reuse an established engine and satisfy [Issue #49](https://github.com/SchmiedmayerLab/heartwood/issues/49).
+- **Batch lane** — a workflow engine such as Cromwell, a CWL executor, or Nextflow runs an ephemeral container per task. Heartwood does not emit batch workflows; batch execution remains outside the interactive runtime.
 
 ## Current Support Boundary
 
@@ -54,7 +54,7 @@ Local inference uses one OpenAI-compatible model-server contract rather than one
 
 Stanford deployments may also expose the Stanford AI API Gateway as a platform-provided OpenAI-compatible research connection. The gateway configuration uses its exact model aliases, external Bearer-token reference, `GET /v1/models` catalog route, and `POST /v1/chat/completions` route through the existing connection and policy contracts. The gateway normalizes access to models from several upstream providers and supports streamed chat-completion deltas; Heartwood must therefore discover aliases rather than maintain the provider list captured in documentation. Stanford's current service documentation and GenAI Evaluation Matrix remain authoritative for data classifications, covered models, required agreements, and project review. Technical connectivity, a Stanford-hosted endpoint, or a gateway API key does not independently authorize protected health information or agent tool access.
 
-## Surfacing The Interface
+## Surfacing the Interface
 
 Every target centers on a Jupyter interactive lane behind an authenticated platform proxy, so one mechanism surfaces the researcher web UI everywhere: serve it in-container and expose it through that proxy. No new ingress and no heartwood-owned login are introduced.
 
@@ -98,7 +98,7 @@ The target deployment keeps participant-level processing in boundary, uses platf
 
 ## Batch Portability Boundary
 
-Heartwood does not emit batch pipelines. If the interactive workflow gains stable typed inputs and outputs, a portable batch extension must use a pinned image and established CWL, WDL, or Nextflow infrastructure, with Dockstore and GA4GH DRS/WES/TES/TRS as interoperability targets. [Issue #49](https://github.com/SchmiedmayerLab/heartwood/issues/49) owns the prerequisite evidence and delivery criteria.
+Heartwood does not emit batch pipelines. Portable batch execution belongs in a pinned image and established CWL, WDL, or Nextflow infrastructure, with Dockstore and GA4GH DRS, WES, TES, and TRS as interoperability boundaries.
 
 ## Platform Image Rationale
 

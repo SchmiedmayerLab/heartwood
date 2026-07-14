@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, RichLog, Static
 
@@ -20,16 +19,17 @@ from heartwood.cli._interactive import (
     PendingAction,
 )
 from heartwood.cli._tui import HeartwoodTerminalApp
-from heartwood.gateway import SessionGateway
+from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
 
 def test_interactive_session_uses_gateway_commands_and_persisted_replay(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
-    gateway = SessionGateway(workspace=tmp_path / "sessions")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        backend_id="deterministic",
+    )
     gateway.start()
     try:
         session = InteractiveSession(gateway, session_id="terminal")
@@ -53,10 +53,11 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
 
 def test_textual_terminal_submits_without_blocking_and_replays_session(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HEARTWOOD_AGENT_BACKEND", "deterministic")
-    gateway = SessionGateway(workspace=tmp_path / "sessions")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        backend_id="deterministic",
+    )
     gateway.start()
 
     async def exercise() -> None:

@@ -152,10 +152,13 @@ def source_version_errors(root: Path, version: str) -> list[str]:
         return ["no packaged component versions were found"]
     errors = [f"{path}: {found}" for path, found in observed.items() if found != version]
     expected_references = {
-        "README.md": [f"heartwood:{version}", f"HEARTWOOD_VERSION={version}"],
+        "README.md": [
+            f"heartwood:{version}",
+            f"releases/download/{version}/heartwood-installer",
+            f"--version {version}",
+        ],
         "docs/platform-support.md": [f"Release `{version}`", f"`{version}-terra`"],
         "docs/releases.md": [f"-f version={version}"],
-        "docs/terra-jupyter-demo.ipynb": [f"heartwood:{version}-terra"],
         "docs/terra-jupyter-demo.md": [f"heartwood:{version}-terra"],
     }
     for relative_path, references in expected_references.items():

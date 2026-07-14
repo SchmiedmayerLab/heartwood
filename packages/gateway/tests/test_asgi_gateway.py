@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
-from heartwood.gateway import GatewayAsgiApp, SessionGateway
+from heartwood.gateway import GatewayAsgiApp, ProjectContext, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -31,7 +31,12 @@ def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: Jso
 
 
 def _gateway(workspace: Path) -> SessionGateway:
-    return SessionGateway(workspace=workspace, env={"HEARTWOOD_AGENT_BACKEND": "deterministic"})
+    workspace.mkdir(parents=True, exist_ok=True)
+    return SessionGateway(
+        project=ProjectContext(workspace),
+        env={},
+        backend_id="deterministic",
+    )
 
 
 def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
@@ -475,7 +480,7 @@ def test_asgi_lifespan_starts_and_stops_gateway_dependencies(tmp_path: Path) -> 
 
 class _LifecycleGateway(SessionGateway):
     def __init__(self, *, workspace: Path) -> None:
-        super().__init__(workspace=workspace)
+        super().__init__(project=ProjectContext(workspace))
         self.started = False
         self.stopped = False
 
