@@ -234,6 +234,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "certifi-2026.6.17-py3-none-any.whl" in lock
     assert "certifi==2022.12.7" not in lock
     assert "ray==2.55.0" in lock
+    assert "setuptools==78.1.1" in lock
     assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
@@ -503,8 +504,7 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     unexpected = [
         path.relative_to(root).as_posix()
         for path in sorted(dependency_files)
-        if path not in gpu_dependencies
-        and declaration.search(path.read_text(encoding="utf-8"))
+        if path not in gpu_dependencies and declaration.search(path.read_text(encoding="utf-8"))
     ]
 
     assert unexpected == []

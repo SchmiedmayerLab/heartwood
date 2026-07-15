@@ -37,6 +37,7 @@ jobs:
           grep --fixed-strings 'vllm-0.10.1.1%2Bcu118' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'certifi-2026.6.17-py3-none-any.whl' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'ray==2.55.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'setuptools==78.1.1' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
