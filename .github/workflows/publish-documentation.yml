@@ -131,6 +131,7 @@ jobs:
             --branch "${DOCUMENTATION_BRANCH}" \
             --remote origin
       - name: Stage the complete Pages artifact
+        id: version_store
         env:
           DOCUMENTATION_CHANNEL: ${{ steps.release.outputs.channel }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -145,6 +146,9 @@ jobs:
             --arg version "${RELEASE_VERSION}" \
             'any(.[]; .version == $version and (.aliases | index($channel)) != null)' \
             published-site/versions.json
+          printf 'commit=%s\n' \
+            "$(git rev-parse --verify "${DOCUMENTATION_BRANCH}^{commit}")" \
+            >> "${GITHUB_OUTPUT}"
       - name: Enable version store authentication
         uses: actions/checkout@v7
         with:
@@ -153,9 +157,11 @@ jobs:
           clean: false
           persist-credentials: true
       - name: Push the validated version store
+        env:
+          DOCUMENTATION_COMMIT: ${{ steps.version_store.outputs.commit }}
         run: >-
           git -c core.hooksPath=/dev/null push -- origin
-          "refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}"
+          "${DOCUMENTATION_COMMIT}:refs/heads/${DOCUMENTATION_BRANCH}"
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
