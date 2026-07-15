@@ -125,6 +125,8 @@ The image supports a read-only application filesystem, dropped Linux capabilitie
 
 Provider credentials are supplied directly to the in-process OpenHands model client after route authorization. Heartwood removes configured provider-key values from terminal subprocess environments. This is not a hard same-user process boundary; use an OpenHands remote workspace or platform-native isolation when tools must be unable to access the model identity.
 
+The NVIDIA variants retain the CUDA 11.8 runtime required by the validated Terra driver baseline. Their secured launcher removes the vLLM configuration path affected by [GHSA-8fr4-5q9j-m8gm](https://github.com/vllm-project/vllm/security/advisories/GHSA-8fr4-5q9j-m8gm) before loading a model and verifies that backport during image construction and every launch. Heartwood rejects the packaged raw vLLM executable; an explicitly supplied external vLLM executable must be version 0.11.1 or newer.
+
 ## Terra Images
 
 The Terra image starts from the pinned Terra Jupyter Python base and preserves its `jupyter` user, home directory, notebook server, kernel setup, entrypoint, port `8000`, and Leonardo route behavior. Heartwood is installed under `/opt/heartwood`; a separate `Python 3 (Heartwood)` kernel is registered without replacing Terra's environment.

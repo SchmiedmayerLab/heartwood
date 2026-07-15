@@ -138,7 +138,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         """,
     )
     _write_python_executable(
-        runtime_root / "vllm" / "bin" / "vllm",
+        runtime_root / "vllm" / "bin" / "heartwood-vllm",
         r"""
         import json
         import os
@@ -146,6 +146,10 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         import sys
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         from pathlib import Path
+
+        if sys.argv[1:] == ["__heartwood_verify_runtime__"]:
+            print("Transformers 5.5.0 integration verified")
+            raise SystemExit(0)
 
         model_id = sys.argv[sys.argv.index("--served-model-name") + 1]
         runtime = Path.cwd() / ".heartwood" / "runtime"

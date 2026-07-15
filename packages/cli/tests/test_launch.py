@@ -575,7 +575,7 @@ def test_runtime_resolution_and_gguf_directory_contract(
     assert _resolve_runtime_executable("llama-cpp") == llama
 
     version_root = tmp_path / "runtime"
-    vllm = version_root / "vllm" / "bin" / "vllm"
+    vllm = version_root / "vllm" / "bin" / "heartwood-vllm"
     vllm.parent.mkdir(parents=True)
     vllm.write_text("", encoding="utf-8")
     monkeypatch.setattr("heartwood.cli._launch._native_version_root", lambda: version_root)
@@ -865,21 +865,31 @@ def test_vllm_preflight_and_output_helpers(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    executable = tmp_path / "bin" / "vllm"
+    executable = tmp_path / "bin" / "heartwood-vllm"
     python = executable.with_name("python")
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\n", encoding="utf-8")
     python.chmod(0o755)
-    observed: list[str] = []
+    observed: list[tuple[str, ...]] = []
 
     def completed(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        observed.extend(command)
+        observed.append(tuple(command))
+        if command == (str(executable), "__heartwood_verify_runtime__"):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "Transformers 5.5.0 integration and "
+                    "vLLM GHSA-8fr4-5q9j-m8gm backport verified\n"
+                ),
+            )
         return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
     assert _preflight_vllm(executable, {"PATH": "/usr/bin"}) is None
-    assert "import torch, vllm" in observed[-1]
-    assert "torch.cuda.init()" in observed[-1]
+    assert "import torch, vllm" in observed[0][-1]
+    assert "torch.cuda.init()" in observed[0][-1]
+    assert observed[1] == (str(executable), "__heartwood_verify_runtime__")
     assert _format_bytes(1024) == "1.0 KiB"
 
     log = tmp_path / "runtime.log"
@@ -939,6 +949,57 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
     assert _preflight_vllm(executable, {}) == (
         "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)"
     )
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="0.10.1.1+cu118 2.7.1+cu118 11.8\n"
+        ),
+    )
+    assert "must be Heartwood's secured launcher" in str(_preflight_vllm(executable, {}))
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="0.11.1 2.9.0 12.8\n"
+        ),
+    )
+    assert _preflight_vllm(executable, {}) is None
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="unknown-version 2.9.0 12.8\n"
+        ),
+    )
+    assert "must be Heartwood's secured launcher" in str(_preflight_vllm(executable, {}))
+
+    wrapper = executable.with_name("heartwood-vllm")
+
+    def failed_compatibility(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command == (str(wrapper), "__heartwood_verify_runtime__"):
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="first line\nincompatible model configuration\n",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", failed_compatibility)
+    assert _preflight_vllm(wrapper, {}) == "incompatible model configuration"
+
+    def timed_out_compatibility(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command == (str(wrapper), "__heartwood_verify_runtime__"):
+            raise subprocess.TimeoutExpired(command, 60)
+        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", timed_out_compatibility)
+    assert "timed out after 60 seconds" in str(_preflight_vllm(wrapper, {}))
 
 
 def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path) -> None:

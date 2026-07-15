@@ -42,7 +42,7 @@ jobs:
           grep --fixed-strings 'torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'transformers==4.57.6' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'transformers==5.5.0' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'nvidia-cuda-runtime-cu11==11.8.89' images/gpu/vllm-requirements.txt
           if grep --fixed-strings --quiet -- '--extra-index-url https://download.pytorch.org/whl/cu118' images/gpu/vllm-requirements.txt; then
             echo 'CUDA artifacts must use immutable wheel URLs instead of exposing the CUDA index to general dependency resolution.' >&2
@@ -58,7 +58,9 @@ jobs:
           fi
           grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt
           bash -n images/gpu/start_vllm.sh
+          bash -n images/gpu/heartwood-vllm
           test -x images/gpu/start_vllm.sh
+          test -x images/gpu/heartwood-vllm
 
   pull-request-build:
     name: Build GPU candidate ${{ matrix.target }}

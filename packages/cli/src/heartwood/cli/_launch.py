@@ -21,6 +21,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
@@ -386,15 +388,13 @@ def _resolve_runtime_executable(runtime: str) -> Path:
         installed = shutil.which("llama-server")
         return Path(installed) if installed else Path("/opt/llama.cpp/llama-server")
     version_root = _native_version_root()
-    discovered_vllm = shutil.which("vllm")
     candidates: tuple[Path | None, ...] = (
-        version_root / "vllm" / "bin" / "vllm" if version_root is not None else None,
-        Path("/opt/heartwood-vllm/bin/vllm"),
-        Path(discovered_vllm) if discovered_vllm is not None else None,
+        version_root / "vllm" / "bin" / "heartwood-vllm" if version_root is not None else None,
+        Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
     )
     return next(
         (candidate for candidate in candidates if candidate and candidate.is_file()),
-        Path("/opt/heartwood-vllm/bin/vllm"),
+        Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
     )
 
 
@@ -873,6 +873,36 @@ def _preflight_vllm(executable: Path, env: Mapping[str, str]) -> str | None:
     except (OSError, subprocess.TimeoutExpired) as error:
         return str(error)
     if completed.returncode == 0:
+        if executable.name == "heartwood-vllm":
+            try:
+                compatibility = subprocess.run(
+                    (str(executable), "__heartwood_verify_runtime__"),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=dict(env),
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return str(error)
+            if compatibility.returncode != 0:
+                detail = (
+                    compatibility.stderr.strip()
+                    or compatibility.stdout.strip()
+                    or "runtime compatibility check failed"
+                )
+                return detail.splitlines()[-1]
+        else:
+            installed_version = completed.stdout.split(maxsplit=1)[0]
+            try:
+                secured_upstream = Version(installed_version) >= Version("0.11.1")
+            except InvalidVersion:
+                secured_upstream = False
+            if not secured_upstream:
+                return (
+                    "the selected vLLM executable must be Heartwood's secured launcher "
+                    "or vLLM 0.11.1 or newer"
+                )
         versions = completed.stdout.strip()
         if versions:
             print(f"Runtime modules: {versions}")

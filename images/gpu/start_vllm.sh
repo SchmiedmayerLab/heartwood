@@ -13,7 +13,7 @@ port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 alias="${HEARTWOOD_LOCAL_MODEL_ALIAS:-heartwood-local-runtime}"
 tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"
 context="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
-vllm="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/vllm}"
+vllm="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then

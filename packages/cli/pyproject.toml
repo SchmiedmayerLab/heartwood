@@ -16,6 +16,7 @@ dependencies = [
     "heartwood-compliance",
     "heartwood-gateway",
     "heartwood-session",
+    "packaging==26.2",
     "textual==8.2.8",
     "uvicorn==0.51.0",
 ]

@@ -45,6 +45,12 @@ venv)
   mkdir -p "${runtime}/bin"
   cat >"${runtime}/bin/python" <<'COMMAND'
 #!/usr/bin/env bash
+if [[ "${1:-}" == */heartwood_vllm.py ]]; then
+  test "${2:-}" = "__heartwood_verify_runtime__"
+  grep --quiet 'GHSA-8fr4-5q9j-m8gm backport verified' "$1"
+  echo "Transformers synthetic integration and vLLM GHSA-8fr4-5q9j-m8gm backport verified"
+  exit 0
+fi
 echo "vLLM: synthetic"
 echo "PyTorch: synthetic (CUDA 11.8)"
 COMMAND
@@ -130,7 +136,13 @@ test -x "${carina_runtime}/bootstrap/bin/uv"
 test -x "${carina_runtime}/heartwood/bin/heartwood"
 test -x "${carina_runtime}/vllm/bin/python"
 test -x "${carina_runtime}/vllm/bin/vllm"
+test -x "${carina_runtime}/vllm/bin/heartwood-vllm"
+test -r "${carina_runtime}/vllm/bin/heartwood_vllm.py"
 test -x "${carina_runtime}/vllm/bin/hf"
+test "$(file_mode "${carina_runtime}/vllm/bin/heartwood-vllm")" = "555"
+test "$(file_mode "${carina_runtime}/vllm/bin/heartwood_vllm.py")" = "444"
+"${carina_runtime}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__ | \
+  grep --quiet 'GHSA-8fr4-5q9j-m8gm backport verified'
 test -L "${workspace}/carina-installation/bin/hf"
 test "$(readlink "${workspace}/carina-installation/bin/hf")" = \
   "${carina_runtime}/vllm/bin/hf"

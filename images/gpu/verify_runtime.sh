@@ -40,13 +40,19 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
 fi
 
 vllm_python="${HEARTWOOD_VLLM_PYTHON:-/opt/heartwood-vllm/bin/python}"
+vllm_executable="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 if [[ ! -x "${vllm_python}" ]]; then
   echo "vLLM Python is unavailable: ${vllm_python}" >&2
+  exit 69
+fi
+if [[ ! -x "${vllm_executable}" ]]; then
+  echo "Heartwood vLLM executable is unavailable: ${vllm_executable}" >&2
   exit 69
 fi
 
 "${vllm_python}" -c \
   'import torch, vllm; from importlib.metadata import version; assert torch.version.cuda == "11.8", f"unexpected CUDA build: {torch.version.cuda}"; print(version("vllm"), torch.__version__, torch.version.cuda)'
+"${vllm_executable}" __heartwood_verify_runtime__
 
 verify_no_model_artifacts /opt /home
 

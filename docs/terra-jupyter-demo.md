@@ -108,7 +108,7 @@ heartwood models download qwen25-coder-7b-instruct-awq-vllm
 heartwood launch --web
 ```
 
-Larger GPUs can use `qwen25-7b-instruct-vllm`. Both recommendations use a 32,768-token context window. Before server startup, Heartwood reports a conservative RAM and GPU-memory estimate, confirms that PyTorch can initialize the attached GPU, and fails with an actionable diagnostic when the driver and packaged CUDA runtime are incompatible. The GPU and CPU interfaces otherwise use the same project state and commands.
+Larger GPUs can use `qwen25-7b-instruct-vllm`. Both recommendations use a 32,768-token context window. Before server startup, Heartwood reports a conservative RAM and GPU-memory estimate, verifies the secured model-configuration loader, confirms that PyTorch can initialize the attached GPU, and fails with an actionable diagnostic when the driver and packaged CUDA runtime are incompatible. The GPU and CPU interfaces otherwise use the same project state and commands.
 
 ## Open the Browser Interface
 

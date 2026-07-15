@@ -108,6 +108,12 @@ COPY fixtures ./fixtures
 COPY skills ./skills
 COPY evals ./evals
 COPY images ./images
+
+RUN if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      install -m 0444 images/gpu/heartwood_vllm.py /opt/heartwood-vllm/bin/heartwood_vllm.py; \
+      install -m 0555 images/gpu/heartwood-vllm /opt/heartwood-vllm/bin/heartwood-vllm; \
+    fi
+
 COPY README.md ACRONYMS.md ./
 COPY docs ./docs
 COPY design ./design

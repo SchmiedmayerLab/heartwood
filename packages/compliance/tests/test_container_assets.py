@@ -211,6 +211,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     platform = _read("images/platform/Dockerfile")
     launcher = _read("images/gpu/start_vllm.sh")
     verifier = _read("images/gpu/verify_runtime.sh")
+    compatibility = _read("images/gpu/heartwood_vllm.py")
     lock = _read("images/gpu/vllm-requirements.txt")
 
     for dockerfile in (generic, platform):
@@ -220,6 +221,10 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
         assert "AS gpu-ci-validate" in dockerfile
         assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
+        assert (
+            "images/gpu/heartwood_vllm.py /opt/heartwood-vllm/bin/heartwood_vllm.py" in dockerfile
+        )
+        assert "images/gpu/heartwood-vllm /opt/heartwood-vllm/bin/heartwood-vllm" in dockerfile
     assert generic.index("uv venv /opt/heartwood-vllm") < generic.index("COPY packages ./packages")
     assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
         "COPY packages ./packages"
@@ -239,7 +244,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl" in lock
-    assert "transformers==4.57.6" in lock
+    assert "transformers==5.5.0" in lock
     assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
     assert "--extra-index-url https://download.pytorch.org/whl/cu118" not in lock
     assert "nvidia-cuda-runtime-cu13" not in lock
@@ -249,15 +254,29 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
     assert "VLLM_USE_FLASHINFER_SAMPLER" in launcher
     assert "huggingface.co" not in launcher
+    assert "/opt/heartwood-vllm/bin/heartwood-vllm" in launcher
     assert "/opt/heartwood-vllm/bin/python" in verifier
-    assert "import torch, vllm" in verifier
+    assert "__heartwood_verify_runtime__" in verifier
     assert 'torch.version.cuda == "11.8"' in verifier
     assert "-name '*.gguf' -o -name '*.safetensors'" in verifier
     assert "-name '*.bin' -size +10M" in verifier
     assert "compressed_tensors/transform/utils/hadamards.safetensors" in verifier
     assert "verify_no_model_artifacts /opt /home" in verifier
     assert "GPU runtime image contains a model artifact" in verifier
+    assert 'cls.__module__.startswith("vllm.")' in compatibility
+    assert "PreTrainedConfig.__init_subclass__ = classmethod" in compatibility
+    assert '_VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"' in compatibility
+    assert "_CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)" in compatibility
+    assert (
+        "vulnerable_module.get_class_from_dynamic_module = reject_dynamic_loader" in compatibility
+    )
+    assert "GHSA-8fr4-5q9j-m8gm backport verified" in compatibility
+    assert "from vllm.transformers_utils import config as config_module" in compatibility
+    assert "vllm.transformers_utils.tokenizer" in compatibility
+    assert '"model_type": "qwen2"' in compatibility
+    assert "trust_remote_code=False" in compatibility
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
+    assert os.access(_repo_root() / "images/gpu/heartwood-vllm", os.X_OK)
 
 
 @pytest.mark.parametrize("filename", ["small.gguf", "small.safetensors"])
@@ -352,6 +371,9 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     bootstrap_environment = _read("deploy/carina/environment.yml")
 
     assert "micromamba create" in bootstrap
+    assert 'images/gpu/heartwood_vllm.py "${root}/vllm/bin/heartwood_vllm.py"' in bootstrap
+    assert 'images/gpu/heartwood-vllm "${root}/vllm/bin/heartwood-vllm"' in bootstrap
+    assert '"${root}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__' in bootstrap
     assert "micromamba install" in bootstrap
     assert "module load" in bootstrap
     assert "HEARTWOOD_MODULE_INIT" in bootstrap
@@ -484,7 +506,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "promoted ${channel} digest does not match" in workflow
     assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v" in dependency_review
     assert "GHSA-rrmf-rvhw-rf47" in dependency_review
-    assert "patched release" in dependency_review
+    assert "GHSA-8fr4-5q9j-m8gm" in dependency_review
+    assert "upstream PR 28126" in dependency_review
 
 
 def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
@@ -499,7 +522,7 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
         *root.rglob("*.in"),
     }
     declaration = re.compile(
-        r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(diskcache|torch)(?:["\'\s<>=!~\[])'
+        r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(diskcache|torch|vllm)(?:["\'\s<>=!~@\[])'
     )
     unexpected = [
         path.relative_to(root).as_posix()
@@ -510,7 +533,9 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     assert unexpected == []
     text = lock.read_text(encoding="utf-8")
     assert "diskcache==5.6.3" in text
+    assert "vllm-0.10.1.1%2Bcu118" in text
     assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in text
+    assert "vllm-0.10.1.1%2Bcu118" in input_file.read_text(encoding="utf-8")
     assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in input_file.read_text(
         encoding="utf-8"
     )
