@@ -323,9 +323,10 @@ cbor2==6.1.3 \
     --hash=sha256:f291a0ae4c1ed96eadb0afa9752568c7424f7d6fa818676d5e33005fcd22ddd9 \
     --hash=sha256:fcec149218bacf1f98caf44225b67b4908e54e0440ca446ea488aac1ddc85a3b
     # via vllm
-certifi==2022.12.7 \
-    --hash=sha256:4ad3232f5e926d6718ec31cfc1fcadfde020920e278684144551c91769c7bc18
+certifi @ https://files.pythonhosted.org/packages/ef/2f/c5464532e965badff2f4c4c1a3a83f5697f0d7c407ed0cda44aaa99bb451/certifi-2026.6.17-py3-none-any.whl \
+    --hash=sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db
     # via
+    #   -r images/gpu/vllm.in
     #   httpcore
     #   httpx
     #   requests

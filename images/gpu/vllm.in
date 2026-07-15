@@ -5,4 +5,5 @@
 # SPDX-License-Identifier: MIT
 
 vllm @ https://github.com/vllm-project/vllm/releases/download/v0.10.1.1/vllm-0.10.1.1%2Bcu118-cp38-abi3-manylinux1_x86_64.whl
+certifi @ https://files.pythonhosted.org/packages/ef/2f/c5464532e965badff2f4c4c1a3a83f5697f0d7c407ed0cda44aaa99bb451/certifi-2026.6.17-py3-none-any.whl
 transformers<5

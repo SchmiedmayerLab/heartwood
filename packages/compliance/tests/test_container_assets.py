@@ -231,6 +231,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
                 assert "/opt/heartwood" not in line
                 assert "/opt/heartwood-vllm" not in line
     assert "vllm-0.10.1.1%2Bcu118" in lock
+    assert "certifi-2026.6.17-py3-none-any.whl" in lock
+    assert "certifi==2022.12.7" not in lock
     assert "torch==2.7.1+cu118" in lock
     assert "transformers==4.57.6" in lock
     assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
