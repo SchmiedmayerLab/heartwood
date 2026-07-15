@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Published Semantic Version to deploy, for example 0.2.0
+        description: Published Semantic Version to deploy, for example 0.2.0-beta.1
         required: true
         type: string
 
@@ -27,15 +27,139 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  DOCUMENTATION_BRANCH: gh-pages
+  MIKE_REQUIREMENT: "mike @ git+https://github.com/squidfunk/mike.git@0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3"
+
 jobs:
   build:
-    name: Build Release Documentation
+    name: Build Versioned Release Documentation
+    runs-on: ubuntu-24.04
     permissions:
-      contents: read
-    uses: ./.github/workflows/documentation.yml
-    with:
-      publish_artifact: true
-      version: ${{ inputs.version }}
+      contents: write
+    outputs:
+      channel: ${{ steps.release.outputs.channel }}
+    steps:
+      - name: Require publication from main
+        run: test "${GITHUB_REF}" = "refs/heads/main"
+      - name: Checkout publication tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Stage publication tooling
+        run: |
+          cp deploy/publish-versioned-documentation.sh \
+            "${RUNNER_TEMP}/publish-versioned-documentation.sh"
+          cp deploy/verify_release_candidate.py \
+            "${RUNNER_TEMP}/verify_release_candidate.py"
+          chmod 755 "${RUNNER_TEMP}/publish-versioned-documentation.sh"
+      - name: Checkout the exact release
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the published release and channel
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          expected_prerelease="$(python3 "${RUNNER_TEMP}/verify_release_candidate.py" \
+            --version "${RELEASE_VERSION}" \
+            --source-root . \
+            --print-prerelease)"
+          release_json="$(gh release view "${RELEASE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft,isPrerelease,tagName,targetCommitish)"
+          test "$(jq -r .isDraft <<<"${release_json}")" = "false"
+          test "$(jq -r .tagName <<<"${release_json}")" = "${RELEASE_VERSION}"
+          test "$(jq -r .targetCommitish <<<"${release_json}")" = "$(git rev-parse HEAD)"
+          test "$(git rev-list -n 1 "${RELEASE_VERSION}")" = "$(git rev-parse HEAD)"
+          test "$(jq -r .isPrerelease <<<"${release_json}")" = "${expected_prerelease}"
+
+          if [[ "${expected_prerelease}" == "true" ]]; then
+            channel="preview"
+            latest_channel_version="$(gh release list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --exclude-drafts \
+              --limit 100 \
+              --json isPrerelease,publishedAt,tagName \
+              --jq 'map(select(.isPrerelease and .publishedAt != null)) | sort_by(.publishedAt) | last | .tagName // ""')"
+          else
+            channel="stable"
+            latest_channel_version="$(gh release view \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json tagName \
+              --jq .tagName)"
+          fi
+          if [[ "${latest_channel_version}" != "${RELEASE_VERSION}" ]]; then
+            echo "documentation can be published only for the latest ${channel} release" >&2
+            exit 1
+          fi
+          printf 'channel=%s\n' "${channel}" >> "${GITHUB_OUTPUT}"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+      - name: Install the release documentation toolchain
+        run: uv sync --locked --only-group docs
+      - name: Stage canonical release documentation
+        run: uv run --no-sync python deploy/stage_documentation.py
+      - name: Build release documentation strictly
+        run: uv run --no-sync zensical build --clean --strict
+      - name: Fetch the existing version store
+        run: |
+          if git ls-remote --exit-code --heads origin "refs/heads/${DOCUMENTATION_BRANCH}" >/dev/null 2>&1; then
+            git fetch origin \
+              "+refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}"
+          fi
+      - name: Publish the release into the version store
+        env:
+          DOCUMENTATION_CHANNEL: ${{ steps.release.outputs.channel }}
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          uv run --frozen --only-group docs --with "${MIKE_REQUIREMENT}" \
+            bash "${RUNNER_TEMP}/publish-versioned-documentation.sh" \
+            --version "${RELEASE_VERSION}" \
+            --channel "${DOCUMENTATION_CHANNEL}" \
+            --branch "${DOCUMENTATION_BRANCH}" \
+            --remote origin
+      - name: Stage the complete Pages artifact
+        env:
+          DOCUMENTATION_CHANNEL: ${{ steps.release.outputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          mkdir published-site
+          git archive "${DOCUMENTATION_BRANCH}" | tar -x -C published-site
+          test -s published-site/index.html
+          test -s "published-site/${RELEASE_VERSION}/index.html"
+          test -s "published-site/${DOCUMENTATION_CHANNEL}/index.html"
+          jq --exit-status \
+            --arg channel "${DOCUMENTATION_CHANNEL}" \
+            --arg version "${RELEASE_VERSION}" \
+            'any(.[]; .version == $version and (.aliases | index($channel)) != null)' \
+            published-site/versions.json
+      - name: Enable version store authentication
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          fetch-depth: 0
+          clean: false
+          persist-credentials: true
+      - name: Push the validated version store
+        run: >-
+          git -c core.hooksPath=/dev/null push -- origin
+          "refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}"
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: published-site
 
   deploy:
     name: Deploy Documentation
@@ -55,8 +179,22 @@ jobs:
         uses: actions/deploy-pages@v5
       - name: Verify the deployed documentation
         env:
+          DOCUMENTATION_CHANNEL: ${{ needs.build.outputs.channel }}
           DOCUMENTATION_URL: ${{ steps.deployment.outputs.page_url }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          documentation_root="${DOCUMENTATION_URL%/}"
+          for path in "" "${RELEASE_VERSION}/" "${DOCUMENTATION_CHANNEL}/"; do
+            curl --fail --silent --show-error \
+              --retry 5 --retry-delay 2 --retry-all-errors \
+              --max-time 30 "${documentation_root}/${path}" >/dev/null
+          done
           curl --fail --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
-            --max-time 30 "${DOCUMENTATION_URL}" >/dev/null
+            --max-time 30 "${documentation_root}/versions.json" \
+            --output /tmp/heartwood-documentation-versions.json
+          jq --exit-status \
+            --arg channel "${DOCUMENTATION_CHANNEL}" \
+            --arg version "${RELEASE_VERSION}" \
+            'any(.[]; .version == $version and (.aliases | index($channel)) != null)' \
+            /tmp/heartwood-documentation-versions.json

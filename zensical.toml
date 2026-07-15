@@ -62,6 +62,10 @@ invalid_link_anchors = true
 unresolved_references = true
 unresolved_footnotes = true
 
+[project.extra.version]
+provider = "mike"
+alias = true
+
 [project.theme]
 features = [
     "content.code.copy",
