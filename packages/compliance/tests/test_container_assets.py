@@ -245,6 +245,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl" in lock
     assert "transformers==5.5.0" in lock
+    assert "requests==2.34.2" in lock
+    assert "urllib3==2.7.0" in lock
     assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
     assert "--extra-index-url https://download.pytorch.org/whl/cu118" not in lock
     assert "nvidia-cuda-runtime-cu13" not in lock
