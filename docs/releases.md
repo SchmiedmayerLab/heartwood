@@ -26,7 +26,9 @@ Every `main` commit runs the `Main Validation` workflow. Its dependency graph ca
 
 After automated verification, the workflow creates a draft with GitHub's automatically generated release notes and the verified native assets. The `Approve And Publish Release` job then waits in the protected `release` environment. Before approving, the designated maintainer can open the draft and refine its title or notes; release assets must remain unchanged. The maintainer may approve their own deployment. Approval authorizes only the already-verified commit, draft, and artifacts; it does not bypass a failed gate. Publication rechecks the draft assets and confirms that `main` still points to the approved commit, then stops if either changed while approval was pending.
 
-For a stable release, the same workflow checks out the exact published tag, rebuilds the canonical documentation strictly, and deploys it to [GitHub Pages](https://schmiedmayerlab.github.io/heartwood/) through the `github-pages` environment. Versions with a Semantic Versioning prerelease suffix are automatically published as GitHub prereleases, are never designated `Latest`, and do not replace the stable documentation site. Pull requests and `main` validate documentation changes but never deploy them, so the public site remains aligned with the latest stable release rather than ongoing development.
+For every release, the same workflow checks out the exact published tag, rebuilds the canonical documentation strictly, and deploys it to a version-specific path on [GitHub Pages](https://schmiedmayerlab.github.io/heartwood/) through the `github-pages` environment. Stable releases move the `/stable/` alias and make it the site default. Versions with a Semantic Versioning prerelease suffix are automatically published as GitHub prereleases, are never designated `Latest`, and move only the `/preview/` alias. Before the first stable documentation release, the site root opens the preview; subsequent prereleases cannot replace the stable default. Pull requests and `main` validate documentation changes but never deploy them.
+
+The Zensical-supported Mike integration maintains `gh-pages` as a generated version store. GitHub Pages remains configured for workflow deployment and serves the verified Actions artifact, so the generated branch does not introduce a second publication path.
 
 The publication job creates these immutable version tags from the verified commit images:
 
@@ -43,10 +45,10 @@ Release-required workflows are declared as jobs in `.github/workflows/main-valid
 
 The release workflow is intentionally serialized. If publication is interrupted after a versioned image tag is created, a rerun accepts that tag only when it resolves to the same verified digest. If an interruption leaves a draft release for the exact candidate commit, the approved publication job replaces that draft with freshly verified assets before publishing. A published release, a draft for another commit, or a version tag that points elsewhere is never overwritten.
 
-If only the Pages deployment fails after the latest release is public, rerun it from `main` without changing the release:
+If only the Pages deployment fails after the latest release in its channel is public, rerun it from `main` without changing the release:
 
 ```bash
-gh workflow run publish-documentation.yml --ref main -f version=0.2.0
+gh workflow run publish-documentation.yml --ref main -f version=0.2.0-beta.1
 ```
 
-The recovery workflow verifies the canonical version, Git tag, release state, target commit, and latest-release designation before it can update the site. It rejects older releases so recovery cannot roll the public documentation back.
+The recovery workflow verifies the canonical version, Git tag, release state, target commit, and stable or preview channel position before it can update the site. It rejects older releases so recovery cannot move either public channel backward. Existing version content must match on a rerun, and the generated branch is pushed only after every local publication check succeeds.

@@ -60,6 +60,10 @@ def test_documentation_index_uses_progressive_disclosure_and_project_tracking() 
             "format": "pymdownx.superfences.fence_code_format",
         }
     ]
+    assert site["project"]["extra"]["version"] == {
+        "provider": "mike",
+        "alias": True,
+    }
 
 
 def test_platform_support_distinguishes_ci_from_live_validation() -> None:
