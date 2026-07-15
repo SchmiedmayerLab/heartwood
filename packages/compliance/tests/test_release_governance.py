@@ -267,6 +267,8 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "DOCUMENTATION_BRANCH: gh-pages" in publication
     assert "refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}" in publication
     assert "deploy/publish-versioned-documentation.sh" in publication
+    assert "${RUNNER_TEMP}/verify_release_candidate.py" in publication
+    assert 'python3 "${RUNNER_TEMP}/verify_release_candidate.py"' in publication
     assert "published-site/${RELEASE_VERSION}/index.html" in publication
     assert "published-site/${DOCUMENTATION_CHANNEL}/index.html" in publication
     assert "actions/upload-pages-artifact@v5" in publication
@@ -281,8 +283,19 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     )
     assert mike_requirement in pyproject
     assert mike_requirement in publication
+    assert 'python3 "${release_verifier}" --version "${version}" --version-only' in publisher
+    assert "git check-ref-format --branch" in publisher
+    assert 'git remote get-url -- "${remote}"' in publisher
     assert "published documentation for ${version} differs" in publisher
-    assert 'git push "${remote}" "refs/heads/${branch}:refs/heads/${branch}"' in publisher
+    assert 'git push -- "${remote}" "refs/heads/${branch}:refs/heads/${branch}"' in publisher
+    release_checkout = publication.index("- name: Checkout the exact release")
+    release_verification = publication.index("- name: Verify the published release and channel")
+    authentication = publication.index("- name: Enable version store authentication")
+    artifact_validation = publication.index("- name: Stage the complete Pages artifact")
+    push = publication.index("- name: Push the validated version store")
+    assert "persist-credentials: false" in publication[release_checkout:release_verification]
+    assert release_checkout < release_verification < artifact_validation < authentication < push
+    assert "persist-credentials: true" in publication[authentication:push]
     assert "prerelease: ${{ steps.release.outputs.prerelease }}" in release
     assert "--print-prerelease" in release
     assert "release_flags=(--draft --latest=false)" in release

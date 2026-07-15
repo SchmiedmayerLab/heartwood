@@ -51,20 +51,22 @@ jobs:
         run: |
           cp deploy/publish-versioned-documentation.sh \
             "${RUNNER_TEMP}/publish-versioned-documentation.sh"
+          cp deploy/verify_release_candidate.py \
+            "${RUNNER_TEMP}/verify_release_candidate.py"
           chmod 755 "${RUNNER_TEMP}/publish-versioned-documentation.sh"
       - name: Checkout the exact release
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.version }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - name: Verify the published release and channel
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          expected_prerelease="$(python3 deploy/verify_release_candidate.py \
+          expected_prerelease="$(python3 "${RUNNER_TEMP}/verify_release_candidate.py" \
             --version "${RELEASE_VERSION}" \
             --source-root . \
             --print-prerelease)"
@@ -127,8 +129,7 @@ jobs:
             --version "${RELEASE_VERSION}" \
             --channel "${DOCUMENTATION_CHANNEL}" \
             --branch "${DOCUMENTATION_BRANCH}" \
-            --remote origin \
-            --push
+            --remote origin
       - name: Stage the complete Pages artifact
         env:
           DOCUMENTATION_CHANNEL: ${{ steps.release.outputs.channel }}
@@ -144,6 +145,17 @@ jobs:
             --arg version "${RELEASE_VERSION}" \
             'any(.[]; .version == $version and (.aliases | index($channel)) != null)' \
             published-site/versions.json
+      - name: Enable version store authentication
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          fetch-depth: 0
+          clean: false
+          persist-credentials: true
+      - name: Push the validated version store
+        run: >-
+          git -c core.hooksPath=/dev/null push -- origin
+          "refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}"
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:

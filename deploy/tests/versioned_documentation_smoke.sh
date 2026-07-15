@@ -39,6 +39,19 @@ export GIT_AUTHOR_NAME="github-actions[bot]"
 export GIT_COMMITTER_EMAIL="${GIT_AUTHOR_EMAIL}"
 export GIT_COMMITTER_NAME="${GIT_AUTHOR_NAME}"
 
+expect_failure() {
+  local expected="$1"
+  shift
+  failure_log="$(mktemp)"
+  if bash "${publisher}" "$@" >"${failure_log}" 2>&1; then
+    echo "documentation publication unexpectedly succeeded" >&2
+    exit 1
+  fi
+  grep --fixed-strings "${expected}" "${failure_log}" >/dev/null
+  rm -f "${failure_log}"
+  failure_log=""
+}
+
 bash "${publisher}" \
   --version 0.1.0 \
   --channel stable \
@@ -46,22 +59,32 @@ bash "${publisher}" \
 stable_root="$(git rev-parse "${stable_branch}:index.html")"
 stable_tip="$(git rev-parse "${stable_branch}")"
 
+expect_failure \
+  'documentation version must use strict Semantic Versioning' \
+  --version stable \
+  --channel stable \
+  --branch "${stable_branch}"
+expect_failure \
+  'documentation branch is invalid: invalid..branch' \
+  --version 0.1.1 \
+  --channel stable \
+  --branch invalid..branch
+expect_failure \
+  'documentation remote is unavailable: -invalid' \
+  --version 0.1.1 \
+  --channel stable \
+  --branch "${stable_branch}" \
+  --remote -invalid
+test "$(git rev-parse "${stable_branch}")" = "${stable_tip}"
+
 source_backup="$(mktemp)"
-failure_log="$(mktemp)"
 cp "${source_path}" "${source_backup}"
 printf '\nVersion publication regression marker.\n' >> "${source_path}"
-if bash "${publisher}" \
+expect_failure \
+  'published documentation for 0.1.0 differs from the existing version' \
   --version 0.1.0 \
   --channel stable \
-  --branch "${stable_branch}" >"${failure_log}" 2>&1; then
-  echo "versioned documentation allowed existing content to change" >&2
-  exit 1
-fi
-grep --fixed-strings \
-  'published documentation for 0.1.0 differs from the existing version' \
-  "${failure_log}" >/dev/null
-rm -f "${failure_log}"
-failure_log=""
+  --branch "${stable_branch}"
 cp "${source_backup}" "${source_path}"
 rm -f "${source_backup}"
 source_backup=""

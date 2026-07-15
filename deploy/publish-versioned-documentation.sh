@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+release_verifier="${script_directory}/verify_release_candidate.py"
 version=""
 channel=""
 branch="gh-pages"
@@ -34,8 +36,24 @@ if [[ -z "${version}" ]]; then
   echo "documentation version is required" >&2
   exit 64
 fi
+if [[ ! -f "${release_verifier}" ]]; then
+  echo "release verifier is unavailable: ${release_verifier}" >&2
+  exit 70
+fi
+if ! python3 "${release_verifier}" --version "${version}" --version-only >/dev/null 2>&1; then
+  echo "documentation version must use strict Semantic Versioning" >&2
+  exit 64
+fi
 if [[ "${channel}" != "stable" && "${channel}" != "preview" ]]; then
   echo "documentation channel must be stable or preview" >&2
+  exit 64
+fi
+if ! git check-ref-format --branch "${branch}" >/dev/null 2>&1; then
+  echo "documentation branch is invalid: ${branch}" >&2
+  exit 64
+fi
+if [[ "${remote}" == -* ]] || ! git remote get-url -- "${remote}" >/dev/null 2>&1; then
+  echo "documentation remote is unavailable: ${remote}" >&2
   exit 64
 fi
 
@@ -81,5 +99,5 @@ else
 fi
 
 if [[ "${push}" == "true" ]]; then
-  git push "${remote}" "refs/heads/${branch}:refs/heads/${branch}"
+  git push -- "${remote}" "refs/heads/${branch}:refs/heads/${branch}"
 fi
