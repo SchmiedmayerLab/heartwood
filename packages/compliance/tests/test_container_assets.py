@@ -233,10 +233,14 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "vllm-0.10.1.1%2Bcu118" in lock
     assert "certifi-2026.6.17-py3-none-any.whl" in lock
     assert "certifi==2022.12.7" not in lock
-    assert "torch==2.7.1+cu118" in lock
+    assert "ray==2.55.0" in lock
+    assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl" in lock
     assert "transformers==4.57.6" in lock
     assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
-    assert "--extra-index-url https://download.pytorch.org/whl/cu118" in lock
+    assert "--extra-index-url https://download.pytorch.org/whl/cu118" not in lock
     assert "nvidia-cuda-runtime-cu13" not in lock
     assert "--hash=sha256:" in lock
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
@@ -482,9 +486,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "patched release" in dependency_review
 
 
-def test_vllm_advisory_exceptions_remain_isolated_to_the_gpu_lock() -> None:
+def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     root = _repo_root()
     lock = root / "images/gpu/vllm-requirements.txt"
+    input_file = root / "images/gpu/vllm.in"
+    gpu_dependencies = {lock, input_file}
     dependency_files = {
         root / "uv.lock",
         *root.rglob("pyproject.toml"),
@@ -497,13 +503,17 @@ def test_vllm_advisory_exceptions_remain_isolated_to_the_gpu_lock() -> None:
     unexpected = [
         path.relative_to(root).as_posix()
         for path in sorted(dependency_files)
-        if path != lock and declaration.search(path.read_text(encoding="utf-8"))
+        if path not in gpu_dependencies
+        and declaration.search(path.read_text(encoding="utf-8"))
     ]
 
     assert unexpected == []
     text = lock.read_text(encoding="utf-8")
     assert "diskcache==5.6.3" in text
-    assert "torch==2.7.1+cu118" in text
+    assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in text
+    assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in input_file.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
