@@ -265,12 +265,13 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert 'channel="preview"' in publication
     assert 'channel="stable"' in publication
     assert "DOCUMENTATION_BRANCH: gh-pages" in publication
-    assert "refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}" in publication
+    assert "${DOCUMENTATION_COMMIT}:refs/heads/${DOCUMENTATION_BRANCH}" in publication
     assert "deploy/publish-versioned-documentation.sh" in publication
     assert "${RUNNER_TEMP}/verify_release_candidate.py" in publication
     assert 'python3 "${RUNNER_TEMP}/verify_release_candidate.py"' in publication
     assert "published-site/${RELEASE_VERSION}/index.html" in publication
     assert "published-site/${DOCUMENTATION_CHANNEL}/index.html" in publication
+    assert 'git rev-parse --verify "${DOCUMENTATION_BRANCH}^{commit}"' in publication
     assert "actions/upload-pages-artifact@v5" in publication
     assert "actions/deploy-pages@v5" in publication
     assert "Verify the deployed documentation" in publication
@@ -296,6 +297,7 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "persist-credentials: false" in publication[release_checkout:release_verification]
     assert release_checkout < release_verification < artifact_validation < authentication < push
     assert "persist-credentials: true" in publication[authentication:push]
+    assert "DOCUMENTATION_COMMIT: ${{ steps.version_store.outputs.commit }}" in publication
     assert "prerelease: ${{ steps.release.outputs.prerelease }}" in release
     assert "--print-prerelease" in release
     assert "release_flags=(--draft --latest=false)" in release

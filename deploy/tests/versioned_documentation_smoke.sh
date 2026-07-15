@@ -12,6 +12,7 @@ repository_root="$(git rev-parse --show-toplevel)"
 publisher="${repository_root}/deploy/publish-versioned-documentation.sh"
 stable_branch="heartwood-documentation-stable-smoke-$$"
 preview_branch="heartwood-documentation-preview-smoke-$$"
+handoff_branch="heartwood-documentation-handoff-smoke-$$"
 remote_name="heartwood-documentation-smoke-$$"
 remote_root="$(mktemp -d)"
 remote_repository="${remote_root}/pages.git"
@@ -126,6 +127,13 @@ git --git-dir="${remote_repository}" show \
   "refs/heads/${preview_branch}:0.2.0-beta.1/index.html" >/dev/null
 git --git-dir="${remote_repository}" show \
   "refs/heads/${preview_branch}:preview/index.html" | grep --fixed-strings '../0.2.0-beta.2/' >/dev/null
+version_store_commit="$(git rev-parse "refs/heads/${preview_branch}^{commit}")"
+git update-ref -d "refs/heads/${preview_branch}"
+git push -- "${remote_name}" \
+  "${version_store_commit}:refs/heads/${handoff_branch}"
+git --git-dir="${remote_repository}" show \
+  "refs/heads/${handoff_branch}:preview/index.html" | grep --fixed-strings '../0.2.0-beta.2/' >/dev/null
+git update-ref "refs/heads/${preview_branch}" "${version_store_commit}"
 
 for branch in "${stable_branch}" "${preview_branch}"; do
   git show "${branch}:.nojekyll" >/dev/null
