@@ -36,4 +36,4 @@ jobs:
       - name: Verify the static site
         run: test -s site/index.html
       - name: Verify stable and preview publication locally
-        run: deploy/tests/versioned_documentation_smoke.sh
+        run: uv run --no-sync bash deploy/tests/versioned_documentation_smoke.sh

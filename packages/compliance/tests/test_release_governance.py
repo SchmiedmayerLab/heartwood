@@ -253,7 +253,7 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "  pull_request:" not in documentation
     assert "  release:" not in documentation
     assert "zensical build --clean --strict" in documentation
-    assert "deploy/tests/versioned_documentation_smoke.sh" in documentation
+    assert "uv run --no-sync bash deploy/tests/versioned_documentation_smoke.sh" in documentation
     assert "gh release view" not in documentation
     assert "actions/upload-pages-artifact" not in documentation
     assert "pages: write" not in documentation
