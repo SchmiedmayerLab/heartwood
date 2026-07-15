@@ -159,13 +159,40 @@ def test_skill_metadata_accepts_skill_md_aliases() -> None:
             "heartwood.phi-risk": "none",
             "heartwood.trust-tier": "verified",
             "heartwood.requires-network": "false",
-            "heartwood.version": "0.1.0",
+            "heartwood.version": "0.2.0-beta.1",
             "heartwood.sig": "sigstore:synthetic-bundle",
         }
     )
     assert metadata.dataset_types == ("omop-cdm", "fhir")
     assert metadata.platforms == ("generic", "terra")
     assert metadata.requires_network is False
+    assert metadata.version == "0.2.0-beta.1"
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "01.2.3",
+        "1.02.3",
+        "1.2.03",
+        "1.2.3-01",
+        "1.2.3-beta.01",
+        "1.2",
+        "v1.2.3",
+    ],
+)
+def test_skill_metadata_rejects_invalid_semantic_versions(version: str) -> None:
+    with pytest.raises(ValidationError):
+        SkillMetadata.model_validate(
+            {
+                "heartwood.dataset-types": "omop-cdm",
+                "heartwood.platforms": "generic",
+                "heartwood.phi-risk": "none",
+                "heartwood.trust-tier": "community",
+                "heartwood.requires-network": "false",
+                "heartwood.version": version,
+            }
+        )
 
 
 def test_verified_skill_metadata_requires_signature() -> None:

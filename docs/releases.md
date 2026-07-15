@@ -19,7 +19,7 @@ Heartwood releases use Semantic Versioning without a `v` prefix. Examples includ
 Start the protected workflow from the current `main` branch:
 
 ```bash
-gh workflow run create-release.yml --ref main -f version=0.2.0
+gh workflow run create-release.yml --ref main -f version=0.2.0-beta.1
 ```
 
 Every `main` commit runs the `Main Validation` workflow. Its dependency graph calls the repository validation, CodeQL, Python, web, secret scan, container smoke, native asset, CPU image, and GPU image workflows and emits `Release Candidate Ready` only after every dependency succeeds. The release workflow accepts only strict Semantic Versioning, requires every packaged source version to match, refuses an existing tag or published release, and binds the candidate to the current `main` commit. It checks `Release Candidate Ready` once for that exact commit and fails immediately when main validation is absent, incomplete, skipped, cancelled, or failed. It then verifies the immutable generic, Terra, generic GPU, and Terra GPU images and rebuilds and tests the versioned native installation bundle.
