@@ -641,6 +641,8 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert 'payload.get("platform_id") != "terra"' in terra_managed_launch
     assert 'payload.get("state") != "ready"' in terra_managed_launch
     assert 'payload.get("project_root")' in terra_managed_launch
+    assert 'launch_message=""' in terra_managed_launch
+    assert "did not report the browser interface" in terra_managed_launch
 
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence

@@ -278,6 +278,14 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
             LocalModelSelection(artifact_id="model", path=".heartwood/cache/model"),
             r"under \.heartwood/models",
         ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                context_window=32_769,
+            ),
+            "between 2048 and 32768",
+        ),
     ],
 )
 def test_local_model_selection_rejects_invalid_metadata(

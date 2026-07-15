@@ -242,12 +242,12 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     except (OSError, UnicodeError, ValueError) as error:
         print(f"Model verification failed: {error}")
         return 66
-    _print_resource_assessment(selection, env)
     runtime_executable = _resolve_runtime_executable(runtime_kind)
     if not runtime_executable.is_file() or not os.access(runtime_executable, os.X_OK):
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
         return 69
     runtime_env = _runtime_environment(env, project=options.project)
+    _print_resource_assessment(selection, runtime_env)
     _stage(2, 6, "Validate the local inference runtime")
     if runtime_kind == "vllm":
         preflight_error = _preflight_vllm(runtime_executable, runtime_env)

@@ -15,6 +15,11 @@ from importlib import import_module
 from pathlib import PurePosixPath
 from typing import Literal, Protocol, cast
 
+from heartwood.gateway._local_model_contract import (
+    DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MAXIMUM_LOCAL_CONTEXT_WINDOW,
+    MINIMUM_LOCAL_CONTEXT_WINDOW,
+)
 from heartwood.gateway._model_artifacts import ModelArtifact
 from heartwood.gateway._model_identity import (
     is_hugging_face_model_id,
@@ -43,8 +48,6 @@ _USER_SELECTED_PURPOSE = (
     "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
     "license, or suitability."
 )
-_DEFAULT_CONTEXT_WINDOW = 16_384
-_MAX_AUTOMATIC_CONTEXT_WINDOW = 32_768
 
 
 class ModelRepositoryError(ValueError):
@@ -80,7 +83,7 @@ class LocalModelChoice:
     minimum_free_bytes: int
     license_posture: str
     catalog_source: LocalModelCatalogSource
-    context_window: int = _DEFAULT_CONTEXT_WINDOW
+    context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     artifact_sha256: str | None = None
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
@@ -577,9 +580,9 @@ def _context_window(info: object) -> int:
             "seq_length",
         ):
             value = config.get(key)
-            if isinstance(value, int) and value >= 2048:
-                return min(value, _MAX_AUTOMATIC_CONTEXT_WINDOW)
-    return _DEFAULT_CONTEXT_WINDOW
+            if isinstance(value, int) and value >= MINIMUM_LOCAL_CONTEXT_WINDOW:
+                return min(value, MAXIMUM_LOCAL_CONTEXT_WINDOW)
+    return DEFAULT_LOCAL_CONTEXT_WINDOW
 
 
 def _preferred_gguf(candidates: tuple[LocalModelChoice, ...]) -> LocalModelChoice | None:

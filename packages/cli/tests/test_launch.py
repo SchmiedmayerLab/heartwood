@@ -241,6 +241,47 @@ def test_launch_reports_missing_selection_artifact_and_runtime(
     assert "vLLM executable is unavailable" in capsys.readouterr().out
 
 
+def test_launch_scrubs_resource_and_runtime_preflight_environments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(tmp_path / ".heartwood" / "models" / "model")
+    executable = tmp_path / "heartwood-vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    observed: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable",
+        lambda _runtime: executable,
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._print_resource_assessment",
+        lambda _selection, env: observed.append(dict(env)),
+    )
+
+    def stop_after_preflight(_executable: Path, env: dict[str, str]) -> str:
+        observed.append(dict(env))
+        return "synthetic stop"
+
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", stop_after_preflight)
+
+    assert (
+        run_launch(
+            options,
+            env={
+                "HEARTWOOD_PLATFORM": "generic",
+                "PATH": "/usr/bin",
+                "OPENAI_API_KEY": "secret",
+            },
+        )
+        == 69
+    )
+    assert len(observed) == 2
+    assert all("OPENAI_API_KEY" not in env for env in observed)
+
+
 def test_launch_checks_scratch_capacity_and_carina_scratch_requirement(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

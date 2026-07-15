@@ -70,5 +70,19 @@ if [ "${ready}" != "yes" ]; then
   exit 1
 fi
 
-grep --fixed-strings '[6/6] Open the web interface on 127.0.0.1:' "${log_file}" >/dev/null
+launch_message=""
+for _ in $(seq 1 "${startup_timeout}"); do
+  if grep --fixed-strings '[6/6] Open the web interface on 127.0.0.1:' "${log_file}" >/dev/null; then
+    launch_message="yes"
+    break
+  fi
+  if ! kill -0 "${launch_pid}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if [ "${launch_message}" != "yes" ]; then
+  echo "Heartwood managed Terra launch did not report the browser interface." >&2
+  exit 1
+fi
 echo "Terra managed local-model launch smoke: ok"
