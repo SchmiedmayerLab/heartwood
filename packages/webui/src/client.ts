@@ -474,7 +474,7 @@ const inferGatewayBasePath = (): string => {
   if (typeof window === "undefined") {
     return "";
   }
-  const match = /^(.*?\/proxy\/[^/]+)(?:\/.*)?$/.exec(window.location.pathname);
+  const match = /^(.*\/proxy\/[^/]+)(?:\/.*)?$/.exec(window.location.pathname);
   return match?.[1] ?? "";
 };
 

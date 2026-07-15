@@ -4,4 +4,5 @@
 #
 # SPDX-License-Identifier: MIT
 
-vllm==0.25.0
+vllm @ https://github.com/vllm-project/vllm/releases/download/v0.10.1.1/vllm-0.10.1.1%2Bcu118-cp38-abi3-manylinux1_x86_64.whl
+transformers<5

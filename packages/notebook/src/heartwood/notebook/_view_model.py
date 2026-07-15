@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
+from urllib.parse import quote
 
 from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
@@ -407,9 +408,19 @@ def _upsert_approval(approvals: list[ApprovalControl], control: ApprovalControl)
 def jupyter_proxy_url(*, port: int, env: dict[str, str] | None = None) -> str:
     """Build a `jupyter-server-proxy` URL for the current notebook server."""
     active_env = os.environ if env is None else env
-    prefix = active_env.get("JUPYTERHUB_SERVICE_PREFIX", "/")
-    normalized = prefix if prefix.startswith("/") else f"/{prefix}"
-    return f"{normalized.rstrip('/')}/proxy/{port}/"
+    service_prefix = active_env.get("JUPYTERHUB_SERVICE_PREFIX", "").strip()
+    if service_prefix:
+        normalized = service_prefix if service_prefix.startswith("/") else f"/{service_prefix}"
+        return f"{normalized.rstrip('/')}/proxy/{port}/"
+
+    google_project = active_env.get("GOOGLE_PROJECT", "").strip()
+    cluster_name = active_env.get("CLUSTER_NAME", "").strip()
+    if google_project and cluster_name:
+        project = quote(google_project, safe="")
+        cluster = quote(cluster_name, safe="")
+        return f"/proxy/{project}/{cluster}/jupyter/proxy/{port}/"
+
+    return f"/proxy/{port}/"
 
 
 def _activity_item(event: SessionEvent) -> ActivityItem:

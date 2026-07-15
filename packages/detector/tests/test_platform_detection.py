@@ -31,6 +31,12 @@ def test_carina_from_explicit_platform_evidence() -> None:
     assert detection.evidence == ("found environment marker HEARTWOOD_PLATFORM=carina",)
 
 
+def test_terra_from_explicit_platform_evidence() -> None:
+    detection = detect_platform({"HEARTWOOD_PLATFORM": "terra"})
+    assert detection.platform is Platform.TERRA
+    assert detection.evidence == ("found environment marker HEARTWOOD_PLATFORM=terra",)
+
+
 def test_carina_from_cluster_name() -> None:
     detection = detect_platform({"SLURM_CLUSTER_NAME": "carina2"})
     assert detection.platform is Platform.CARINA

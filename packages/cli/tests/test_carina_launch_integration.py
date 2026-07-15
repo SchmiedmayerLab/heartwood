@@ -134,7 +134,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         """
         #!/usr/bin/env bash
         set -euo pipefail
-        echo '0.14.0 0.25.0'
+        echo '0.10.1.1 2.7.1 11.8'
         """,
     )
     _write_python_executable(

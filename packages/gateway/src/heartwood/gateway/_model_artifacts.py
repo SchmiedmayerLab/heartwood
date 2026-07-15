@@ -111,6 +111,7 @@ class ModelArtifact:
     artifact_sha256: str
     license_posture: str
     model_alias: str
+    context_window: int = 16_384
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
     recommended: bool = False
@@ -136,6 +137,8 @@ class ModelArtifact:
         if self.artifact_size_bytes <= 0 or self.minimum_free_bytes < self.artifact_size_bytes:
             msg = "artifact storage metadata is invalid"
             raise ModelArtifactError(msg)
+        if self.context_window < 2048:
+            raise ModelArtifactError("context_window must be at least 2048 tokens")
         if len(self.artifact_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.artifact_sha256
         ):
@@ -458,6 +461,7 @@ def _load_artifact(path: Path) -> ModelArtifact:
         artifact_sha256=_string(data, "artifact_sha256"),
         license_posture=_string(data, "license_posture"),
         model_alias=_string(data, "model_alias"),
+        context_window=_positive_int(data, "context_window"),
         minimum_resource_envelope=_optional_string(data, "minimum_resource_envelope"),
         recommended_resource_envelope=_optional_string(data, "recommended_resource_envelope"),
         recommended=_optional_bool(data, "recommended", default=False),

@@ -18,14 +18,14 @@ Use the Terra-derived image when Terra must retain ownership of Jupyter, the not
 
 | Image | Platforms | Purpose |
 |---|---|---|
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1` | AMD64 and ARM64 | Versioned generic runtime and the normal container starting point. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2` | AMD64 and ARM64 | Versioned generic runtime and the normal container starting point. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
 | `edge` and `edge-*` | Flavor-specific | Latest validated `main` build for development, not a stable release. |
 | `sha-<git-sha>` and `sha-<git-sha>-*` | Flavor-specific | Immutable images for one repository commit. |
 
-The portable generic image remains the default. A GPU image still requires compatible host drivers, a suitable model, enough accelerator memory, and deployment-specific validation.
+The portable generic image remains the default. The NVIDIA variants use a pinned CUDA 11.8 vLLM environment so they remain compatible with the NVIDIA driver baseline observed on Terra. A GPU image still requires a suitable model, enough accelerator memory, a driver that supports CUDA 11.8, and deployment-specific validation.
 
 ## Start a Project
 
@@ -38,7 +38,7 @@ cd heartwood-demo
 docker run --rm -it \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood serve --host 0.0.0.0
 ```
 
@@ -53,7 +53,7 @@ The same project can use the terminal interface instead:
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood
 ```
 
@@ -72,12 +72,12 @@ List the current recommendations, then download one into the project's `.heartwo
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood models local
 
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
@@ -86,12 +86,12 @@ You can instead inspect and prepare another Hugging Face model. The image choose
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood models inspect <owner/model>
 
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood models download <owner/model>
 ```
 
@@ -103,7 +103,7 @@ Start the model and browser together:
 docker run --rm -it \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood launch --web --host 0.0.0.0
 ```
 
@@ -113,11 +113,11 @@ For a no-network terminal demonstration after the artifact is present:
 docker run --rm -it \
   --network none \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood launch --plain
 ```
 
-The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant, inspect or download the recommended `qwen25-7b-instruct-vllm` snapshot with that image, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. The image supplies vLLM but still downloads model weights only after that explicit project-level command.
+The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant on a 16 GB GPU, download `qwen25-coder-7b-instruct-awq-vllm`, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. Larger GPUs can use `qwen25-7b-instruct-vllm`. The image supplies vLLM but still downloads model weights only after that explicit project-level command. Before startup, Heartwood initializes CUDA and reports the selected 32,768-token context together with estimated and observed RAM and GPU memory.
 
 ## Runtime Security Controls
 

@@ -990,19 +990,22 @@ class SessionGateway:
         runtime_profile: str,
     ) -> None:
         execution_model = "heartwood-local-model"
+        choice = self._downloadable_local_model_choices.get(model_id)
+        if choice is None:
+            raise ModelRepositoryError(f"local model metadata is unavailable: {model_id}")
+        output_budget = min(4096, max(512, choice.context_window // 8))
         profile = replace(
             model_profile_from_preset("local-openai-compatible", execution_model),
             profile_id="local",
             description="Heartwood-managed local model",
+            max_input_tokens=choice.context_window - output_budget,
+            max_output_tokens=output_budget,
         )
         settings = (
             self.config_store.load()
             .model_settings.with_profile(profile)
             .selecting(profile.profile_id)
         )
-        choice = self._downloadable_local_model_choices.get(model_id)
-        if choice is None:
-            raise ModelRepositoryError(f"local model metadata is unavailable: {model_id}")
         self.config_store.select_local_model(
             artifact_id=model_id,
             path=path,
@@ -1016,6 +1019,7 @@ class SessionGateway:
             minimum_free_bytes=choice.minimum_free_bytes,
             license_posture=choice.license_posture,
             artifact_sha256=choice.artifact_sha256,
+            context_window=choice.context_window,
             minimum_resource_envelope=choice.minimum_resource_envelope,
             recommended_resource_envelope=choice.recommended_resource_envelope,
             catalog_source=choice.catalog_source,
@@ -1131,6 +1135,7 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         license_posture=selection.license_posture,
         catalog_source="user-selected",
         artifact_sha256=selection.artifact_sha256,
+        context_window=selection.context_window,
         minimum_resource_envelope=selection.minimum_resource_envelope,
         recommended_resource_envelope=selection.recommended_resource_envelope,
     )

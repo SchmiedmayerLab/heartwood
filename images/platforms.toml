@@ -54,7 +54,7 @@ ci_tag = "edge-terra-ci"
 commit_runtime_tag = "sha-<git-sha>-terra"
 commit_gpu_runtime_tag = "sha-<git-sha>-terra-gpu-nvidia"
 bundles_model_artifact = false
-gpu_runtime = "vllm==0.25.0"
+gpu_runtime = "vllm==0.10.1.1+cu118"
 model_cache = "<project>/.heartwood/models"
 ci_required = true
 live_workspace_validation_required = true

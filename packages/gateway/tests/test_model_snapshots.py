@@ -35,6 +35,14 @@ def test_repository_snapshot_catalog_pins_the_carina_demo_model() -> None:
     assert snapshot.source_repository == "Qwen/Qwen2.5-7B-Instruct"
     assert snapshot.source_revision == "a09a35458c702b33eeacc393d103063234e8bc28"
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
+    assert snapshot.context_window == 32_768
+
+    terra_snapshot = catalog.snapshot("qwen25-coder-7b-instruct-awq-vllm")
+    assert terra_snapshot.runtime_profile == "vllm-cuda"
+    assert terra_snapshot.source_repository == "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
+    assert terra_snapshot.source_revision == "b25037543e9394b818fdfca67ab2a00ecc7dd641"
+    assert terra_snapshot.minimum_free_bytes >= terra_snapshot.expected_size_bytes
+    assert terra_snapshot.context_window == 32_768
 
 
 def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path) -> None:

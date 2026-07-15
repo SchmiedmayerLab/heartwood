@@ -34,8 +34,15 @@ jobs:
           > /tmp/gpu-build-graph.json
       - name: Validate runtime lock and launcher
         run: |
-          grep --fixed-strings 'vllm==0.25.0' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'torch==2.11.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'vllm-0.10.1.1%2Bcu118' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torch==2.7.1+cu118' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'transformers==4.57.6' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'nvidia-cuda-runtime-cu11==11.8.89' images/gpu/vllm-requirements.txt
+          grep --fixed-strings -- '--extra-index-url https://download.pytorch.org/whl/cu118' images/gpu/vllm-requirements.txt
+          if grep --fixed-strings --quiet 'nvidia-cuda-runtime-cu13' images/gpu/vllm-requirements.txt; then
+            echo 'CUDA 13 is incompatible with the NVIDIA driver currently available on Terra.' >&2
+            exit 1
+          fi
           grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt
           bash -n images/gpu/start_vllm.sh
           test -x images/gpu/start_vllm.sh

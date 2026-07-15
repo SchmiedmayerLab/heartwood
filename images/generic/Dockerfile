@@ -60,9 +60,6 @@ RUN groupadd --system --gid "${HEARTWOOD_GID}" heartwood \
       jq \
       libgomp1 \
       tmux \
-    && if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
-      DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ffmpeg; \
-    fi \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \

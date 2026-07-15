@@ -331,8 +331,24 @@ def test_profile_mapping_applies_defaults_and_rejects_empty_optional_values() ->
 
     assert mapped.capability_tier == "supervised"
     assert mapped.credential_kind == "environment"
+    assert mapped.max_input_tokens is None
+    assert mapped.max_output_tokens is None
     with pytest.raises(ModelSettingsError, match="description"):
         model_profile_from_mapping({**mapped.safe_dict(), "description": ""})
+
+    bounded = model_profile_from_mapping(
+        {
+            **mapped.safe_dict(),
+            "max_input_tokens": 32_768,
+            "max_output_tokens": 4_096,
+        }
+    )
+    assert bounded.max_input_tokens == 32_768
+    assert bounded.max_output_tokens == 4_096
+    with pytest.raises(ModelSettingsError, match="max_input_tokens"):
+        model_profile_from_mapping({**mapped.safe_dict(), "max_input_tokens": 0})
+    with pytest.raises(ModelSettingsError, match="max_output_tokens"):
+        replace(mapped, max_output_tokens=cast(Any, True)).validate()
 
 
 def _local_profile() -> ModelProfile:

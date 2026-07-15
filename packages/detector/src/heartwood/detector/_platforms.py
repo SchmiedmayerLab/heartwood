@@ -86,12 +86,12 @@ def detect_platform(env: Mapping[str, str] | None = None) -> PlatformDetection:
 
     explicit_platform = env.get("HEARTWOOD_PLATFORM", "").strip().lower()
     slurm_cluster = env.get("SLURM_CLUSTER_NAME", "").strip().lower()
-    if explicit_platform == Platform.CARINA.value or slurm_cluster in {"carina", "carina2"}:
-        carina_evidence: list[str] = []
-        if explicit_platform == Platform.CARINA.value:
-            carina_evidence.append("HEARTWOOD_PLATFORM=carina")
-        if slurm_cluster in {"carina", "carina2"}:
-            carina_evidence.append(f"SLURM_CLUSTER_NAME={slurm_cluster}")
+    if explicit_platform in {Platform.CARINA.value, Platform.TERRA.value}:
+        platform = Platform(explicit_platform)
+        matches[platform] = [f"HEARTWOOD_PLATFORM={explicit_platform}"]
+    if slurm_cluster in {"carina", "carina2"}:
+        carina_evidence = matches.get(Platform.CARINA, [])
+        carina_evidence.append(f"SLURM_CLUSTER_NAME={slurm_cluster}")
         matches[Platform.CARINA] = carina_evidence
 
     if not matches:

@@ -40,6 +40,7 @@ def test_repository_catalog_contains_only_explicit_download_artifacts() -> None:
         "qwen25-coder-7b-instruct-q4_k_m",
     }
     assert all(artifact.source_revision not in {"main", "latest"} for artifact in catalog.artifacts)
+    assert catalog.artifact("qwen25-7b-instruct-q4_k_m").context_window == 32_768
 
 
 def test_artifact_download_verifies_size_and_checksum(tmp_path: Path) -> None:
@@ -521,6 +522,7 @@ def _artifact_manifest(artifact_id: str) -> str:
             f'artifact_sha256 = "{digest}"',
             'license_posture = "Synthetic"',
             'model_alias = "test"',
+            "context_window = 16384",
         )
     )
 

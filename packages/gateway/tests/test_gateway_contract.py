@@ -949,6 +949,8 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     assert config.local_model.artifact_id == "qwen25-7b-instruct-vllm"
     assert config.model_settings.active_profile == "local"
     assert config.model_settings.profile().model == "openai/heartwood-local-model"
+    assert config.model_settings.profile().max_input_tokens == 28_672
+    assert config.model_settings.profile().max_output_tokens == 4_096
     restarted = _gateway(tmp_path)
     assert restarted.model_settings()["active_profile"] == "local"
     assert restarted.project_readiness()["state"] == "compute-required"

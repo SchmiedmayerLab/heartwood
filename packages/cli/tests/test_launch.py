@@ -21,6 +21,7 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._launch import (
     LaunchOptions,
     LocalRuntimeSelection,
+    _available_system_memory_bytes,
     _catalog_contains_model,
     _discover_slurm_gpu_partitions,
     _ensure_setup,
@@ -29,6 +30,7 @@ from heartwood.cli._launch import (
     _interaction_command,
     _model_size,
     _preflight_vllm,
+    _print_resource_assessment,
     _print_runtime_failure,
     _reentry_command,
     _resolve_runtime_executable,
@@ -118,6 +120,8 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
 
     assert plan.platform_id == "carina"
     assert plan.allocation_required
+    assert plan.context_window == 16_384
+    assert "Context: 16,384 tokens" in plan.format()
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
@@ -476,6 +480,7 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         Path("/opt/llama.cpp/llama-server"),
         model,
         "heartwood-local-model",
+        32_768,
     )
     assert command[:3] == (
         "/opt/llama.cpp/llama-server",
@@ -483,6 +488,58 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         str(model),
     )
     assert "--alias" in command
+    context_index = command.index("--ctx-size")
+    assert command[context_index + 1] == "32768"
+
+
+def test_resource_assessment_reports_context_and_memory_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    selection = LocalRuntimeSelection(
+        model_root=tmp_path / "model",
+        runtime="vllm",
+        model_id="test-model",
+        size_bytes=10 * 1024**3,
+        artifact_sha256=None,
+        context_window=32_768,
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_system_memory_bytes",
+        lambda: 16 * 1024**3,
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env: 12 * 1024**3,
+    )
+
+    _print_resource_assessment(selection, {"PATH": "/usr/bin"})
+
+    output = capsys.readouterr().out
+    assert "Context window: 32,768 tokens" in output
+    assert "Warning: RAM may be insufficient" in output
+    assert "Warning: GPU memory may be insufficient" in output
+
+
+def test_available_system_memory_honors_cgroup_v1_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = {
+        "/proc/meminfo": "MemAvailable: 67108864 kB\n",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes": str(32 * 1024**3),
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes": str(8 * 1024**3),
+    }
+
+    def read_text(path: Path, **_kwargs: object) -> str:
+        try:
+            return content[str(path)]
+        except KeyError as error:
+            raise OSError from error
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    assert _available_system_memory_bytes() == 24 * 1024**3
 
 
 def test_runtime_resolution_and_gguf_directory_contract(
@@ -672,20 +729,30 @@ def test_setup_helper_runs_inside_project_without_path_arguments(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    observed: list[tuple[tuple[str, ...], Path | None]] = []
+    observed: list[tuple[tuple[str, ...], Path | None, dict[str, str]]] = []
 
     def completed(
         command: Sequence[str], **kwargs: object
     ) -> subprocess.CompletedProcess[Sequence[str]]:
-        observed.append((tuple(command), cast(Path | None, kwargs.get("cwd"))))
+        observed.append(
+            (
+                tuple(command),
+                cast(Path | None, kwargs.get("cwd")),
+                dict(cast(dict[str, str], kwargs.get("env"))),
+            )
+        )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
-    assert _ensure_setup(_options(tmp_path), {"HEARTWOOD_PLATFORM": "generic"}) == 0
-    assert any("setup" in command for command, _cwd in observed)
-    assert any("doctor" in command for command, _cwd in observed)
-    assert all(cwd == tmp_path for _command, cwd in observed)
-    assert all("--workspace" not in command for command, _cwd in observed)
+    assert _ensure_setup(_options(tmp_path), {"HEARTWOOD_PLATFORM": "terra"}) == 0
+    assert any("setup" in command for command, _cwd, _env in observed)
+    assert any("doctor" in command for command, _cwd, _env in observed)
+    assert all(cwd == tmp_path for _command, cwd, _env in observed)
+    assert all("--workspace" not in command for command, _cwd, _env in observed)
+    assert all(env["HEARTWOOD_PLATFORM"] == "terra" for _command, _cwd, env in observed)
+    assert all(
+        select_platform_adapter(env).adapter_id == "terra" for _command, _cwd, env in observed
+    )
 
 
 def test_setup_helper_propagates_setup_failure_and_missing_selection(
@@ -787,11 +854,12 @@ def test_vllm_preflight_and_output_helpers(
 
     def completed(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         observed.extend(command)
-        return subprocess.CompletedProcess(command, 0, stdout="0.14.0 0.25.0\n")
+        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
     assert _preflight_vllm(executable, {"PATH": "/usr/bin"}) is None
-    assert "import torchcodec, vllm" in observed[-1]
+    assert "import torch, vllm" in observed[-1]
+    assert "torch.cuda.init()" in observed[-1]
     assert _format_bytes(1024) == "1.0 KiB"
 
     log = tmp_path / "runtime.log"
@@ -831,10 +899,26 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
             command,
             1,
             stdout="",
-            stderr="first line\nmissing FFmpeg\n",
+            stderr="first line\nmissing runtime library\n",
         ),
     )
-    assert _preflight_vllm(executable, {}) == "missing FFmpeg"
+    assert _preflight_vllm(executable, {}) == "missing runtime library"
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr=(
+                "Traceback (most recent call last):\n"
+                "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)\n"
+            ),
+        ),
+    )
+    assert _preflight_vllm(executable, {}) == (
+        "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)"
+    )
 
 
 def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path) -> None:
@@ -846,6 +930,7 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
         model_id="test-model",
         size_bytes=4,
         artifact_sha256=hashlib.sha256(b"1234").hexdigest(),
+        context_window=32_768,
     )
     _verify_local_model(selection)
     file_destination = tmp_path / "file-stage"

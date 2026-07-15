@@ -14,6 +14,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
 mkdir -p "${workspace}/bin"
 cat >"${workspace}/bin/uv" <<'EOF'
 #!/usr/bin/env bash
@@ -37,8 +45,8 @@ venv)
   mkdir -p "${runtime}/bin"
   cat >"${runtime}/bin/python" <<'COMMAND'
 #!/usr/bin/env bash
-echo "TorchCodec: synthetic"
 echo "vLLM: synthetic"
+echo "PyTorch: synthetic (CUDA 11.8)"
 COMMAND
   cat >"${runtime}/bin/vllm" <<'COMMAND'
 #!/usr/bin/env bash
@@ -69,11 +77,7 @@ done
 : "${prefix:?--prefix is required}"
 mkdir -p "${prefix}/bin" "${prefix}/lib" "${prefix}/conda-meta"
 cp "$(dirname "$0")/uv" "${prefix}/bin/uv"
-cat >"${prefix}/bin/ffmpeg" <<'COMMAND'
-#!/usr/bin/env bash
-echo "ffmpeg synthetic"
-COMMAND
-chmod +x "${prefix}/bin/uv" "${prefix}/bin/ffmpeg"
+chmod +x "${prefix}/bin/uv"
 EOF
 chmod +x "${workspace}/bin/micromamba"
 
@@ -99,7 +103,7 @@ test -x "${workspace}/installation/bin/heartwood"
 test -L "${workspace}/installation/current"
 for directory in versions runtimes bin; do
   test -d "${workspace}/installation/${directory}"
-  test "$(stat -c '%a' "${workspace}/installation/${directory}")" = "700"
+  test "$(file_mode "${workspace}/installation/${directory}")" = "700"
 done
 for directory in state models cache logs; do
   test ! -e "${workspace}/installation/${directory}"
@@ -122,7 +126,6 @@ done
 
 carina_version="$(basename "$(readlink "${workspace}/carina-installation/current")")"
 carina_runtime="${workspace}/carina-installation/runtimes/${carina_version}"
-test -x "${carina_runtime}/bootstrap/bin/ffmpeg"
 test -x "${carina_runtime}/bootstrap/bin/uv"
 test -x "${carina_runtime}/heartwood/bin/heartwood"
 test -x "${carina_runtime}/vllm/bin/python"
@@ -133,7 +136,7 @@ test "$(readlink "${workspace}/carina-installation/bin/hf")" = \
   "${carina_runtime}/vllm/bin/hf"
 for directory in versions runtimes bin; do
   test -d "${workspace}/carina-installation/${directory}"
-  test "$(stat -c '%a' "${workspace}/carina-installation/${directory}")" = "700"
+  test "$(file_mode "${workspace}/carina-installation/${directory}")" = "700"
 done
 for directory in state models cache logs; do
   test ! -e "${workspace}/carina-installation/${directory}"

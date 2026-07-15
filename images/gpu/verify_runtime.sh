@@ -46,7 +46,7 @@ if [[ ! -x "${vllm_python}" ]]; then
 fi
 
 "${vllm_python}" -c \
-  'import torchcodec, vllm; from importlib.metadata import version; print(version("torchcodec"), version("vllm"))'
+  'import torch, vllm; from importlib.metadata import version; assert torch.version.cuda == "11.8", f"unexpected CUDA build: {torch.version.cuda}"; print(version("vllm"), torch.__version__, torch.version.cuda)'
 
 verify_no_model_artifacts /opt /home
 

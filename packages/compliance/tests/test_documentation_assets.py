@@ -299,7 +299,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     combined = "\n".join(sources)
 
     assert notebook["nbformat"] == 4
-    assert "Terra-Style Jupyter Demo" in sources[0]
+    assert "Analyze Synthetic Data with Heartwood on Terra" in sources[0]
     assert f"{_declared_version()}-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
@@ -307,7 +307,10 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert "NotebookSession" in combined
     assert "jupyter_proxy_url(port=8767)" in combined
     assert "heartwood serve" in combined
+    assert "heartwood launch --web" in combined
+    assert "Open Heartwood in a new tab" in combined
     assert "project_root = Path.cwd().resolve()" in combined
+    assert "/home/jupyter/heartwood-demo" not in combined
     assert "os.chdir(project_root)" not in combined
     assert "--workspace" not in combined
     assert "HEARTWOOD_WORKSPACE" not in combined

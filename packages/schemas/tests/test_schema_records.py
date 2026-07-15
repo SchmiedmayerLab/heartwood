@@ -159,14 +159,14 @@ def test_skill_metadata_accepts_skill_md_aliases() -> None:
             "heartwood.phi-risk": "none",
             "heartwood.trust-tier": "verified",
             "heartwood.requires-network": "false",
-            "heartwood.version": "0.2.0-beta.1",
+            "heartwood.version": "0.2.0-beta.2",
             "heartwood.sig": "sigstore:synthetic-bundle",
         }
     )
     assert metadata.dataset_types == ("omop-cdm", "fhir")
     assert metadata.platforms == ("generic", "terra")
     assert metadata.requires_network is False
-    assert metadata.version == "0.2.0-beta.1"
+    assert metadata.version == "0.2.0-beta.2"
 
 
 @pytest.mark.parametrize(

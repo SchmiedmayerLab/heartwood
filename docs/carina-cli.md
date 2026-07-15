@@ -33,23 +33,23 @@ cd "$PROJECT"
 
 Keep the project separate from the installation root. Heartwood will create `.heartwood/` in the current directory; no state or model paths need to be exported.
 
-## Install Release 0.2.0-beta.1
+## Install Release 0.2.0-beta.2
 
 Load Carina's supported package manager and download the immutable installer:
 
 ```bash
 module load micromamba/2.3.3
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.1/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.2/heartwood-installer
 chmod +x heartwood-installer
 ./heartwood-installer \
   --root "$INSTALL_ROOT" \
   --platform carina \
-  --version 0.2.0-beta.1
+  --version 0.2.0-beta.2
 export PATH="$INSTALL_ROOT/bin:$PATH"
 ```
 
-The installer verifies the release bundle, creates versioned source and runtime environments, installs the locked Heartwood application, installs the hash-locked vLLM environment, and validates FFmpeg, TorchCodec, and vLLM imports. It does not create project state, download a model, or store a credential.
+The installer verifies the release bundle, creates versioned source and runtime environments, installs the locked Heartwood application, installs the hash-locked vLLM environment, and validates the vLLM and PyTorch runtime imports together with the packaged CUDA build. It does not create project state, download a model, or store a credential.
 
 Confirm the installation and project readiness:
 

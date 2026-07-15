@@ -43,6 +43,8 @@ _USER_SELECTED_PURPOSE = (
     "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
     "license, or suitability."
 )
+_DEFAULT_CONTEXT_WINDOW = 16_384
+_MAX_AUTOMATIC_CONTEXT_WINDOW = 32_768
 
 
 class ModelRepositoryError(ValueError):
@@ -78,6 +80,7 @@ class LocalModelChoice:
     minimum_free_bytes: int
     license_posture: str
     catalog_source: LocalModelCatalogSource
+    context_window: int = _DEFAULT_CONTEXT_WINDOW
     artifact_sha256: str | None = None
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
@@ -101,6 +104,8 @@ class LocalModelChoice:
             raise ModelRepositoryError("local model storage metadata is invalid")
         if not self.license_posture.strip():
             raise ModelRepositoryError("local model license posture must not be empty")
+        if self.context_window < 2048:
+            raise ModelRepositoryError("local model context window must be at least 2048 tokens")
         if self.runtime == "llama-cpp":
             if self.source_path is None or not self.source_path.casefold().endswith(".gguf"):
                 raise ModelRepositoryError("CPU models require one GGUF file")
@@ -140,6 +145,7 @@ class LocalModelChoice:
                 artifact_sha256=self.artifact_sha256,
                 license_posture=self.license_posture,
                 model_alias=self.label,
+                context_window=self.context_window,
                 minimum_resource_envelope=self.minimum_resource_envelope,
                 recommended_resource_envelope=self.recommended_resource_envelope,
                 recommended=False,
@@ -154,6 +160,7 @@ class LocalModelChoice:
             minimum_free_bytes=self.minimum_free_bytes,
             license_posture=self.license_posture,
             model_alias=self.label,
+            context_window=self.context_window,
             minimum_resource_envelope=self.minimum_resource_envelope,
             recommended_resource_envelope=self.recommended_resource_envelope,
             recommended=False,
@@ -305,12 +312,17 @@ class HuggingFaceModelRepository:
                 metadata_complete = False
         files = tuple(inspected_files)
         license_posture = _license_posture(getattr(info, "card_data", None))
+        context_window = _context_window(info)
         candidates = [
             candidate
             for item in files
             if (
                 candidate := _gguf_candidate(
-                    source_repository, resolved_revision, item, license_posture
+                    source_repository,
+                    resolved_revision,
+                    item,
+                    license_posture,
+                    context_window=context_window,
                 )
             )
             is not None
@@ -322,6 +334,7 @@ class HuggingFaceModelRepository:
             license_posture,
             metadata_complete=metadata_complete,
             supports_tool_calls=_supports_hermes_tool_calls(info),
+            context_window=context_window,
         )
         if snapshot is not None:
             candidates.append(snapshot)
@@ -381,6 +394,7 @@ def recommended_model_choices(
             minimum_free_bytes=artifact.minimum_free_bytes,
             license_posture=artifact.license_posture,
             catalog_source="recommended",
+            context_window=artifact.context_window,
             artifact_sha256=artifact.artifact_sha256,
             minimum_resource_envelope=artifact.minimum_resource_envelope,
             recommended_resource_envelope=artifact.recommended_resource_envelope,
@@ -401,6 +415,7 @@ def recommended_model_choices(
             minimum_free_bytes=snapshot.minimum_free_bytes,
             license_posture=snapshot.license_posture,
             catalog_source="recommended",
+            context_window=snapshot.context_window,
             minimum_resource_envelope=snapshot.minimum_resource_envelope,
             recommended_resource_envelope=snapshot.recommended_resource_envelope,
         )
@@ -429,6 +444,8 @@ def _gguf_candidate(
     revision: str,
     file: _RepositoryFile,
     license_posture: str,
+    *,
+    context_window: int,
 ) -> LocalModelChoice | None:
     if (
         not file.path.casefold().endswith(".gguf")
@@ -451,6 +468,7 @@ def _gguf_candidate(
         minimum_free_bytes=(file.size * 3 + 1) // 2,
         license_posture=license_posture,
         catalog_source="user-selected",
+        context_window=context_window,
         artifact_sha256=file.sha256,
         minimum_resource_envelope=_cpu_resources(file.size, recommended=False),
         recommended_resource_envelope=_cpu_resources(file.size, recommended=True),
@@ -465,6 +483,7 @@ def _snapshot_candidate(
     *,
     metadata_complete: bool,
     supports_tool_calls: bool,
+    context_window: int,
 ) -> LocalModelChoice | None:
     if not metadata_complete or not supports_tool_calls:
         return None
@@ -492,6 +511,7 @@ def _snapshot_candidate(
         minimum_free_bytes=(size * 3 + 1) // 2,
         license_posture=license_posture,
         catalog_source="user-selected",
+        context_window=context_window,
         minimum_resource_envelope=_gpu_resources(size, recommended=False),
         recommended_resource_envelope=_gpu_resources(size, recommended=True),
     )
@@ -544,6 +564,22 @@ def _supports_hermes_tool_calls(info: object) -> bool:
         return False
     pipeline_tag = getattr(info, "pipeline_tag", None)
     return not isinstance(pipeline_tag, str) or pipeline_tag in _TEXT_GENERATION_PIPELINES
+
+
+def _context_window(info: object) -> int:
+    """Choose a bounded local-runtime window from source model metadata."""
+    config = getattr(info, "config", None)
+    if isinstance(config, dict):
+        for key in (
+            "max_position_embeddings",
+            "model_max_length",
+            "n_positions",
+            "seq_length",
+        ):
+            value = config.get(key)
+            if isinstance(value, int) and value >= 2048:
+                return min(value, _MAX_AUTOMATIC_CONTEXT_WINDOW)
+    return _DEFAULT_CONTEXT_WINDOW
 
 
 def _preferred_gguf(candidates: tuple[LocalModelChoice, ...]) -> LocalModelChoice | None:

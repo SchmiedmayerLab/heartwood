@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 Use the Terra image when an analysis already lives in a Terra workspace and Heartwood should be available beside its notebooks and files. The image preserves Terra's normal Jupyter environment and adds the Heartwood terminal command, browser interface, notebook kernel, and local-model support.
 
-The complete release workflow has not yet been live-validated in Terra. Follow this guide in a synthetic workspace containing no protected health information while collecting that evidence.
+Follow this guide first in a synthetic workspace containing no protected health information. A successful synthetic run establishes that the image, notebook, model route, interaction surfaces, persistence, and audit path work together; it does not authorize a model or dataset.
 
 ## Before You Begin
 
@@ -22,20 +22,34 @@ Terra keeps `/home/jupyter` on the persistent disk. Create a separate analysis d
 
 ## Start the Terra Environment
 
-Use the immutable release image:
+Choose the immutable release image that matches the intended compute:
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra
+ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra
+ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra-gpu-nvidia
 ```
 
-Create a Terra workspace containing no protected health information, select the custom image, and start Jupyter. Confirm that:
+The portable image is the compatibility path and runs local inference on CPU. The NVIDIA image is the recommended interactive local-model path when Terra GPU access is available. Begin with one of these configurations and adjust it to local policy and the resource guidance displayed by Heartwood:
+
+| Setting | Portable CPU | NVIDIA GPU |
+|---|---|---|
+| CPUs | 16 | 8 or more |
+| Memory | 60 GB | 48 GB or more |
+| GPU | None | One NVIDIA T4 with 16 GB VRAM or better |
+| Persistent disk | 100 GB | 100 GB |
+| Autopause | 30 minutes | 30 minutes |
+| Environment creation timeout | 30 minutes | 30 minutes |
+
+Set the machine and disk first, select the custom image last, and review Terra's cost estimate before creating the environment. The persistent disk, rather than the machine, keeps the project and downloaded models across pause, resume, and image changes.
+
+Start Jupyter and confirm that:
 
 - the normal notebook file browser opens rather than returning a 404;
 - the `Python 3 (Heartwood)` kernel is available;
 - the notebook survives the expected Leonardo route prefix;
 - `/home/jupyter` is backed by the persistent disk selected for the environment.
 
-If the file browser does not open normally, stop before model or project setup and record the Cloud Environment error. Do not install Heartwood again inside the image.
+Terra can report the environment as running before its **Open** control becomes available. If **Open** remains disabled, open the workspace terminal and follow its **Jupyter Notebook** link to reach the authenticated file browser. If neither route works after startup completes, stop before model or project setup and inspect the Cloud Environment error. Do not install Heartwood again inside the image.
 
 ## Create a Synthetic Project
 
@@ -85,20 +99,29 @@ heartwood models download <owner/model>
 heartwood launch --web
 ```
 
-The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and browser interface. First inference on CPU can be slow, and attaching a GPU does not accelerate this portable image's llama.cpp path.
+The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and browser interface. A full OpenHands prompt on a 7-billion-parameter CPU model can take several minutes, so this path demonstrates portability rather than interactive performance. Attaching a GPU does not accelerate the portable image's llama.cpp path.
 
-The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. In that image, Heartwood prefers a supported standard Hugging Face snapshot and reports approximate GPU-memory requirements. GPU selection, model suitability, and live platform validation must match the deployment evidence before it replaces the CPU path.
+The explicit Terra GPU image contains the pinned CUDA 11.8 vLLM runtime but still contains no model weights. On a T4-class environment, use the coding-oriented 4-bit recommendation:
+
+```bash
+heartwood models download qwen25-coder-7b-instruct-awq-vllm
+heartwood launch --web
+```
+
+Larger GPUs can use `qwen25-7b-instruct-vllm`. Both recommendations use a 32,768-token context window. Before server startup, Heartwood reports a conservative RAM and GPU-memory estimate, confirms that PyTorch can initialize the attached GPU, and fails with an actionable diagnostic when the driver and packaged CUDA runtime are incompatible. The GPU and CPU interfaces otherwise use the same project state and commands.
 
 ## Open the Browser Interface
 
-For a hosted or already running model, start the interface from the project directory:
+For a hosted model, start the interface from the project directory:
 
 ```bash
 cd /home/jupyter/heartwood-demo
 heartwood serve
 ```
 
-For a Heartwood-managed local model, use `heartwood launch --web` instead so the model remains supervised. Open the authenticated Jupyter proxy route for port `8767`; it normally ends in `/proxy/8767/`. Treat this as a synthetic validation workflow until the exact release image completes the route, persistence, and resume checks in a real Terra control plane.
+For a Heartwood-managed local model, use `heartwood launch --web` instead so the model remains supervised. Keep that terminal open. The launcher reports model verification, startup progress, readiness, and the point at which the browser interface is available.
+
+Open the copied notebook with the **Python 3 (Heartwood)** kernel and run its first cell. It displays an authenticated **Open Heartwood in a new tab** link derived from Terra's current Leonardo runtime. Do not substitute the generic `/proxy/8767/` path: Terra requires the full `/proxy/<Google project>/<cluster>/jupyter/proxy/8767/` runtime prefix. Heartwood preserves that nested prefix for all browser API requests.
 
 ![Heartwood synthetic reference analysis at a narrow notebook viewport](assets/web-notebook-viewport.png)
 
@@ -123,7 +146,6 @@ Use Activity to inspect the ordered event trace and Export Audit to produce the 
 After the web conversation is idle, replay it from a terminal in the same project:
 
 ```bash
-cd /home/jupyter/heartwood-demo
 heartwood --session-id terra-demo replay
 heartwood --session-id terra-demo audit export \
   --output terra-demo-audit.jsonl

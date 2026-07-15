@@ -79,6 +79,7 @@ class LocalModelSelection:
     minimum_free_bytes: int | None = None
     license_posture: str | None = None
     artifact_sha256: str | None = None
+    context_window: int = 16_384
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
     catalog_source: str = "recommended"
@@ -117,6 +118,8 @@ class LocalModelSelection:
             self.size_bytes is None or self.minimum_free_bytes < self.size_bytes
         ):
             raise ProjectConfigError("local model minimum_free_bytes must cover its size")
+        if self.context_window < 2048:
+            raise ProjectConfigError("local model context_window must be at least 2048 tokens")
         for field_name, value in (
             ("license_posture", self.license_posture),
             ("minimum_resource_envelope", self.minimum_resource_envelope),
@@ -305,6 +308,7 @@ class ProjectConfigStore:
         minimum_free_bytes: int | None = None,
         license_posture: str | None = None,
         artifact_sha256: str | None = None,
+        context_window: int = 16_384,
         minimum_resource_envelope: str | None = None,
         recommended_resource_envelope: str | None = None,
         catalog_source: str = "recommended",
@@ -327,6 +331,7 @@ class ProjectConfigStore:
             minimum_free_bytes=minimum_free_bytes,
             license_posture=license_posture,
             artifact_sha256=artifact_sha256,
+            context_window=context_window,
             minimum_resource_envelope=minimum_resource_envelope,
             recommended_resource_envelope=recommended_resource_envelope,
             catalog_source=catalog_source,
@@ -482,6 +487,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "path",
             "recommended_resource_envelope",
             "catalog_source",
+            "context_window",
             "runtime",
             "size_bytes",
             "source_path",
@@ -506,6 +512,8 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
         ),
         license_posture=_optional_string(value.get("license_posture"), "license_posture"),
         artifact_sha256=_optional_string(value.get("artifact_sha256"), "artifact_sha256"),
+        context_window=_optional_positive_int(value.get("context_window"), "context_window")
+        or 16_384,
         minimum_resource_envelope=_optional_string(
             value.get("minimum_resource_envelope"), "minimum_resource_envelope"
         ),

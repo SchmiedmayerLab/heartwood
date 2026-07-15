@@ -65,7 +65,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0-beta.1"
+__version__ = "0.2.0-beta.2"
 
 _PROG = "heartwood"
 
@@ -1046,6 +1046,9 @@ def _format_model_artifacts(catalog: dict[str, object]) -> str:
             )
             lines.append(f"{item.get('model_id')}  {runtime}  {size_gib:.2f} GiB  {review}")
             lines.append(f"    {item.get('label')}: {item.get('purpose')}")
+            context_window = item.get("context_window")
+            if isinstance(context_window, int):
+                lines.append(f"    Context: {context_window:,} tokens")
             lines.append(f"    {item.get('availability_reason')}")
             resources = item.get("recommended_resource_envelope")
             if isinstance(resources, str):
@@ -1067,6 +1070,8 @@ def _format_model_repository(inspection: dict[str, object]) -> str:
         return "Hugging Face model\n\nHeartwood returned an invalid model plan."
     size = model.get("size_bytes")
     size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
+    context_window = model.get("context_window")
+    context_label = f"{context_window:,} tokens" if isinstance(context_window, int) else "Unknown"
     runtime = "CPU" if model.get("runtime") == "llama-cpp" else "NVIDIA GPU"
     lines = [
         "Heartwood model plan",
@@ -1076,6 +1081,7 @@ def _format_model_repository(inspection: dict[str, object]) -> str:
         f"Revision: {model.get('source_revision')}",
         f"Runtime: {runtime}",
         f"Download: {size_gib:.2f} GiB",
+        f"Context: {context_label}",
         f"Selection: {inspection.get('selection_reason')}",
         f"License: {model.get('license_posture')}",
         "",

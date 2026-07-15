@@ -71,6 +71,7 @@ This glossary defines acronyms, platform names, formats, and specialized terms u
 |---|---|---|
 | AMD64 | 64-bit Advanced Micro Devices architecture | x86-64 CPU architecture identifier used by Linux Docker images |
 | ARM64 | 64-bit Arm architecture | CPU architecture identifier used by Apple Silicon, AWS Graviton, and Arm Linux runners |
+| AWQ | Activation-aware Weight Quantization | Model quantization method used to reduce GPU memory requirements while retaining inference quality |
 | GCP | Google Cloud Platform | Google's cloud |
 | AWS | Amazon Web Services | Amazon's cloud |
 | VM | Virtual Machine | A virtualized computer instance |

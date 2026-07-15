@@ -81,9 +81,9 @@ export VLLM_USE_FLASHINFER_SAMPLER=0
 
 printf 'Heartwood: %s\n' "$("${root}/heartwood/bin/heartwood" --version)"
 "${root}/vllm/bin/python" -c '
-import torchcodec
+import torch
 import vllm
 from importlib.metadata import version
-print(f"TorchCodec: {version('"'"'torchcodec'"'"')}")
 print(f"vLLM: {version('"'"'vllm'"'"')}")
+print(f"PyTorch: {torch.__version__} (CUDA {torch.version.cuda})")
 '

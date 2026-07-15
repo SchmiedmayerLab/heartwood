@@ -218,7 +218,6 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert "uv pip sync --require-hashes" in dockerfile
         assert "images/gpu/vllm-requirements.txt" in dockerfile
         assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
-        assert "ffmpeg" in dockerfile
         assert "AS gpu-ci-validate" in dockerfile
         assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
     assert generic.index("uv venv /opt/heartwood-vllm") < generic.index("COPY packages ./packages")
@@ -231,8 +230,12 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
             if "chown" in line:
                 assert "/opt/heartwood" not in line
                 assert "/opt/heartwood-vllm" not in line
-    assert "vllm==0.25.0" in lock
-    assert "torch==2.11.0" in lock
+    assert "vllm-0.10.1.1%2Bcu118" in lock
+    assert "torch==2.7.1+cu118" in lock
+    assert "transformers==4.57.6" in lock
+    assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
+    assert "--extra-index-url https://download.pytorch.org/whl/cu118" in lock
+    assert "nvidia-cuda-runtime-cu13" not in lock
     assert "--hash=sha256:" in lock
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
@@ -240,7 +243,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "VLLM_USE_FLASHINFER_SAMPLER" in launcher
     assert "huggingface.co" not in launcher
     assert "/opt/heartwood-vllm/bin/python" in verifier
-    assert "import torchcodec, vllm" in verifier
+    assert "import torch, vllm" in verifier
+    assert 'torch.version.cuda == "11.8"' in verifier
     assert "-name '*.gguf' -o -name '*.safetensors'" in verifier
     assert "-name '*.bin' -size +10M" in verifier
     assert "compressed_tensors/transform/utils/hadamards.safetensors" in verifier
@@ -348,10 +352,10 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert '"${root}/bootstrap/conda-meta"' in bootstrap
     assert "images/gpu/vllm-requirements.txt" in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
-    assert "import torchcodec" in bootstrap
+    assert "import torch" in bootstrap
     assert "import vllm" in bootstrap
     assert "VLLM_USE_FLASHINFER_SAMPLER=0" in bootstrap
-    assert "ffmpeg=" in bootstrap_environment
+    assert "ffmpeg" not in bootstrap_environment
     assert "SLURM_JOB_ID" in launch_runtime
     assert "LOCAL_SCRATCH_JOB" in launch_runtime
     assert "--inside-allocation" in launch_runtime
@@ -497,7 +501,7 @@ def test_vllm_advisory_exceptions_remain_isolated_to_the_gpu_lock() -> None:
     assert unexpected == []
     text = lock.read_text(encoding="utf-8")
     assert "diskcache==5.6.3" in text
-    assert "torch==2.11.0" in text
+    assert "torch==2.7.1+cu118" in text
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
@@ -552,6 +556,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         "images/platform/scripts/terra_image_smoke.sh",
         "images/platform/scripts/terra_jupyter_contract_smoke.sh",
         "images/platform/scripts/terra_jupyter_launch_smoke.sh",
+        "images/platform/scripts/terra_managed_launch_smoke.sh",
         "images/platform/scripts/terra_project_persistence_smoke.sh",
     )
     for script in scripts:
@@ -565,6 +570,11 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 
     local_runtime = _read("images/generic/scripts/start_local_runtime.sh")
     assert 'model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"' in local_runtime
+    assert "HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768" in local_runtime
+    assert "HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768" in _read(
+        "images/generic/scripts/capable_model_e2e.sh"
+    )
+    assert "HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768" in _read("images/gpu/start_vllm.sh")
     assert '"${script_dir}/local_model_stub.py"' in local_runtime
     assert "runtime_root=" not in local_runtime
     assert "mounted or downloaded GGUF file" in local_runtime
@@ -588,6 +598,12 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert "heartwood serve --host 0.0.0.0" in terra_launch
     assert "project/readiness" in terra_launch
     assert "proxy/${gateway_port}/" in terra_launch
+
+    terra_managed_launch = _read("images/platform/scripts/terra_managed_launch_smoke.sh")
+    assert "heartwood launch --web" in terra_managed_launch
+    assert 'payload.get("platform_id") != "terra"' in terra_managed_launch
+    assert 'payload.get("state") != "ready"' in terra_managed_launch
+    assert 'payload.get("project_root")' in terra_managed_launch
 
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
@@ -655,6 +671,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert publish.index("Run staged Terra current-directory persistence smoke") < publish.index(
         "Run staged Terra OpenHands smoke"
     )
+    assert publish.index("Run staged Terra managed local-model launch smoke") < publish.index(
+        "Run staged Terra local inference smoke"
+    )
     assert publish.index("Run staged Terra local inference smoke") < publish.index(
         "Create and verify immutable Terra commit tag"
     )
@@ -672,6 +691,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
     assert "Run Terra current-directory persistence smoke" in smoke
+    assert "Run Terra managed local-model launch smoke" in smoke
+    assert "terra_managed_launch_smoke.sh" in smoke
     assert "terra_project_persistence_smoke.sh" in smoke
     assert "images/generic/scripts/offline_stack_smoke.sh" in smoke
     assert "HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis" in smoke

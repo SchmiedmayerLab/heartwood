@@ -254,6 +254,29 @@ def test_jupyter_proxy_url_uses_service_prefix() -> None:
     )
 
 
+def test_jupyter_proxy_url_uses_terra_leonardo_route() -> None:
+    assert (
+        jupyter_proxy_url(
+            port=8767,
+            env={
+                "GOOGLE_PROJECT": "terra-project",
+                "CLUSTER_NAME": "saturn-runtime",
+            },
+        )
+        == "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/"
+    )
+
+
+def test_jupyter_proxy_url_requires_complete_terra_route() -> None:
+    assert (
+        jupyter_proxy_url(
+            port=8767,
+            env={"GOOGLE_PROJECT": "terra-project"},
+        )
+        == "/proxy/8767/"
+    )
+
+
 def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
     tmp_path: Path,
 ) -> None:

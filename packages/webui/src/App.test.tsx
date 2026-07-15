@@ -383,6 +383,7 @@ class FakeClient implements HeartwoodClient {
           artifact_sha256: "a".repeat(64),
           license_posture: "Test fixture",
           model_alias: "Stories 260K",
+          context_window: 32_768,
           minimum_resource_envelope: null,
           recommended_resource_envelope: null,
           recommended: true,
@@ -402,6 +403,7 @@ class FakeClient implements HeartwoodClient {
           minimum_free_bytes: 256 * 1024 * 1024,
           license_posture: "Test fixture",
           catalog_source: "recommended",
+          context_window: 32_768,
           artifact_sha256: "a".repeat(64),
           minimum_resource_envelope: "Minimum: 4 CPU cores and 8 GB RAM.",
           recommended_resource_envelope:
@@ -432,6 +434,7 @@ class FakeClient implements HeartwoodClient {
       minimum_free_bytes: 4 * 1024 * 1024 * 1024,
       license_posture: "Source model card reports apache-2.0.",
       catalog_source: "user-selected",
+      context_window: 32_768,
       artifact_sha256: "b".repeat(64),
       minimum_resource_envelope:
         "Estimated minimum: 4 CPU cores and 12 GB RAM.",
@@ -476,6 +479,7 @@ class FakeClient implements HeartwoodClient {
       minimum_free_bytes: 4 * 1024 * 1024 * 1024,
       license_posture: "Source model card reports apache-2.0.",
       catalog_source: "user-selected",
+      context_window: 32_768,
       artifact_sha256: "b".repeat(64),
       minimum_resource_envelope:
         "Estimated minimum: 4 CPU cores and 12 GB RAM.",

@@ -30,7 +30,7 @@ jobs:
       - name: Review dependencies
         uses: actions/dependency-review-action@v5.0.0
         with:
-          # vLLM 0.25.0 directly requires diskcache 5.6.3 and torch 2.11.0;
+          # vLLM 0.10.1.1 directly requires diskcache 5.6.3 and torch 2.7.1;
           # neither advisory has a patched release. Heartwood does not load
           # caches across trust domains or expose torch.jit.script to input.
           # A repository compliance test confines both packages to the hashed
