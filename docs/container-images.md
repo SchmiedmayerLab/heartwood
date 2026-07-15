@@ -18,10 +18,10 @@ Use the Terra-derived image when Terra must retain ownership of Jupyter, the not
 
 | Image | Platforms | Purpose |
 |---|---|---|
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0` | AMD64 and ARM64 | Stable generic runtime and the normal container starting point. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1` | AMD64 and ARM64 | Versioned generic runtime and the normal container starting point. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
 | `edge` and `edge-*` | Flavor-specific | Latest validated `main` build for development, not a stable release. |
 | `sha-<git-sha>` and `sha-<git-sha>-*` | Flavor-specific | Immutable images for one repository commit. |
 
@@ -38,7 +38,7 @@ cd heartwood-demo
 docker run --rm -it \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood serve --host 0.0.0.0
 ```
 
@@ -53,7 +53,7 @@ The same project can use the terminal interface instead:
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood
 ```
 
@@ -72,12 +72,12 @@ List the current recommendations, then download one into the project's `.heartwo
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood models local
 
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
@@ -86,12 +86,12 @@ You can instead inspect and prepare another Hugging Face model. The image choose
 ```bash
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood models inspect <owner/model>
 
 docker run --rm -it \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood models download <owner/model>
 ```
 
@@ -103,7 +103,7 @@ Start the model and browser together:
 docker run --rm -it \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood launch --web --host 0.0.0.0
 ```
 
@@ -113,7 +113,7 @@ For a no-network terminal demonstration after the artifact is present:
 docker run --rm -it \
   --network none \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1 \
   heartwood launch --plain
 ```
 

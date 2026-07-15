@@ -25,7 +25,7 @@ Terra keeps `/home/jupyter` on the persistent disk. Create a separate analysis d
 Use the immutable release image:
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra
+ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra
 ```
 
 Create a Terra workspace containing no protected health information, select the custom image, and start Jupyter. Confirm that:
@@ -87,7 +87,7 @@ heartwood launch --web
 
 The portable Terra image chooses a supported single-file GGUF model for its CPU llama.cpp runtime. Heartwood resolves the repository to an immutable revision, displays estimated storage and memory requirements, downloads it into the current project's `.heartwood/models/` directory, verifies it, and persists the shared selection. The launcher supervises both the model and browser interface. First inference on CPU can be slow, and attaching a GPU does not accelerate this portable image's llama.cpp path.
 
-The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. In that image, Heartwood prefers a supported standard Hugging Face snapshot and reports approximate GPU-memory requirements. GPU selection, model suitability, and live platform validation must match the deployment evidence before it replaces the CPU path.
+The explicit Terra GPU image is `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.1-terra-gpu-nvidia`. It contains the pinned vLLM runtime but still contains no model weights. In that image, Heartwood prefers a supported standard Hugging Face snapshot and reports approximate GPU-memory requirements. GPU selection, model suitability, and live platform validation must match the deployment evidence before it replaces the CPU path.
 
 ## Open the Browser Interface
 

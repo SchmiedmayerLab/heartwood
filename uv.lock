@@ -1469,7 +1469,7 @@ wheels = [
 
 [[package]]
 name = "heartwood-adapters"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/adapters" }
 dependencies = [
     { name = "heartwood-detector" },
@@ -1486,7 +1486,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-audit"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/audit" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -1497,7 +1497,7 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-cli"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/cli" }
 dependencies = [
     { name = "heartwood-compliance" },
@@ -1518,7 +1518,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-compliance"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/compliance" }
 dependencies = [
     { name = "heartwood-audit" },
@@ -1533,7 +1533,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-core-adapter"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/core-adapter" }
 dependencies = [
     { name = "heartwood-adapters" },
@@ -1554,7 +1554,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-detector"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/detector" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -1565,12 +1565,12 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-fixtures"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/fixtures" }
 
 [[package]]
 name = "heartwood-gateway"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/gateway" }
 dependencies = [
     { name = "anthropic" },
@@ -1612,7 +1612,7 @@ provides-extras = ["agent"]
 
 [[package]]
 name = "heartwood-model-policy"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/model-policy" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -1623,7 +1623,7 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-notebook"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/notebook" }
 dependencies = [
     { name = "heartwood-gateway" },
@@ -1647,7 +1647,7 @@ provides-extras = ["widgets"]
 
 [[package]]
 name = "heartwood-schemas"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/schemas" }
 dependencies = [
     { name = "pydantic" },
@@ -1658,7 +1658,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
 
 [[package]]
 name = "heartwood-session"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/session" }
 dependencies = [
     { name = "pydantic" },
@@ -1669,7 +1669,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
 
 [[package]]
 name = "heartwood-skills"
-version = "0.2.0"
+version = "0.2.0b1"
 source = { editable = "packages/skills" }
 dependencies = [
     { name = "heartwood-schemas" },
