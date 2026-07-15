@@ -21,6 +21,7 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._launch import (
     LaunchOptions,
     LocalRuntimeSelection,
+    _available_gpu_memory_bytes,
     _available_system_memory_bytes,
     _catalog_contains_model,
     _discover_slurm_gpu_partitions,
@@ -540,6 +541,25 @@ def test_available_system_memory_honors_cgroup_v1_limit(
     monkeypatch.setattr(Path, "read_text", read_text)
 
     assert _available_system_memory_bytes() == 24 * 1024**3
+
+
+def test_available_gpu_memory_uses_least_available_visible_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch.shutil.which",
+        lambda name, **_kwargs: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="16384\n8192\n",
+        ),
+    )
+
+    assert _available_gpu_memory_bytes({"PATH": "/usr/bin"}) == 8 * 1024**3
 
 
 def test_runtime_resolution_and_gguf_directory_contract(

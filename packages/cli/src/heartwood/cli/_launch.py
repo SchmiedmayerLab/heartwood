@@ -518,16 +518,18 @@ def _print_memory_result(label: str, required: int, available: int | None) -> No
 
 def _available_system_memory_bytes() -> int | None:
     candidates: list[int] = []
+    meminfo_available: int | None = None
     try:
         values: dict[str, int] = {}
         for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
             name, separator, raw = line.partition(":")
             if separator and raw.strip().endswith("kB"):
                 values[name] = int(raw.strip().split()[0]) * 1024
-        if available := values.get("MemAvailable"):
-            candidates.append(available)
+        meminfo_available = values.get("MemAvailable")
     except (OSError, ValueError):
-        pass
+        meminfo_available = None
+    if meminfo_available:
+        candidates.append(meminfo_available)
 
     for maximum_path, current_path in (
         (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory.current")),
@@ -576,7 +578,7 @@ def _available_gpu_memory_bytes(env: Mapping[str, str]) -> int | None:
         ]
     except ValueError:
         return None
-    return max(values) if values else None
+    return min(values) if values else None
 
 
 def _verify_local_model(
