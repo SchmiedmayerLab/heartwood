@@ -72,7 +72,7 @@ These documents progress from product intent to implementation and validation de
 
 ## Published Documentation
 
-The public [Heartwood documentation site](https://schmiedmayerlab.github.io/heartwood/) is built from the exact latest release tag. Pull requests and `main` validate the evolving source without changing the released site.
+The public [Heartwood documentation site](https://schmiedmayerlab.github.io/heartwood/) is built only from published release tags. Each published documentation version remains available at its Semantic Version path. The `/stable/` alias follows the latest stable release, while `/preview/` follows the latest prerelease. The site root opens stable documentation once a stable version has been published; before then, it opens the current preview. Pull requests and `main` validate evolving source without changing any published page.
 
 Preview the current source locally:
 

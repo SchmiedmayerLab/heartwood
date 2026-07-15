@@ -268,9 +268,8 @@ jobs:
   documentation:
     name: Publish Release Documentation
     needs: [verify, publish]
-    if: needs.verify.outputs.prerelease == 'false'
     permissions:
-      contents: read
+      contents: write
       pages: write
       id-token: write
     uses: ./.github/workflows/publish-documentation.yml

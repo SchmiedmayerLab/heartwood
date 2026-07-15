@@ -243,6 +243,8 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
 def test_documentation_is_validated_continuously_and_published_from_releases() -> None:
     documentation = Path(".github/workflows/documentation.yml").read_text(encoding="utf-8")
     publication = Path(".github/workflows/publish-documentation.yml").read_text(encoding="utf-8")
+    publisher = Path("deploy/publish-versioned-documentation.sh").read_text(encoding="utf-8")
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
     release = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
 
     assert "  workflow_call:" in documentation
@@ -250,33 +252,46 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "  push:" not in documentation
     assert "  pull_request:" not in documentation
     assert "  release:" not in documentation
-    assert "refs/tags/{0}" in documentation
-    assert "gh release view" in documentation
-    assert "--json tagName" in documentation
-    assert "--json isDraft,isPrerelease,targetCommitish" in documentation
-    assert "Prerelease documentation cannot replace the stable site." in documentation
-    assert "Documentation can be published only for the latest release." in documentation
-    assert "--version-only" in documentation
     assert "zensical build --clean --strict" in documentation
-    assert "actions/upload-pages-artifact@v5" in documentation
+    assert "deploy/tests/versioned_documentation_smoke.sh" in documentation
+    assert "gh release view" not in documentation
+    assert "actions/upload-pages-artifact" not in documentation
     assert "pages: write" not in documentation
     assert "id-token: write" not in documentation
     assert "  workflow_call:" in publication
     assert "  workflow_dispatch:" in publication
-    assert "uses: ./.github/workflows/documentation.yml" in publication
-    assert "publish_artifact: true" in publication
+    assert "ref: refs/tags/${{ inputs.version }}" in publication
+    assert "--json isDraft,isPrerelease,tagName,targetCommitish" in publication
+    assert 'channel="preview"' in publication
+    assert 'channel="stable"' in publication
+    assert "DOCUMENTATION_BRANCH: gh-pages" in publication
+    assert "refs/heads/${DOCUMENTATION_BRANCH}:refs/heads/${DOCUMENTATION_BRANCH}" in publication
+    assert "deploy/publish-versioned-documentation.sh" in publication
+    assert "published-site/${RELEASE_VERSION}/index.html" in publication
+    assert "published-site/${DOCUMENTATION_CHANNEL}/index.html" in publication
+    assert "actions/upload-pages-artifact@v5" in publication
     assert "actions/deploy-pages@v5" in publication
     assert "Verify the deployed documentation" in publication
-    assert '"${DOCUMENTATION_URL}"' in publication
+    assert '"${documentation_root}/${path}"' in publication
+    assert '"${documentation_root}/versions.json"' in publication
     assert "name: github-pages" in publication
     assert "group: github-pages" in publication
+    mike_requirement = (
+        "mike @ git+https://github.com/squidfunk/mike.git@0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3"
+    )
+    assert mike_requirement in pyproject
+    assert mike_requirement in publication
+    assert "published documentation for ${version} differs" in publisher
+    assert 'git push "${remote}" "refs/heads/${branch}:refs/heads/${branch}"' in publisher
     assert "prerelease: ${{ steps.release.outputs.prerelease }}" in release
     assert "--print-prerelease" in release
     assert "release_flags=(--draft --latest=false)" in release
     assert "release_flags+=(--prerelease --latest=false)" in release
     assert "release_flags+=(--prerelease=false --latest)" in release
     assert "needs: [verify, publish]" in release
-    assert "if: needs.verify.outputs.prerelease == 'false'" in release
+    assert "if: needs.verify.outputs.prerelease == 'false'" not in release
+    documentation_job = release.split("  documentation:\n", maxsplit=1)[1]
+    assert "contents: write" in documentation_job
     assert "uses: ./.github/workflows/publish-documentation.yml" in release
 
 
