@@ -21,12 +21,16 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    has_authenticated_jupyter_proxy,
+    jupyter_proxy_url,
     verify_model_artifact,
 )
 
@@ -87,6 +91,7 @@ class LaunchPlan:
     project_root: Path
     runtime: str | None
     model_id: str | None
+    context_window: int | None
     partition: str | None = None
 
     def format(self) -> str:
@@ -99,6 +104,11 @@ class LaunchPlan:
             f"Compute: {compute}",
             f"Model: {self.model_root if self.model_root is not None else 'not selected'}",
             f"Runtime: {self.runtime if self.runtime is not None else 'not selected'}",
+            (
+                f"Context: {self.context_window:,} tokens"
+                if self.context_window
+                else "Context: not selected"
+            ),
             f"State: {self.state_root}",
             f"Project: {self.project_root}",
         ]
@@ -118,6 +128,7 @@ class LocalRuntimeSelection:
     model_id: str
     size_bytes: int | None
     artifact_sha256: str | None
+    context_window: int
 
 
 def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchPlan:
@@ -150,6 +161,7 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
         options.project.root,
         selection.runtime if selection is not None else None,
         selection.model_id if selection is not None else None,
+        selection.context_window if selection is not None else None,
         partition=partition,
     )
 
@@ -237,6 +249,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
         return 69
     runtime_env = _runtime_environment(env, project=options.project)
+    _print_resource_assessment(selection, runtime_env)
     _stage(2, 6, "Validate the local inference runtime")
     if runtime_kind == "vllm":
         preflight_error = _preflight_vllm(runtime_executable, runtime_env)
@@ -294,6 +307,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
                     runtime_executable,
                     staged_source,
                     model_id,
+                    selection.context_window,
                 ),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
@@ -322,7 +336,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         setup_code = _ensure_setup(options, runtime_env)
         if setup_code != 0:
             return setup_code
-        interaction, label = _interaction_command(options)
+        interaction, label = _interaction_command(options, env=env)
         _stage(6, 6, label)
         print(f"Project: {options.project.root}")
         return subprocess.run(
@@ -343,8 +357,23 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             shutil.rmtree(staged_model, ignore_errors=True)
 
 
-def _interaction_command(options: LaunchOptions) -> tuple[list[str], str]:
+def _interaction_command(
+    options: LaunchOptions,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> tuple[list[str], str]:
     if options.web:
+        active_env = {} if env is None else env
+        platform_id = select_platform_adapter(active_env).adapter_id
+        if platform_id == "terra" and has_authenticated_jupyter_proxy(active_env):
+            location = (
+                "through Terra's authenticated proxy: "
+                f"{jupyter_proxy_url(port=options.web_port, env=active_env)}"
+            )
+        elif platform_id == "terra":
+            location = "after opening the tutorial notebook to obtain the Terra proxy link"
+        else:
+            location = f"on {options.web_host}:{options.web_port}"
         return (
             [
                 sys.executable,
@@ -356,7 +385,7 @@ def _interaction_command(options: LaunchOptions) -> tuple[list[str], str]:
                 "--port",
                 str(options.web_port),
             ],
-            f"Open the web interface on {options.web_host}:{options.web_port}",
+            f"Open the web interface {location}",
         )
     command = [
         sys.executable,
@@ -376,15 +405,13 @@ def _resolve_runtime_executable(runtime: str) -> Path:
         installed = shutil.which("llama-server")
         return Path(installed) if installed else Path("/opt/llama.cpp/llama-server")
     version_root = _native_version_root()
-    discovered_vllm = shutil.which("vllm")
     candidates: tuple[Path | None, ...] = (
-        version_root / "vllm" / "bin" / "vllm" if version_root is not None else None,
-        Path("/opt/heartwood-vllm/bin/vllm"),
-        Path(discovered_vllm) if discovered_vllm is not None else None,
+        version_root / "vllm" / "bin" / "heartwood-vllm" if version_root is not None else None,
+        Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
     )
     return next(
         (candidate for candidate in candidates if candidate and candidate.is_file()),
-        Path("/opt/heartwood-vllm/bin/vllm"),
+        Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
     )
 
 
@@ -393,6 +420,7 @@ def _runtime_command(
     executable: Path,
     model: Path,
     model_id: str,
+    context_window: int,
 ) -> tuple[str, ...]:
     if runtime == "llama-cpp":
         model_file = _gguf_file(model)
@@ -407,7 +435,7 @@ def _runtime_command(
             "--port",
             "8765",
             "--ctx-size",
-            "4096",
+            str(context_window),
         )
     return (
         str(executable),
@@ -420,7 +448,7 @@ def _runtime_command(
         "--served-model-name",
         model_id,
         "--max-model-len",
-        "8192",
+        str(context_window),
         "--enable-auto-tool-choice",
         "--tool-call-parser",
         "hermes",
@@ -455,7 +483,119 @@ def _local_model_selection(
         model_id=selection.model_id,
         size_bytes=selection.size_bytes,
         artifact_sha256=selection.artifact_sha256,
+        context_window=selection.context_window,
     )
+
+
+def _print_resource_assessment(
+    selection: LocalRuntimeSelection,
+    env: Mapping[str, str],
+) -> None:
+    """Report the selected context and a conservative memory preflight."""
+    model_bytes = selection.size_bytes
+    if model_bytes is None and selection.model_root.exists():
+        model_bytes = _model_size(selection.model_root)
+    if model_bytes is None:
+        print(f"Context window: {selection.context_window:,} tokens.")
+        print("Resource check: model size is unavailable; memory could not be estimated.")
+        return
+
+    context_bytes = selection.context_window * 128 * 1024
+    system_required = max(
+        8 * 1024**3,
+        int(model_bytes * 1.25) + context_bytes + 4 * 1024**3,
+    )
+    system_available = _available_system_memory_bytes()
+    print(f"Context window: {selection.context_window:,} tokens.")
+    _print_memory_result("RAM", system_required, system_available)
+
+    if selection.runtime == "vllm":
+        gpu_required = int(model_bytes * 1.15) + context_bytes + 2 * 1024**3
+        gpu_available = _available_gpu_memory_bytes(env)
+        _print_memory_result("GPU memory", gpu_required, gpu_available)
+
+
+def _print_memory_result(label: str, required: int, available: int | None) -> None:
+    estimate = _format_bytes(required)
+    if available is None:
+        print(
+            f"Resource check: {label} availability could not be verified; "
+            f"estimated minimum {estimate}."
+        )
+        return
+    observed = _format_bytes(available)
+    if available < required:
+        print(
+            f"Warning: {label} may be insufficient for this model and context; "
+            f"{observed} available, estimated minimum {estimate}."
+        )
+        return
+    print(f"Resource check: {observed} {label} available; estimated minimum {estimate}.")
+
+
+def _available_system_memory_bytes() -> int | None:
+    candidates: list[int] = []
+    meminfo_available: int | None = None
+    try:
+        values: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            name, separator, raw = line.partition(":")
+            if separator and raw.strip().endswith("kB"):
+                values[name] = int(raw.strip().split()[0]) * 1024
+        meminfo_available = values.get("MemAvailable")
+    except (OSError, ValueError):
+        meminfo_available = None
+    if meminfo_available:
+        candidates.append(meminfo_available)
+
+    for maximum_path, current_path in (
+        (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory.current")),
+        (
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+            Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+        ),
+    ):
+        try:
+            maximum_text = maximum_path.read_text(encoding="utf-8").strip()
+            current_text = current_path.read_text(encoding="utf-8").strip()
+            if maximum_text == "max":
+                continue
+            maximum = int(maximum_text)
+            if maximum < 2**60:
+                candidates.append(max(0, maximum - int(current_text)))
+        except (OSError, ValueError):
+            continue
+    return min(candidates) if candidates else None
+
+
+def _available_gpu_memory_bytes(env: Mapping[str, str]) -> int | None:
+    executable = shutil.which("nvidia-smi", path=env.get("PATH"))
+    if executable is None:
+        return None
+    try:
+        result = subprocess.run(
+            (
+                executable,
+                "--query-gpu=memory.free",
+                "--format=csv,noheader,nounits",
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=dict(env),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        values = [
+            int(line.strip()) * 1024**2 for line in result.stdout.splitlines() if line.strip()
+        ]
+    except ValueError:
+        return None
+    return min(values) if values else None
 
 
 def _verify_local_model(
@@ -526,7 +666,13 @@ def _runtime_environment(
         "CUDA_VISIBLE_DEVICES",
         "NVIDIA_VISIBLE_DEVICES",
         "NVIDIA_DRIVER_CAPABILITIES",
+        "GOOGLE_PROJECT",
+        "CLUSTER_NAME",
+        "JUPYTERHUB_SERVICE_PREFIX",
+        "HEARTWOOD_GPU_RUNTIME",
+        "HEARTWOOD_IMAGE_FLAVOR",
         "HEARTWOOD_PLATFORM",
+        "HEARTWOOD_PLATFORM_HOME",
         "HEARTWOOD_LOCAL_RUNTIME_ACTIVE",
         "LOCAL_SCRATCH_JOB",
         "SLURM_JOB_ID",
@@ -731,8 +877,14 @@ def _preflight_vllm(executable: Path, env: Mapping[str, str]) -> str | None:
                 str(python),
                 "-c",
                 (
-                    "import torchcodec, vllm; from importlib.metadata import version; "
-                    "print(version('torchcodec'), version('vllm'))"
+                    "import torch, vllm; from importlib.metadata import version; "
+                    "cuda = torch.version.cuda or 'none'; "
+                    "available = torch.cuda.is_available(); "
+                    "assert available, "
+                    "f'CUDA is unavailable to PyTorch {torch.__version__} "
+                    "(built for CUDA {cuda})'; "
+                    "torch.cuda.init(); "
+                    "print(version('vllm'), torch.__version__, cuda)"
                 ),
             ),
             check=False,
@@ -744,6 +896,36 @@ def _preflight_vllm(executable: Path, env: Mapping[str, str]) -> str | None:
     except (OSError, subprocess.TimeoutExpired) as error:
         return str(error)
     if completed.returncode == 0:
+        if executable.name == "heartwood-vllm":
+            try:
+                compatibility = subprocess.run(
+                    (str(executable), "__heartwood_verify_runtime__"),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=dict(env),
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return str(error)
+            if compatibility.returncode != 0:
+                detail = (
+                    compatibility.stderr.strip()
+                    or compatibility.stdout.strip()
+                    or "runtime compatibility check failed"
+                )
+                return detail.splitlines()[-1]
+        else:
+            installed_version = completed.stdout.split(maxsplit=1)[0]
+            try:
+                secured_upstream = Version(installed_version) >= Version("0.11.1")
+            except InvalidVersion:
+                secured_upstream = False
+            if not secured_upstream:
+                return (
+                    "the selected vLLM executable must be Heartwood's secured launcher "
+                    "or vLLM 0.11.1 or newer"
+                )
         versions = completed.stdout.strip()
         if versions:
             print(f"Runtime modules: {versions}")

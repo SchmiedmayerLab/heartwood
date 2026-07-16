@@ -65,3 +65,19 @@ The runtime selects the detected generic, Terra, or Carina platform policy, but 
 The first supported biomedical workflow is natural language to in-boundary code execution to aggregate results over OMOP on BigQuery: cohort definition, data-quality checks, a baseline model, aggregate output, count-floor enforcement, and an egress attestation for review. The same session must remain usable from the CLI, web UI, and notebook bridge and must survive the platform's normal persistence and autopause behavior.
 
 The repository demonstrates this sequence with a localized 24-person synthetic CSV analogue of the required OMOP tables. The reference Skills define an adult target-condition cohort, report aggregate quality checks, fit an explicitly training-only age baseline, and apply an aggregate count floor; browser, CLI, replay, and container tests require the aggregate outputs to agree. This fixture is not evidence of BigQuery integration, live-platform behavior, or biomedical review.
+
+## Continue Through the Architecture
+
+Read the remaining documents according to the question being reviewed:
+
+| Question | Document |
+|---|---|
+| Where does Heartwood run, and why are some artifacts platform-specific? | [Platform Architecture](02-platforms.md) |
+| Which component owns projects, sessions, models, approvals, and interfaces? | [System Architecture](03-architecture.md) |
+| How are biomedical procedures packaged and trusted? | [Skills and Extensions](04-skills.md) |
+| What are the security, privacy, and institutional boundaries? | [Security and Compliance](05-security-compliance.md) |
+| What is persisted, replayed, and exported? | [Audit and Reproducibility](06-observability-audit.md) |
+| Which claims require deterministic, capable-model, container, or live-platform evidence? | [Testing and Evaluation](07-testing-eval.md) |
+| How is the repository built, tested, licensed, and released? | [Engineering and Releases](08-development.md) |
+
+Operational readers should return to [Get Started](../docs/getting-started.md), [Deploy Heartwood](../docs/deployment.md), or [Platform Support and Validation](../docs/platform-support.md) rather than treating architecture documents as setup instructions.

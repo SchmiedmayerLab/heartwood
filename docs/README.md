@@ -10,13 +10,31 @@ SPDX-License-Identifier: MIT
 
 # Documentation
 
-Start with [Get Started with Heartwood](getting-started.md). It explains how to choose an installation path, open a project, connect a model, and begin a conversation without requiring knowledge of the internal architecture.
+Start with [Get Started](getting-started.md). It takes a new user from choosing an environment to the first reviewed agent task without requiring knowledge of Heartwood's internal architecture.
+
+## Choose a Reading Path
+
+| You want to... | Read these pages in order |
+|---|---|
+| Try Heartwood for the first time | [Get Started](getting-started.md) → [Work with the Agent](using-heartwood.md) |
+| Use the visual or notebook experience | [Get Started](getting-started.md) → [Browser and Notebooks](web-interface.md) |
+| Work in Terra | [Use Heartwood on Terra](terra-jupyter-demo.md) → [Work with the Agent](using-heartwood.md) |
+| Work on Stanford Carina | [Use Heartwood on Stanford Carina](carina-cli.md) → [Work with the Agent](using-heartwood.md) |
+| Run without a hosted model | [Connect a Model](model-connections.md) → [Run a Model Locally](getting-started-offline.md) |
+| Prepare an institutional deployment | [Deploy Heartwood](deployment.md) → [Platform Support and Validation](platform-support.md) → [Security and Compliance](../design/05-security-compliance.md) |
+| Understand or contribute to the system | [Product Scope](../design/01-overview.md) → [System Architecture](../design/03-architecture.md) → [Contributing](../CONTRIBUTING.md) |
+
+If a setup does not behave as described, start with [Troubleshooting](troubleshooting.md). It explains the readiness states, the most common project and model problems, and what diagnostic information is safe to collect.
 
 ## Start Here
 
 - [Get Started with Heartwood](getting-started.md) explains when to use a container, native installation, or platform image and follows the first project through model setup and conversation.
 - [Work with the Agent](using-heartwood.md) explains conversations, action review, session controls, resume, and audit export.
-- [Use the Browser and Notebooks](web-interface.md) explains visual setup, shared project state, local-model preparation, conversations, and Jupyter routing.
+- [Troubleshooting](troubleshooting.md) explains project readiness, local runtime failures, interface routing, and safe diagnostic collection.
+
+## Interfaces
+
+- [Browser and Notebooks](web-interface.md) explains visual setup, shared project state, local-model preparation, conversations, and Jupyter routing.
 
 ## Models
 
@@ -26,13 +44,13 @@ Start with [Get Started with Heartwood](getting-started.md). It explains how to 
 ## Platforms
 
 - [Choose Where to Run Heartwood](platforms.md) compares workstation, container, Terra, Carina, and other managed environments.
+- [Run Heartwood in a Container](container-images.md) provides the shortest workstation setup and documents the available image variants.
 - [Heartwood on Terra](terra-jupyter-demo.md) provides the custom-image, Jupyter, proxy, and synthetic validation workflow.
 - [Heartwood on Stanford Carina](carina-cli.md) provides the native installation and synthetic GPU workflow.
 
 ## Deployment
 
 - [Deploy Heartwood](deployment.md) introduces artifact selection, persistence, model access, security boundaries, and validation claims.
-- [Container Images](container-images.md) documents generic and Terra-derived image tags, project mounts, security controls, and publication.
 - [Build a Platform-Specific Image](platform-images.md) defines how maintainers extend Heartwood from another platform base image.
 - [Platform Support and Validation](platform-support.md) records release-specific evidence without implying institutional approval.
 - [Release Heartwood](releases.md) defines the protected release process.

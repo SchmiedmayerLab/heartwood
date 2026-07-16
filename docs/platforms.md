@@ -12,17 +12,23 @@ SPDX-License-Identifier: MIT
 
 Heartwood should run in the same approved computing environment as the files it may inspect and modify. The interaction stays consistent across environments: start Heartwood from the project directory, choose an authorized model, and use the terminal, browser, or notebook support available there.
 
+Choose the environment before choosing a model. The environment determines which installation artifact, persistent storage, network routes, and interfaces are available; the model choice then stays within that boundary.
+
 ## Choose an Environment
 
 | Situation | Recommended setup | Main interface |
 |---|---|---|
 | Learning Heartwood on a workstation | Generic Heartwood container | Browser or terminal |
 | Working on a general Linux server | Generic container or native installation, according to local policy | Browser or terminal |
-| Working in Terra | Terra-derived Heartwood image | Browser through Jupyter, terminal, or notebook |
+| Working in Terra | Terra-derived Heartwood image | Start in the terminal; add the browser through Jupyter or use the notebook bridge |
 | Working on Stanford Carina | Native Heartwood installation | Interactive terminal |
 | Working on another managed research platform | Operator-reviewed generic or platform-derived deployment | Depends on platform routing |
 
 The generic container is the easiest local starting point because it includes the complete application and a supported CPU inference runtime. A native installation is better when the environment already controls software, scheduling, and storage. A platform-derived image is necessary when replacing the platform's base image would break its notebook, identity, or routing contract.
+
+!!! tip "Use the platform guide when one exists"
+
+    Terra and Carina have environment-specific startup, persistence, and compute behavior. Follow their complete guides instead of combining generic container or native-installation instructions with platform commands.
 
 ## Keep One Project Model
 
@@ -50,8 +56,15 @@ Before using controlled data, the deployment owner must verify:
 
 ## Follow a Platform Guide
 
-- [Heartwood on Terra](terra-jupyter-demo.md) explains the custom image, persistent project directory, Jupyter proxy, model options, and synthetic validation workflow.
+- [Use Heartwood on Terra](terra-jupyter-demo.md) provides a beginner-first setup, then covers the terminal, authenticated browser route, notebook workflow, CPU and GPU models, troubleshooting, and synthetic validation.
 - [Heartwood on Stanford Carina](carina-cli.md) explains private storage, installation, local GPU inference, scheduler consent, and synthetic validation.
 - [Run Heartwood in a Container](container-images.md) covers the generic image for workstations and self-hosted environments.
 
 [Platform Support and Validation](platform-support.md) provides the release-specific evidence matrix. It deliberately separates implemented software from automated validation, real-platform validation, and institutional approval.
+
+## Continue from Here
+
+- On a workstation, continue with [Run Heartwood in a Container](container-images.md#quick-start-the-browser).
+- On Terra, follow [Use Heartwood on Terra](terra-jupyter-demo.md) from cloud-environment creation through synthetic validation.
+- On Stanford Carina, follow [Use Heartwood on Stanford Carina](carina-cli.md) from private storage through the reviewed GPU allocation.
+- For another managed platform, start with [Deploy Heartwood](deployment.md) and the [platform-image extension contract](platform-images.md).

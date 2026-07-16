@@ -49,6 +49,10 @@ LABEL org.opencontainers.image.title="Heartwood Platform Runtime" \
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HEARTWOOD_GPU_RUNTIME=${HEARTWOOD_GPU_RUNTIME} \
+    HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR} \
+    HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM} \
+    HEARTWOOD_PLATFORM_HOME=${HEARTWOOD_PLATFORM_HOME} \
     LITELLM_LOCAL_MODEL_COST_MAP=True \
     OPENHANDS_SUPPRESS_BANNER=1 \
     UV_COMPILE_BYTECODE=1 \
@@ -73,9 +77,6 @@ RUN apt-get update \
       jq \
       libgomp1 \
       tmux \
-    && if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
-      DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ffmpeg; \
-    fi \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -111,6 +112,12 @@ COPY fixtures ./fixtures
 COPY skills ./skills
 COPY evals ./evals
 COPY images ./images
+
+RUN if [ "${HEARTWOOD_GPU_RUNTIME}" = "vllm" ]; then \
+      install -m 0444 images/gpu/heartwood_vllm.py /opt/heartwood-vllm/bin/heartwood_vllm.py; \
+      install -m 0555 images/gpu/heartwood-vllm /opt/heartwood-vllm/bin/heartwood-vllm; \
+    fi
+
 COPY README.md ACRONYMS.md ./
 COPY docs ./docs
 COPY design ./design

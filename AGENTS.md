@@ -31,6 +31,7 @@ When project direction changes, update the relevant design document first, then 
 | Deployment artifact, persistence, model-route, and validation responsibilities | [docs/deployment.md](docs/deployment.md) |
 | Current platform implementation and validation status | [docs/platform-support.md](docs/platform-support.md) |
 | Browser workflow, model setup, actions, audit, CLI parity, and notebook layout | [docs/web-interface.md](docs/web-interface.md) |
+| Readiness states, common setup and runtime failures, and safe diagnostic collection | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Project scope, users, and reference workflow | [design/01-overview.md](design/01-overview.md) |
 | Target platforms and deployment assumptions | [design/02-platforms.md](design/02-platforms.md) |
 | Project and state contract, core architecture, session gateway, adapter SPI, interaction surfaces, and data flow | [design/03-architecture.md](design/03-architecture.md) |

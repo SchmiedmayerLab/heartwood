@@ -24,6 +24,11 @@ from typing import Any, Protocol, cast
 
 from filelock import FileLock
 
+from heartwood.gateway._local_model_contract import (
+    DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MAXIMUM_LOCAL_CONTEXT_WINDOW,
+    MINIMUM_LOCAL_CONTEXT_WINDOW,
+)
 from heartwood.gateway._model_identity import (
     is_hugging_face_model_id,
     is_resolved_revision,
@@ -65,6 +70,7 @@ class ModelSnapshot:
     minimum_free_bytes: int
     license_posture: str
     model_alias: str
+    context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
     recommended: bool = False
@@ -87,6 +93,8 @@ class ModelSnapshot:
                 raise ModelSnapshotError(f"{name} must be a non-empty string")
         if self.expected_size_bytes <= 0 or self.minimum_free_bytes < self.expected_size_bytes:
             raise ModelSnapshotError("snapshot storage metadata is invalid")
+        if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
+            raise ModelSnapshotError("context_window must be between 2048 and 32768 tokens")
 
     def safe_dict(self) -> dict[str, object]:
         """Return non-secret catalog metadata."""
@@ -143,6 +151,7 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             minimum_free_bytes=_positive_int(item, "minimum_free_bytes"),
             license_posture=_string(item, "license_posture"),
             model_alias=_string(item, "model_alias"),
+            context_window=_positive_int(item, "context_window"),
             minimum_resource_envelope=_optional_string(item, "minimum_resource_envelope"),
             recommended_resource_envelope=_optional_string(item, "recommended_resource_envelope"),
             recommended=_optional_bool(item, "recommended", default=False),

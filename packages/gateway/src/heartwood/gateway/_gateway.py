@@ -638,8 +638,38 @@ class SessionGateway:
                         bytes_total=size,
                         path=str(path),
                     )
+        preferred_runtime = self._preferred_local_runtime()
+        local_choices = list(self._local_model_choices.values())
+        local_choices.sort(
+            key=lambda choice: (
+                selected is None or choice.model_id != selected.artifact_id,
+                not self._local_runtime_available(choice.runtime),
+                choice.runtime != preferred_runtime,
+            )
+        )
+        preferred_id = next(
+            (
+                choice.model_id
+                for choice in local_choices
+                if self._local_runtime_available(choice.runtime)
+                and choice.runtime == preferred_runtime
+            ),
+            None,
+        )
         choices = [
-            self._local_model_choice_dict(choice) for choice in self._local_model_choices.values()
+            self._local_model_choice_dict(
+                choice,
+                recommendation=(
+                    "Selected for this project"
+                    if selected is not None and choice.model_id == selected.artifact_id
+                    else (
+                        "Recommended for this deployment"
+                        if selected is None and choice.model_id == preferred_id
+                        else None
+                    )
+                ),
+            )
+            for choice in local_choices
         ]
         if (
             selected is not None
@@ -649,16 +679,17 @@ class SessionGateway:
             persisted = _selected_local_model_dict(selected)
             runtime = str(persisted["runtime"])
             available = self._local_runtime_available(runtime)
-            choices.append(
+            choices.insert(
+                0,
                 {
                     **persisted,
                     "available": available,
-                    "availability_reason": (
-                        "Available on this deployment"
-                        if available
-                        else "The selected runtime is not available on this deployment"
+                    "availability_reason": self._local_model_availability_reason(
+                        runtime,
+                        available=available,
+                        recommendation="Selected for this project",
                     ),
-                }
+                },
             )
         return {
             **self.artifact_catalog.safe_dict(),
@@ -990,19 +1021,22 @@ class SessionGateway:
         runtime_profile: str,
     ) -> None:
         execution_model = "heartwood-local-model"
+        choice = self._downloadable_local_model_choices.get(model_id)
+        if choice is None:
+            raise ModelRepositoryError(f"local model metadata is unavailable: {model_id}")
+        output_budget = min(4096, max(512, choice.context_window // 8))
         profile = replace(
             model_profile_from_preset("local-openai-compatible", execution_model),
             profile_id="local",
             description="Heartwood-managed local model",
+            max_input_tokens=choice.context_window - output_budget,
+            max_output_tokens=output_budget,
         )
         settings = (
             self.config_store.load()
             .model_settings.with_profile(profile)
             .selecting(profile.profile_id)
         )
-        choice = self._downloadable_local_model_choices.get(model_id)
-        if choice is None:
-            raise ModelRepositoryError(f"local model metadata is unavailable: {model_id}")
         self.config_store.select_local_model(
             artifact_id=model_id,
             path=path,
@@ -1016,6 +1050,7 @@ class SessionGateway:
             minimum_free_bytes=choice.minimum_free_bytes,
             license_posture=choice.license_posture,
             artifact_sha256=choice.artifact_sha256,
+            context_window=choice.context_window,
             minimum_resource_envelope=choice.minimum_resource_envelope,
             recommended_resource_envelope=choice.recommended_resource_envelope,
             catalog_source=choice.catalog_source,
@@ -1045,15 +1080,42 @@ class SessionGateway:
         self._downloadable_local_model_choices[choice.model_id] = choice
         return choice
 
-    def _local_model_choice_dict(self, choice: LocalModelChoice) -> dict[str, object]:
+    def _local_model_choice_dict(
+        self,
+        choice: LocalModelChoice,
+        *,
+        recommendation: str | None = None,
+    ) -> dict[str, object]:
         available = self._local_runtime_available(choice.runtime)
-        if available:
-            reason = "Available on this deployment"
-        elif choice.runtime == "vllm":
-            reason = "Requires a Heartwood NVIDIA GPU runtime"
-        else:
-            reason = "The portable CPU runtime is not available on this deployment"
+        reason = self._local_model_availability_reason(
+            choice.runtime,
+            available=available,
+            recommendation=recommendation,
+        )
         return {**choice.safe_dict(), "available": available, "availability_reason": reason}
+
+    @staticmethod
+    def _local_model_availability_reason(
+        runtime: str,
+        *,
+        available: bool,
+        recommendation: str | None,
+    ) -> str:
+        if available:
+            return recommendation or "Available on this deployment"
+        unavailable = (
+            "Requires a Heartwood NVIDIA GPU runtime"
+            if runtime == "vllm"
+            else "The portable CPU runtime is not available on this deployment"
+        )
+        return f"{recommendation}; {unavailable.lower()}" if recommendation else unavailable
+
+    def _preferred_local_runtime(self) -> str | None:
+        if self._local_runtime_available("vllm"):
+            return "vllm"
+        if self._local_runtime_available("llama-cpp"):
+            return "llama-cpp"
+        return None
 
     def _require_local_model_runtime(self, model_id: str) -> LocalModelChoice:
         choice = self._downloadable_local_model_choices.get(model_id)
@@ -1131,6 +1193,7 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         license_posture=selection.license_posture,
         catalog_source="user-selected",
         artifact_sha256=selection.artifact_sha256,
+        context_window=selection.context_window,
         minimum_resource_envelope=selection.minimum_resource_envelope,
         recommended_resource_envelope=selection.recommended_resource_envelope,
     )

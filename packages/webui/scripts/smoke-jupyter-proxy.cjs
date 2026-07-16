@@ -26,7 +26,8 @@ const workspace = fs.mkdtempSync(
 const gatewayPort = process.env.HEARTWOOD_WEB_JUPYTER_GATEWAY_PORT || "8776";
 const proxyPort = process.env.HEARTWOOD_WEB_JUPYTER_PROXY_PORT || "8777";
 const servicePrefix =
-  process.env.HEARTWOOD_WEB_JUPYTER_SERVICE_PREFIX || "/user/synthetic/";
+  process.env.HEARTWOOD_WEB_JUPYTER_SERVICE_PREFIX ||
+  "/proxy/heartwood-ci/saturn-smoke/jupyter/";
 const externalBasePath = `${normalizePrefix(servicePrefix)}proxy/${gatewayPort}/`;
 const externalOrigin = `http://127.0.0.1:${proxyPort}`;
 const externalBaseUrl = `${externalOrigin}${externalBasePath}`;

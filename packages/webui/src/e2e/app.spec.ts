@@ -380,6 +380,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         minimum_free_bytes: 4 * 1024 * 1024 * 1024,
         license_posture: "Source model card reports apache-2.0.",
         catalog_source: "user-selected",
+        context_window: 32_768,
         artifact_sha256: "a".repeat(64),
         minimum_resource_envelope:
           "Estimated minimum: 4 CPU cores and 12 GB RAM.",

@@ -12,6 +12,8 @@ SPDX-License-Identifier: MIT
 
 Heartwood works on one project at a time. The project is exactly the directory where the Heartwood command, web server, or notebook process starts.
 
+Most users only need to remember two rules: start Heartwood inside the directory it may modify, and preserve that complete directory when moving or backing up the project. The remaining sections document the storage contract for users and operators who need more detail.
+
 ## Choose the Project Boundary
 
 Enter the directory the agent may inspect and modify before starting Heartwood:
@@ -69,3 +71,10 @@ To move a project, stop Heartwood and move the project files and `.heartwood/` t
 To start cleanly, create a new empty directory and start Heartwood there. Heartwood rejects an unknown or obsolete `.heartwood/` layout instead of guessing how to reinterpret it.
 
 Downloaded model artifacts belong to the project by default. A deployment may mount dedicated persistent storage at `.heartwood/models/`, but users still interact with the same project layout and commands.
+
+## Continue from Here
+
+- Return to [Get Started](getting-started.md#step-2-create-or-open-a-project) to configure and use the project.
+- Use [Browser and Notebooks](web-interface.md#continue-a-shared-session) when continuing the same session through another interface.
+- Use [Deploy Heartwood](deployment.md#provide-durable-project-storage) when mapping the project to container, cloud, or scheduler-managed storage.
+- Use [Troubleshooting](troubleshooting.md#resolve-project-and-persistence-problems) when interfaces resolve different projects or state does not survive a restart.

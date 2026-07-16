@@ -14,7 +14,7 @@ request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"
 model_alias="${HEARTWOOD_LOCAL_MODEL_ALIAS:-heartwood-local-runtime}"
 default_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
-n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-4096}"
+n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 n_threads="${HEARTWOOD_LOCAL_MODEL_THREADS:-${default_threads}}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 

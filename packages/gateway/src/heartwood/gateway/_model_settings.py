@@ -37,6 +37,8 @@ _MODEL_PROFILE_FIELDS = {
     "credential_kind",
     "credential_status",
     "description",
+    "max_input_tokens",
+    "max_output_tokens",
     "model",
     "policy_endpoint",
     "profile_id",
@@ -62,6 +64,8 @@ class ModelProfile:
     api_version: str | None = None
     aws_region_name: str | None = None
     aws_profile_name: str | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
     description: str | None = None
 
     def validate(self) -> None:
@@ -75,6 +79,15 @@ class ModelProfile:
         if self.capability_tier not in _CAPABILITY_TIERS:
             msg = f"unsupported capability tier: {self.capability_tier}"
             raise ModelSettingsError(msg)
+        token_limits: tuple[tuple[str, object], ...] = (
+            ("max_input_tokens", self.max_input_tokens),
+            ("max_output_tokens", self.max_output_tokens),
+        )
+        for name, value in token_limits:
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 1
+            ):
+                raise ModelSettingsError(f"{name} must be a positive integer")
         if self.credential_kind not in _CREDENTIAL_KINDS:
             msg = f"unsupported credential kind: {self.credential_kind}"
             raise ModelSettingsError(msg)
@@ -384,6 +397,10 @@ def model_profile_from_mapping(value: object) -> ModelProfile:
         api_version=_optional_string(value.get("api_version"), "api_version"),
         aws_region_name=_optional_string(value.get("aws_region_name"), "aws_region_name"),
         aws_profile_name=_optional_string(value.get("aws_profile_name"), "aws_profile_name"),
+        max_input_tokens=_optional_positive_int(value.get("max_input_tokens"), "max_input_tokens"),
+        max_output_tokens=_optional_positive_int(
+            value.get("max_output_tokens"), "max_output_tokens"
+        ),
         description=_optional_string(value.get("description"), "description"),
     )
     profile.validate()
@@ -419,6 +436,15 @@ def _optional_string(value: object, key: str) -> str | None:
         return None
     if not isinstance(value, str) or not value:
         msg = f"{key} must be a non-empty string"
+        raise ModelSettingsError(msg)
+    return value
+
+
+def _optional_positive_int(value: object, key: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        msg = f"{key} must be a positive integer"
         raise ModelSettingsError(msg)
     return value
 

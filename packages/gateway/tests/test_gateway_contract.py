@@ -575,6 +575,8 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     gateway.env["PATH"] = "/runtime"
     available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] is (model["runtime"] == "llama-cpp") for model in available)
+    assert available[0]["model_id"] == "qwen25-7b-instruct-q4_k_m"
+    assert available[0]["availability_reason"] == "Recommended for this deployment"
 
     monkeypatch.setattr(
         "heartwood.gateway._gateway.shutil.which",
@@ -583,6 +585,8 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
     fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] for model in fully_available)
+    assert fully_available[0]["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
+    assert fully_available[0]["availability_reason"] == "Recommended for this deployment"
 
 
 def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) -> None:
@@ -866,6 +870,8 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
     catalog = restarted.model_artifacts()
     models = cast(list[dict[str, object]], catalog["models"])
     selected = next(model for model in models if model["model_id"] == choice.model_id)
+    assert models[0] == selected
+    assert str(selected["availability_reason"]).startswith("Selected for this project")
     assert selected["source_repository"] == choice.source_repository
     assert selected["catalog_source"] == "user-selected"
     assert selected["license_posture"] == choice.license_posture
@@ -949,6 +955,8 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     assert config.local_model.artifact_id == "qwen25-7b-instruct-vllm"
     assert config.model_settings.active_profile == "local"
     assert config.model_settings.profile().model == "openai/heartwood-local-model"
+    assert config.model_settings.profile().max_input_tokens == 28_672
+    assert config.model_settings.profile().max_output_tokens == 4_096
     restarted = _gateway(tmp_path)
     assert restarted.model_settings()["active_profile"] == "local"
     assert restarted.project_readiness()["state"] == "compute-required"

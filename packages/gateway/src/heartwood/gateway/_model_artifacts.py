@@ -22,6 +22,11 @@ from typing import Any, Literal, Protocol, cast
 
 from filelock import FileLock
 
+from heartwood.gateway._local_model_contract import (
+    DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MAXIMUM_LOCAL_CONTEXT_WINDOW,
+    MINIMUM_LOCAL_CONTEXT_WINDOW,
+)
 from heartwood.gateway._model_identity import (
     is_hugging_face_model_id,
     is_immutable_revision,
@@ -111,6 +116,7 @@ class ModelArtifact:
     artifact_sha256: str
     license_posture: str
     model_alias: str
+    context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
     recommended: bool = False
@@ -136,6 +142,8 @@ class ModelArtifact:
         if self.artifact_size_bytes <= 0 or self.minimum_free_bytes < self.artifact_size_bytes:
             msg = "artifact storage metadata is invalid"
             raise ModelArtifactError(msg)
+        if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
+            raise ModelArtifactError("context_window must be between 2048 and 32768 tokens")
         if len(self.artifact_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.artifact_sha256
         ):
@@ -458,6 +466,7 @@ def _load_artifact(path: Path) -> ModelArtifact:
         artifact_sha256=_string(data, "artifact_sha256"),
         license_posture=_string(data, "license_posture"),
         model_alias=_string(data, "model_alias"),
+        context_window=_positive_int(data, "context_window"),
         minimum_resource_envelope=_optional_string(data, "minimum_resource_envelope"),
         recommended_resource_envelope=_optional_string(data, "recommended_resource_envelope"),
         recommended=_optional_bool(data, "recommended", default=False),

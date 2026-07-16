@@ -170,6 +170,8 @@ export interface ModelProfile {
   api_version: string | null;
   aws_region_name: string | null;
   aws_profile_name: string | null;
+  max_input_tokens?: number | null;
+  max_output_tokens?: number | null;
   description: string | null;
   credential_status?: CredentialStatus;
 }
@@ -287,6 +289,7 @@ export interface ModelArtifact {
   artifact_sha256: string;
   license_posture: string;
   model_alias: string;
+  context_window: number;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
   recommended: boolean;
@@ -315,6 +318,7 @@ export interface LocalModelChoice {
   minimum_free_bytes: number;
   license_posture: string;
   catalog_source: "recommended" | "user-selected";
+  context_window: number;
   artifact_sha256: string | null;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
@@ -347,6 +351,7 @@ export interface ModelSnapshot {
   minimum_free_bytes: number;
   license_posture: string;
   model_alias: string;
+  context_window: number;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
   recommended: boolean;

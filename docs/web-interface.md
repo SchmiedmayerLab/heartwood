@@ -10,9 +10,25 @@ SPDX-License-Identifier: MIT
 
 # Use the Browser and Notebooks
 
-The browser and terminal are two views of the same Heartwood project. They use the same conversations, model selection, action review, Skills, and audit history. Both interfaces also report the same project readiness checks. Start either interface from the directory Heartwood should treat as the project; its private configuration and progress remain in `.heartwood/`.
+Use the browser when you want visual setup, conversation, action review, and audit inspection. Use the notebook bridge when Heartwood should participate beside an analysis. Neither creates a separate project: the terminal, browser, and notebook offer the same conversations, model selection, action review, Skills, and audit history under `.heartwood/`.
 
-## Open the Interface
+!!! note "Before you begin"
+
+    Start every interface from the directory Heartwood should treat as the project. Configure a model before submitting a notebook task, and use one active writer for each session.
+
+## Choose an Interface
+
+| Interface | Best for | How to start |
+|---|---|---|
+| Interactive terminal | Initial setup, reliable remote use, model startup, and repeated agent work | Run `heartwood`; use `heartwood launch` for a downloaded local model. |
+| Browser | Visual model setup, conversation, grouped action review, and audit inspection | Run `heartwood serve`; use `heartwood launch --web` for a downloaded local model. |
+| Notebook | Detecting project data, submitting a task, reviewing the shared session, and embedding results beside an analysis | Start from a configured project and use `NotebookSession`. |
+
+The notebook API is not a separate agent or model runtime. Configure the project once through the terminal or browser. When using a Heartwood-managed local model, keep `heartwood launch --web` running while the notebook sends requests.
+
+## Use the Browser
+
+### Start the Service
 
 Start the browser interface from the project directory:
 
@@ -23,9 +39,9 @@ heartwood serve
 
 Open `http://127.0.0.1:8767/`. Use `heartwood launch --web` instead when Heartwood should start a downloaded local model and keep its inference server running with the browser.
 
-The [container guide](container-images.md) is the shortest browser setup when Heartwood is not installed directly on the machine. On Terra, use the authenticated Jupyter proxy route described in [Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly.
+The [container guide](container-images.md) is the shortest browser setup when Heartwood is not installed directly on the machine. On Terra, use the authenticated Jupyter proxy route described in [Use Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly. The Terra tutorial notebook generates the complete runtime-specific link; a generic `/proxy/8767/` path is not sufficient there.
 
-## Set Up the Project
+### Complete Project Setup
 
 When a project has no active model, Heartwood opens **Set up Heartwood** automatically. The **This project** summary shows the same readiness result as `heartwood doctor`:
 
@@ -53,7 +69,7 @@ heartwood launch --web
 
 Runtime startup and scheduler allocation remain terminal operations because they may replace the current server process or request platform compute. The browser keeps the conversation unavailable until that launch completes instead of attempting a request against a stopped model.
 
-## Work with the Agent
+### Work with the Agent
 
 Create or select a conversation, then describe the result you need. Heartwood displays messages, proposed commands and file edits, tool results, and completion status in one timeline.
 
@@ -63,9 +79,35 @@ After you submit a task, an activity indicator remains in the conversation until
 
 When an action needs confirmation, review every member of the displayed set. **Allow all once** continues the complete OpenHands action set; **Reject all** executes none of it. **Ask Every Time** is the default. A deployment may permit **Auto-Approve Low Risk**, but medium-, high-, and unknown-risk sets still require review.
 
-The synthetic reference workflow in [Heartwood on Terra](terra-jupyter-demo.md#run-the-synthetic-workflow) demonstrates cohort creation, aggregate checks, approval, replay, and audit export without controlled data.
+The synthetic reference workflow in [Use Heartwood on Terra](terra-jupyter-demo.md#step-5-run-the-synthetic-workflow) demonstrates cohort creation, aggregate checks, approval, replay, and audit export without controlled data.
 
-## Continue from Another Interface
+### Inspect and Export Activity
+
+Open **Activity & audit** to inspect ordered route decisions, action proposals, human decisions, tool outcomes, and errors. **Export audit** creates a content-minimized JSON Lines record. It omits prompts, model responses, action summaries, paths, row values, and secrets by default.
+
+The notebook-width layout keeps the conversation and controls usable behind Jupyter's proxy:
+
+![Heartwood synthetic reference analysis at a narrow notebook viewport](assets/web-notebook-viewport.png)
+
+Both documentation screenshots contain synthetic data only.
+
+## Use a Notebook
+
+Start the notebook process from the configured project directory. The notebook can inspect the same session without another workspace or state path:
+
+```python
+from heartwood.notebook import NotebookSession
+
+session = NotebookSession(session_id="<session-id>")
+view = session.replay()
+print(view.event_count)
+```
+
+`NotebookSession` exposes project detection, model inspection and download planning, task submission, grouped approval, pause and resume, replay, and audit export through the same gateway contracts used by the terminal and browser.
+
+The notebook does not supervise a downloaded model. Keep `heartwood launch --web` running in a terminal while notebook cells use a Heartwood-managed local model. On Terra, [the tutorial notebook](terra-jupyter-demo.ipynb) demonstrates project detection, the authenticated browser link, a synthetic task, grouped approval, result verification, replay, and audit export.
+
+## Continue a Shared Session
 
 Model and action settings are persisted as soon as they change. The browser refreshes shared project state when **Settings** opens, when the window regains focus, and while a local-model download is active. The session identifier is also shared by the browser, terminal, and notebook bridge. From the same project directory:
 
@@ -76,21 +118,9 @@ heartwood --session-id <session-id> chat
 
 Use one active writer for a session. Wait for the current agent turn to become idle before opening that session from another interface. A fresh interface process reconstructs the same configuration and events from `.heartwood/`; browser storage is not the source of truth.
 
-In a notebook process whose current directory is the project:
+## Continue from Here
 
-```python
-from heartwood.notebook import NotebookSession
-
-session = NotebookSession(session_id="<session-id>")
-print(session.replay().event_count)
-```
-
-## Inspect and Export Activity
-
-Open **Activity & audit** to inspect ordered route decisions, action proposals, human decisions, tool outcomes, and errors. **Export audit** creates a content-minimized JSON Lines record. It omits prompts, model responses, action summaries, paths, row values, and secrets by default.
-
-The notebook-width layout keeps the conversation and controls usable behind Jupyter's proxy:
-
-![Heartwood synthetic reference analysis at a narrow notebook viewport](assets/web-notebook-viewport.png)
-
-Both documentation screenshots contain synthetic data only.
+- Follow [Work with the Agent](using-heartwood.md) for requests, waiting states, action review, and session controls.
+- Follow [Use Heartwood on Terra](terra-jupyter-demo.md) for the complete authenticated Jupyter-proxy workflow.
+- Use [Troubleshooting](troubleshooting.md#resolve-interface-problems) when the service, proxy, model, or shared session is unavailable.
+- Read [Project Files and State](project-state.md) before moving or preserving a project.
