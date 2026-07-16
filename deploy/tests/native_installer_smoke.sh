@@ -47,7 +47,8 @@ venv)
 #!/usr/bin/env bash
 if [[ "${1:-}" == */heartwood_vllm.py ]]; then
   test "${2:-}" = "__heartwood_verify_runtime__"
-  grep --quiet 'GHSA-7rgv-gqhr-fxg3 fixes verified' "$1"
+  grep --quiet 'GHSA-7rgv-gqhr-fxg3' "$1"
+  grep --quiet 'GHSA-65pc-fj4g-8rjx' "$1"
   echo "Transformers synthetic integration and GPU security fixes verified"
   exit 0
 fi

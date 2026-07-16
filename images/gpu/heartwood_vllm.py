@@ -45,6 +45,7 @@ def _apply_vllm_security_backport() -> type[object]:
 
 
 def _verify_runtime(removed_config: type[object]) -> None:
+    import idna  # noqa: F401
     import transformers
     import xgrammar  # noqa: F401
     from vllm.transformers_utils import config as config_module
@@ -55,6 +56,8 @@ def _verify_runtime(removed_config: type[object]) -> None:
         raise RuntimeError("the vulnerable vLLM configuration remains registered")
     if version("xgrammar") != "0.1.32":
         raise RuntimeError("the reviewed xgrammar security override is unavailable")
+    if version("idna") != "3.18":
+        raise RuntimeError("the reviewed idna security override is unavailable")
 
     vulnerable_module = importlib.import_module(removed_config.__module__)
     dynamic_loader_called = False
@@ -105,7 +108,8 @@ def _verify_runtime(removed_config: type[object]) -> None:
 
     print(
         f"Transformers {transformers.__version__} integration and "
-        "vLLM GHSA-8fr4-5q9j-m8gm and xgrammar GHSA-7rgv-gqhr-fxg3 fixes verified"
+        "vLLM GHSA-8fr4-5q9j-m8gm, xgrammar GHSA-7rgv-gqhr-fxg3, and "
+        "idna GHSA-65pc-fj4g-8rjx fixes verified"
     )
 
 

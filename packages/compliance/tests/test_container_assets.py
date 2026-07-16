@@ -251,6 +251,9 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "xgrammar==0.1.32" in lock
     assert "GHSA-7rgv-gqhr-fxg3" in overrides
     assert "xgrammar==0.1.32" in overrides
+    assert "idna==3.18" in lock
+    assert "GHSA-65pc-fj4g-8rjx" in overrides
+    assert "idna==3.18" in overrides
     assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
     assert "--extra-index-url https://download.pytorch.org/whl/cu118" not in lock
     assert "nvidia-cuda-runtime-cu13" not in lock
@@ -277,8 +280,10 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         "vulnerable_module.get_class_from_dynamic_module = reject_dynamic_loader" in compatibility
     )
     assert "GHSA-8fr4-5q9j-m8gm" in compatibility
-    assert "GHSA-7rgv-gqhr-fxg3 fixes verified" in compatibility
+    assert "GHSA-7rgv-gqhr-fxg3" in compatibility
     assert 'version("xgrammar") != "0.1.32"' in compatibility
+    assert "GHSA-65pc-fj4g-8rjx" in compatibility
+    assert 'version("idna") != "3.18"' in compatibility
     assert "vllm.v1.structured_output import backend_xgrammar" in compatibility
     assert "from vllm.transformers_utils import config as config_module" in compatibility
     assert "vllm.transformers_utils.tokenizer" in compatibility

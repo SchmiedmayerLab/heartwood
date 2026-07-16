@@ -7,3 +7,7 @@
 # vLLM 0.10.1.1 pins vulnerable xgrammar 0.1.21. Version 0.1.32 is the first
 # release patched for GHSA-7rgv-gqhr-fxg3 and retains the required API.
 xgrammar==0.1.32
+
+# vLLM's legacy HTTP dependency graph permits vulnerable idna releases. Version
+# 3.18 includes the complete GHSA-jjg7-2v4v-x38h and GHSA-65pc-fj4g-8rjx fixes.
+idna==3.18

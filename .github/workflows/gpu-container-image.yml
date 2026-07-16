@@ -62,6 +62,8 @@ jobs:
           grep --fixed-strings 'urllib3==2.7.0' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-overrides.txt
+          grep --fixed-strings 'idna==3.18' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'idna==3.18' images/gpu/vllm-overrides.txt
           grep --fixed-strings 'nvidia-cuda-runtime-cu11==11.8.89' images/gpu/vllm-requirements.txt
           if grep --fixed-strings --quiet -- '--extra-index-url https://download.pytorch.org/whl/cu118' images/gpu/vllm-requirements.txt; then
             echo 'CUDA artifacts must use immutable wheel URLs instead of exposing the CUDA index to general dependency resolution.' >&2
