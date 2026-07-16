@@ -10,9 +10,9 @@ SPDX-License-Identifier: MIT
 
 # Work with the Agent
 
-Heartwood works on one project at a time. The project is exactly the directory where you start the command, and approved agent actions may modify files in that directory or its subdirectories.
+This guide covers the recurring workflow after Heartwood is installed: open a project, ask for work, review the complete proposed action set, and preserve or export the session. Complete [Get Started](getting-started.md) first if the project does not yet have a model connection.
 
-## Start a Project
+## Open or Resume a Project
 
 Change into the analysis directory before starting Heartwood:
 
@@ -33,7 +33,19 @@ heartwood doctor
 
 `ready`, `setup-required`, and `compute-required` describe normal next steps. `recovery-required` identifies configuration or runtime evidence that must be corrected before work continues.
 
-## Ask for Work
+## Follow the Agent Workflow
+
+```mermaid
+flowchart LR
+    ASK["Describe the task"] --> WAIT["Model plans or responds"]
+    WAIT --> REVIEW{"Action review needed?"}
+    REVIEW -->|No| RESULT["Inspect the result"]
+    REVIEW -->|Yes| DECIDE["Allow or reject the complete set"]
+    DECIDE --> WAIT
+    RESULT --> NEXT["Continue, replay, or export"]
+```
+
+### Ask for a Bounded Result
 
 Enter a specific task at the `heartwood>` prompt. State the inputs, expected outputs, and constraints that matter for review. For example:
 
@@ -49,7 +61,13 @@ For automation or a basic terminal, submit one task without opening the full-scr
 heartwood chat --plain --prompt "Summarize the analysis scripts and their outputs."
 ```
 
-## Review Actions
+### Understand Waiting States
+
+Heartwood displays activity while the model is preparing a response or while an approved tool is running. Local models and complex tasks can take longer than hosted-model conversations. The interface reports elapsed time when a wait becomes noticeable; it does not invent workflow steps that the agent has not reported.
+
+If the process exits or remains unavailable, run `heartwood doctor`. For a downloaded local model, confirm that `heartwood launch` or `heartwood launch --web` is still running. See [Troubleshooting](troubleshooting.md) for the common readiness and runtime checks.
+
+### Review the Complete Action Set
 
 Heartwood defaults to **Ask Every Time**. When OpenHands reaches a confirmation stop, Heartwood shows every member of the pending action set with its tool, summary, arguments, and risk classification.
 
@@ -59,6 +77,10 @@ Heartwood defaults to **Ask Every Time**. When OpenHands reaches a confirmation 
 The OpenHands SDK approves or rejects one confirmation stop as a group. Heartwood does not imply that individual actions can be executed independently when the upstream runtime cannot support that behavior.
 
 The optional **Auto-Approve Low Risk** mode lets actions classified by OpenHands as low risk execute automatically. Medium-, high-, and unknown-risk action sets still stop for review. The selected platform policy determines whether this mode is available.
+
+!!! warning "Reject uncertainty"
+
+    Reject the complete set when any action has an unexpected command, path, destination, data scope, or side effect. Clarify the request and let the agent propose a new set.
 
 ## Control the Session
 
@@ -83,7 +105,11 @@ heartwood --session-id manuscript-review
 
 Return to a session by starting Heartwood with the same identifier. The browser interface lists sessions recorded in the current project.
 
-## Use the Browser Interface
+## Continue in Another Interface
+
+The terminal, browser, and notebook are presentation layers over the same project configuration and session record. Finish the active turn before switching interfaces, and use the same project directory and session identifier.
+
+### Browser
 
 Start the shared gateway and web application from the project directory:
 
@@ -95,7 +121,7 @@ Open `http://127.0.0.1:8767/`. The browser uses the same project configuration, 
 
 An unconfigured project opens the shared setup view automatically. Changes made through the browser are visible to the next terminal or notebook command, and opening **Settings** refreshes changes made by another interface. A downloaded local model still needs the terminal-owned `heartwood launch --web` lifecycle before the browser can submit a task.
 
-## Use a Notebook
+### Notebook
 
 The notebook bridge also binds to the notebook process's current directory:
 
@@ -109,7 +135,7 @@ print(view.event_count)
 
 Run terminal, web, and notebook writes to the same session sequentially. File-backed sessions protect one process at a time; independently running writers are not a supported coordination mechanism.
 
-## Preserve the Project
+## Preserve or Move the Project
 
 Heartwood stores configuration, conversations, downloaded models, Skills, logs, and audit data in `.heartwood/` inside the project. Keep that directory with the project, do not commit it, and do not ask the agent to inspect or modify it.
 
@@ -124,3 +150,10 @@ heartwood --session-id cohort-review audit export
 ```
 
 Review the export before moving it outside the deployment boundary. A scrubbed export is evidence about Heartwood activity, not automatic authorization to disclose data or results.
+
+## Continue from Here
+
+- Use [Browser and Notebooks](web-interface.md) for visual setup, notebook APIs, Jupyter routing, and shared-session examples.
+- Use [Project Files and State](project-state.md) before moving, backing up, or resetting a project.
+- Use [Troubleshooting](troubleshooting.md) when readiness, model startup, or an interface does not behave as expected.
+- Review [Audit and Reproducibility](../design/06-observability-audit.md) for the technical distinction between resumable sessions and content-minimized audit records.

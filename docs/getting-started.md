@@ -10,9 +10,21 @@ SPDX-License-Identifier: MIT
 
 # Get Started with Heartwood
 
-This guide takes you from an empty project directory to the first Heartwood conversation. Begin with synthetic or non-sensitive files while learning the workflow.
+This guide takes you from choosing an installation path to completing the first reviewed Heartwood task. You will create one project, connect one model, choose an interface, and learn where Heartwood keeps its state.
 
-## Choose How to Run Heartwood
+!!! warning "Begin with non-sensitive files"
+
+    Learn and validate the workflow with synthetic or non-sensitive data. A working Heartwood installation does not by itself authorize a model, machine, or research platform for controlled data.
+
+The complete first-use path is:
+
+1. choose one way to run Heartwood;
+2. enter the directory the agent may modify;
+3. connect an authorized model;
+4. open the terminal, browser, or notebook interface;
+5. submit and review a bounded task.
+
+## Step 1: Choose How to Run Heartwood
 
 Heartwood offers the same project and conversation experience through several installation paths. Choose one; you do not need both a container and a native installation.
 
@@ -20,7 +32,7 @@ Heartwood offers the same project and conversation experience through several in
 
 Use the container for a workstation or general-purpose server with Docker. It is the recommended first-use path because the image already contains Heartwood, its browser interface, and the software needed to run a supported CPU model. It does not contain model weights or credentials.
 
-Follow [Run Heartwood in a Container](container-images.md#start-a-project) to start the browser or terminal with the current directory mounted as the project.
+Follow [Run Heartwood in a Container](container-images.md#quick-start-the-browser) to start the browser or terminal with the current directory mounted as the project.
 
 ### Install the Command
 
@@ -34,7 +46,7 @@ Some notebook platforms require their own base image, user, storage, and routing
 
 [Choose Where to Run Heartwood](platforms.md) explains these options in more detail.
 
-## Create or Open a Project
+## Step 2: Create or Open a Project
 
 The project is the directory Heartwood may work on. Create one or enter an existing analysis directory before starting Heartwood:
 
@@ -48,7 +60,11 @@ Heartwood uses that exact directory as the project. Starting Heartwood from a di
 
 Heartwood saves project setup and conversations in a private `.heartwood/` directory. You normally do not need to open or edit it. See [Project Files and State](project-state.md) when you need storage or migration details.
 
-## Choose a Model
+!!! tip "Confirm the boundary before continuing"
+
+    Run `pwd` in a terminal. Heartwood may work in that directory and its subdirectories. If the path is too broad, create a narrower project directory before setup.
+
+## Step 3: Choose a Model
 
 The first run asks where the model should run. Choose the simplest authorized option available in your environment:
 
@@ -60,7 +76,20 @@ Heartwood then displays the models available from that source. Provider tokens a
 
 See [Connect a Model](model-connections.md) for every connection type. See [Run a Model Locally](getting-started-offline.md) before downloading model weights or choosing CPU or GPU inference.
 
-## Ask for the First Task
+## Step 4: Choose an Interface
+
+| Interface | Start it with | Use it for |
+|---|---|---|
+| Interactive terminal | `heartwood` | Initial setup, reliable remote use, conversation, and action review. |
+| Browser | `heartwood serve` | Visual setup, conversation, grouped action review, and audit inspection. |
+| Browser with local model | `heartwood launch --web` | Starting and supervising a downloaded model while the browser is open. |
+| Notebook | `NotebookSession` from a notebook in the project | Detection, task submission, grouped approval, replay, and audit beside an analysis. |
+
+Use `heartwood launch` instead of bare `heartwood` when a downloaded local model must be started for the terminal. The notebook reuses a configured project and running model connection; it does not replace initial setup or local-model supervision.
+
+[Browser and Notebooks](web-interface.md) explains visual setup, local-model progress, Jupyter routing, and shared sessions.
+
+## Step 5: Ask for the First Task
 
 After setup, Heartwood opens the conversation when the selected model is already available. When setup downloads a local model, it instead tells you to start the model and terminal together:
 
@@ -78,20 +107,7 @@ When Heartwood proposes commands or file changes, review the complete action set
 
 Exiting Heartwood does not remove the project setup or conversation. Start `heartwood` from the same directory to continue.
 
-## Choose an Interface
-
-| Interface | Start it with | Use it for |
-|---|---|---|
-| Interactive terminal | `heartwood` | Initial setup, conversation, action review, replay, and audit export. |
-| Browser | `heartwood serve` | Visual setup and the same project conversation when the selected model is already available. |
-| Browser with local model | `heartwood launch --web` | Starting a downloaded model and keeping it supervised while the browser is open. |
-| Notebook | `NotebookSession` from a notebook in the project | Detection, task submission, grouped approval, replay, and audit beside the analysis. |
-
-Use `heartwood launch` instead of bare `heartwood` when a downloaded local model must be started for the terminal. The notebook reuses a configured project and running model connection; it does not replace initial setup or local-model supervision.
-
-[Work with the Agent](using-heartwood.md) covers session controls and action review. [Use the Browser and Notebooks](web-interface.md) covers visual setup, local-model progress, Jupyter routing, and shared sessions.
-
-## Check the Project
+## Check Readiness at Any Time
 
 Run the read-only diagnostic whenever the next step is unclear:
 
@@ -100,3 +116,13 @@ heartwood doctor
 ```
 
 The result tells you whether setup is needed, a downloaded model needs to be started, the project is ready, or a configuration problem needs attention.
+
+## Continue from Here
+
+| Next question | Continue with |
+|---|---|
+| How do I write effective requests and review actions? | [Work with the Agent](using-heartwood.md) |
+| How do I use the browser or a notebook? | [Browser and Notebooks](web-interface.md) |
+| How do model connections and credentials work? | [Connect a Model](model-connections.md) |
+| How do I download and run a model locally? | [Run a Model Locally](getting-started-offline.md) |
+| What should I do when a check fails? | [Troubleshooting](troubleshooting.md) |

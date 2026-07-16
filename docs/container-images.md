@@ -14,6 +14,10 @@ The generic Heartwood image is the easiest way to use the complete CLI and brows
 
 Use the Terra-derived image when Terra must retain ownership of Jupyter, the notebook route, user identity, and persistent disk. Use the native installer on environments such as Carina where the scheduler and shared filesystem are more important than container portability.
 
+!!! note "Before you begin"
+
+    Install Docker, confirm that it can pull from `ghcr.io`, and choose a host directory the agent may modify. Start with synthetic or non-sensitive files.
+
 ## Choose an Image
 
 | Image | Platforms | Purpose |
@@ -27,7 +31,7 @@ Use the Terra-derived image when Terra must retain ownership of Jupyter, the not
 
 The portable generic image remains the default. The NVIDIA variants use a pinned CUDA 11.8 vLLM environment so they remain compatible with the NVIDIA driver baseline observed on Terra. A GPU image still requires a suitable model, enough accelerator memory, a driver that supports CUDA 11.8, and deployment-specific validation.
 
-## Start a Project
+## Quick Start the Browser
 
 Create or enter the directory the agent may edit, then mount that directory at `/workspace`:
 
@@ -44,6 +48,8 @@ docker run --rm -it \
 
 Open `http://127.0.0.1:8767/`. Heartwood treats `/workspace` as the project and creates `/workspace/.heartwood/`. One project mount therefore preserves source files, configuration, sessions, downloaded models, Skills, logs, and audit records across replacement containers.
 
+Complete model setup in the browser, create a conversation, and submit a bounded first task. Keep the container process running while the browser is in use. Press `Ctrl+C` to stop it; the mounted project remains on the host.
+
 `/workspace` is the image's default mount target and working directory, not a separate Heartwood workspace setting. Mounting another directory and selecting it with Docker's `--workdir` changes the project in exactly the same way as changing directories before running the native CLI. Platform images such as Terra use their platform's persistent home directory instead of imposing this generic mount convention.
 
 The image runs as non-root user `10001:10001`. Installed application, Skill, and inference-runtime files remain root-owned, while the project and user-home paths are explicitly writable by the runtime identity. On Linux, make the mounted project writable by that identity or run the container with a reviewed user mapping that can write the project. Do not make the application root writable merely to avoid a host-permission problem.
@@ -56,6 +62,8 @@ docker run --rm -it \
   ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
   heartwood
 ```
+
+If Docker reports that `/workspace` is not writable, review the user-mapping guidance below before changing permissions.
 
 ## Use a Hosted or Existing Model Service
 
@@ -140,3 +148,10 @@ Pull requests build and validate the generic AMD64 and ARM64 images, Terra-compa
 Publication builds candidates by digest, tests the exact staged descriptors, creates immutable commit tags, and moves `edge` only after validation. Release promotion copies those verified descriptors to the Semantic Version tags. Generic architecture manifests include supply-chain attestations. Terra disables index-producing attestations to preserve Leonardo's required single-manifest format.
 
 See [Build a Platform-Specific Image](platform-images.md) for the extension contract and [Platform Support and Validation](platform-support.md) for the distinction between implementation, continuous-integration validation, live validation, and institutional approval.
+
+## Continue from Here
+
+- Use [Get Started](getting-started.md#step-3-choose-a-model) for the guided model and first-task workflow.
+- Use [Connect a Model](model-connections.md) for hosted, research-environment, local-service, and custom connections.
+- Use [Run a Model Locally](getting-started-offline.md) before downloading weights or selecting a GPU model.
+- Use [Troubleshooting](troubleshooting.md) for project permissions, model startup, browser access, or persistence problems.

@@ -32,7 +32,13 @@ Heartwood runs alongside the project instead of moving it into a separate servic
 
 Heartwood treats the directory where it starts as the project and keeps its setup and conversation history with that project.
 
-Choose the starting path that matches your environment:
+Getting to the first task involves three decisions:
+
+1. **Where Heartwood runs:** a container, a native installation, or a managed platform image.
+2. **Where the model runs:** in the research environment, on the same machine, or through an authorized provider.
+3. **How you interact:** the terminal, browser, or notebook.
+
+Choose the installation path that matches your environment:
 
 | Your environment | Recommended path |
 |---|---|
@@ -48,7 +54,7 @@ cd /path/to/analysis-project
 heartwood
 ```
 
-The first run guides you through choosing a model. A hosted or already-running model proceeds to the conversation; a downloaded local model tells you to run `heartwood launch` so its inference server remains supervised. See [Get Started](docs/getting-started.md) for the complete first-use path.
+The first run guides you through choosing a model and opens the conversation when the model is available. A downloaded local model instead directs you to `heartwood launch`, which starts and supervises its inference server. Follow [Get Started](docs/getting-started.md) for the complete first-use path, or use [Troubleshooting](docs/troubleshooting.md) when Heartwood reports that setup or compute is still required.
 
 ## Choose a Model
 

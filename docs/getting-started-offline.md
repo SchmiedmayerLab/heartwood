@@ -14,6 +14,20 @@ A local model processes Heartwood requests inside the current machine or researc
 
 Heartwood images and native runtime bundles contain inference software, not model weights. A model is downloaded only after an explicit user request and remains in the current project's `.heartwood/models/` directory.
 
+!!! warning "Plan storage and compute before downloading"
+
+    Model files can require many gigabytes of persistent storage, and model startup needs additional RAM or GPU memory. Run the model catalog or inspection command first and review its resource guidance.
+
+## Choose a Local Setup
+
+| Setup | Use it when | Heartwood manages |
+|---|---|---|
+| Existing OpenAI-compatible service | Ollama, vLLM, SGLang, llama.cpp, or another compatible server is already running | Connection, route authorization, and model selection |
+| Portable CPU model | Docker or a supported portable image is available and slower local inference is acceptable | Model selection, download, verification, llama.cpp startup, and shutdown |
+| NVIDIA GPU model | The explicit GPU image or Carina runtime is available with enough GPU memory | Model selection, download, verification, vLLM startup, and shutdown |
+
+Use an existing service when another system already owns model files and startup. Use the portable CPU path for the broadest compatibility. Choose the NVIDIA path only when the deployment includes the explicit GPU runtime and a compatible accelerator.
+
 ## Understand the Three Parts
 
 Local inference involves three distinct parts:
@@ -32,16 +46,6 @@ flowchart LR
 
 Downloading a model prepares the files but does not leave a server running. `heartwood launch` starts the server, waits until the selected model is ready, opens the terminal or browser, and stops the server when the session ends. The downloaded files remain available for the next launch.
 
-## Choose a Local Setup
-
-| Setup | Use it when | Heartwood manages |
-|---|---|---|
-| Existing OpenAI-compatible service | Ollama, vLLM, SGLang, llama.cpp, or another compatible server is already running | Connection, route authorization, and model selection |
-| Portable CPU model | Docker or a supported portable image is available and slower local inference is acceptable | Model selection, download, verification, llama.cpp startup, and shutdown |
-| NVIDIA GPU model | The explicit GPU image or Carina runtime is available with enough GPU memory | Model selection, download, verification, vLLM startup, and shutdown |
-
-An existing service avoids another model download when the model is already managed elsewhere. The portable CPU path is the most widely compatible demonstration. The GPU path starts faster inference but requires a compatible NVIDIA environment and usually much more storage and accelerator memory.
-
 ## Check the Requirements First
 
 Run the guided local-model catalog from the project directory:
@@ -56,7 +60,7 @@ Current recommendations include quantized Qwen2.5 7B models for CPU use, a 4-bit
 
 A recommended model is one for which Heartwood maintains reproducible source and runtime metadata. It does not mean that the model is appropriate for biomedical work, production use, a particular dataset, or an institution's requirements.
 
-## Let Heartwood Prepare a Model
+## Prepare a Recommended Model
 
 The easiest path is to run `heartwood`, choose **On this device**, and select a recommendation. The browser offers the same choices under **Settings** and reports download progress.
 
@@ -81,7 +85,9 @@ Heartwood performs the following work:
 
 The dry run changes no external state. It shows which project, model, runtime, and compute request a real launch would use.
 
-## Use Another Hugging Face Model
+At this point the model files are prepared but no inference process is running. Continue with [Start and Stop the Local Server](#start-and-stop-the-local-server).
+
+## Prepare Another Hugging Face Model
 
 Choose **Other Hugging Face model** in guided setup or provide the repository identifier directly:
 
@@ -211,3 +217,10 @@ heartwood audit export
 ```
 
 The export omits prompts, model responses, action details, paths, row values, and credentials. Review it before moving it outside the deployment boundary.
+
+## Continue from Here
+
+- Return to [Work with the Agent](using-heartwood.md) after `heartwood launch` opens the interface.
+- Use [Run Heartwood in a Container](container-images.md#download-and-run-a-local-model) for complete Docker commands and GPU flags.
+- Use [Use Heartwood on Terra](terra-jupyter-demo.md#optional-run-a-local-model-on-terra) or [Use Heartwood on Stanford Carina](carina-cli.md#step-3-prepare-a-local-gpu-model) for platform-specific compute behavior.
+- Use [Troubleshooting](troubleshooting.md#resolve-model-setup-problems) for download, startup, memory, and runtime failures.

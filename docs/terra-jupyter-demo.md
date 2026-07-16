@@ -14,7 +14,9 @@ Use the Terra image when an analysis already lives in a Terra workspace. It pres
 
 Start in a synthetic workspace containing no protected health information. The workflow below checks that the image, project storage, model connection, interfaces, action review, and audit record work together. It does not authorize a model, dataset, or use of controlled data.
 
-## Choose Your Starting Path
+## Before You Begin
+
+You need permission to create or replace a Terra Cloud Environment, enough persistent-disk quota for the project, and access to one authorized model route. A local model additionally requires enough disk and CPU or GPU memory for the selected artifact.
 
 Four choices determine the setup:
 
@@ -27,7 +29,18 @@ Four choices determine the setup:
 
 The terminal, browser, and notebook use the same model selection, sessions, action decisions, and `.heartwood/` project state. You do not configure three separate Heartwood installations.
 
-## 1. Create the Cloud Environment
+## Follow the Workflow
+
+| Step | Outcome |
+|---|---|
+| 1. Create the environment | Terra starts the correct Heartwood image and preserves Jupyter. |
+| 2. Create the project | Analysis files, the tutorial notebook, and `.heartwood/` share persistent storage. |
+| 3. Connect a model | Heartwood can reach one authorized research, hosted, or local model. |
+| 4. Choose an interface | The terminal works first; the browser and notebook reuse the same state. |
+| 5. Run the synthetic task | One bounded task exercises Skills, action review, and aggregate output. |
+| 6. Verify the session | Replay and audit export prove that the interfaces share the session record. |
+
+## Step 1: Create the Cloud Environment
 
 In the Terra workspace, open **Analyses**, select the cloud icon, open the Jupyter environment settings, and choose **Customize** or **Custom Environment** under **Application Configuration**. Paste one immutable release image:
 
@@ -61,7 +74,7 @@ Set the machine and persistent disk before selecting **Create** or **Create/Repl
 
 When the environment reports that it is running, confirm that the normal Jupyter file browser opens and that **Python 3 (Heartwood)** appears in the kernel list. Terra may report a running environment before its **Open** control is ready. If **Open** remains unavailable, open the workspace terminal and follow its **Jupyter Notebook** link. Do not install Heartwood again inside the image.
 
-## 2. Create a Project
+## Step 2: Create a Project
 
 Open a Terra terminal and create the synthetic tutorial project on the persistent disk:
 
@@ -82,7 +95,7 @@ Heartwood file operations stay within the project and exclude its private `.hear
 
 The tutorial fixture contains 24 synthetic people, 39 condition-occurrence rows, and 20 people with condition concept `201826`. Terra workspace tables and buckets are separate storage; localize only the files the agent should use into the project directory.
 
-## 3. Connect a Model
+## Step 3: Connect a Model
 
 Choose one model path. The first two avoid downloading model weights into Terra; the last two run inference in the Cloud Environment.
 
@@ -109,9 +122,9 @@ For a local model, inspect the available recommendations before downloading anyt
 heartwood models local
 ```
 
-Heartwood shows download size, runtime, context window, and conservative memory guidance. Continue with [Run a Local Model on Terra](#run-a-local-model-on-terra) after choosing one.
+Heartwood shows download size, runtime, context window, and conservative memory guidance. Continue with [Run a Local Model on Terra](#optional-run-a-local-model-on-terra) after choosing one.
 
-## 4. Choose an Interface
+## Step 4: Choose an Interface
 
 ### Terminal
 
@@ -158,7 +171,7 @@ The screenshot shows the responsive layout used by the automated notebook-viewpo
 
 Initial model setup and Heartwood-managed runtime startup remain clearer in the terminal or browser. A local model must remain supervised by `heartwood launch --web` in a terminal while notebook cells use it.
 
-## 5. Run the Synthetic Workflow
+## Step 5: Run the Synthetic Workflow
 
 Choose one interface to own the task and its decision:
 
@@ -180,7 +193,7 @@ This is a capability check for the selected model, not a guarantee that every mo
 
 Use **Activity & audit** in the browser or `/replay` in the terminal to inspect route decisions, proposals, the grouped decision, tool outcomes, and errors. Action confirmation defaults to **Ask Every Time**. A deployment may permit **Auto-Approve Low Risk**, but medium-, high-, and unknown-risk groups still require review.
 
-## 6. Verify the Shared Session
+## Step 6: Verify the Shared Session
 
 Wait until the active turn is idle, then replay and export the same session from a terminal in the project. Replace `terra-demo` when the browser created a different identifier:
 
@@ -207,7 +220,7 @@ print(jupyter_proxy_url(port=8767))
 
 The terminal, notebook, and browser should report the same persisted events. Use one active writer for a session; independent processes writing the same file-backed session concurrently are not supported.
 
-## Run a Local Model on Terra
+## Optional: Run a Local Model on Terra
 
 ### Portable CPU Path
 
@@ -215,7 +228,8 @@ The portable Terra image uses llama.cpp on CPU. Select the reviewed recommendati
 
 ```bash
 heartwood models download qwen25-7b-instruct-q4_k_m
-# Or inspect and download another repository:
+
+# Alternatively, inspect and download another repository:
 heartwood models inspect <owner/model>
 heartwood models download <owner/model>
 heartwood launch --web
@@ -302,6 +316,14 @@ The release extends the pinned Terra Jupyter Python base recorded in `images/pla
 The public Terra tag is a `linux/amd64` Docker schema-2 manifest with media type `application/vnd.docker.distribution.manifest.v2+json`. Terra Leonardo image auto-detection rejects an Open Container Initiative index, so Terra tags intentionally differ from the generic multi-platform tag. `edge-terra` follows the latest validated `main` build and is only for development testing.
 
 Record both the Heartwood image and Terra base image digests. Passing image and proxy checks establishes software compatibility, not authorization for workspace data, a model provider, or controlled-data use.
+
+## Continue from Here
+
+- Use [Work with the Agent](using-heartwood.md) for day-to-day requests, waiting states, grouped action review, replay, and audit export.
+- Use [Browser and Notebooks](web-interface.md) for the shared interface contract and notebook API.
+- Use [Run a Model Locally](getting-started-offline.md) for model formats, runtime selection, context limits, and offline operation.
+- Use [Troubleshooting](troubleshooting.md) for general readiness and connection problems; keep the Terra-specific checks above for Jupyter, Leonardo, persistent disks, and GPU attachment.
+- Use [Platform Support and Validation](platform-support.md#terra) before making claims about the current release or introducing controlled data.
 
 ## Terra References
 

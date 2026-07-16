@@ -14,6 +14,10 @@ This page records the evidence available for release `0.2.0-beta.2`. Start with 
 
 An implemented feature, automated test, or published artifact is not evidence of institutional approval. The [Documentation Guide](README.md#documentation-status) defines each status term, and [Platform Architecture](../design/02-platforms.md) explains the underlying deployment assumptions.
 
+!!! info "How to read this page"
+
+    Use **Current Status** for the release-level claim, then read the matching platform section for the exact automated and live evidence. The final institutional decision always belongs to the deploying organization.
+
 ## Current Status
 
 | Platform path | Available artifact | Current claim | Required deployment work |
@@ -69,3 +73,9 @@ A path becomes live-validated only after an immutable published artifact complet
 - [Terra architecture and persistent-disk mounts](https://support.terra.bio/hc/en-us/articles/360058163311-Terra-architecture-where-your-data-and-tools-live)
 - [Accessing workspace-bucket data from a notebook](https://support.terra.bio/hc/en-us/articles/360046617372-Accessing-data-from-the-workspace-Bucket-in-a-notebook)
 - [DataBiosphere Terra Docker image catalog](https://github.com/DataBiosphere/terra-docker)
+
+## Continue from Here
+
+- Researchers should return to [Choose Where to Run Heartwood](platforms.md) and follow the matching platform guide.
+- Operators should use [Deploy Heartwood](deployment.md) to map the artifact, storage, model route, security boundary, and validation evidence.
+- Reviewers should continue with [Security and Compliance](../design/05-security-compliance.md) and [Testing and Evaluation](../design/07-testing-eval.md).

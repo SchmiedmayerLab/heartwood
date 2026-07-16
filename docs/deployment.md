@@ -12,6 +12,16 @@ SPDX-License-Identifier: MIT
 
 This section is for platform operators, research-computing teams, and reviewers preparing Heartwood for a specific environment. Researchers starting an existing deployment should use [Get Started](getting-started.md) or [Choose Where to Run Heartwood](platforms.md).
 
+A complete deployment answers five questions in order: which artifact runs, where project state persists, how models and credentials are reached, which controls form the security boundary, and what evidence supports the deployment claim.
+
+```mermaid
+flowchart LR
+    ARTIFACT["Select artifact"] --> STORAGE["Provide durable project storage"]
+    STORAGE --> MODEL["Configure authorized model access"]
+    MODEL --> BOUNDARY["Establish isolation and policy"]
+    BOUNDARY --> EVIDENCE["Validate the exact deployment"]
+```
+
 ## Choose the Deployment Artifact
 
 | Environment | Artifact | Why |
@@ -65,3 +75,4 @@ Do not infer a later claim from an earlier one. [Platform Support and Validation
 - [Release Heartwood](releases.md) documents the protected release process.
 - [Platform Architecture](../design/02-platforms.md) explains why platform-specific artifacts exist.
 - [Security and Compliance](../design/05-security-compliance.md) defines the threat and governance boundaries.
+- [Troubleshooting](troubleshooting.md) provides the user-facing readiness and diagnostic flow that a deployment must support.
