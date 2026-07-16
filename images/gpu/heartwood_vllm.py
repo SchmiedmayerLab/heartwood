@@ -13,6 +13,7 @@ import json
 import sys
 import tempfile
 from contextlib import suppress
+from importlib.metadata import version
 from pathlib import Path
 
 _VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"
@@ -45,11 +46,15 @@ def _apply_vllm_security_backport() -> type[object]:
 
 def _verify_runtime(removed_config: type[object]) -> None:
     import transformers
+    import xgrammar  # noqa: F401
     from vllm.transformers_utils import config as config_module
     from vllm.transformers_utils.tokenizer import get_tokenizer  # noqa: F401
+    from vllm.v1.structured_output import backend_xgrammar  # noqa: F401
 
     if _VULNERABLE_CONFIG_TYPE in config_module._CONFIG_REGISTRY:
         raise RuntimeError("the vulnerable vLLM configuration remains registered")
+    if version("xgrammar") != "0.1.32":
+        raise RuntimeError("the reviewed xgrammar security override is unavailable")
 
     vulnerable_module = importlib.import_module(removed_config.__module__)
     dynamic_loader_called = False
@@ -100,7 +105,7 @@ def _verify_runtime(removed_config: type[object]) -> None:
 
     print(
         f"Transformers {transformers.__version__} integration and "
-        "vLLM GHSA-8fr4-5q9j-m8gm backport verified"
+        "vLLM GHSA-8fr4-5q9j-m8gm and xgrammar GHSA-7rgv-gqhr-fxg3 fixes verified"
     )
 
 

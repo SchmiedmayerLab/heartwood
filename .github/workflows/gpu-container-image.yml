@@ -27,6 +27,10 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
       - name: Validate build graph
         run: >-
           docker buildx bake --file docker-bake.hcl --print
@@ -34,6 +38,17 @@ jobs:
           > /tmp/gpu-build-graph.json
       - name: Validate runtime lock and launcher
         run: |
+          cp images/gpu/vllm-requirements.txt /tmp/vllm-requirements.expected
+          uv pip compile \
+            --python-version 3.12 \
+            --python-platform x86_64-manylinux_2_28 \
+            --generate-hashes \
+            --emit-index-url \
+            --exclude-newer 2026-07-15T00:00:00Z \
+            --override images/gpu/vllm-overrides.txt \
+            --output-file images/gpu/vllm-requirements.txt \
+            images/gpu/vllm.in
+          cmp /tmp/vllm-requirements.expected images/gpu/vllm-requirements.txt
           grep --fixed-strings 'vllm-0.10.1.1%2Bcu118' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'certifi-2026.6.17-py3-none-any.whl' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'ray==2.55.0' images/gpu/vllm-requirements.txt
@@ -45,6 +60,8 @@ jobs:
           grep --fixed-strings 'transformers==5.5.0' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'requests==2.34.2' images/gpu/vllm-requirements.txt
           grep --fixed-strings 'urllib3==2.7.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-overrides.txt
           grep --fixed-strings 'nvidia-cuda-runtime-cu11==11.8.89' images/gpu/vllm-requirements.txt
           if grep --fixed-strings --quiet -- '--extra-index-url https://download.pytorch.org/whl/cu118' images/gpu/vllm-requirements.txt; then
             echo 'CUDA artifacts must use immutable wheel URLs instead of exposing the CUDA index to general dependency resolution.' >&2

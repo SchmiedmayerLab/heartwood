@@ -19,7 +19,7 @@ An implemented feature, automated test, or published artifact is not evidence of
 | Platform path | Available artifact | Current claim | Required deployment work |
 |---|---|---|---|
 | Generic Linux or Jupyter environment | Generic release container for AMD64 and ARM64 | Implemented and CI-validated | Validate the host's identity, storage, network, model, and data controls |
-| Terra Jupyter | Terra-derived release image for AMD64 | Implemented and CI-validated | Complete the synthetic workflow in a real Terra workspace, then obtain any required institutional review |
+| Terra Jupyter | Terra-derived release image for AMD64 | Implemented, CI-validated, and partially live-validated with synthetic data | Complete one immutable-image model interaction and grouped decision workflow, then obtain any required institutional review |
 | Stanford Carina | Native release installer and bundle | Implemented and CI-validated | Complete the synthetic workflow from the published release on Carina, then obtain any required institutional review |
 
 No listed path is automatically approved for protected health information or another controlled dataset.

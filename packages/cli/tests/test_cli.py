@@ -305,9 +305,27 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
     config = RealSessionGateway(project=ProjectContext(project), env={}).config_store.load()
     assert config.local_model is not None
     assert config.local_model.source_repository == "example/research-model-gguf"
+    assert "Heartwood model plan" in capsys.readouterr().out
+
+    class InteractiveInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdin", InteractiveInput())
+    monkeypatch.setattr(
+        "heartwood.cli._interactive_chat",
+        lambda *_args, **_kwargs: pytest.fail(
+            "bare heartwood must not open a conversation before local inference starts"
+        ),
+    )
+    capsys.readouterr()
+    assert _run(project, monkeypatch, []) == 0
+    output = capsys.readouterr().out
+    assert "Readiness: compute-required" in output
+    assert "Start it with `heartwood launch`" in output
+
     assert _run(project, monkeypatch, ["setup"]) == 0
     output = capsys.readouterr().out
-    assert "Heartwood model plan" in output
     assert "Run `heartwood launch`" in output
 
 

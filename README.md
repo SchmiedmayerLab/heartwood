@@ -41,14 +41,14 @@ Choose the starting path that matches your environment:
 | Terra | Use the [Terra image and Jupyter workflow](docs/terra-jupyter-demo.md). |
 | Stanford Carina | Use the [Carina installation and terminal workflow](docs/carina-cli.md). |
 
-Then enter the directory Heartwood may work on and start the conversation:
+Then enter the directory Heartwood may work on and start Heartwood:
 
 ```bash
 cd /path/to/analysis-project
 heartwood
 ```
 
-The first run guides you through choosing a model. See [Get Started](docs/getting-started.md) for the complete first-use path.
+The first run guides you through choosing a model. A hosted or already-running model proceeds to the conversation; a downloaded local model tells you to run `heartwood launch` so its inference server remains supervised. See [Get Started](docs/getting-started.md) for the complete first-use path.
 
 ## Choose a Model
 

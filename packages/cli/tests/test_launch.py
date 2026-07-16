@@ -921,7 +921,8 @@ def test_vllm_preflight_and_output_helpers(
                 0,
                 stdout=(
                     "Transformers 5.5.0 integration and "
-                    "vLLM GHSA-8fr4-5q9j-m8gm backport verified\n"
+                    "vLLM GHSA-8fr4-5q9j-m8gm and "
+                    "xgrammar GHSA-7rgv-gqhr-fxg3 fixes verified\n"
                 ),
             )
         return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")

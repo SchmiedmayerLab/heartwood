@@ -19,7 +19,7 @@ nav = [
     { "Start Here" = [
         { "Get Started" = "docs/getting-started.md" },
         { "Work with the Agent" = "docs/using-heartwood.md" },
-        { "Browser and Notebooks" = "docs/web-interface.md" },
+        { "Use the Browser and Notebooks" = "docs/web-interface.md" },
     ] },
     { "Models" = [
         { "Connect a Model" = "docs/model-connections.md" },
@@ -27,7 +27,7 @@ nav = [
     ] },
     { "Platforms" = [
         { "Choose an Environment" = "docs/platforms.md" },
-        { "Terra" = "docs/terra-jupyter-demo.md" },
+        { "Use Heartwood on Terra" = "docs/terra-jupyter-demo.md" },
         { "Stanford Carina" = "docs/carina-cli.md" },
     ] },
     { "Deployment" = [

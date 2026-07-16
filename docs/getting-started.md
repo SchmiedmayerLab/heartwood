@@ -28,9 +28,9 @@ Use the native installation when Docker is unavailable or Heartwood must run dir
 
 Choose a published version from [Heartwood Releases](https://github.com/SchmiedmayerLab/heartwood/releases) and use the native installer attached to that release, then follow any platform-specific instructions. The [Carina guide](carina-cli.md) provides the complete managed-environment example.
 
-### Use a Platform Image
+### Use a Managed Platform Image
 
-Some notebook platforms require their own base image, user, storage, and routing behavior. Terra therefore uses a Terra-derived Heartwood image rather than the generic image. Follow [Heartwood on Terra](terra-jupyter-demo.md) without installing another copy inside the notebook environment.
+Some notebook platforms require their own base image, user, storage, and routing behavior. Terra therefore uses a Terra-derived Heartwood image rather than the generic image. Follow [Use Heartwood on Terra](terra-jupyter-demo.md) without installing another copy inside the notebook environment.
 
 [Choose Where to Run Heartwood](platforms.md) explains these options in more detail.
 
@@ -62,7 +62,13 @@ See [Connect a Model](model-connections.md) for every connection type. See [Run 
 
 ## Ask for the First Task
 
-After setup, enter a specific request. State the files Heartwood should use, the expected result, and any restrictions that matter. For example:
+After setup, Heartwood opens the conversation when the selected model is already available. When setup downloads a local model, it instead tells you to start the model and terminal together:
+
+```bash
+heartwood launch
+```
+
+Enter a specific request after the conversation opens. State the files Heartwood should use, the expected result, and any restrictions that matter. For example:
 
 ```text
 Inspect the CSV files in input, summarize missing values by column, and write the aggregate result to missingness-summary.csv. Do not include row-level values.
@@ -74,10 +80,14 @@ Exiting Heartwood does not remove the project setup or conversation. Start `hear
 
 ## Choose an Interface
 
-- Run `heartwood` for the interactive terminal.
-- Run `heartwood serve` for the browser when using an already available model service.
-- Run `heartwood launch --web` when Heartwood should start a downloaded local model and the browser together.
-- Use the notebook support from a notebook whose current directory is the project.
+| Interface | Start it with | Use it for |
+|---|---|---|
+| Interactive terminal | `heartwood` | Initial setup, conversation, action review, replay, and audit export. |
+| Browser | `heartwood serve` | Visual setup and the same project conversation when the selected model is already available. |
+| Browser with local model | `heartwood launch --web` | Starting a downloaded model and keeping it supervised while the browser is open. |
+| Notebook | `NotebookSession` from a notebook in the project | Detection, task submission, grouped approval, replay, and audit beside the analysis. |
+
+Use `heartwood launch` instead of bare `heartwood` when a downloaded local model must be started for the terminal. The notebook reuses a configured project and running model connection; it does not replace initial setup or local-model supervision.
 
 [Work with the Agent](using-heartwood.md) covers session controls and action review. [Use the Browser and Notebooks](web-interface.md) covers visual setup, local-model progress, Jupyter routing, and shared sessions.
 

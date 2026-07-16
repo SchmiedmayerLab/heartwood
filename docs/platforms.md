@@ -18,7 +18,7 @@ Heartwood should run in the same approved computing environment as the files it 
 |---|---|---|
 | Learning Heartwood on a workstation | Generic Heartwood container | Browser or terminal |
 | Working on a general Linux server | Generic container or native installation, according to local policy | Browser or terminal |
-| Working in Terra | Terra-derived Heartwood image | Browser through Jupyter, terminal, or notebook |
+| Working in Terra | Terra-derived Heartwood image | Start in the terminal; add the browser through Jupyter or use the notebook bridge |
 | Working on Stanford Carina | Native Heartwood installation | Interactive terminal |
 | Working on another managed research platform | Operator-reviewed generic or platform-derived deployment | Depends on platform routing |
 
@@ -50,7 +50,7 @@ Before using controlled data, the deployment owner must verify:
 
 ## Follow a Platform Guide
 
-- [Heartwood on Terra](terra-jupyter-demo.md) explains the custom image, persistent project directory, Jupyter proxy, model options, and synthetic validation workflow.
+- [Use Heartwood on Terra](terra-jupyter-demo.md) provides a beginner-first setup, then covers the terminal, authenticated browser route, notebook workflow, CPU and GPU models, troubleshooting, and synthetic validation.
 - [Heartwood on Stanford Carina](carina-cli.md) explains private storage, installation, local GPU inference, scheduler consent, and synthetic validation.
 - [Run Heartwood in a Container](container-images.md) covers the generic image for workstations and self-hosted environments.
 

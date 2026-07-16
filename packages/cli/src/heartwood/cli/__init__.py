@@ -393,13 +393,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             setup_code, configured_gateway = _configure_setup(parser, args, project=project)
             if setup_code != 0:
                 return setup_code
+            readiness = inspect_deployment(project)
         if readiness.state == "recovery-required":
             print(_format_readiness(readiness))
             print("\nResolve the failed checks, then run `heartwood doctor` again.")
+            if configured_gateway is not None:
+                configured_gateway.stop()
             return 1
         if readiness.state == "compute-required":
             print(_format_readiness(readiness))
             print("\nLocal inference is configured. Start it with `heartwood launch`.")
+            if configured_gateway is not None:
+                configured_gateway.stop()
             return 0
 
     gateway = configured_gateway or SessionGateway(project=project)

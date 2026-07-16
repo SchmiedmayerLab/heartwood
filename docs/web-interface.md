@@ -12,6 +12,16 @@ SPDX-License-Identifier: MIT
 
 The browser and terminal are two views of the same Heartwood project. They use the same conversations, model selection, action review, Skills, and audit history. Both interfaces also report the same project readiness checks. Start either interface from the directory Heartwood should treat as the project; its private configuration and progress remain in `.heartwood/`.
 
+## Choose an Interface
+
+| Interface | Best for | How to start |
+|---|---|---|
+| Interactive terminal | Initial setup, reliable remote use, model startup, and repeated agent work | Run `heartwood`; use `heartwood launch` for a downloaded local model. |
+| Browser | Visual model setup, conversation, grouped action review, and audit inspection | Run `heartwood serve`; use `heartwood launch --web` for a downloaded local model. |
+| Notebook | Detecting project data, submitting a task, reviewing the shared session, and embedding results beside an analysis | Start from a configured project and use `NotebookSession`. |
+
+The notebook API is not a separate agent or model runtime. Configure the project once through the terminal or browser. When using a Heartwood-managed local model, keep `heartwood launch --web` running while the notebook sends requests.
+
 ## Open the Interface
 
 Start the browser interface from the project directory:
@@ -23,7 +33,7 @@ heartwood serve
 
 Open `http://127.0.0.1:8767/`. Use `heartwood launch --web` instead when Heartwood should start a downloaded local model and keep its inference server running with the browser.
 
-The [container guide](container-images.md) is the shortest browser setup when Heartwood is not installed directly on the machine. On Terra, use the authenticated Jupyter proxy route described in [Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly.
+The [container guide](container-images.md) is the shortest browser setup when Heartwood is not installed directly on the machine. On Terra, use the authenticated Jupyter proxy route described in [Use Heartwood on Terra](terra-jupyter-demo.md) instead of exposing the port publicly. The Terra tutorial notebook generates the complete runtime-specific link; a generic `/proxy/8767/` path is not sufficient there.
 
 ## Set Up the Project
 
@@ -63,7 +73,7 @@ After you submit a task, an activity indicator remains in the conversation until
 
 When an action needs confirmation, review every member of the displayed set. **Allow all once** continues the complete OpenHands action set; **Reject all** executes none of it. **Ask Every Time** is the default. A deployment may permit **Auto-Approve Low Risk**, but medium-, high-, and unknown-risk sets still require review.
 
-The synthetic reference workflow in [Heartwood on Terra](terra-jupyter-demo.md#run-the-synthetic-workflow) demonstrates cohort creation, aggregate checks, approval, replay, and audit export without controlled data.
+The synthetic reference workflow in [Use Heartwood on Terra](terra-jupyter-demo.md#5-run-the-synthetic-workflow) demonstrates cohort creation, aggregate checks, approval, replay, and audit export without controlled data.
 
 ## Continue from Another Interface
 
@@ -76,7 +86,7 @@ heartwood --session-id <session-id> chat
 
 Use one active writer for a session. Wait for the current agent turn to become idle before opening that session from another interface. A fresh interface process reconstructs the same configuration and events from `.heartwood/`; browser storage is not the source of truth.
 
-In a notebook process whose current directory is the project:
+In a notebook process whose current directory is the configured project:
 
 ```python
 from heartwood.notebook import NotebookSession
@@ -84,6 +94,8 @@ from heartwood.notebook import NotebookSession
 session = NotebookSession(session_id="<session-id>")
 print(session.replay().event_count)
 ```
+
+`NotebookSession` also exposes detection, model inspection and download planning, task submission, grouped approval, pause and resume, replay, and audit export through the same gateway contracts used by the other interfaces. [The Terra tutorial notebook](terra-jupyter-demo.ipynb) demonstrates the complete synthetic sequence.
 
 ## Inspect and Export Activity
 
