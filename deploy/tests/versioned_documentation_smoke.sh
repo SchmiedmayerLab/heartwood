@@ -31,7 +31,13 @@ cleanup() {
   git remote remove "${remote_name}" 2>/dev/null || true
   git update-ref -d "refs/heads/${stable_branch}" || true
   git update-ref -d "refs/heads/${preview_branch}" || true
-  rm -rf "${remote_root}"
+  for _ in 1 2 3; do
+    rm -rf "${remote_root}" 2>/dev/null && break
+    sleep 0.1
+  done
+  if [[ -e "${remote_root}" ]]; then
+    echo "warning: could not remove temporary documentation remote: ${remote_root}" >&2
+  fi
 }
 trap cleanup EXIT
 
@@ -105,6 +111,8 @@ git show "${stable_branch}:versions.json" | jq --exit-status '
 ' >/dev/null
 
 git init --bare --quiet "${remote_repository}"
+git --git-dir="${remote_repository}" config gc.auto 0
+git --git-dir="${remote_repository}" config maintenance.auto false
 git remote add "${remote_name}" "${remote_repository}"
 bash "${publisher}" \
   --version 0.2.0-beta.1 \
