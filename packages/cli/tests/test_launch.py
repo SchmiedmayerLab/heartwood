@@ -21,6 +21,8 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._launch import (
     LaunchOptions,
     LocalRuntimeSelection,
+    _available_gpu_memory_bytes,
+    _available_system_memory_bytes,
     _catalog_contains_model,
     _discover_slurm_gpu_partitions,
     _ensure_setup,
@@ -29,6 +31,7 @@ from heartwood.cli._launch import (
     _interaction_command,
     _model_size,
     _preflight_vllm,
+    _print_resource_assessment,
     _print_runtime_failure,
     _reentry_command,
     _resolve_runtime_executable,
@@ -118,6 +121,8 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
 
     assert plan.platform_id == "carina"
     assert plan.allocation_required
+    assert plan.context_window == 16_384
+    assert "Context: 16,384 tokens" in plan.format()
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
@@ -234,6 +239,47 @@ def test_launch_reports_missing_selection_artifact_and_runtime(
     )
     assert run_launch(_options(tmp_path), env=env) == 69
     assert "vLLM executable is unavailable" in capsys.readouterr().out
+
+
+def test_launch_scrubs_resource_and_runtime_preflight_environments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(tmp_path / ".heartwood" / "models" / "model")
+    executable = tmp_path / "heartwood-vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    observed: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable",
+        lambda _runtime: executable,
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._print_resource_assessment",
+        lambda _selection, env: observed.append(dict(env)),
+    )
+
+    def stop_after_preflight(_executable: Path, env: dict[str, str]) -> str:
+        observed.append(dict(env))
+        return "synthetic stop"
+
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", stop_after_preflight)
+
+    assert (
+        run_launch(
+            options,
+            env={
+                "HEARTWOOD_PLATFORM": "generic",
+                "PATH": "/usr/bin",
+                "OPENAI_API_KEY": "secret",
+            },
+        )
+        == 69
+    )
+    assert len(observed) == 2
+    assert all("OPENAI_API_KEY" not in env for env in observed)
 
 
 def test_launch_checks_scratch_capacity_and_carina_scratch_requirement(
@@ -476,6 +522,7 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         Path("/opt/llama.cpp/llama-server"),
         model,
         "heartwood-local-model",
+        32_768,
     )
     assert command[:3] == (
         "/opt/llama.cpp/llama-server",
@@ -483,6 +530,77 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         str(model),
     )
     assert "--alias" in command
+    context_index = command.index("--ctx-size")
+    assert command[context_index + 1] == "32768"
+
+
+def test_resource_assessment_reports_context_and_memory_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    selection = LocalRuntimeSelection(
+        model_root=tmp_path / "model",
+        runtime="vllm",
+        model_id="test-model",
+        size_bytes=10 * 1024**3,
+        artifact_sha256=None,
+        context_window=32_768,
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_system_memory_bytes",
+        lambda: 16 * 1024**3,
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env: 12 * 1024**3,
+    )
+
+    _print_resource_assessment(selection, {"PATH": "/usr/bin"})
+
+    output = capsys.readouterr().out
+    assert "Context window: 32,768 tokens" in output
+    assert "Warning: RAM may be insufficient" in output
+    assert "Warning: GPU memory may be insufficient" in output
+
+
+def test_available_system_memory_honors_cgroup_v1_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = {
+        "/proc/meminfo": "MemAvailable: 67108864 kB\n",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes": str(32 * 1024**3),
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes": str(8 * 1024**3),
+    }
+
+    def read_text(path: Path, **_kwargs: object) -> str:
+        try:
+            return content[str(path)]
+        except KeyError as error:
+            raise OSError from error
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    assert _available_system_memory_bytes() == 24 * 1024**3
+
+
+def test_available_gpu_memory_uses_least_available_visible_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.cli._launch.shutil.which",
+        lambda name, **_kwargs: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="16384\n8192\n",
+        ),
+    )
+
+    assert _available_gpu_memory_bytes({"PATH": "/usr/bin"}) == 8 * 1024**3
 
 
 def test_runtime_resolution_and_gguf_directory_contract(
@@ -498,7 +616,7 @@ def test_runtime_resolution_and_gguf_directory_contract(
     assert _resolve_runtime_executable("llama-cpp") == llama
 
     version_root = tmp_path / "runtime"
-    vllm = version_root / "vllm" / "bin" / "vllm"
+    vllm = version_root / "vllm" / "bin" / "heartwood-vllm"
     vllm.parent.mkdir(parents=True)
     vllm.write_text("", encoding="utf-8")
     monkeypatch.setattr("heartwood.cli._launch._native_version_root", lambda: version_root)
@@ -543,6 +661,10 @@ def test_runtime_environment_scrubs_credentials_and_legacy_path_controls() -> No
         {
             "PATH": "/usr/bin",
             "CUDA_VISIBLE_DEVICES": "0",
+            "GOOGLE_PROJECT": "terra-project",
+            "CLUSTER_NAME": "saturn-runtime",
+            "HEARTWOOD_GPU_RUNTIME": "vllm",
+            "HEARTWOOD_PLATFORM_HOME": "/home/jupyter",
             "OPENAI_API_KEY": "secret",
             "STANFORD_AI_API_KEY": "secret",
             "HEARTWOOD_HOME": "/legacy",
@@ -551,6 +673,10 @@ def test_runtime_environment_scrubs_credentials_and_legacy_path_controls() -> No
         }
     )
     assert runtime_env["CUDA_VISIBLE_DEVICES"] == "0"
+    assert runtime_env["GOOGLE_PROJECT"] == "terra-project"
+    assert runtime_env["CLUSTER_NAME"] == "saturn-runtime"
+    assert runtime_env["HEARTWOOD_GPU_RUNTIME"] == "vllm"
+    assert runtime_env["HEARTWOOD_PLATFORM_HOME"] == "/home/jupyter"
     assert runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert not any("API_KEY" in name for name in runtime_env)
     assert "HEARTWOOD_HOME" not in runtime_env
@@ -594,6 +720,35 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     )
     assert interaction[-5:] == ["serve", "--host", "0.0.0.0", "--port", "9876"]
     assert label == "Open the web interface on 0.0.0.0:9876"
+
+
+def test_terra_web_launch_reports_the_authenticated_proxy_route(tmp_path: Path) -> None:
+    interaction, label = _interaction_command(
+        _options(tmp_path, web=True, web_port=8767),
+        env={
+            "HEARTWOOD_PLATFORM": "terra",
+            "GOOGLE_PROJECT": "terra-project",
+            "CLUSTER_NAME": "saturn-runtime",
+        },
+    )
+
+    assert interaction[-5:] == ["serve", "--host", "127.0.0.1", "--port", "8767"]
+    assert label == (
+        "Open the web interface through Terra's authenticated proxy: "
+        "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/"
+    )
+
+
+def test_terra_web_launch_does_not_present_an_incomplete_proxy_route(tmp_path: Path) -> None:
+    _, label = _interaction_command(
+        _options(tmp_path, web=True, web_port=8767),
+        env={"HEARTWOOD_PLATFORM": "terra"},
+    )
+
+    assert label == (
+        "Open the web interface after opening the tutorial notebook to obtain the Terra proxy link"
+    )
+    assert "/proxy/8767/" not in label
 
 
 def test_runtime_readiness_accepts_requested_model_and_stops_after_exit(
@@ -672,20 +827,30 @@ def test_setup_helper_runs_inside_project_without_path_arguments(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    observed: list[tuple[tuple[str, ...], Path | None]] = []
+    observed: list[tuple[tuple[str, ...], Path | None, dict[str, str]]] = []
 
     def completed(
         command: Sequence[str], **kwargs: object
     ) -> subprocess.CompletedProcess[Sequence[str]]:
-        observed.append((tuple(command), cast(Path | None, kwargs.get("cwd"))))
+        observed.append(
+            (
+                tuple(command),
+                cast(Path | None, kwargs.get("cwd")),
+                dict(cast(dict[str, str], kwargs.get("env"))),
+            )
+        )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
-    assert _ensure_setup(_options(tmp_path), {"HEARTWOOD_PLATFORM": "generic"}) == 0
-    assert any("setup" in command for command, _cwd in observed)
-    assert any("doctor" in command for command, _cwd in observed)
-    assert all(cwd == tmp_path for _command, cwd in observed)
-    assert all("--workspace" not in command for command, _cwd in observed)
+    assert _ensure_setup(_options(tmp_path), {"HEARTWOOD_PLATFORM": "terra"}) == 0
+    assert any("setup" in command for command, _cwd, _env in observed)
+    assert any("doctor" in command for command, _cwd, _env in observed)
+    assert all(cwd == tmp_path for _command, cwd, _env in observed)
+    assert all("--workspace" not in command for command, _cwd, _env in observed)
+    assert all(env["HEARTWOOD_PLATFORM"] == "terra" for _command, _cwd, env in observed)
+    assert all(
+        select_platform_adapter(env).adapter_id == "terra" for _command, _cwd, env in observed
+    )
 
 
 def test_setup_helper_propagates_setup_failure_and_missing_selection(
@@ -778,20 +943,32 @@ def test_vllm_preflight_and_output_helpers(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    executable = tmp_path / "bin" / "vllm"
+    executable = tmp_path / "bin" / "heartwood-vllm"
     python = executable.with_name("python")
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\n", encoding="utf-8")
     python.chmod(0o755)
-    observed: list[str] = []
+    observed: list[tuple[str, ...]] = []
 
     def completed(command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        observed.extend(command)
-        return subprocess.CompletedProcess(command, 0, stdout="0.14.0 0.25.0\n")
+        observed.append(tuple(command))
+        if command == (str(executable), "__heartwood_verify_runtime__"):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "Transformers 5.5.0 integration and "
+                    "vLLM GHSA-8fr4-5q9j-m8gm and "
+                    "xgrammar GHSA-7rgv-gqhr-fxg3 fixes verified\n"
+                ),
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
     assert _preflight_vllm(executable, {"PATH": "/usr/bin"}) is None
-    assert "import torchcodec, vllm" in observed[-1]
+    assert "import torch, vllm" in observed[0][-1]
+    assert "torch.cuda.init()" in observed[0][-1]
+    assert observed[1] == (str(executable), "__heartwood_verify_runtime__")
     assert _format_bytes(1024) == "1.0 KiB"
 
     log = tmp_path / "runtime.log"
@@ -831,10 +1008,77 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
             command,
             1,
             stdout="",
-            stderr="first line\nmissing FFmpeg\n",
+            stderr="first line\nmissing runtime library\n",
         ),
     )
-    assert _preflight_vllm(executable, {}) == "missing FFmpeg"
+    assert _preflight_vllm(executable, {}) == "missing runtime library"
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr=(
+                "Traceback (most recent call last):\n"
+                "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)\n"
+            ),
+        ),
+    )
+    assert _preflight_vllm(executable, {}) == (
+        "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)"
+    )
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="0.10.1.1+cu118 2.7.1+cu118 11.8\n"
+        ),
+    )
+    assert "must be Heartwood's secured launcher" in str(_preflight_vllm(executable, {}))
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="0.11.1 2.9.0 12.8\n"
+        ),
+    )
+    assert _preflight_vllm(executable, {}) is None
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, stdout="unknown-version 2.9.0 12.8\n"
+        ),
+    )
+    assert "must be Heartwood's secured launcher" in str(_preflight_vllm(executable, {}))
+
+    wrapper = executable.with_name("heartwood-vllm")
+
+    def failed_compatibility(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command == (str(wrapper), "__heartwood_verify_runtime__"):
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="first line\nincompatible model configuration\n",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", failed_compatibility)
+    assert _preflight_vllm(wrapper, {}) == "incompatible model configuration"
+
+    def timed_out_compatibility(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command == (str(wrapper), "__heartwood_verify_runtime__"):
+            raise subprocess.TimeoutExpired(command, 60)
+        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", timed_out_compatibility)
+    assert "timed out after 60 seconds" in str(_preflight_vllm(wrapper, {}))
 
 
 def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path) -> None:
@@ -846,6 +1090,7 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
         model_id="test-model",
         size_bytes=4,
         artifact_sha256=hashlib.sha256(b"1234").hexdigest(),
+        context_window=32_768,
     )
     _verify_local_model(selection)
     file_destination = tmp_path / "file-stage"

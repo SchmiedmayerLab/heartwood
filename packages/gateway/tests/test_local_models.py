@@ -43,6 +43,7 @@ def test_repository_plan_selects_balanced_gguf_for_cpu() -> None:
     assert plan.model.source_path == "model-q4_k_m.gguf"
     assert plan.model.source_revision == "1" * 40
     assert plan.model.catalog_source == "user-selected"
+    assert plan.model.context_window == 16_384
     assert "CPU cores" in str(plan.model.minimum_resource_envelope)
     assert "balanced single-file GGUF" in plan.selection_reason
 
@@ -65,6 +66,22 @@ def test_repository_plan_prefers_standard_snapshot_when_gpu_runtime_is_available
     assert plan.model.source_path is None
     assert "NVIDIA GPU" in str(plan.model.minimum_resource_envelope)
     assert "NVIDIA vLLM runtime" in plan.selection_reason
+
+
+def test_repository_plan_bounds_context_from_model_metadata() -> None:
+    repository = _repository(
+        _file("config.json", 100),
+        _file("model.safetensors", 1024, digest="a" * 64),
+        context_window=131_072,
+    )
+
+    plan = repository.plan(
+        "example/long-context-model",
+        cpu_available=False,
+        gpu_available=True,
+    )
+
+    assert plan.model.context_window == 32_768
 
 
 def test_repository_plan_reports_unsupported_formats_and_runtime_mismatch() -> None:
@@ -253,6 +270,7 @@ def test_repository_inspection_normalizes_metadata_and_detects_configured_custom
         (lambda choice: replace(choice, size_bytes=0), "storage metadata"),
         (lambda choice: replace(choice, minimum_free_bytes=1), "storage metadata"),
         (lambda choice: replace(choice, license_posture=" "), "license posture"),
+        (lambda choice: replace(choice, context_window=1024), "at least 2048"),
         (lambda choice: replace(choice, source_path="model.bin"), "one GGUF file"),
         (
             lambda choice: replace(choice, source_path="../model.gguf"),
@@ -309,9 +327,11 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
+        "qwen25-coder-7b-instruct-awq-vllm",
         "qwen25-7b-instruct-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
+    assert all(choice.context_window == 32_768 for choice in choices)
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
 
 
@@ -320,14 +340,18 @@ def _repository(
     tags: tuple[str, ...] = ("text-generation",),
     model_type: str = "qwen2",
     pipeline_tag: str | None = "text-generation",
+    context_window: int | None = None,
 ) -> HuggingFaceModelRepository:
+    config: dict[str, object] = {"model_type": model_type}
+    if context_window is not None:
+        config["max_position_embeddings"] = context_window
     info = SimpleNamespace(
         id="example/model",
         sha="1" * 40,
         siblings=list(siblings),
         card_data=SimpleNamespace(license="apache-2.0"),
         tags=list(tags),
-        config={"model_type": model_type},
+        config=config,
         pipeline_tag=pipeline_tag,
     )
     return HuggingFaceModelRepository(model_info=lambda *_args, **_kwargs: info)

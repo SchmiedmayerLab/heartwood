@@ -75,6 +75,8 @@ _AGENT_LLM_RETRY_MIN_WAIT_SECONDS = 1
 _AGENT_LLM_RETRY_MULTIPLIER = 2.0
 _AGENT_LLM_LOCAL_TIMEOUT_SECONDS = 600
 _AGENT_LLM_TIMEOUT_SECONDS = 180
+_AGENT_LLM_DEFAULT_MAX_MESSAGE_CHARS = 30_000
+_AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN = 4
 
 
 class OpenHandsSdkBackend:
@@ -279,6 +281,9 @@ class OpenHandsSdkBackend:
             "api_version": self.profile.api_version,
             "aws_region_name": self.profile.aws_region_name,
             "aws_profile_name": self.profile.aws_profile_name,
+            "max_input_tokens": self.profile.max_input_tokens,
+            "max_output_tokens": self.profile.max_output_tokens,
+            "max_message_chars": _llm_max_message_chars(self.profile),
             "log_completions": False,
             **_llm_resilience_options(self.profile),
         }
@@ -445,6 +450,16 @@ def _llm_resilience_options(profile: ModelProfile) -> dict[str, int | float]:
             _AGENT_LLM_LOCAL_TIMEOUT_SECONDS if profile.is_local else _AGENT_LLM_TIMEOUT_SECONDS
         ),
     }
+
+
+def _llm_max_message_chars(profile: ModelProfile) -> int:
+    """Keep individual local events useful at the configured input capacity."""
+    if profile.max_input_tokens is None:
+        return _AGENT_LLM_DEFAULT_MAX_MESSAGE_CHARS
+    return max(
+        _AGENT_LLM_DEFAULT_MAX_MESSAGE_CHARS,
+        profile.max_input_tokens * _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN,
+    )
 
 
 def _backend_error(error: Exception) -> BackendEvent:

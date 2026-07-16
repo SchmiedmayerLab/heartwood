@@ -27,6 +27,10 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
       - name: Validate build graph
         run: >-
           docker buildx bake --file docker-bake.hcl --print
@@ -34,11 +38,50 @@ jobs:
           > /tmp/gpu-build-graph.json
       - name: Validate runtime lock and launcher
         run: |
-          grep --fixed-strings 'vllm==0.25.0' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'torch==2.11.0' images/gpu/vllm-requirements.txt
+          cp images/gpu/vllm-requirements.txt /tmp/vllm-requirements.expected
+          uv pip compile \
+            --python-version 3.12 \
+            --python-platform x86_64-manylinux_2_28 \
+            --generate-hashes \
+            --emit-index-url \
+            --exclude-newer 2026-07-15T00:00:00Z \
+            --override images/gpu/vllm-overrides.txt \
+            --output-file images/gpu/vllm-requirements.txt \
+            images/gpu/vllm.in
+          cmp /tmp/vllm-requirements.expected images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'vllm-0.10.1.1%2Bcu118' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'certifi-2026.6.17-py3-none-any.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'ray==2.55.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'setuptools==78.1.1' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'transformers==5.5.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'requests==2.34.2' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'urllib3==2.7.0' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-overrides.txt
+          grep --fixed-strings 'idna==3.18' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'idna==3.18' images/gpu/vllm-overrides.txt
+          grep --fixed-strings 'nvidia-cuda-runtime-cu11==11.8.89' images/gpu/vllm-requirements.txt
+          if grep --fixed-strings --quiet -- '--extra-index-url https://download.pytorch.org/whl/cu118' images/gpu/vllm-requirements.txt; then
+            echo 'CUDA artifacts must use immutable wheel URLs instead of exposing the CUDA index to general dependency resolution.' >&2
+            exit 1
+          fi
+          if grep --fixed-strings --quiet 'nvidia-cuda-runtime-cu13' images/gpu/vllm-requirements.txt; then
+            echo 'CUDA 13 is incompatible with the NVIDIA driver currently available on Terra.' >&2
+            exit 1
+          fi
+          if grep --fixed-strings --quiet 'certifi==2022.12.7' images/gpu/vllm-requirements.txt; then
+            echo 'The GPU lock must not use the obsolete CA bundle mirrored by the CUDA index.' >&2
+            exit 1
+          fi
           grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt
           bash -n images/gpu/start_vllm.sh
+          bash -n images/gpu/heartwood-vllm
           test -x images/gpu/start_vllm.sh
+          test -x images/gpu/heartwood-vllm
 
   pull-request-build:
     name: Build GPU candidate ${{ matrix.target }}

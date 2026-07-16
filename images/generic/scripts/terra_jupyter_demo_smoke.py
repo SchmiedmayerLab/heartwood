@@ -49,7 +49,10 @@ def _loopback_port(env_name: str, *, excluded: frozenset[int] = frozenset()) -> 
 
 GATEWAY_PORT = _loopback_port("HEARTWOOD_TERRA_DEMO_GATEWAY_PORT")
 PROXY_PORT = _loopback_port("HEARTWOOD_TERRA_DEMO_PROXY_PORT", excluded=frozenset({GATEWAY_PORT}))
-SERVICE_PREFIX = os.environ.get("HEARTWOOD_TERRA_DEMO_SERVICE_PREFIX", "/user/synthetic/")
+SERVICE_PREFIX = os.environ.get(
+    "HEARTWOOD_TERRA_DEMO_SERVICE_PREFIX",
+    "/proxy/heartwood-ci/saturn-smoke/jupyter/",
+)
 SESSION_ID = os.environ.get("HEARTWOOD_TERRA_DEMO_SESSION_ID", "terra-demo-smoke")
 PROJECT_ROOT = Path(
     os.environ.get("HEARTWOOD_TERRA_DEMO_PROJECT_ROOT", "/tmp/heartwood-terra-demo")
@@ -333,6 +336,13 @@ def _verify_notebook_api() -> None:
     expected_proxy_url = f"{_normalize_prefix(SERVICE_PREFIX).rstrip('/')}/proxy/{GATEWAY_PORT}/"
     if jupyter_proxy_url(port=GATEWAY_PORT, env=env) != expected_proxy_url:
         raise AssertionError("notebook proxy URL did not match Terra-style service prefix")
+    leonardo_env = {
+        "GOOGLE_PROJECT": "heartwood-ci",
+        "CLUSTER_NAME": "saturn-smoke",
+    }
+    expected_leonardo_url = f"/proxy/heartwood-ci/saturn-smoke/jupyter/proxy/{GATEWAY_PORT}/"
+    if jupyter_proxy_url(port=GATEWAY_PORT, env=leonardo_env) != expected_leonardo_url:
+        raise AssertionError("notebook proxy URL did not match Terra Leonardo route")
 
     session = NotebookSession(session_id=f"{SESSION_ID}-notebook")
     if session.project.root != PROJECT_ROOT.resolve():

@@ -1,5 +1,11 @@
+#!/usr/bin/env bash
 # This source file is part of the Heartwood open-source project
+#
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
 # SPDX-License-Identifier: MIT
 
-version = "0.2.0-beta.2"
+set -euo pipefail
+
+runtime_bin="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec "${runtime_bin}/python" "${runtime_bin}/heartwood_vllm.py" "$@"

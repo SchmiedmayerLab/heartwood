@@ -299,17 +299,26 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     combined = "\n".join(sources)
 
     assert notebook["nbformat"] == 4
-    assert "Terra-Style Jupyter Demo" in sources[0]
+    assert "Analyze Synthetic Data with Heartwood on Terra" in sources[0]
     assert f"{_declared_version()}-terra`" in combined
     assert "contains no model weights" in combined
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
     assert "NotebookSession" in combined
+    assert "has_authenticated_jupyter_proxy" in combined
     assert "jupyter_proxy_url(port=8767)" in combined
     assert "heartwood serve" in combined
+    assert "heartwood launch --web" in combined
+    assert "Open Heartwood in a new tab" in combined
     assert "project_root = Path.cwd().resolve()" in combined
+    assert "/home/jupyter/heartwood-demo" not in combined
     assert "os.chdir(project_root)" not in combined
     assert "--workspace" not in combined
+    assert combined.index("readiness = session.project_readiness()") < combined.index(
+        "input_root.mkdir(parents=True, exist_ok=True)"
+    )
+    assert 'readiness["state"] == "setup-required"' in combined
+    assert 'session.discover_models("local", refresh=True)' in combined
     assert "HEARTWOOD_WORKSPACE" not in combined
     assert "session.detect()" in combined
     assert "target-condition cohort" in combined
@@ -400,7 +409,7 @@ def test_beginner_guides_explain_one_project_and_local_server_lifecycle() -> Non
 def test_carina_runbook_uses_project_local_release_workflow() -> None:
     runbook = _read("docs/carina-cli.md")
 
-    assert f"## Install Release {_declared_version()}" in runbook
+    assert f"## Step 2: Install Release {_declared_version()}" in runbook
     assert f"--version {_declared_version()}" in runbook
     assert "project's private `.heartwood/` state" in runbook
     assert "heartwood models download qwen25-7b-instruct-vllm" in runbook
@@ -434,6 +443,15 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "heartwood launch --web" in runbook
     assert "edge-terra-coder" not in runbook
     assert "edge-terra-smoke" not in runbook
+
+
+def test_container_examples_preserve_bind_mount_writability() -> None:
+    guide = _read("docs/container-images.md")
+
+    assert guide.count("docker run --rm -it \\") == 8
+    assert guide.count('--user "$(id -u):$(id -g)" \\') == 8
+    assert guide.count("--env HOME=/tmp \\") == 8
+    assert "Select exactly one immutable release image" in _read("docs/terra-jupyter-demo.md")
 
 
 def test_platform_extension_guide_defines_one_shared_mechanism() -> None:

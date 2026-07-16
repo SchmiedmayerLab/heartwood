@@ -17,6 +17,7 @@ from heartwood.gateway._action_settings import (
 )
 from heartwood.gateway._asgi import GatewayAsgiApp
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._jupyter import has_authenticated_jupyter_proxy, jupyter_proxy_url
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
     LocalModelChoice,
@@ -156,7 +157,9 @@ __all__ = [
     "custom_model_connection",
     "download_model_artifact",
     "download_model_snapshot",
+    "has_authenticated_jupyter_proxy",
     "inspect_deployment",
+    "jupyter_proxy_url",
     "load_model_artifact_catalog",
     "load_model_connections",
     "load_model_snapshot_catalog",

@@ -137,6 +137,9 @@ def inspect_deployment(
             )
         )
 
+    if adapter.adapter_id == "terra":
+        checks.extend(_terra_environment_checks(project=project, env=active_env))
+
     config: ProjectConfig | None = None
     config_store = ProjectConfigStore(
         project,
@@ -497,6 +500,67 @@ def _carina_compute_checks(
         ),
         False,
     )
+
+
+def _terra_environment_checks(
+    *,
+    project: ProjectContext,
+    env: Mapping[str, str],
+) -> tuple[ReadinessCheck, ...]:
+    """Validate the persistent project boundary and optional GPU attachment on Terra."""
+    persistent_root = Path(
+        env.get("HEARTWOOD_PLATFORM_HOME", "").strip() or "/home/jupyter"
+    ).resolve()
+    project_root = project.root.resolve()
+    if project_root == persistent_root:
+        storage = ReadinessCheck(
+            "terra-project-storage",
+            "fail",
+            (
+                f"Create and enter a dedicated project directory under {persistent_root}; "
+                "the persistent-disk root is too broad for an agent project"
+            ),
+        )
+    elif project_root.is_relative_to(persistent_root):
+        storage = ReadinessCheck(
+            "terra-project-storage",
+            "pass",
+            f"Project is inside Terra persistent storage at {persistent_root}",
+        )
+    else:
+        storage = ReadinessCheck(
+            "terra-project-storage",
+            "fail",
+            (
+                f"Move the project under Terra persistent storage at {persistent_root}; "
+                "files outside that mount can be lost when the Cloud Environment is replaced"
+            ),
+        )
+
+    checks = [storage]
+    gpu_runtime = env.get("HEARTWOOD_GPU_RUNTIME", "").strip().lower()
+    if gpu_runtime == "vllm":
+        visible = gpu_visible(env)
+        checks.append(
+            ReadinessCheck(
+                "terra-gpu-runtime",
+                "pass" if visible else "warning",
+                (
+                    "Terra NVIDIA runtime and attached GPU detected"
+                    if visible
+                    else "Terra NVIDIA runtime detected; attach a GPU before local GPU inference"
+                ),
+            )
+        )
+    elif gpu_runtime == "none":
+        checks.append(
+            ReadinessCheck(
+                "terra-gpu-runtime",
+                "pass",
+                "Portable Terra runtime selected; local models use CPU inference",
+            )
+        )
+    return tuple(checks)
 
 
 def gpu_visible(env: Mapping[str, str]) -> bool:

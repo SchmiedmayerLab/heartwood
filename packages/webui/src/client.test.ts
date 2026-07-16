@@ -423,6 +423,7 @@ describe("GatewayClient", () => {
         minimum_free_bytes: 1024,
         license_posture: "Review source terms",
         catalog_source: "user-selected",
+        context_window: 32_768,
         artifact_sha256: "a".repeat(64),
         minimum_resource_envelope: "Estimated minimum",
         recommended_resource_envelope: "Recommended resources",
@@ -668,6 +669,27 @@ describe("GatewayClient", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/user/synthetic/proxy/8767/sessions/session-test/events?after=0",
+    );
+  });
+
+  it("preserves the complete Terra Leonardo proxy base path", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/",
+    );
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ events: syntheticEvents().slice(0, 1) }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const client = new GatewayClient();
+    await client.replayEvents("session-test", 0);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/sessions/session-test/events?after=0",
     );
   });
 

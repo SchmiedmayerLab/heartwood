@@ -64,6 +64,11 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: bash images/generic/scripts/container_persistence_smoke.sh
+      - name: Verify host-user bind-mount persistence
+        run: >-
+          bash images/generic/scripts/bind_mount_user_smoke.sh
+          heartwood-runtime-smoke:local
+          ${{ matrix.platform }}
       - name: Download and verify CI-only model fixture
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
@@ -185,10 +190,23 @@ jobs:
           docker run --rm --platform linux/amd64
           --entrypoint bash
           --volume heartwood-terra-ci-project:/home/jupyter
+          --env GOOGLE_PROJECT=heartwood-ci
+          --env CLUSTER_NAME=terra-managed-launch-smoke
+          --env WORKSPACE_ID=terra-managed-launch-smoke
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           -c 'mkdir -p /home/jupyter/model-analysis &&
           cd /home/jupyter/model-analysis &&
           exec heartwood models download llama-cpp-stories260k-ci'
+      - name: Run Terra managed local-model launch smoke
+        run: >-
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /home/jupyter/model-analysis --entrypoint bash
+          --volume heartwood-terra-ci-project:/home/jupyter
+          --env GOOGLE_PROJECT=heartwood-ci
+          --env CLUSTER_NAME=terra-managed-launch-smoke
+          --env WORKSPACE_ID=terra-managed-launch-smoke
+          ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
+          /opt/heartwood/images/platform/scripts/terra_managed_launch_smoke.sh
       - name: Run Terra mounted local inference without network
         run: >-
           docker run --rm --platform linux/amd64 --network none

@@ -305,9 +305,27 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
     config = RealSessionGateway(project=ProjectContext(project), env={}).config_store.load()
     assert config.local_model is not None
     assert config.local_model.source_repository == "example/research-model-gguf"
+    assert "Heartwood model plan" in capsys.readouterr().out
+
+    class InteractiveInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdin", InteractiveInput())
+    monkeypatch.setattr(
+        "heartwood.cli._interactive_chat",
+        lambda *_args, **_kwargs: pytest.fail(
+            "bare heartwood must not open a conversation before local inference starts"
+        ),
+    )
+    capsys.readouterr()
+    assert _run(project, monkeypatch, []) == 0
+    output = capsys.readouterr().out
+    assert "Readiness: compute-required" in output
+    assert "Start it with `heartwood launch`" in output
+
     assert _run(project, monkeypatch, ["setup"]) == 0
     output = capsys.readouterr().out
-    assert "Heartwood model plan" in output
     assert "Run `heartwood launch`" in output
 
 
@@ -1023,6 +1041,7 @@ def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_serve_starts_gateway_for_current_project(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     project = tmp_path / "analysis"
     web_root = tmp_path / "web"
@@ -1033,6 +1052,9 @@ def test_serve_starts_gateway_for_current_project(
         "heartwood.cli.uvicorn.run",
         lambda _app, *, host, port, log_level: observed.append((host, port)),  # noqa: ARG005
     )
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
+    monkeypatch.setenv("GOOGLE_PROJECT", "terra-project")
+    monkeypatch.setenv("CLUSTER_NAME", "saturn-runtime")
 
     assert (
         _run(
@@ -1054,6 +1076,31 @@ def test_serve_starts_gateway_for_current_project(
     )
     assert observed == [("0.0.0.0", 9876)]
     assert (project / ".heartwood" / "sessions").is_dir()
+    assert (
+        "Terra browser path: /proxy/terra-project/saturn-runtime/jupyter/proxy/9876/"
+        in capsys.readouterr().out
+    )
+
+
+def test_serve_does_not_present_an_incomplete_terra_proxy_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
+    monkeypatch.setattr("heartwood.cli.uvicorn.run", lambda *_args, **_kwargs: None)
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
+    monkeypatch.delenv("GOOGLE_PROJECT", raising=False)
+    monkeypatch.delenv("CLUSTER_NAME", raising=False)
+    monkeypatch.delenv("JUPYTERHUB_SERVICE_PREFIX", raising=False)
+
+    assert _run(tmp_path / "analysis", monkeypatch, ["serve", "--web-root", str(web_root)]) == 0
+    output = capsys.readouterr().out
+    assert "Terra browser path unavailable" in output
+    assert "Open the tutorial notebook" in output
+    assert "/proxy/8767/" not in output
 
 
 def test_cli_formatters_fail_closed_on_malformed_projection_data(

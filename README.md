@@ -32,7 +32,13 @@ Heartwood runs alongside the project instead of moving it into a separate servic
 
 Heartwood treats the directory where it starts as the project and keeps its setup and conversation history with that project.
 
-Choose the starting path that matches your environment:
+Getting to the first task involves three decisions:
+
+1. **Where Heartwood runs:** a container, a native installation, or a managed platform image.
+2. **Where the model runs:** in the research environment, on the same machine, or through an authorized provider.
+3. **How you interact:** the terminal, browser, or notebook.
+
+Choose the installation path that matches your environment:
 
 | Your environment | Recommended path |
 |---|---|
@@ -41,14 +47,14 @@ Choose the starting path that matches your environment:
 | Terra | Use the [Terra image and Jupyter workflow](docs/terra-jupyter-demo.md). |
 | Stanford Carina | Use the [Carina installation and terminal workflow](docs/carina-cli.md). |
 
-Then enter the directory Heartwood may work on and start the conversation:
+Then enter the directory Heartwood may work on and start Heartwood:
 
 ```bash
 cd /path/to/analysis-project
 heartwood
 ```
 
-The first run guides you through choosing a model. See [Get Started](docs/getting-started.md) for the complete first-use path.
+The first run guides you through choosing a model and opens the conversation when the model is available. A downloaded local model instead directs you to `heartwood launch`, which starts and supervises its inference server. Follow [Get Started](docs/getting-started.md) for the complete first-use path, or use [Troubleshooting](docs/troubleshooting.md) when Heartwood reports that setup or compute is still required.
 
 ## Choose a Model
 

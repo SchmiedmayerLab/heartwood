@@ -18,21 +18,24 @@ nav = [
     { "Home" = "index.md" },
     { "Start Here" = [
         { "Get Started" = "docs/getting-started.md" },
+        { "Choose an Environment" = "docs/platforms.md" },
         { "Work with the Agent" = "docs/using-heartwood.md" },
+        { "Troubleshooting" = "docs/troubleshooting.md" },
+    ] },
+    { "Interfaces" = [
         { "Browser and Notebooks" = "docs/web-interface.md" },
     ] },
     { "Models" = [
         { "Connect a Model" = "docs/model-connections.md" },
         { "Run a Model Locally" = "docs/getting-started-offline.md" },
     ] },
-    { "Platforms" = [
-        { "Choose an Environment" = "docs/platforms.md" },
-        { "Terra" = "docs/terra-jupyter-demo.md" },
-        { "Stanford Carina" = "docs/carina-cli.md" },
+    { "Platform Guides" = [
+        { "Containers" = "docs/container-images.md" },
+        { "Use Heartwood on Terra" = "docs/terra-jupyter-demo.md" },
+        { "Use Heartwood on Stanford Carina" = "docs/carina-cli.md" },
     ] },
     { "Deployment" = [
         { "Deployment Overview" = "docs/deployment.md" },
-        { "Container Images" = "docs/container-images.md" },
         { "Platform-Specific Images" = "docs/platform-images.md" },
         { "Support and Validation" = "docs/platform-support.md" },
         { "Release Heartwood" = "docs/releases.md" },
@@ -69,12 +72,15 @@ alias = true
 [project.theme]
 features = [
     "content.code.copy",
+    "navigation.footer",
     "navigation.indexes",
+    "navigation.path",
     "navigation.sections",
     "navigation.tabs",
     "navigation.tabs.sticky",
     "navigation.top",
     "search.highlight",
+    "toc.follow",
 ]
 
 [project.theme.icon]

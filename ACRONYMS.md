@@ -110,6 +110,7 @@ This glossary defines acronyms, platform names, formats, and specialized terms u
 | Term | Expansion | What it is |
 |---|---|---|
 | AI | Artificial Intelligence | Broad term for systems that perform tasks associated with human intelligence |
+| AWQ | Activation-aware Weight Quantization | Model quantization method used to reduce GPU memory requirements while retaining inference quality |
 | LLM | Large Language Model | Model used by the OpenHands conversation runtime |
 | GGUF | GPT-Generated Unified Format | llama.cpp model artifact format used for local inference profiles |
 | ML | Machine Learning | Statistical/modeling techniques that learn patterns from data |

@@ -23,6 +23,7 @@ from heartwood.gateway._openhands_sdk import (
     _agent_context,
     _analyzed_risk,
     _configure_upstream_defaults,
+    _llm_max_message_chars,
     _llm_resilience_options,
     _security_configuration,
     _terminal_tool_params,
@@ -125,6 +126,28 @@ def test_openhands_bounds_interactive_model_retries() -> None:
         "retry_multiplier": 2.0,
         "timeout": 180,
     }
+
+
+def test_openhands_aligns_local_event_capacity_with_input_budget() -> None:
+    local = ModelProfile(
+        profile_id="local",
+        model="openai/local",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
+        max_input_tokens=28_672,
+        max_output_tokens=4_096,
+    )
+    hosted = ModelProfile(
+        profile_id="hosted",
+        model="openai/model",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    assert _llm_max_message_chars(local) == 114_688
+    assert _llm_max_message_chars(hosted) == 30_000
 
 
 def test_openhands_security_configuration_uses_upstream_defense_in_depth() -> None:
