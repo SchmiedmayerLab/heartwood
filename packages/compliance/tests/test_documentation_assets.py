@@ -403,7 +403,7 @@ def test_beginner_guides_explain_one_project_and_local_server_lifecycle() -> Non
 def test_carina_runbook_uses_project_local_release_workflow() -> None:
     runbook = _read("docs/carina-cli.md")
 
-    assert f"## Install Release {_declared_version()}" in runbook
+    assert f"## Step 2: Install Release {_declared_version()}" in runbook
     assert f"--version {_declared_version()}" in runbook
     assert "project's private `.heartwood/` state" in runbook
     assert "heartwood models download qwen25-7b-instruct-vllm" in runbook

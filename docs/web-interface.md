@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Use the Browser and Notebooks
 
-Use the browser when you want visual setup, conversation, action review, and audit inspection. Use the notebook bridge when Heartwood should participate beside an analysis. Neither creates a separate project: the terminal, browser, and notebook use the same configuration, sessions, Skills, and audit history under `.heartwood/`.
+Use the browser when you want visual setup, conversation, action review, and audit inspection. Use the notebook bridge when Heartwood should participate beside an analysis. Neither creates a separate project: the terminal, browser, and notebook offer the same conversations, model selection, action review, Skills, and audit history under `.heartwood/`.
 
 !!! note "Before you begin"
 
