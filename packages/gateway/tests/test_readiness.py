@@ -181,6 +181,16 @@ def test_terra_requires_a_dedicated_project_on_persistent_storage(tmp_path: Path
     )
     assert unknown_mount.state == "recovery-required"
 
+    whitespace_home = inspect_deployment(
+        ProjectContext(misleading_project),
+        env={"HEARTWOOD_PLATFORM": "terra", "HEARTWOOD_PLATFORM_HOME": "   "},
+    )
+    whitespace_storage = next(
+        check for check in whitespace_home.checks if check.check_id == "terra-project-storage"
+    )
+    assert whitespace_home.state == "recovery-required"
+    assert "/home/jupyter" in whitespace_storage.summary
+
 
 def test_terra_gpu_image_reports_attachment_readiness(tmp_path: Path) -> None:
     persistent_root = tmp_path / "jupyter"

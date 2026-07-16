@@ -445,6 +445,15 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "edge-terra-smoke" not in runbook
 
 
+def test_container_examples_preserve_bind_mount_writability() -> None:
+    guide = _read("docs/container-images.md")
+
+    assert guide.count("docker run --rm -it \\") == 8
+    assert guide.count('--user "$(id -u):$(id -g)" \\') == 8
+    assert guide.count("--env HOME=/tmp \\") == 8
+    assert "Select exactly one immutable release image" in _read("docs/terra-jupyter-demo.md")
+
+
 def test_platform_extension_guide_defines_one_shared_mechanism() -> None:
     guide = _read("docs/platform-images.md")
 

@@ -42,10 +42,17 @@ The terminal, browser, and notebook use the same model selection, sessions, acti
 
 ## Step 1: Create the Cloud Environment
 
-In the Terra workspace, open **Analyses**, select the cloud icon, open the Jupyter environment settings, and choose **Customize** or **Custom Environment** under **Application Configuration**. Paste one immutable release image:
+In the Terra workspace, open **Analyses**, select the cloud icon, open the Jupyter environment settings, and choose **Customize** or **Custom Environment** under **Application Configuration**. Select exactly one immutable release image for the intended model path:
+
+**Portable CPU or hosted-model path:**
 
 ```text
 ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra
+```
+
+**NVIDIA GPU local-model path:**
+
+```text
 ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra-gpu-nvidia
 ```
 

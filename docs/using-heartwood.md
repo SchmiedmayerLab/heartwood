@@ -153,7 +153,7 @@ Review the export before moving it outside the deployment boundary. A scrubbed e
 
 ## Continue from Here
 
-- Use [Browser and Notebooks](web-interface.md) for visual setup, notebook APIs, Jupyter routing, and shared-session examples.
-- Use [Project Files and State](project-state.md) before moving, backing up, or resetting a project.
-- Use [Troubleshooting](troubleshooting.md) when readiness, model startup, or an interface does not behave as expected.
+- Read [Browser and Notebooks](web-interface.md) for visual setup, notebook APIs, Jupyter routing, and shared-session examples.
+- Review [Project Files and State](project-state.md) before moving, backing up, or resetting a project.
+- Consult [Troubleshooting](troubleshooting.md) when readiness, model startup, or an interface does not behave as expected.
 - Review [Audit and Reproducibility](../design/06-observability-audit.md) for the technical distinction between resumable sessions and content-minimized audit records.

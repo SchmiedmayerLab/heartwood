@@ -73,6 +73,14 @@ jobs:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
           DOCKER_PLATFORM: ${{ matrix.platform }}
         run: docker pull --platform "${DOCKER_PLATFORM}" "${CANDIDATE_REFERENCE}"
+      - name: Run staged host-user bind-mount smoke
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          bash images/generic/scripts/bind_mount_user_smoke.sh
+          "${CANDIDATE_REFERENCE}"
+          "${DOCKER_PLATFORM}"
       - name: Run staged generic OpenHands smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}

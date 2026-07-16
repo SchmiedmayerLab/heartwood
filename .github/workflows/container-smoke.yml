@@ -64,6 +64,11 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: bash images/generic/scripts/container_persistence_smoke.sh
+      - name: Verify host-user bind-mount persistence
+        run: >-
+          bash images/generic/scripts/bind_mount_user_smoke.sh
+          heartwood-runtime-smoke:local
+          ${{ matrix.platform }}
       - name: Download and verify CI-only model fixture
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}

@@ -142,6 +142,10 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert terra["gpu_runtime_tag"] == "edge-terra-gpu-nvidia"
     assert terra["commit_runtime_tag"] == "sha-<git-sha>-terra"
     assert terra["commit_gpu_runtime_tag"] == "sha-<git-sha>-terra-gpu-nvidia"
+    assert terra["gpu_runtime"] == (
+        "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.10.1.1/"
+        "vllm-0.10.1.1%2Bcu118-cp38-abi3-manylinux1_x86_64.whl"
+    )
     assert terra["bundles_model_artifact"] is False
     assert terra["supported_platforms"] == ["linux/amd64"]
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
@@ -689,6 +693,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}"' in publish
     assert '"${IMAGE_NAME}:sha-${GIT_SHA}"' in publish
     assert 'docker pull --platform "${DOCKER_PLATFORM}" "${CANDIDATE_REFERENCE}"' in publish
+    assert "Run staged host-user bind-mount smoke" in publish
     assert "Run staged generic OpenHands smoke" in publish
     assert "Run staged generic local inference smoke" in publish
     assert 'docker run --rm --init --platform "${DOCKER_PLATFORM}"' in publish
@@ -758,6 +763,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis" in smoke
     assert "HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis" in smoke
     assert "container_persistence_smoke.sh" in smoke
+    assert "Verify host-user bind-mount persistence" in smoke
+    assert "bind_mount_user_smoke.sh" in smoke
     assert "Download and verify CI-only model fixture" in smoke
     assert "heartwood models download llama-cpp-stories260k-ci" in smoke
     assert "--volume heartwood-ci-project:/workspace" in smoke

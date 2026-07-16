@@ -508,7 +508,9 @@ def _terra_environment_checks(
     env: Mapping[str, str],
 ) -> tuple[ReadinessCheck, ...]:
     """Validate the persistent project boundary and optional GPU attachment on Terra."""
-    persistent_root = Path(env.get("HEARTWOOD_PLATFORM_HOME") or "/home/jupyter").resolve()
+    persistent_root = Path(
+        env.get("HEARTWOOD_PLATFORM_HOME", "").strip() or "/home/jupyter"
+    ).resolve()
     project_root = project.root.resolve()
     if project_root == persistent_root:
         storage = ReadinessCheck(
