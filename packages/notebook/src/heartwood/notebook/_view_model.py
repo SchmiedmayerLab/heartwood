@@ -8,13 +8,11 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
-from urllib.parse import quote
 
-from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway
+from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway, jupyter_proxy_url
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 
@@ -161,6 +159,22 @@ class NotebookSession:
     def configure_model_source(self, source_id: str) -> dict[str, object]:
         """Prepare the same project model source used by terminal and browser clients."""
         return self.gateway.configure_model_source(source_id)
+
+    def discover_models(
+        self,
+        connection_id: str,
+        *,
+        token: str | None = None,
+        base_url: str | None = None,
+        refresh: bool = False,
+    ) -> dict[str, object]:
+        """Discover models through the shared authorized connection catalog."""
+        return self.gateway.discover_models(
+            connection_id,
+            token=token,
+            base_url=base_url,
+            refresh=refresh,
+        )
 
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or update one non-secret model profile."""
@@ -403,24 +417,6 @@ def _upsert_approval(approvals: list[ApprovalControl], control: ApprovalControl)
             approvals[index] = control
             return
     approvals.append(control)
-
-
-def jupyter_proxy_url(*, port: int, env: dict[str, str] | None = None) -> str:
-    """Build a `jupyter-server-proxy` URL for the current notebook server."""
-    active_env = os.environ if env is None else env
-    service_prefix = active_env.get("JUPYTERHUB_SERVICE_PREFIX", "").strip()
-    if service_prefix:
-        normalized = service_prefix if service_prefix.startswith("/") else f"/{service_prefix}"
-        return f"{normalized.rstrip('/')}/proxy/{port}/"
-
-    google_project = active_env.get("GOOGLE_PROJECT", "").strip()
-    cluster_name = active_env.get("CLUSTER_NAME", "").strip()
-    if google_project and cluster_name:
-        project = quote(google_project, safe="")
-        cluster = quote(cluster_name, safe="")
-        return f"/proxy/{project}/{cluster}/jupyter/proxy/{port}/"
-
-    return f"/proxy/{port}/"
 
 
 def _activity_item(event: SessionEvent) -> ActivityItem:

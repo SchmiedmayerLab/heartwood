@@ -638,8 +638,38 @@ class SessionGateway:
                         bytes_total=size,
                         path=str(path),
                     )
+        preferred_runtime = self._preferred_local_runtime()
+        local_choices = list(self._local_model_choices.values())
+        local_choices.sort(
+            key=lambda choice: (
+                selected is None or choice.model_id != selected.artifact_id,
+                not self._local_runtime_available(choice.runtime),
+                choice.runtime != preferred_runtime,
+            )
+        )
+        preferred_id = next(
+            (
+                choice.model_id
+                for choice in local_choices
+                if self._local_runtime_available(choice.runtime)
+                and choice.runtime == preferred_runtime
+            ),
+            None,
+        )
         choices = [
-            self._local_model_choice_dict(choice) for choice in self._local_model_choices.values()
+            self._local_model_choice_dict(
+                choice,
+                recommendation=(
+                    "Selected for this project"
+                    if selected is not None and choice.model_id == selected.artifact_id
+                    else (
+                        "Recommended for this deployment"
+                        if selected is None and choice.model_id == preferred_id
+                        else None
+                    )
+                ),
+            )
+            for choice in local_choices
         ]
         if (
             selected is not None
@@ -649,16 +679,17 @@ class SessionGateway:
             persisted = _selected_local_model_dict(selected)
             runtime = str(persisted["runtime"])
             available = self._local_runtime_available(runtime)
-            choices.append(
+            choices.insert(
+                0,
                 {
                     **persisted,
                     "available": available,
-                    "availability_reason": (
-                        "Available on this deployment"
-                        if available
-                        else "The selected runtime is not available on this deployment"
+                    "availability_reason": self._local_model_availability_reason(
+                        runtime,
+                        available=available,
+                        recommendation="Selected for this project",
                     ),
-                }
+                },
             )
         return {
             **self.artifact_catalog.safe_dict(),
@@ -1049,15 +1080,42 @@ class SessionGateway:
         self._downloadable_local_model_choices[choice.model_id] = choice
         return choice
 
-    def _local_model_choice_dict(self, choice: LocalModelChoice) -> dict[str, object]:
+    def _local_model_choice_dict(
+        self,
+        choice: LocalModelChoice,
+        *,
+        recommendation: str | None = None,
+    ) -> dict[str, object]:
         available = self._local_runtime_available(choice.runtime)
-        if available:
-            reason = "Available on this deployment"
-        elif choice.runtime == "vllm":
-            reason = "Requires a Heartwood NVIDIA GPU runtime"
-        else:
-            reason = "The portable CPU runtime is not available on this deployment"
+        reason = self._local_model_availability_reason(
+            choice.runtime,
+            available=available,
+            recommendation=recommendation,
+        )
         return {**choice.safe_dict(), "available": available, "availability_reason": reason}
+
+    @staticmethod
+    def _local_model_availability_reason(
+        runtime: str,
+        *,
+        available: bool,
+        recommendation: str | None,
+    ) -> str:
+        if available:
+            return recommendation or "Available on this deployment"
+        unavailable = (
+            "Requires a Heartwood NVIDIA GPU runtime"
+            if runtime == "vllm"
+            else "The portable CPU runtime is not available on this deployment"
+        )
+        return f"{recommendation}; {unavailable.lower()}" if recommendation else unavailable
+
+    def _preferred_local_runtime(self) -> str | None:
+        if self._local_runtime_available("vllm"):
+            return "vllm"
+        if self._local_runtime_available("llama-cpp"):
+            return "llama-cpp"
+        return None
 
     def _require_local_model_runtime(self, model_id: str) -> LocalModelChoice:
         choice = self._downloadable_local_model_choices.get(model_id)

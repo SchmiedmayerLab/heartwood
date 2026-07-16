@@ -51,6 +51,20 @@ class _ModelGateway(_CountingGateway):
         super().__init__()
         self.inspected: tuple[str, str | None] | None = None
         self.downloaded: tuple[str, str | None] | None = None
+        self.discovered: tuple[str, bool] | None = None
+
+    def discover_models(
+        self,
+        connection_id: str,
+        *,
+        token: str | None = None,
+        base_url: str | None = None,
+        refresh: bool = False,
+    ) -> dict[str, object]:
+        assert token is None
+        assert base_url is None
+        self.discovered = (connection_id, refresh)
+        return {"connection_id": connection_id, "models": []}
 
     def inspect_model_repository(
         self, repository: str, *, revision: str | None = None
@@ -214,9 +228,12 @@ def test_notebook_reuses_gateway_model_inspection_and_download_contract(tmp_path
 
     plan = session.inspect_model_repository("example/model", revision="main")
     download = session.download_custom_local_model("example/model", revision="1" * 40)
+    discovered = session.discover_models("local", refresh=True)
 
     assert gateway.inspected == ("example/model", "main")
     assert gateway.downloaded == ("example/model", "1" * 40)
+    assert gateway.discovered == ("local", True)
+    assert discovered["connection_id"] == "local"
     assert cast(dict[str, object], plan["model"])["source_repository"] == "example/model"
     assert download["status"] == "downloading"
 

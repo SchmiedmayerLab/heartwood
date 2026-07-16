@@ -305,6 +305,7 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert "edge-terra-coder" not in combined
     assert "edge-terra-smoke" not in combined
     assert "NotebookSession" in combined
+    assert "has_authenticated_jupyter_proxy" in combined
     assert "jupyter_proxy_url(port=8767)" in combined
     assert "heartwood serve" in combined
     assert "heartwood launch --web" in combined
@@ -313,6 +314,11 @@ def test_terra_notebook_uses_the_no_weight_runtime_contract() -> None:
     assert "/home/jupyter/heartwood-demo" not in combined
     assert "os.chdir(project_root)" not in combined
     assert "--workspace" not in combined
+    assert combined.index("readiness = session.project_readiness()") < combined.index(
+        "input_root.mkdir(parents=True, exist_ok=True)"
+    )
+    assert 'readiness["state"] == "setup-required"' in combined
+    assert 'session.discover_models("local", refresh=True)' in combined
     assert "HEARTWOOD_WORKSPACE" not in combined
     assert "session.detect()" in combined
     assert "target-condition cohort" in combined

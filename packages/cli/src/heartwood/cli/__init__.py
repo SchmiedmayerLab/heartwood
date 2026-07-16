@@ -52,7 +52,9 @@ from heartwood.gateway import (
     ProjectContext,
     SessionGateway,
     SkillSettingsError,
+    has_authenticated_jupyter_proxy,
     inspect_deployment,
+    jupyter_proxy_url,
 )
 from heartwood.session import (
     CommandKind,
@@ -1487,6 +1489,14 @@ def _handle_serve(
         static_dir=web_root,
         static_base_path=base_path,
     )
+    if select_platform_adapter(os.environ).adapter_id == "terra":
+        print("Heartwood web interface")
+        if has_authenticated_jupyter_proxy():
+            print(f"Terra browser path: {jupyter_proxy_url(port=port)}")
+        else:
+            print("Terra browser path unavailable in this terminal.")
+            print("Open the tutorial notebook to generate the authenticated browser link.")
+        print("Keep this terminal open while using the browser.")
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
 

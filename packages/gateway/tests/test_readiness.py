@@ -143,6 +143,106 @@ def test_ready_local_project_reports_selected_artifact(tmp_path: Path) -> None:
     assert "synthetic-model" in artifact.summary
 
 
+def test_terra_requires_a_dedicated_project_on_persistent_storage(tmp_path: Path) -> None:
+    persistent_root = tmp_path / "jupyter"
+    project_root = persistent_root / "synthetic-analysis"
+    persistent_root.mkdir()
+    project_root.mkdir()
+    env = {
+        "HEARTWOOD_PLATFORM": "terra",
+        "HEARTWOOD_PLATFORM_HOME": str(persistent_root),
+        "HEARTWOOD_GPU_RUNTIME": "none",
+    }
+
+    ready_boundary = inspect_deployment(ProjectContext(project_root), env=env)
+    broad_boundary = inspect_deployment(ProjectContext(persistent_root), env=env)
+    outside_root = tmp_path / "ephemeral"
+    outside_root.mkdir()
+    ephemeral_boundary = inspect_deployment(ProjectContext(outside_root), env=env)
+
+    storage = next(
+        check for check in ready_boundary.checks if check.check_id == "terra-project-storage"
+    )
+    runtime = next(
+        check for check in ready_boundary.checks if check.check_id == "terra-gpu-runtime"
+    )
+    assert ready_boundary.state == "setup-required"
+    assert storage.status == "pass"
+    assert runtime.summary == "Portable Terra runtime selected; local models use CPU inference"
+    assert broad_boundary.state == "recovery-required"
+    assert ephemeral_boundary.state == "recovery-required"
+
+    misleading_home = tmp_path / "ephemeral-home"
+    misleading_project = misleading_home / "synthetic-analysis"
+    misleading_project.mkdir(parents=True)
+    unknown_mount = inspect_deployment(
+        ProjectContext(misleading_project),
+        env={"HEARTWOOD_PLATFORM": "terra", "HOME": str(misleading_home)},
+    )
+    assert unknown_mount.state == "recovery-required"
+
+
+def test_terra_gpu_image_reports_attachment_readiness(tmp_path: Path) -> None:
+    persistent_root = tmp_path / "jupyter"
+    project_root = persistent_root / "synthetic-analysis"
+    project_root.mkdir(parents=True)
+    base_env = {
+        "HEARTWOOD_PLATFORM": "terra",
+        "HEARTWOOD_PLATFORM_HOME": str(persistent_root),
+        "HEARTWOOD_GPU_RUNTIME": "vllm",
+    }
+
+    missing = inspect_deployment(ProjectContext(project_root), env=base_env)
+    attached = inspect_deployment(
+        ProjectContext(project_root),
+        env={**base_env, "CUDA_VISIBLE_DEVICES": "0"},
+    )
+
+    missing_gpu = next(check for check in missing.checks if check.check_id == "terra-gpu-runtime")
+    attached_gpu = next(check for check in attached.checks if check.check_id == "terra-gpu-runtime")
+    assert missing_gpu.status == "warning"
+    assert attached_gpu.status == "pass"
+
+
+def test_terra_baseline_persists_builtin_hosted_provider_routes(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    env = {
+        "HEARTWOOD_PLATFORM": "terra",
+        "HEARTWOOD_PLATFORM_HOME": str(tmp_path.parent),
+    }
+
+    gateway = SessionGateway(
+        project=project,
+        env=env,
+        backend_id="deterministic",
+        model_catalog_service=ModelCatalogService(
+            openai_lister=lambda _connection, _token: (ProviderModel("gpt-synthetic"),),
+            compatibility=lambda _connection, _model: (
+                "available",
+                "verified",
+                32_768,
+                True,
+            ),
+        ),
+    )
+    gateway.configure_model_source("openai")
+    catalog = gateway.discover_models("openai", token="transient-secret", refresh=True)
+    gateway.connect_model("openai", "gpt-synthetic")
+    validation = gateway.validate_model_profile()
+    policy = gateway.config_store.load().policy
+    persisted = project.config_path.read_text(encoding="utf-8")
+
+    assert policy.policy_id == "terra-default"
+    assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
+    assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
+    assert policy.credential_allowlist == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+    assert catalog["models"]
+    decision = validation["policy_decision"]
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "allow"
+    assert "transient-secret" not in persisted
+
+
 def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: Path) -> None:
     project = _project(tmp_path)
     persist_deployment_profile(project, model_source="local", env={})

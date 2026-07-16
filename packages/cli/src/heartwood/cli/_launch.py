@@ -29,6 +29,8 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    has_authenticated_jupyter_proxy,
+    jupyter_proxy_url,
     verify_model_artifact,
 )
 
@@ -334,7 +336,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         setup_code = _ensure_setup(options, runtime_env)
         if setup_code != 0:
             return setup_code
-        interaction, label = _interaction_command(options)
+        interaction, label = _interaction_command(options, env=env)
         _stage(6, 6, label)
         print(f"Project: {options.project.root}")
         return subprocess.run(
@@ -355,8 +357,23 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             shutil.rmtree(staged_model, ignore_errors=True)
 
 
-def _interaction_command(options: LaunchOptions) -> tuple[list[str], str]:
+def _interaction_command(
+    options: LaunchOptions,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> tuple[list[str], str]:
     if options.web:
+        active_env = {} if env is None else env
+        platform_id = select_platform_adapter(active_env).adapter_id
+        if platform_id == "terra" and has_authenticated_jupyter_proxy(active_env):
+            location = (
+                "through Terra's authenticated proxy: "
+                f"{jupyter_proxy_url(port=options.web_port, env=active_env)}"
+            )
+        elif platform_id == "terra":
+            location = "after opening the tutorial notebook to obtain the Terra proxy link"
+        else:
+            location = f"on {options.web_host}:{options.web_port}"
         return (
             [
                 sys.executable,
@@ -368,7 +385,7 @@ def _interaction_command(options: LaunchOptions) -> tuple[list[str], str]:
                 "--port",
                 str(options.web_port),
             ],
-            f"Open the web interface on {options.web_host}:{options.web_port}",
+            f"Open the web interface {location}",
         )
     command = [
         sys.executable,
@@ -649,7 +666,13 @@ def _runtime_environment(
         "CUDA_VISIBLE_DEVICES",
         "NVIDIA_VISIBLE_DEVICES",
         "NVIDIA_DRIVER_CAPABILITIES",
+        "GOOGLE_PROJECT",
+        "CLUSTER_NAME",
+        "JUPYTERHUB_SERVICE_PREFIX",
+        "HEARTWOOD_GPU_RUNTIME",
+        "HEARTWOOD_IMAGE_FLAVOR",
         "HEARTWOOD_PLATFORM",
+        "HEARTWOOD_PLATFORM_HOME",
         "HEARTWOOD_LOCAL_RUNTIME_ACTIVE",
         "LOCAL_SCRATCH_JOB",
         "SLURM_JOB_ID",

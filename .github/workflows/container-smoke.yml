@@ -186,6 +186,7 @@ jobs:
           --entrypoint bash
           --volume heartwood-terra-ci-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
+          --env CLUSTER_NAME=terra-managed-launch-smoke
           --env WORKSPACE_ID=terra-managed-launch-smoke
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           -c 'mkdir -p /home/jupyter/model-analysis &&
@@ -197,6 +198,7 @@ jobs:
           --workdir /home/jupyter/model-analysis --entrypoint bash
           --volume heartwood-terra-ci-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
+          --env CLUSTER_NAME=terra-managed-launch-smoke
           --env WORKSPACE_ID=terra-managed-launch-smoke
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           /opt/heartwood/images/platform/scripts/terra_managed_launch_smoke.sh

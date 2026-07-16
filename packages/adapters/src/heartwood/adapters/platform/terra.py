@@ -40,19 +40,30 @@ class TerraPlatformAdapter:
         return ()
 
     def credential_allowlist(self) -> tuple[str, ...]:
-        """Return no implicit provider credential."""
-        return ()
+        """Return credentials for the built-in hosted-provider connections."""
+        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
     def default_policy_profile(self) -> PolicyProfile:
-        """Return the conservative local-runtime Terra policy."""
+        """Return the conservative built-in model-route policy for Terra."""
         return PolicyProfile(
-            policy_id="terra-local-default",
+            policy_id="terra-default",
             platform_id=self.adapter_id,
             deny_egress_by_default=True,
-            allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
-            allowed_model_catalog_endpoints=("http://127.0.0.1:8765/v1/models",),
+            allowed_model_endpoints=(
+                "http://127.0.0.1:8765/v1/chat/completions",
+                "https://api.anthropic.com/v1/messages",
+                "https://api.openai.com/v1/chat/completions",
+            ),
+            allowed_model_catalog_endpoints=(
+                "http://127.0.0.1:8765/v1/models",
+                "https://api.anthropic.com/v1/models",
+                "https://api.openai.com/v1/models",
+            ),
             allowed_capability_tiers=("supervised", "experimental"),
             allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
-            credential_allowlist=(),
-            notes="Terra local-runtime policy; deployment controls remain authoritative.",
+            credential_allowlist=self.credential_allowlist(),
+            notes=(
+                "Terra baseline for loopback, OpenAI, and Anthropic model routes; workspace, "
+                "network, institutional, and deployment controls remain authoritative."
+            ),
         )

@@ -34,7 +34,11 @@ image_user = "jupyter"
 working_dir = "/home/jupyter"
 entrypoint = ["/opt/conda/bin/jupyter", "notebook"]
 exposed_ports = ["8000/tcp"]
-required_env = ["HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python"]
+required_env = [
+    "HEARTWOOD_PLATFORM=terra",
+    "HEARTWOOD_PLATFORM_HOME=/home/jupyter",
+    "HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python",
+]
 forbidden_path_entries = ["/opt/heartwood/.venv/bin"]
 proxy = "jupyter-server-proxy under the Terra Leonardo proxy"
 registry_policy = "Publish public GHCR tags as single-platform Docker schema-2 manifests because Terra Leonardo image auto-detection does not accept OCI indexes; use an approved private registry for controlled deployments."

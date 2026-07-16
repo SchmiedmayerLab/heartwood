@@ -118,6 +118,10 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "heartwood-project" not in platform
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
     assert "WORKDIR ${HEARTWOOD_PLATFORM_HOME}" in platform
+    assert "HEARTWOOD_GPU_RUNTIME=${HEARTWOOD_GPU_RUNTIME}" in platform
+    assert "HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR}" in platform
+    assert "HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM}" in platform
+    assert "HEARTWOOD_PLATFORM_HOME=${HEARTWOOD_PLATFORM_HOME}" in platform
     for legacy_setting in (
         "HEARTWOOD_AGENT_BACKEND=",
         "HEARTWOOD_HOME=",
@@ -656,7 +660,10 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert 'payload.get("state") != "ready"' in terra_managed_launch
     assert 'payload.get("project_root")' in terra_managed_launch
     assert 'launch_message=""' in terra_managed_launch
-    assert "did not report the browser interface" in terra_managed_launch
+    assert "Open the web interface through Terra" in terra_managed_launch
+    assert "did not report ${expected_proxy}" in terra_managed_launch
+    assert "terra-project-storage" in terra_managed_launch
+    assert "terra-gpu-runtime" in terra_managed_launch
 
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
@@ -855,7 +862,11 @@ image_user = "jupyter"
 working_dir = "/home/jupyter"
 entrypoint = ["/opt/conda/bin/jupyter", "notebook"]
 exposed_ports = ["8000/tcp"]
-required_env = ["HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python"]
+required_env = [
+    "HEARTWOOD_PLATFORM=terra",
+    "HEARTWOOD_PLATFORM_HOME=/home/jupyter",
+    "HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python",
+]
 forbidden_path_entries = ["/opt/heartwood/.venv/bin"]
 runtime_tag = "edge-terra"
 commit_runtime_tag = "sha-<git-sha>-terra"
@@ -1067,6 +1078,8 @@ class _RegistryHandler(BaseHTTPRequestHandler):
                             "PATH=/opt/llama.cpp:/opt/conda/bin:/usr/local/bin:/usr/bin",
                             "LD_LIBRARY_PATH=/opt/llama.cpp",
                             "JUPYTER_PATH=/opt/conda/share/jupyter",
+                            "HEARTWOOD_PLATFORM=terra",
+                            "HEARTWOOD_PLATFORM_HOME=/home/jupyter",
                             "HEARTWOOD_PYTHON=/opt/heartwood/.venv/bin/python",
                         ],
                     },

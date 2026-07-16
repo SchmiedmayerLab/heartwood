@@ -24,7 +24,7 @@ Four choices determine the setup:
 |---|---|
 | Heartwood image | Use the portable Terra image for a hosted model or CPU-only local test. Use the NVIDIA Terra image for an interactive local model on a GPU. |
 | Project | Create one analysis directory under `/home/jupyter`; that directory is the project Heartwood may modify. |
-| Model | Prefer an institution-provided model when one is available. Otherwise use an authorized hosted provider or explicitly download a local model. |
+| Model | Prefer an institution-provided connection such as the Stanford AI API Gateway when it is authorized. Otherwise use built-in OpenAI or Anthropic access, or explicitly download a local model. |
 | Interface | Start with the terminal. Add the browser through Terra's authenticated Jupyter proxy or use the example notebook after the project is configured. |
 
 The terminal, browser, and notebook use the same model selection, sessions, action decisions, and `.heartwood/` project state. You do not configure three separate Heartwood installations.
@@ -51,18 +51,15 @@ ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra-gpu-nvidia
 
 The image name ending in `-terra` is the portable choice. The image ending in `-terra-gpu-nvidia` is required for Heartwood-managed NVIDIA inference. Both images contain the application and inference software but contain no model weights and no provider credentials.
 
-These are practical starting configurations for the tutorial, not universal requirements:
+Choose resources for the model path rather than for the Heartwood image alone. These are practical starting configurations for this tutorial, not universal requirements:
 
-| Setting | Portable image | NVIDIA image |
-|---|---|---|
-| CPUs | 16 | 8 or more |
-| Memory | 60 GB | 48 GB or more |
-| GPU | None | One NVIDIA T4 with 16 GB VRAM or better |
-| Persistent disk | 100 GB | 100 GB |
-| Autopause | 30 minutes | 30 minutes |
-| Expected first-start wait | Allow up to 30 minutes | Allow up to 30 minutes |
+| Workflow | Image | Compute starting point | Persistent disk |
+|---|---|---|---|
+| Authorized hosted model | Portable Terra | 8 CPUs and 30 GB memory | 50 GB or enough for the localized analysis |
+| Recommended 7B CPU model | Portable Terra | 8 CPUs and 32 GB memory | 75 GB or more |
+| Recommended 4-bit 7B GPU model | NVIDIA Terra | 8 CPUs, 48 GB memory, and one NVIDIA T4 with 16 GB VRAM or better | 75 GB or more |
 
-Set the machine and persistent disk before selecting **Create** or **Create/Replace**, and review Terra's cost estimate. Keep the persistent disk when replacing or pausing the environment. Terra preserves files under `/home/jupyter` on that disk; important long-term results should also be copied to workspace storage according to the project's data-management policy.
+Keep Terra's 30-minute autopause unless the workflow requires a reviewed alternative. Set the machine and persistent disk before selecting **Create** or **Create/Replace**, review Terra's cost estimate, and start with the smallest profile that meets Heartwood's model guidance. Terra documents that recreating a Cloud Environment can take up to ten minutes; a first custom-image pull can take longer, but investigate rather than waiting indefinitely if startup approaches 30 minutes. Keep the persistent disk when replacing or pausing the environment. Terra preserves files under `/home/jupyter` on that disk; important long-term results should also be copied to workspace storage according to the project's data-management policy.
 
 | Item | Persists when the disk is retained? | Guidance |
 |---|---|---|
@@ -91,6 +88,8 @@ heartwood doctor
 
 The directory where the Heartwood command, web server, or notebook process starts is the project. `heartwood-demo` is only the tutorial name; there is no fixed Terra workspace path. Heartwood creates `.heartwood/` inside the project for configuration, sessions, models, Skills, logs, and audit data.
 
+`heartwood doctor` requires a dedicated project below Terra's `/home/jupyter` persistent-disk mount. It stops setup when run from `/home/jupyter` itself because that would give the agent an unnecessarily broad project boundary, or from a directory outside the persistent mount because that state can disappear when the Cloud Environment is replaced. On the NVIDIA image it also reports whether an attached GPU is visible.
+
 Heartwood file operations stay within the project and exclude its private `.heartwood/` directory. OpenHands terminal commands retain the operating-system permissions of the Jupyter process, so Terra's environment remains the hard filesystem boundary. Keep the whole project under `/home/jupyter` so both analysis files and Heartwood state survive pause, resume, and image replacement.
 
 The tutorial fixture contains 24 synthetic people, 39 condition-occurrence rows, and 20 people with condition concept `201826`. Terra workspace tables and buckets are separate storage; localize only the files the agent should use into the project directory.
@@ -101,12 +100,14 @@ Choose one model path. The first two avoid downloading model weights into Terra;
 
 | Model path | What you need | Start with |
 |---|---|---|
-| Research environment | A model connection preconfigured by the platform or institution | Select **Research environment** in the setup flow. |
-| Hosted provider | An authorized OpenAI, Anthropic, or OpenAI-compatible endpoint and its required credential | Select the provider in the setup flow and choose a model returned by its API. |
+| Stanford AI API Gateway | An authorized Stanford gateway key and an approved use of one of its current model routes | Select **Stanford AI API Gateway** in the setup flow and choose a model returned by its API. |
+| Hosted provider | An authorized OpenAI or Anthropic route and its required credential | Select the provider in the setup flow and choose a model returned by its API. |
 | Portable local model | The portable image, sufficient disk and RAM, and tolerance for slower CPU inference | Run `heartwood models local` and choose a CPU recommendation. |
 | NVIDIA local model | The NVIDIA image, an attached compatible GPU, and sufficient disk, RAM, and GPU memory | Run `heartwood models local` and choose a GPU recommendation. |
 
-For the simplest setup, run `heartwood` in the project terminal and follow the prompts. If you prefer visual setup, run `heartwood serve`, execute the tutorial notebook's first code cell to generate Terra's authenticated link, and complete the same choices in the browser. Provider credentials entered interactively are held by that Heartwood process and are not written into project configuration. The deploying institution must authorize the exact endpoint, identity, retention settings, and data classification; when required for controlled data, the route must be covered by an institution-approved business associate agreement.
+For the quickest capability demonstration, use an authorized hosted connection with the portable image. For an offline demonstration, use the NVIDIA image and its first available GPU recommendation; Heartwood orders the shared CLI and browser model list for the runtime and GPU actually detected. The CPU path is portable but substantially slower for a complete OpenHands turn.
+
+Run `heartwood` in the project terminal and follow the prompts. If you prefer visual setup, run `heartwood serve`, open the Terra browser path printed by the command on the current Terra notebook host, and complete the same choices in the browser. If the terminal cannot determine that path, use the tutorial notebook below to generate a clickable authenticated link. Provider credentials entered interactively are held by that Heartwood process and are not written into project configuration. The built-in Terra policy recognizes the loopback, OpenAI, Anthropic, and Stanford gateway routes; another OpenAI-compatible endpoint requires an explicitly deployment-provided connection and policy rather than silently widening the managed-platform baseline. The deploying institution must authorize the exact endpoint, identity, retention settings, and data classification; when required for controlled data, the route must be covered by an institution-approved business associate agreement.
 
 For a connection whose credentials are already available to the current process or supplied by the platform, the CLI can refresh and select its model catalog:
 
@@ -122,7 +123,7 @@ For a local model, inspect the available recommendations before downloading anyt
 heartwood models local
 ```
 
-Heartwood shows download size, runtime, context window, and conservative memory guidance. Continue with [Run a Local Model on Terra](#optional-run-a-local-model-on-terra) after choosing one.
+Heartwood puts the selected model first; before a selection, it puts the best available deployment match first. It shows download size, runtime, context window, and conservative memory guidance, and the browser reads the same ordered catalog. Continue with [Run a Local Model on Terra](#optional-run-a-local-model-on-terra) after choosing one.
 
 ## Step 4: Choose an Interface
 
@@ -150,7 +151,9 @@ For a downloaded local model, start the model and browser together:
 heartwood launch --web
 ```
 
-Keep that terminal open. Then open the copied tutorial notebook with the **Python 3 (Heartwood)** kernel and run its first code cell. The cell displays **Open Heartwood in a new tab** using the current Terra runtime's authenticated route.
+Keep that terminal open. Then open the copied tutorial notebook with the **Python 3 (Heartwood)** kernel and run its first code cell. When Terra exposes complete proxy metadata, the cell displays **Open Heartwood in a new tab** using the current runtime's authenticated route.
+
+Both commands print the authenticated Terra path when the terminal receives the required runtime identifiers. Use the notebook-generated link as a second route check. When neither process receives complete proxy metadata, continue in the CLI rather than guessing a route.
 
 Do not use `http://127.0.0.1:8767/` or a generic `/proxy/8767/` URL from your computer. Terra requires the full `/proxy/<Google project>/<cluster>/jupyter/proxy/8767/` path, and Heartwood preserves that prefix for browser API requests. The CLI remains available if the platform proxy is temporarily unavailable.
 
@@ -162,14 +165,14 @@ The screenshot shows the responsive layout used by the automated notebook-viewpo
 
 [Open the Terra tutorial notebook](terra-jupyter-demo.ipynb) from the project directory with the Heartwood kernel. It can:
 
-- identify the current project and display the authenticated browser link;
+- identify the current project, validate model availability before writing tutorial files, and display the authenticated browser link when available;
 - inspect synthetic dataset proposals;
 - submit a task through the same OpenHands-backed session contract;
 - display the complete pending action set and apply one grouped decision;
 - verify the generated aggregate result;
 - replay the session and export the scrubbed audit record.
 
-Initial model setup and Heartwood-managed runtime startup remain clearer in the terminal or browser. A local model must remain supervised by `heartwood launch --web` in a terminal while notebook cells use it.
+Initial model setup and Heartwood-managed runtime startup remain clearer in the terminal or browser. A local model must remain supervised by `heartwood launch --web` in a terminal while notebook cells use it. A hosted-model credential entered interactively belongs only to that terminal or browser-service process; notebook-owned model turns require the credential to be supplied securely to the notebook kernel by the platform. Heartwood persists the non-secret model selection, never the credential value.
 
 ## Step 5: Run the Synthetic Workflow
 
@@ -208,14 +211,19 @@ The notebook uses the same project without a workspace argument:
 ```python
 from pathlib import Path
 
-from heartwood.notebook import NotebookSession, jupyter_proxy_url
+from heartwood.notebook import (
+    NotebookSession,
+    has_authenticated_jupyter_proxy,
+    jupyter_proxy_url,
+)
 
 project_root = Path.cwd().resolve()
 session = NotebookSession(session_id="terra-demo")
 view = session.replay()
 assert session.project.root == project_root
 print(view.event_count)
-print(jupyter_proxy_url(port=8767))
+if has_authenticated_jupyter_proxy():
+    print(jupyter_proxy_url(port=8767))
 ```
 
 The terminal, notebook, and browser should report the same persisted events. Use one active writer for a session; independent processes writing the same file-backed session concurrently are not supported.
@@ -224,7 +232,7 @@ The terminal, notebook, and browser should report the same persisted events. Use
 
 ### Portable CPU Path
 
-The portable Terra image uses llama.cpp on CPU. Select the reviewed recommendation or provide another supported Hugging Face repository:
+The portable Terra image uses llama.cpp on CPU. `heartwood models local` marks the best available CPU recommendation and lists it first. Select that recommendation or provide another supported Hugging Face repository:
 
 ```bash
 heartwood models download qwen25-7b-instruct-q4_k_m
@@ -239,7 +247,7 @@ Heartwood resolves the source to an immutable revision, displays expected storag
 
 ### NVIDIA GPU Path
 
-The NVIDIA Terra image adds the GPU inference runtime but still contains no model weights. On a T4-class environment, use the 4-bit coding recommendation:
+The NVIDIA Terra image adds the GPU inference runtime but still contains no model weights. When an attached GPU is visible, the same model catalog puts the GPU recommendation before CPU alternatives. On a T4-class environment, use the 4-bit coding recommendation:
 
 ```bash
 heartwood models download qwen25-coder-7b-instruct-awq-vllm
@@ -329,6 +337,7 @@ Record both the Heartwood image and Terra base image digests. Passing image and 
 
 - [Terra custom cloud environment tutorial](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks)
 - [Starting and customizing a Jupyter app](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app)
+- [Using GPUs in a Terra Cloud Environment](https://support.terra.bio/hc/en-us/articles/4403006001947-Getting-started-with-GPUs-in-a-Cloud-Environment)
 - [Persistent disk setup](https://support.terra.bio/hc/en-us/articles/7131848736027-How-to-set-up-persistent-disk-storage-for-your-analysis-app)
 - [Terra architecture and persistent disks](https://support.terra.bio/hc/en-us/articles/360058163311-Terra-architecture-where-your-data-and-tools-live)
 - [Accessing workspace-bucket data from a notebook](https://support.terra.bio/hc/en-us/articles/360046617372-Accessing-data-from-the-workspace-Bucket-in-a-notebook)

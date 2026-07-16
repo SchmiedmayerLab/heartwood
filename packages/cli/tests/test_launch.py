@@ -661,6 +661,10 @@ def test_runtime_environment_scrubs_credentials_and_legacy_path_controls() -> No
         {
             "PATH": "/usr/bin",
             "CUDA_VISIBLE_DEVICES": "0",
+            "GOOGLE_PROJECT": "terra-project",
+            "CLUSTER_NAME": "saturn-runtime",
+            "HEARTWOOD_GPU_RUNTIME": "vllm",
+            "HEARTWOOD_PLATFORM_HOME": "/home/jupyter",
             "OPENAI_API_KEY": "secret",
             "STANFORD_AI_API_KEY": "secret",
             "HEARTWOOD_HOME": "/legacy",
@@ -669,6 +673,10 @@ def test_runtime_environment_scrubs_credentials_and_legacy_path_controls() -> No
         }
     )
     assert runtime_env["CUDA_VISIBLE_DEVICES"] == "0"
+    assert runtime_env["GOOGLE_PROJECT"] == "terra-project"
+    assert runtime_env["CLUSTER_NAME"] == "saturn-runtime"
+    assert runtime_env["HEARTWOOD_GPU_RUNTIME"] == "vllm"
+    assert runtime_env["HEARTWOOD_PLATFORM_HOME"] == "/home/jupyter"
     assert runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert not any("API_KEY" in name for name in runtime_env)
     assert "HEARTWOOD_HOME" not in runtime_env
@@ -712,6 +720,35 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     )
     assert interaction[-5:] == ["serve", "--host", "0.0.0.0", "--port", "9876"]
     assert label == "Open the web interface on 0.0.0.0:9876"
+
+
+def test_terra_web_launch_reports_the_authenticated_proxy_route(tmp_path: Path) -> None:
+    interaction, label = _interaction_command(
+        _options(tmp_path, web=True, web_port=8767),
+        env={
+            "HEARTWOOD_PLATFORM": "terra",
+            "GOOGLE_PROJECT": "terra-project",
+            "CLUSTER_NAME": "saturn-runtime",
+        },
+    )
+
+    assert interaction[-5:] == ["serve", "--host", "127.0.0.1", "--port", "8767"]
+    assert label == (
+        "Open the web interface through Terra's authenticated proxy: "
+        "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/"
+    )
+
+
+def test_terra_web_launch_does_not_present_an_incomplete_proxy_route(tmp_path: Path) -> None:
+    _, label = _interaction_command(
+        _options(tmp_path, web=True, web_port=8767),
+        env={"HEARTWOOD_PLATFORM": "terra"},
+    )
+
+    assert label == (
+        "Open the web interface after opening the tutorial notebook to obtain the Terra proxy link"
+    )
+    assert "/proxy/8767/" not in label
 
 
 def test_runtime_readiness_accepts_requested_model_and_stops_after_exit(

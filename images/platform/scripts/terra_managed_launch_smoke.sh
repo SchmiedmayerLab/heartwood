@@ -56,6 +56,11 @@ if payload.get("platform_id") != "terra":
     raise SystemExit(f"managed launch selected {payload.get('platform_id')!r}, expected 'terra'")
 if payload.get("state") != "ready":
     raise SystemExit(f"managed launch readiness is {payload.get('state')!r}, expected 'ready'")
+checks = {item["check_id"]: item for item in payload.get("checks", [])}
+if checks.get("terra-project-storage", {}).get("status") != "pass":
+    raise SystemExit("managed launch did not confirm Terra persistent project storage")
+if checks.get("terra-gpu-runtime", {}).get("status") != "pass":
+    raise SystemExit("managed launch did not confirm the portable Terra runtime")
 PY
     then
       ready="yes"
@@ -71,8 +76,11 @@ if [ "${ready}" != "yes" ]; then
 fi
 
 launch_message=""
+google_project="${GOOGLE_PROJECT:-heartwood-ci}"
+cluster_name="${CLUSTER_NAME:-terra-managed-launch-smoke}"
+expected_proxy="/proxy/${google_project}/${cluster_name}/jupyter/proxy/${port}/"
 for _ in $(seq 1 "${startup_timeout}"); do
-  if grep --fixed-strings '[6/6] Open the web interface on 127.0.0.1:' "${log_file}" >/dev/null; then
+  if grep --fixed-strings "[6/6] Open the web interface through Terra's authenticated proxy: ${expected_proxy}" "${log_file}" >/dev/null; then
     launch_message="yes"
     break
   fi
@@ -82,7 +90,7 @@ for _ in $(seq 1 "${startup_timeout}"); do
   sleep 1
 done
 if [ "${launch_message}" != "yes" ]; then
-  echo "Heartwood managed Terra launch did not report the browser interface." >&2
+  echo "Heartwood managed Terra launch did not report ${expected_proxy}." >&2
   exit 1
 fi
 echo "Terra managed local-model launch smoke: ok"

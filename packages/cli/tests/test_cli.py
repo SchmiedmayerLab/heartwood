@@ -1041,6 +1041,7 @@ def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_serve_starts_gateway_for_current_project(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     project = tmp_path / "analysis"
     web_root = tmp_path / "web"
@@ -1051,6 +1052,9 @@ def test_serve_starts_gateway_for_current_project(
         "heartwood.cli.uvicorn.run",
         lambda _app, *, host, port, log_level: observed.append((host, port)),  # noqa: ARG005
     )
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
+    monkeypatch.setenv("GOOGLE_PROJECT", "terra-project")
+    monkeypatch.setenv("CLUSTER_NAME", "saturn-runtime")
 
     assert (
         _run(
@@ -1072,6 +1076,31 @@ def test_serve_starts_gateway_for_current_project(
     )
     assert observed == [("0.0.0.0", 9876)]
     assert (project / ".heartwood" / "sessions").is_dir()
+    assert (
+        "Terra browser path: /proxy/terra-project/saturn-runtime/jupyter/proxy/9876/"
+        in capsys.readouterr().out
+    )
+
+
+def test_serve_does_not_present_an_incomplete_terra_proxy_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
+    monkeypatch.setattr("heartwood.cli.uvicorn.run", lambda *_args, **_kwargs: None)
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
+    monkeypatch.delenv("GOOGLE_PROJECT", raising=False)
+    monkeypatch.delenv("CLUSTER_NAME", raising=False)
+    monkeypatch.delenv("JUPYTERHUB_SERVICE_PREFIX", raising=False)
+
+    assert _run(tmp_path / "analysis", monkeypatch, ["serve", "--web-root", str(web_root)]) == 0
+    output = capsys.readouterr().out
+    assert "Terra browser path unavailable" in output
+    assert "Open the tutorial notebook" in output
+    assert "/proxy/8767/" not in output
 
 
 def test_cli_formatters_fail_closed_on_malformed_projection_data(
