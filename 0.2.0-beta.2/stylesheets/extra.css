@@ -1,0 +1,32 @@
+/*
+ * This source file is part of the Heartwood open-source project
+ *
+ * SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+:root > * {
+  --md-primary-fg-color: #0b694d;
+  --md-primary-fg-color--light: #2b8268;
+  --md-primary-fg-color--dark: #084d39;
+  --md-accent-fg-color: #087c58;
+  --md-accent-fg-color--transparent: rgb(8 124 88 / 12%);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 150;
+  --md-primary-fg-color: #48a98a;
+  --md-primary-fg-color--light: #76c3aa;
+  --md-primary-fg-color--dark: #2f8067;
+  --md-accent-fg-color: #71d2b3;
+}
+
+.md-typeset h1,
+.md-typeset h2 {
+  letter-spacing: 0;
+}
+
+.md-typeset table:not([class]) {
+  border-radius: 6px;
+}
