@@ -333,6 +333,7 @@ jobs:
           docker run --rm --platform linux/amd64
           --volume heartwood-terra-managed-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
+          --env CLUSTER_NAME=terra-managed-launch-smoke
           --env WORKSPACE_ID=terra-managed-launch-smoke
           --entrypoint bash
           "${CANDIDATE_REFERENCE}"
@@ -347,6 +348,7 @@ jobs:
           --workdir /home/jupyter/model-analysis --entrypoint bash
           --volume heartwood-terra-managed-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
+          --env CLUSTER_NAME=terra-managed-launch-smoke
           --env WORKSPACE_ID=terra-managed-launch-smoke
           "${CANDIDATE_REFERENCE}"
           /opt/heartwood/images/platform/scripts/terra_managed_launch_smoke.sh
