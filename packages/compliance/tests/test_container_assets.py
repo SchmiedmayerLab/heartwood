@@ -765,6 +765,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "container_persistence_smoke.sh" in smoke
     assert "Verify host-user bind-mount persistence" in smoke
     assert "bind_mount_user_smoke.sh" in smoke
+    assert publish.count("--env CLUSTER_NAME=terra-managed-launch-smoke") == 2
+    assert smoke.count("--env CLUSTER_NAME=terra-managed-launch-smoke") == 2
     assert "Download and verify CI-only model fixture" in smoke
     assert "heartwood models download llama-cpp-stories260k-ci" in smoke
     assert "--volume heartwood-ci-project:/workspace" in smoke
