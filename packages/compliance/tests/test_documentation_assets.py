@@ -441,6 +441,9 @@ def test_terra_runbook_tracks_platform_and_model_setup() -> None:
     assert "real Terra workspace validation" in runbook
     assert "heartwood serve" in runbook
     assert "heartwood launch --web" in runbook
+    assert "## Step 7: Stop Compute Safely" in runbook
+    assert "Do not open the terminal route merely to confirm the pause" in runbook
+    assert runbook.count("heartwood models download qwen25-7b-instruct-q4_k_m") == 1
     assert "edge-terra-coder" not in runbook
     assert "edge-terra-smoke" not in runbook
 

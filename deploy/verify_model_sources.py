@@ -78,6 +78,8 @@ def verify_model_source(source: ModelSource, *, fetch_json: JsonFetcher) -> None
     """Require the remote repository and immutable commit to match the catalog."""
     payload = fetch_json(source.api_url, 20)
     repository = payload.get("id")
+    if repository is None:
+        repository = payload.get("modelId")
     revision = payload.get("sha")
     if repository != source.repository:
         raise ModelSourceVerificationError(

@@ -51,6 +51,10 @@ def test_model_source_verification_requires_exact_repository_and_revision() -> N
         source,
         fetch_json=lambda _url, _timeout: {"id": "example/model", "sha": "a" * 40},
     )
+    verifier.verify_model_source(
+        source,
+        fetch_json=lambda _url, _timeout: {"modelId": "example/model", "sha": "a" * 40},
+    )
     with pytest.raises(verifier.ModelSourceVerificationError, match="expected revision"):
         verifier.verify_model_source(
             source,
