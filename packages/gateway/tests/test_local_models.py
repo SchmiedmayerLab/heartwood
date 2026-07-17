@@ -43,7 +43,7 @@ def test_repository_plan_selects_balanced_gguf_for_cpu() -> None:
     assert plan.model.source_path == "model-q4_k_m.gguf"
     assert plan.model.source_revision == "1" * 40
     assert plan.model.catalog_source == "user-selected"
-    assert plan.model.context_window == 16_384
+    assert plan.model.context_window == 32_768
     assert "CPU cores" in str(plan.model.minimum_resource_envelope)
     assert "balanced single-file GGUF" in plan.selection_reason
 
@@ -327,7 +327,7 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
-        "qwen25-coder-7b-instruct-awq-vllm",
+        "qwen25-7b-instruct-awq-vllm",
         "qwen25-7b-instruct-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)

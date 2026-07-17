@@ -321,11 +321,15 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             model_id=model_id,
             timeout=options.startup_timeout,
         ):
-            print(
-                f"{_runtime_label(runtime_kind)} did not become ready after "
-                f"{options.startup_timeout} seconds."
-            )
-            _print_runtime_failure(log_path, runtime.poll())
+            exit_code = runtime.poll()
+            if exit_code is None:
+                print(
+                    f"{_runtime_label(runtime_kind)} did not become ready after "
+                    f"{options.startup_timeout} seconds."
+                )
+            else:
+                print(f"{_runtime_label(runtime_kind)} exited before becoming ready.")
+            _print_runtime_failure(log_path, exit_code)
             return 70
         print(
             f"{_runtime_label(runtime_kind)} is ready after "

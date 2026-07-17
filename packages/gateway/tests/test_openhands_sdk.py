@@ -49,13 +49,22 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
         captured.update(options)
         return object()
 
-    context = _agent_context(SimpleNamespace(AgentContext=agent_context), ["verified-skill"])
+    context = _agent_context(
+        SimpleNamespace(AgentContext=agent_context),
+        ["verified-skill"],
+    )
 
     assert context is not None
     assert captured["skills"] == ["verified-skill"]
     assert captured["load_user_skills"] is False
     assert captured["load_public_skills"] is False
     assert captured["load_project_skills"] is False
+    suffix = str(captured["system_message_suffix"])
+    assert "location returned by invoke_skill" in suffix
+    assert "scripts/run.py" in suffix
+    assert "never from the project directory" in suffix
+    assert "/opt/heartwood" not in suffix
+    assert str(Path.cwd()) not in suffix
 
 
 def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:

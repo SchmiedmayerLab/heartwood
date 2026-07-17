@@ -469,7 +469,10 @@ def _backend_error(error: Exception) -> BackendEvent:
     )
 
 
-def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
+def _agent_context(
+    sdk: _SdkModule,
+    skills: list[object],
+) -> object:
     """Build the context from explicitly verified Skills only."""
     return sdk.AgentContext(
         skills=skills,
@@ -478,8 +481,11 @@ def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
         load_project_skills=False,
         system_message_suffix=(
             "Operate only inside the configured project directory. Do not inspect or modify "
-            "the reserved .heartwood directory. Follow Heartwood data-use, egress, and "
-            "aggregate-export controls."
+            "reserved .heartwood state. An explicitly loaded Skill may read or execute only "
+            "the files under the Skill location returned by invoke_skill; never modify that "
+            "location or inspect neighboring .heartwood content. Resolve a Skill-relative file "
+            "such as scripts/run.py from the returned Skill location, never from the project "
+            "directory. Follow Heartwood data-use, egress, and aggregate-export controls."
         ),
     )
 

@@ -70,7 +70,7 @@ See [Project Files and State](project-state.md) for the full storage contract.
 
 ??? question "Why does local model startup take several minutes?"
 
-    Heartwood verifies the artifact, checks memory, starts the inference server, loads the model, and waits for a health response before opening the interface. The launcher reports elapsed time every 15 seconds. If it exits, inspect `.heartwood/logs/local-model.log` and the diagnostic printed by the launcher.
+    Heartwood verifies the artifact, checks memory, starts the inference server, loads the model, and waits for a health response before opening the interface. The launcher reports elapsed time every 15 seconds. If the runtime exits before readiness, the launcher reports an early exit rather than waiting for the full timeout. Inspect `.heartwood/logs/local-model.log` and the diagnostic printed by the launcher.
 
 ??? question "Why is the GPU unused or out of memory?"
 
@@ -115,6 +115,10 @@ See [Connect a Model](model-connections.md) for each supported connection type a
 ??? question "Why can a notebook replay a session but not submit a task?"
 
     The notebook bridge shares project state; it does not start a downloaded model. Configure the project first and keep `heartwood launch --web` running for a Heartwood-managed local model. Use one active writer for each session.
+
+??? question "Why did opening Terra's terminal resume a paused environment?"
+
+    The terminal route is an application route and can request running compute. Use the workspace dashboard's cloud controls or the Cloud Environments manager to inspect, pause, replace, or delete compute without first opening the terminal. Keep the persistent disk when the project must survive replacement.
 
 See [Browser and Notebooks](web-interface.md) for interface setup and [Use Heartwood on Terra](terra-jupyter-demo.md#troubleshoot-the-terra-workflow) for platform-specific checks.
 

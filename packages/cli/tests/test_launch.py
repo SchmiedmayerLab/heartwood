@@ -121,8 +121,8 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
 
     assert plan.platform_id == "carina"
     assert plan.allocation_required
-    assert plan.context_window == 16_384
-    assert "Context: 16,384 tokens" in plan.format()
+    assert plan.context_window == 32_768
+    assert "Context: 32,768 tokens" in plan.format()
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
@@ -512,6 +512,48 @@ def test_launch_reports_runtime_timeout_and_forces_cleanup(
     output = capsys.readouterr().out
     assert "did not become ready after 7 seconds" in output
     assert "Runtime log:" in output
+
+
+def test_launch_reports_early_runtime_exit_without_claiming_timeout(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, startup_timeout=600)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+
+    class FailedProcess:
+        def __init__(self, _command: object, **_kwargs: object) -> None:
+            pass
+
+        def poll(self) -> int:
+            return 42
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return 42
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", FailedProcess)
+    monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kwargs: False)
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 70
+    output = capsys.readouterr().out
+    assert "vLLM exited before becoming ready" in output
+    assert "after 600 seconds" not in output
+    assert "vLLM exited with status 42" in output
 
 
 def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:

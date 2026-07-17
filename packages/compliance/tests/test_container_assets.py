@@ -114,6 +114,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "      jq \\" in platform
     assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
     assert "ipykernel install" in platform
+    assert '--env IPYTHONDIR "/tmp/heartwood-ipython"' in platform
     assert "heartwood-workspace" not in platform
     assert "heartwood-project" not in platform
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
@@ -220,6 +221,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     launcher = _read("images/gpu/start_vllm.sh")
     verifier = _read("images/gpu/verify_runtime.sh")
     compatibility = _read("images/gpu/heartwood_vllm.py")
+    sitecustomize = _read("images/gpu/sitecustomize.py")
+    executable = _read("images/gpu/heartwood-vllm")
     lock = _read("images/gpu/vllm-requirements.txt")
     overrides = _read("images/gpu/vllm-overrides.txt")
 
@@ -233,6 +236,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert (
             "images/gpu/heartwood_vllm.py /opt/heartwood-vllm/bin/heartwood_vllm.py" in dockerfile
         )
+        assert "images/gpu/sitecustomize.py /opt/heartwood-vllm/bin/sitecustomize.py" in dockerfile
         assert "images/gpu/heartwood-vllm /opt/heartwood-vllm/bin/heartwood-vllm" in dockerfile
     assert generic.index("uv venv /opt/heartwood-vllm") < generic.index("COPY packages ./packages")
     assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
@@ -282,6 +286,16 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "GPU runtime image contains a model artifact" in verifier
     assert 'cls.__module__.startswith("vllm.")' in compatibility
     assert "PreTrainedConfig.__init_subclass__ = classmethod" in compatibility
+    assert "_heartwood_compatibility_applied" in compatibility
+    assert 'hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended")' in compatibility
+    assert "self.added_tokens_decoder.values()" in compatibility
+    assert 'ModelRegistry.models.get("Qwen2ForCausalLM")' in compatibility
+    assert "registered_model.inspect_model_cls()" in compatibility
+    assert "get_cached_tokenizer" in compatibility
+    assert "tokenizer_check = subprocess.run" in compatibility
+    assert "apply_transformers_compatibility" in sitecustomize
+    assert 'export PYTHONPATH="${runtime_bin}"' in executable
+    assert "${PYTHONPATH" not in executable
     assert '_VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"' in compatibility
     assert "_CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)" in compatibility
     assert (
@@ -394,6 +408,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
 
     assert "micromamba create" in bootstrap
     assert 'images/gpu/heartwood_vllm.py "${root}/vllm/bin/heartwood_vllm.py"' in bootstrap
+    assert 'images/gpu/sitecustomize.py "${root}/vllm/bin/sitecustomize.py"' in bootstrap
     assert 'images/gpu/heartwood-vllm "${root}/vllm/bin/heartwood-vllm"' in bootstrap
     assert '"${root}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__' in bootstrap
     assert "micromamba install" in bootstrap
