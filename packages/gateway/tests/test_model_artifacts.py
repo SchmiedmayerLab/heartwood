@@ -359,7 +359,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
         ({"source_revision": "latest"}, "immutable revision"),
         ({"artifact_size_bytes": 0}, "storage metadata"),
         ({"minimum_free_bytes": 1}, "storage metadata"),
-        ({"context_window": 32_769}, "between 2048 and 32768"),
+        ({"context_window": 1_048_577}, "between 2048 and 1048576"),
         ({"artifact_sha256": "ABC"}, "lowercase SHA-256"),
     ],
 )

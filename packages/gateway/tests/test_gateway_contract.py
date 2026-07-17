@@ -585,7 +585,7 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
     fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] for model in fully_available)
-    assert fully_available[0]["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
+    assert fully_available[0]["model_id"] == "qwen25-7b-instruct-awq-vllm"
     assert fully_available[0]["availability_reason"] == "Recommended for this deployment"
 
 

@@ -234,7 +234,12 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
 
 def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
     workflow = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
+    validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
     assert "--required-check 'Release Candidate Ready'" in workflow
+    assert "python3 deploy/verify_model_sources.py --source-root ." in workflow
+    assert (
+        "python3 deploy/verify_model_sources.py --source-root . --allow-unavailable" in validation
+    )
     assert "for attempt in" not in workflow
     assert "sleep 30" not in workflow
     assert "release-required-checks.txt" not in workflow

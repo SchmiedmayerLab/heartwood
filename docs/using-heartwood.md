@@ -67,6 +67,10 @@ Heartwood displays activity while the model is preparing a response or while an 
 
 If the process exits or remains unavailable, run `heartwood doctor`. For a downloaded local model, confirm that `heartwood launch` or `heartwood launch --web` is still running. See [Troubleshooting](troubleshooting.md) for the common readiness and runtime checks.
 
+### Continue a Long Conversation
+
+Heartwood configures OpenHands to summarize older conversation events before the active model input budget is exhausted. The first events and recent work remain available while an OpenHands-generated summary replaces older detail. This supports longer agentic workflows without requiring manual transcript management, but a summary is not a verbatim archive. Keep durable decisions, intermediate data, and requested outputs in project files; start a focused session when exact older context is essential. The original in-boundary session events and content-minimized audit record remain separate from the model's condensed working history.
+
 ### Review the Complete Action Set
 
 Heartwood defaults to **Ask Every Time**. When OpenHands reaches a confirmation stop, Heartwood shows every member of the pending action set with its tool, summary, arguments, and risk classification.

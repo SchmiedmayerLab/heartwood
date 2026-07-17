@@ -37,9 +37,9 @@ def test_repository_snapshot_catalog_pins_the_carina_demo_model() -> None:
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
     assert snapshot.context_window == 32_768
 
-    terra_snapshot = catalog.snapshot("qwen25-coder-7b-instruct-awq-vllm")
+    terra_snapshot = catalog.snapshot("qwen25-7b-instruct-awq-vllm")
     assert terra_snapshot.runtime_profile == "vllm-cuda"
-    assert terra_snapshot.source_repository == "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
+    assert terra_snapshot.source_repository == "Qwen/Qwen2.5-7B-Instruct-AWQ"
     assert terra_snapshot.source_revision == "b25037543e9394b818fdfca67ab2a00ecc7dd641"
     assert terra_snapshot.minimum_free_bytes >= terra_snapshot.expected_size_bytes
     assert terra_snapshot.context_window == 32_768
@@ -178,7 +178,7 @@ def test_snapshot_metadata_rejects_floating_revisions() -> None:
         ({"purpose": ""}, "purpose must be"),
         ({"expected_size_bytes": 0}, "storage metadata"),
         ({"minimum_free_bytes": 1}, "storage metadata"),
-        ({"context_window": 32_769}, "between 2048 and 32768"),
+        ({"context_window": 1_048_577}, "between 2048 and 1048576"),
     ],
 )
 def test_snapshot_metadata_rejects_unsafe_values(changes: dict[str, object], message: str) -> None:

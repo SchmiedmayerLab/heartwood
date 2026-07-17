@@ -18,6 +18,11 @@ from heartwood.gateway._action_settings import (
 from heartwood.gateway._asgi import GatewayAsgiApp
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._jupyter import has_authenticated_jupyter_proxy, jupyter_proxy_url
+from heartwood.gateway._local_model_contract import (
+    LocalContextPlan,
+    estimate_local_runtime_memory,
+    plan_local_context_window,
+)
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
     LocalModelChoice,
@@ -109,6 +114,7 @@ __all__ = [
     "GatewayAsgiApp",
     "GatewayEventStream",
     "HuggingFaceModelRepository",
+    "LocalContextPlan",
     "LocalModelChoice",
     "LocalModelDownloadManager",
     "LocalModelDownloadPlan",
@@ -157,6 +163,7 @@ __all__ = [
     "custom_model_connection",
     "download_model_artifact",
     "download_model_snapshot",
+    "estimate_local_runtime_memory",
     "has_authenticated_jupyter_proxy",
     "inspect_deployment",
     "jupyter_proxy_url",
@@ -168,6 +175,7 @@ __all__ = [
     "model_profile_from_preset",
     "model_settings_from_mapping",
     "persist_deployment_profile",
+    "plan_local_context_window",
     "recommended_model_choices",
     "verify_model_artifact",
     "verify_model_snapshot",
