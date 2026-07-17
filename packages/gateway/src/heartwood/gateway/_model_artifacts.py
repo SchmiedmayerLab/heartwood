@@ -143,7 +143,9 @@ class ModelArtifact:
             msg = "artifact storage metadata is invalid"
             raise ModelArtifactError(msg)
         if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
-            raise ModelArtifactError("context_window must be between 2048 and 131072 tokens")
+            raise ModelArtifactError(
+                f"context_window must be between 2048 and {MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
+            )
         if len(self.artifact_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in self.artifact_sha256
         ):

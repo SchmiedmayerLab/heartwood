@@ -78,7 +78,7 @@ See [Project Files and State](project-state.md) for the full storage contract.
 
 ??? question "Why did Heartwood select a smaller context than the model supports?"
 
-    Repository metadata describes the model's maximum capacity, not what the current machine can run comfortably. At launch, Heartwood reserves memory headroom and selects the largest supported 16K, 32K, 64K, or 128K tier that fits its conservative estimate. The launch output shows the model capacity, effective selection, and reason. A smaller tier avoids predictable out-of-memory failures and is saved into the shared project profile; do not pass a different value directly to the inference server.
+    Repository metadata describes the model's maximum capacity, not what the current machine can run comfortably. At launch, Heartwood reserves memory headroom and selects the largest supported power-of-two tier from 16K through 1M that fits its conservative estimate. The launch output shows the model capacity, effective selection, and reason. A smaller tier avoids predictable out-of-memory failures and is saved into the shared project profile; do not pass a different value directly to the inference server. Values above 128K normally require a long-context model and substantially more memory, and can increase response latency even when they fit.
 
 See [Run a Model Locally](getting-started-offline.md) for model formats, CPU and GPU paths, resource planning, and offline use.
 

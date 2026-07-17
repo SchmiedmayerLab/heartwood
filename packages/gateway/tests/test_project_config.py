@@ -282,9 +282,9 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
             LocalModelSelection(
                 artifact_id="model",
                 path=".heartwood/models/model",
-                context_window=131_073,
+                context_window=1_048_577,
             ),
-            "between 2048 and 131072",
+            "between 2048 and 1048576",
         ),
     ],
 )

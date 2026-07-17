@@ -141,7 +141,7 @@ docker run --rm -it \
   heartwood launch --plain
 ```
 
-The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant on a 16 GB GPU, download `qwen25-7b-instruct-awq-vllm`, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. Larger GPUs can use `qwen25-7b-instruct-vllm`. The image supplies vLLM but still downloads model weights only after that explicit project-level command. Before startup, Heartwood initializes CUDA, selects a 16K, 32K, 64K, or 128K context bounded by model capacity and conservative observed memory, and persists that effective budget for every interface. The reviewed Qwen recommendations currently have a 32K capacity.
+The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant on a 16 GB GPU, download `qwen25-7b-instruct-awq-vllm`, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. Larger GPUs can use `qwen25-7b-instruct-vllm`. The image supplies vLLM but still downloads model weights only after that explicit project-level command. Before startup, Heartwood initializes CUDA, selects a power-of-two context tier from 16K through 1M bounded by model capacity and conservative observed memory, and persists that effective budget for every interface. The reviewed Qwen recommendations currently have a 32K capacity; capacities above 128K are intended only for compatible long-context models on memory-rich systems.
 
 ## Runtime Security Controls
 

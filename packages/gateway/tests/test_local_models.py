@@ -62,6 +62,12 @@ def test_context_planner_uses_stable_model_and_memory_bounded_tiers() -> None:
         runtime="vllm",
         available_memory_bytes=48 * 1024**3,
     )
+    long_context_gpu = plan_local_context_window(
+        model_limit=1_048_576,
+        model_size_bytes=5 * 1024**3,
+        runtime="vllm",
+        available_memory_bytes=80 * 1024**3,
+    )
     unknown = plan_local_context_window(
         model_limit=131_072,
         model_size_bytes=None,
@@ -74,6 +80,8 @@ def test_context_planner_uses_stable_model_and_memory_bounded_tiers() -> None:
     assert "headroom" in t4.reason
     assert larger_gpu.effective_window == 131_072
     assert "full" in larger_gpu.reason
+    assert long_context_gpu.effective_window == 262_144
+    assert "headroom" in long_context_gpu.reason
     assert unknown.effective_window == 32_768
     assert "safe default" in unknown.reason
 
@@ -113,7 +121,7 @@ def test_repository_plan_bounds_context_from_model_metadata() -> None:
     repository = _repository(
         _file("config.json", 100),
         _file("model.safetensors", 1024, digest="a" * 64),
-        context_window=131_072,
+        context_window=2_097_152,
     )
 
     plan = repository.plan(
@@ -122,7 +130,7 @@ def test_repository_plan_bounds_context_from_model_metadata() -> None:
         gpu_available=True,
     )
 
-    assert plan.model.context_window == 131_072
+    assert plan.model.context_window == 1_048_576
 
 
 def test_repository_plan_reports_unsupported_formats_and_runtime_mismatch() -> None:
@@ -312,7 +320,7 @@ def test_repository_inspection_normalizes_metadata_and_detects_configured_custom
         (lambda choice: replace(choice, minimum_free_bytes=1), "storage metadata"),
         (lambda choice: replace(choice, license_posture=" "), "license posture"),
         (lambda choice: replace(choice, context_window=1024), "at least 2048"),
-        (lambda choice: replace(choice, context_window=131_073), "at most 131072"),
+        (lambda choice: replace(choice, context_window=1_048_577), "at most 1048576"),
         (lambda choice: replace(choice, source_path="model.bin"), "one GGUF file"),
         (
             lambda choice: replace(choice, source_path="../model.gguf"),
