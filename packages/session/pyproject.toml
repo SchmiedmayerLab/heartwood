@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-session"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 description = "Shared session command/event contract for Heartwood interfaces."
 readme = "README.md"
 requires-python = ">=3.12"

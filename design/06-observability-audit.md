@@ -20,14 +20,14 @@ Per session, Heartwood records:
 - platform and dataset detection proposals with evidence and confidence;
 - selected model profile identifier, which equals the connection identifier for catalog-selected models, endpoint, capability tier, action-confirmation mode, and route decision without credentials or the provider catalog;
 - researcher and agent message events in the in-boundary session stream;
-- proposed tool name and risk in both records, with the model-generated action summary retained only in the in-boundary session stream;
+- proposed tool name and risk in both records, with the model-generated action summary and exact structured action arguments retained only in the in-boundary session stream for review and replay;
 - confirmation request and allow-once or reject result when the selected mode requires review;
 - tool completion status in both records, with detailed result presentation retained only in the in-boundary session stream;
 - Skill identity, trust, verification, and installation decision when applicable;
 - export request, policy decision, and attestation metadata, with filesystem destinations scrubbed from the exported audit record;
-- errors without prompt, response, secret, or row content.
+- error occurrence and non-content classification fields, with detailed backend and validation reasons retained only in the private session stream for troubleshooting and replay.
 
-The exported audit record omits message content, model-generated action summaries, filesystem paths, row values, and sensitive tool payloads. These fields remain available only where required in the in-boundary operational state.
+The exported audit record omits message content, model-generated action summaries, structured action arguments, detailed error reasons, filesystem paths, row values, and sensitive tool payloads. These fields remain available only where required in the in-boundary operational state.
 
 ## Tamper Evidence
 
@@ -39,7 +39,7 @@ The CLI, notebook, and web UI render the same plain-language sequence from the s
 
 ## Replay and Resume
 
-Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, and pending action set. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
+Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, exact proposed-action arguments, resolved decisions, and pending action set. Private replay retains detailed error reasons needed for diagnosis; the derived audit record replaces those reasons with a content-minimized marker. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
 
 ## Field Feedback Boundary
 

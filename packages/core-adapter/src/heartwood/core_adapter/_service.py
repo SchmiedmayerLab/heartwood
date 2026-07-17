@@ -382,6 +382,7 @@ class SessionService:
                             "tool_name": tool_call.tool_name,
                             "risk": tool_call.risk,
                             "summary": tool_call.summary,
+                            "arguments": tool_call.arguments,
                         },
                     )
                 )
@@ -429,6 +430,7 @@ class SessionService:
             tool_name=tool_call.tool_name,
             risk=tool_call.risk,
             summary=tool_call.summary,
+            arguments=tool_call.arguments,
         )
         return self._record_event(
             EventKind.CONFIRMATION_REQUESTED,
@@ -453,7 +455,7 @@ class SessionService:
             session_id=self.store.session_id,
             event_type=kind.value,
             occurred_at=self.clock(),
-            payload=payload,
+            payload=_audit_payload(kind, payload),
         )
         event = SessionEvent(
             event_id=f"{self.store.session_id}-event-{sequence:06d}",
@@ -466,6 +468,13 @@ class SessionService:
         )
         self.store.append_event(event)
         return event
+
+
+def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Project an operational event into its content-minimized audit representation."""
+    if kind != EventKind.ERROR_RECORDED:
+        return payload
+    return {key: "[scrubbed]" if key == "reason" else value for key, value in payload.items()}
 
 
 def _require_tool_call(event: BackendEvent) -> ProposedToolCall:
@@ -504,6 +513,12 @@ def _pending_tool_calls(events: tuple[SessionEvent, ...]) -> tuple[ProposedToolC
                     tool_name=str(request.get("tool_name", "unknown-tool")),
                     risk=cast(Literal["low", "medium", "high", "unknown"], risk),
                     summary=str(request.get("summary", "pending action")),
+                    arguments=cast(
+                        dict[str, JsonValue],
+                        request.get("arguments", {})
+                        if isinstance(request.get("arguments"), dict)
+                        else {},
+                    ),
                 )
                 pending[tool_call.tool_call_id] = tool_call
         elif kind == EventKind.CONFIRMATION_RESOLVED.value:

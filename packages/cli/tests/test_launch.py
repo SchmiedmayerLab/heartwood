@@ -31,6 +31,7 @@ from heartwood.cli._launch import (
     _interaction_command,
     _model_size,
     _preflight_vllm,
+    _print_copy_progress,
     _print_resource_assessment,
     _print_runtime_failure,
     _reentry_command,
@@ -512,6 +513,40 @@ def test_launch_reports_runtime_timeout_and_forces_cleanup(
     output = capsys.readouterr().out
     assert "did not become ready after 7 seconds" in output
     assert "Runtime log:" in output
+
+
+def test_runtime_early_exit_is_not_reported_as_a_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    options = _options(tmp_path, startup_timeout=900)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "heartwood-vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+
+    class ExitedProcess:
+        def __init__(self, _command: object, **_kwargs: object) -> None:
+            pass
+
+        def poll(self) -> int:
+            return 1
+
+        def terminate(self) -> None:
+            pytest.fail("an exited process must not be terminated")
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", ExitedProcess)
+    monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kwargs: False)
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 70
+    output = capsys.readouterr().out
+    assert "exited before becoming ready" in output
+    assert "did not become ready after 900 seconds" not in output
 
 
 def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
@@ -1109,3 +1144,19 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
     assert _stage_model(source_directory, directory_destination) == directory_destination
     assert (directory_destination / "weights.safetensors").read_bytes() == b"synthetic"
     assert _model_size(source_directory) > 0
+
+
+def test_model_staging_progress_waits_for_a_stable_eta(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    total = 14 * 1024 * 1024 * 1024
+
+    _print_copy_progress(1536, total, 0.001)
+    _print_copy_progress(128 * 1024 * 1024, total, 8)
+    _print_copy_progress(total, total, 20)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert "calculating remaining time" in lines[0]
+    assert "seconds remaining" not in lines[0]
+    assert "seconds remaining" in lines[1]
+    assert lines[2].endswith("complete)")

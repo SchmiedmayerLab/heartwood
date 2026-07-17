@@ -48,6 +48,12 @@ The first line confirms the project boundary. The diagnostic then checks project
 
 See [Project Files and State](project-state.md) for the full storage contract.
 
+??? question "Why did a native installation fill my home quota?"
+
+    The installation root must be on approved project storage and separate from the Heartwood project directory. Current native installers place package-manager homes, caches, and temporary files under `<installation-root>/.installer/`; the Carina guide also supplies explicit confinement variables for the published release. If an older or interrupted command reports a path under the login home, stop before retrying, remove only the installer-created cache after reviewing its exact path, and then follow the complete [Carina installation workflow](carina-cli.md#step-2-install-heartwood). Do not broadly clear the home directory or unrelated package caches.
+
+    An interrupted confined installation may retain `<installation-root>/.installer/` so downloads can resume. Rerun the same installer command with the same installation root. A successful installation removes this transient directory automatically; do not remove the versioned `runtimes/`, `versions/`, `bin/`, or `current` entries.
+
 ## Resolve Model Setup Problems
 
 ??? question "Why does a downloaded model not answer requests?"
@@ -127,6 +133,14 @@ See [Browser and Notebooks](web-interface.md) for interface setup and [Use Heart
 ??? question "Why is an action waiting?"
 
     The agent pauses at a confirmation stop until the interface that owns the active turn allows or rejects it. Do not try to approve the same turn simultaneously from another terminal, browser, or notebook process.
+
+??? question "Why does an action summary look safe but its details are unclear?"
+
+    Review the structured arguments shown under every pending action. For a terminal action, confirm the complete command; for a file action, confirm the operation, path, and proposed content. Reject the complete set when these details are missing, truncated, outside the project boundary, or inconsistent with the request. Do not approve based only on the model-generated summary or risk label.
+
+??? question "Why did OpenHands show an action error and then another proposal?"
+
+    A tool-call validation error can cause the model to submit a corrected proposal. Heartwood retains the detailed error in the private project session for replay, replaces its reason with a content-minimized marker in the audit record, and excludes the invalid action when OpenHands identifies its exact tool-call id. Review the corrected action normally. If both an invalid and corrected action remain pending, reject the set and preserve the session as diagnostic evidence instead of allowing duplicate side effects.
 
 See [Work with the Agent](using-heartwood.md#review-the-complete-action-set) for the normal approval workflow.
 

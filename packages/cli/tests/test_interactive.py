@@ -110,6 +110,26 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
 
 
 def test_line_formatter_groups_multi_action_review_and_resolution() -> None:
+    proposal_without_arguments = _event(
+        0,
+        EventKind.TOOL_CALL_PROPOSED,
+        {"tool_name": "terminal", "risk": "low", "summary": "Inspect status"},
+    )
+    proposal_with_empty_arguments = _event(
+        0,
+        EventKind.TOOL_CALL_PROPOSED,
+        {
+            "tool_name": "terminal",
+            "risk": "low",
+            "summary": "Inspect status",
+            "arguments": {},
+        },
+    )
+    assert _format_event(proposal_without_arguments) == ("[000] Action: Inspect status (risk=low)")
+    assert _format_event(proposal_with_empty_arguments) == (
+        "[000] Action: Inspect status (risk=low)"
+    )
+
     pending = (
         _event(
             1,
@@ -121,6 +141,7 @@ def test_line_formatter_groups_multi_action_review_and_resolution() -> None:
                     "tool_name": "terminal",
                     "risk": "medium",
                     "summary": "Run the synthetic cohort command",
+                    "arguments": {"command": "python run.py --output /project/cohort-summary.json"},
                 }
             },
         ),
@@ -143,7 +164,9 @@ def test_line_formatter_groups_multi_action_review_and_resolution() -> None:
 
     assert pending_lines[0] == "Review 2 actions as one OpenHands action set:"
     assert "Run the synthetic cohort command" in pending_lines[1]
-    assert "Write the aggregate result" in pending_lines[2]
+    assert "Arguments:" in pending_lines[2]
+    assert "python run.py --output /project/cohort-summary.json" in "\n".join(pending_lines)
+    assert any("Write the aggregate result" in line for line in pending_lines)
     assert pending_lines[-2:] == ("Allow all once: /allow", "Reject all: /reject")
     assert "internal-request" not in "\n".join(pending_lines)
 
@@ -163,6 +186,37 @@ def test_line_formatter_groups_multi_action_review_and_resolution() -> None:
     )
 
     assert resolved_lines == ("[003-004] Action set approved (2 actions)",)
+
+    replay_lines = _format_event_lines(
+        (
+            _event(
+                5,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "tool-3",
+                    "tool_name": "file_editor",
+                    "risk": "medium",
+                    "summary": "Write the reviewed aggregate",
+                    "arguments": {
+                        "command": "create",
+                        "path": "/project/cohort-summary.txt",
+                        "file_text": "heartwood-corrected-review-ok\n",
+                    },
+                },
+            ),
+            _event(
+                6,
+                EventKind.CONFIRMATION_RESOLVED,
+                {"tool_call_id": "tool-3", "decision": "denied"},
+            ),
+        )
+    )
+    replay_text = "\n".join(replay_lines)
+    assert "Arguments:" in replay_text
+    assert '"command": "create"' in replay_text
+    assert '"path": "/project/cohort-summary.txt"' in replay_text
+    assert '"file_text": "heartwood-corrected-review-ok\\n"' in replay_text
+    assert replay_lines[-1] == "[006] Action set denied (1 action)"
 
 
 def test_interaction_activity_matches_the_submitted_operation() -> None:

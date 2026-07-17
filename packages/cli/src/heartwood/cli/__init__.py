@@ -30,6 +30,7 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     command_help,
+    format_action_arguments,
     interaction_activity,
     pending_actions,
 )
@@ -67,7 +68,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0-beta.2"
+__version__ = "0.2.0-beta.3"
 
 _PROG = "heartwood"
 
@@ -1352,6 +1353,9 @@ def _format_event_lines(
             lines.append(
                 f"  {index}. {action.summary} [tool={action.tool_name}, risk={action.risk}]"
             )
+            if argument_lines := format_action_arguments(action.arguments):
+                lines.append("     Arguments:")
+                lines.extend(f"       {line}" for line in argument_lines)
         lines.extend(("Allow all once: /allow", "Reject all: /reject"))
     return tuple(lines)
 
@@ -1377,10 +1381,17 @@ def _format_event(event: SessionEvent) -> str:
     if kind == EventKind.AGENT_MESSAGE_EMITTED.value:
         return f"{prefix} Agent: {event.payload.get('content', '')}"
     if kind == EventKind.TOOL_CALL_PROPOSED.value:
-        return (
+        line = (
             f"{prefix} Action: {event.payload.get('summary', event.payload.get('tool_name', ''))} "
             f"(risk={event.payload.get('risk', 'unknown')})"
         )
+        arguments = event.payload.get("arguments")
+        if not isinstance(arguments, dict):
+            return line
+        argument_lines = format_action_arguments(arguments)
+        if not argument_lines:
+            return line
+        return "\n".join((line, "  Arguments:", *(f"    {item}" for item in argument_lines)))
     if kind == EventKind.CONFIRMATION_REQUESTED.value:
         return ""
     if kind == EventKind.CONFIRMATION_RESOLVED.value:

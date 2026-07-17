@@ -220,6 +220,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     launcher = _read("images/gpu/start_vllm.sh")
     verifier = _read("images/gpu/verify_runtime.sh")
     compatibility = _read("images/gpu/heartwood_vllm.py")
+    child_bootstrap = _read("images/gpu/sitecustomize.py")
     lock = _read("images/gpu/vllm-requirements.txt")
     overrides = _read("images/gpu/vllm-overrides.txt")
 
@@ -233,6 +234,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert (
             "images/gpu/heartwood_vllm.py /opt/heartwood-vllm/bin/heartwood_vllm.py" in dockerfile
         )
+        assert "images/gpu/sitecustomize.py /opt/heartwood-vllm/bin/sitecustomize.py" in dockerfile
         assert "images/gpu/heartwood-vllm /opt/heartwood-vllm/bin/heartwood-vllm" in dockerfile
     assert generic.index("uv venv /opt/heartwood-vllm") < generic.index("COPY packages ./packages")
     assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
@@ -282,6 +284,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "GPU runtime image contains a model artifact" in verifier
     assert 'cls.__module__.startswith("vllm.")' in compatibility
     assert "PreTrainedConfig.__init_subclass__ = classmethod" in compatibility
+    assert 'hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended")' in compatibility
+    assert "return self.all_special_tokens" in compatibility
     assert '_VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"' in compatibility
     assert "_CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)" in compatibility
     assert (
@@ -295,6 +299,9 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "vllm.v1.structured_output import backend_xgrammar" in compatibility
     assert "from vllm.transformers_utils import config as config_module" in compatibility
     assert "vllm.transformers_utils.tokenizer" in compatibility
+    assert "vllm.model_executor.models.registry import ModelRegistry" in compatibility
+    assert 'os.environ["PYTHONPATH"] = str(runtime_bin)' in compatibility
+    assert "activate_runtime_boundary()" in child_bootstrap
     assert '"model_type": "qwen2"' in compatibility
     assert "trust_remote_code=False" in compatibility
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
@@ -394,6 +401,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
 
     assert "micromamba create" in bootstrap
     assert 'images/gpu/heartwood_vllm.py "${root}/vllm/bin/heartwood_vllm.py"' in bootstrap
+    assert 'images/gpu/sitecustomize.py "${root}/vllm/bin/sitecustomize.py"' in bootstrap
     assert 'images/gpu/heartwood-vllm "${root}/vllm/bin/heartwood-vllm"' in bootstrap
     assert '"${root}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__' in bootstrap
     assert "micromamba install" in bootstrap
@@ -467,9 +475,15 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "HEARTWOOD_MODEL_CACHE" not in installer
     assert "exec %q" in installer
     assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
+    assert "installer release ${installer_release} does not match bundle" in installer
+    assert "__HEARTWOOD_RELEASE_VERSION__" in installer
+    assert "__HEARTWOOD_RELEASE_VERSION__" in packager
+    assert "--version VERSION" not in installer
+    assert "releases/latest/download" not in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
     assert "git archive --format=tar HEAD" in packager
     assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
+    assert "native package version is unsafe" in packager
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow

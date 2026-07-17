@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Platform Support and Validation
 
-This page records the evidence available for release `0.2.0-beta.2`. Start with [Choose Where to Run Heartwood](platforms.md) when deciding which setup to use; this page is the detailed reference for operators and reviewers.
+This page records the evidence available for release `0.2.0-beta.3`. Start with [Choose Where to Run Heartwood](platforms.md) when deciding which setup to use; this page is the detailed reference for operators and reviewers.
 
 An implemented feature, automated test, or published artifact is not evidence of institutional approval. The [Documentation Guide](README.md#documentation-status) defines each status term, and [Platform Architecture](../design/02-platforms.md) explains the underlying deployment assumptions.
 
@@ -32,13 +32,13 @@ No listed path is automatically approved for protected health information or ano
 
 ### Generic Container
 
-The published tags are `0.2.0-beta.2`, `edge`, and immutable `sha-<git-sha>` tags. Continuous integration builds native AMD64 and ARM64 artifacts and checks the no-weight image contract, centrally recommended and user-selected model planning, OpenHands loopback conversation, grouped action confirmation, mounted llama.cpp inference, one-project-volume recovery, browser workflow, audit export, CLI replay, responsive browser layout, and notebook-proxy behavior.
+The published tags are `0.2.0-beta.3`, `edge`, and immutable `sha-<git-sha>` tags. Continuous integration builds native AMD64 and ARM64 artifacts and checks the no-weight image contract, centrally recommended and user-selected model planning, OpenHands loopback conversation, grouped action confirmation, mounted llama.cpp inference, one-project-volume recovery, browser workflow, audit export, CLI replay, responsive browser layout, and notebook-proxy behavior.
 
 These checks use synthetic fixtures. A self-hosted deployment must still validate the exact host, identity, storage, network, provider, model, and data-use controls.
 
 ### Terra
 
-The published tags are `0.2.0-beta.2-terra`, `edge-terra`, and immutable `sha-<git-sha>-terra` tags. Terra tags use the single-platform Docker schema-2 format required by Leonardo.
+The published tags are `0.2.0-beta.3-terra`, `edge-terra`, and immutable `sha-<git-sha>-terra` tags. Terra tags use the single-platform Docker schema-2 format required by Leonardo.
 
 Continuous integration builds from the real pinned Terra base on `main` and checks the Jupyter environment, Heartwood kernel, inherited entrypoint, notebook route, Leonardo-compatible manifest, dedicated project placement under persistent storage, restart persistence, exact authenticated browser routing through Jupyter Server Proxy, portable and NVIDIA runtime metadata, deployment-aware model recommendations, the shared local-model contract, OpenHands synthetic workflow, mounted llama.cpp inference, secured vLLM configuration loading, CLI, notebook bridge, and audit export.
 
@@ -46,9 +46,9 @@ Real Terra workspace validation remains required before a supported or instituti
 
 ### Stanford Carina
 
-Release `0.2.0-beta.2` provides the native installation bundle; no Carina-specific container image is published. Continuous integration verifies the installer layout, locked Heartwood and vLLM environments, Micromamba bootstrap, vLLM and PyTorch runtime imports, Slurm handoff, exact current-directory project preservation, runtime supervision, setup, session lifecycle, shutdown, scratch cleanup, recommended and user-selected model planning, verified download, GPU-partition discovery, explicit compute consent, grouped OpenHands confirmation, narrow-terminal interaction, Stanford AI API Gateway connection, and both permitted confirmation modes.
+Release `0.2.0-beta.3` provides the native installation bundle; no Carina-specific container image is published. Continuous integration verifies the installer layout, locked Heartwood and vLLM environments, Micromamba bootstrap, vLLM and PyTorch runtime imports, Slurm handoff, exact current-directory project preservation, runtime supervision, setup, session lifecycle, shutdown, scratch cleanup, recommended and user-selected model planning, verified download, GPU-partition discovery, explicit compute consent, grouped OpenHands confirmation, narrow-terminal interaction, Stanford AI API Gateway connection, and both permitted confirmation modes.
 
-The published release has not completed the documented synthetic workflow on Carina. The current supported presentation is the terminal; no authenticated browser-proxy route or controlled-data approval is claimed.
+Live synthetic platform testing covered the complete beta.3 workflow on one NVIDIA L40S GPU. Installation started in the selected project-storage directory without external path, cache, home, or version inputs; completed all seven stages in 893 seconds; removed transient installer state; kept both application environments on the persistent bootstrap interpreter; and bound Carina into the installed launcher. The pinned Qwen2.5 7B snapshot staged to job-local scratch, vLLM became ready in 124 seconds, and the in-allocation diagnostic passed its model, project, policy, scratch, scheduler, and GPU checks. The session invoked a repository-verified synthetic cohort Skill, displayed exact structured arguments before review and in replay, allowed one bounded terminal action, rejected file actions without creating them, excluded an invalid proposal, paused and resumed an idle session without another model call, verified a content-minimized hash-chained audit export while retaining private diagnostics, exited normally, and preserved 16 unrelated normal-QoS tasks. The tested 7B model also produced unacceptable free-form narrative drafts, so deterministic Skill results and successful tool execution are not evidence of research validity. Carina remains implemented and CI-validated until the immutable beta.3 artifact repeats the live workflow; the supported presentation is the terminal, and no authenticated browser-proxy route, controlled-data approval, or research-validity claim is made.
 
 ## Shared Image Contract
 

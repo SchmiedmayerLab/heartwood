@@ -8,13 +8,13 @@
 set -euo pipefail
 
 repository="SchmiedmayerLab/heartwood"
-root="${HOME}/.local/share/heartwood"
-version="latest"
+root="${PWD}"
+installer_release="__HEARTWOOD_RELEASE_VERSION__"
 platform="auto"
 bundle=""
 checksums=""
 dry_run="false"
-minimum_free_gib="${HEARTWOOD_INSTALL_MINIMUM_FREE_GIB:-8}"
+minimum_free_gib="8"
 stage_number=0
 stage_count=7
 
@@ -27,11 +27,11 @@ usage() {
   cat <<'EOF'
 Usage: heartwood-installer [options]
 
-  --root PATH          Installation root
-  --version VERSION    GitHub release tag, or latest (default)
+  --root PATH          Installation root (default: current directory)
   --platform NAME      auto, carina, or generic
   --bundle PATH        Use a local heartwood-native.tar.gz
   --checksums PATH     SHA256SUMS for a local bundle
+  --minimum-free-gib N Required free space in GiB (default: 8)
   --dry-run            Verify and display the installation without changing it
 EOF
 }
@@ -39,10 +39,10 @@ EOF
 while (($#)); do
   case "$1" in
     --root) root="${2:?missing installation root}"; shift 2 ;;
-    --version) version="${2:?missing version}"; shift 2 ;;
     --platform) platform="${2:?missing platform}"; shift 2 ;;
     --bundle) bundle="${2:?missing bundle}"; shift 2 ;;
     --checksums) checksums="${2:?missing checksum manifest}"; shift 2 ;;
+    --minimum-free-gib) minimum_free_gib="${2:?missing minimum free space}"; shift 2 ;;
     --dry-run) dry_run="true"; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 64 ;;
@@ -61,32 +61,84 @@ if [[ "${platform}" != "carina" && "${platform}" != "generic" ]]; then
   exit 64
 fi
 
-workspace="$(mktemp -d)"
+root_preexisting="true"
+if [[ ! -e "${root}" ]]; then
+  root_preexisting="false"
+fi
+umask 077
+mkdir -p "${root}"
+root="$(cd "${root}" && pwd -P)"
+installer_state="${root}/.installer"
+installer_directories=(
+  "${installer_state}"
+  "${installer_state}/home"
+  "${installer_state}/tmp"
+  "${installer_state}/cache/uv"
+  "${installer_state}/cache/xdg"
+  "${installer_state}/cache/mamba"
+  "${installer_state}/cache/pip"
+  "${installer_state}/cache/huggingface"
+  "${installer_state}/cache/torch"
+  "${installer_state}/cache/cuda"
+  "${installer_state}/cache/numba"
+  "${installer_state}/cache/triton"
+  "${installer_state}/config"
+  "${installer_state}/data"
+  "${installer_state}/state"
+)
+mkdir -p "${installer_directories[@]}"
+chmod 700 "${root}" "${installer_directories[@]}"
+export HOME="${installer_state}/home"
+export TMPDIR="${installer_state}/tmp"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
+export XDG_CACHE_HOME="${installer_state}/cache/xdg"
+export XDG_CONFIG_HOME="${installer_state}/config"
+export XDG_DATA_HOME="${installer_state}/data"
+export XDG_STATE_HOME="${installer_state}/state"
+export UV_CACHE_DIR="${installer_state}/cache/uv"
+export MAMBA_ROOT_PREFIX="${installer_state}/cache/mamba"
+export PIP_CACHE_DIR="${installer_state}/cache/pip"
+export HF_HOME="${installer_state}/cache/huggingface"
+export TORCH_HOME="${installer_state}/cache/torch"
+export CUDA_CACHE_PATH="${installer_state}/cache/cuda"
+export NUMBA_CACHE_DIR="${installer_state}/cache/numba"
+export TRITON_CACHE_DIR="${installer_state}/cache/triton"
+
+workspace="$(mktemp -d "${TMPDIR}/heartwood-installer.XXXXXX")"
 installation_staging=""
+installation_attempted="false"
+installation_succeeded="false"
 cleanup() {
   rm -rf "${workspace}"
   if [[ -n "${installation_staging}" && -d "${installation_staging}" ]]; then
     rm -rf "${installation_staging}"
   fi
+  if [[ "${installation_succeeded}" == "true" || "${installation_attempted}" == "false" ]]; then
+    rm -rf "${installer_state}"
+    if [[ "${root_preexisting}" == "false" ]]; then
+      rmdir "${root}" >/dev/null 2>&1 || true
+    fi
+  fi
 }
 trap cleanup EXIT
 
 if [[ ! "${minimum_free_gib}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "HEARTWOOD_INSTALL_MINIMUM_FREE_GIB must be a positive integer" >&2
+  echo "--minimum-free-gib must be a positive integer" >&2
   exit 64
 fi
 
 stage "Resolve and verify the release assets"
 if [[ -z "${bundle}" ]]; then
+  if [[ "${installer_release}" == __HEARTWOOD_* ]]; then
+    echo "the source installer is not release-stamped; use --bundle for local testing" >&2
+    exit 64
+  fi
   if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to retrieve a GitHub Release" >&2
     exit 69
   fi
-  if [[ "${version}" == "latest" ]]; then
-    release_root="https://github.com/${repository}/releases/latest/download"
-  else
-    release_root="https://github.com/${repository}/releases/download/${version}"
-  fi
+  release_root="https://github.com/${repository}/releases/download/${installer_release}"
   bundle="${workspace}/heartwood-native.tar.gz"
   checksums="${workspace}/SHA256SUMS"
   curl --fail --location --show-error --progress-bar "${release_root}/heartwood-native.tar.gz" --output "${bundle}"
@@ -122,12 +174,17 @@ if [[ ! "${release_version}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]]; then
   echo "bundle contains an unsafe release version" >&2
   exit 66
 fi
+if [[ "${installer_release}" != __HEARTWOOD_* && "${release_version}" != "${installer_release}" ]]; then
+  echo "installer release ${installer_release} does not match bundle ${release_version}" >&2
+  exit 66
+fi
 
 printf 'Heartwood native installation\n\n'
 printf 'Platform: %s\n' "${platform}"
 printf 'Version: %s\n' "${release_version}"
 printf 'Root: %s\n' "${root}"
 if [[ "${dry_run}" == "true" ]]; then
+  installation_succeeded="true"
   printf 'Result: verified dry run; no files changed\n'
   exit 0
 fi
@@ -169,6 +226,7 @@ if [[ ! -d "${source_root}" ]]; then
 fi
 
 stage "Install the locked application and inference runtimes; this can take several minutes"
+installation_attempted="true"
 if [[ "${platform}" == "carina" ]]; then
   (
     cd "${source_root}"
@@ -192,12 +250,19 @@ if [[ ! -x "${command_path}" ]]; then
   echo "installed heartwood command is unavailable" >&2
   exit 70
 fi
-printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${command_path}" >"${root}/bin/heartwood"
+if [[ "${platform}" == "carina" ]]; then
+  printf '#!/usr/bin/env bash\nexport HEARTWOOD_PLATFORM=carina\nexec %q "$@"\n' \
+    "${command_path}" >"${root}/bin/heartwood"
+else
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${command_path}" >"${root}/bin/heartwood"
+fi
 chmod +x "${root}/bin/heartwood"
 if [[ -x "${runtime_root}/vllm/bin/hf" ]]; then
   ln -sfn "${runtime_root}/vllm/bin/hf" "${root}/bin/hf"
 fi
 
 stage "Installation complete"
+installation_succeeded="true"
+rm -rf "${installer_state}"
 printf 'Installed %s in %d seconds.\n' "${release_version}" "${SECONDS}"
 printf 'Add %s to PATH, then run: heartwood doctor\n' "${root}/bin"

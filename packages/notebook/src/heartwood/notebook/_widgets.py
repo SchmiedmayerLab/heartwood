@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import html
 import importlib
+import json
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Protocol, cast
@@ -81,6 +82,11 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         items.append(f"{control.label}: {control.decision or 'pending'}")
         items.extend(
             f"{index}. {action.summary} ({action.tool_name}, {action.risk} risk)"
+            + (
+                f"\nArguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}"
+                if action.arguments
+                else ""
+            )
             for index, action in enumerate(control.actions, 1)
         )
     return tuple(items)

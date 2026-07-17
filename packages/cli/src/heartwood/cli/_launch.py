@@ -321,10 +321,17 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             model_id=model_id,
             timeout=options.startup_timeout,
         ):
-            print(
-                f"{_runtime_label(runtime_kind)} did not become ready after "
-                f"{options.startup_timeout} seconds."
-            )
+            elapsed = int(time.monotonic() - started)
+            if runtime.poll() is None:
+                print(
+                    f"{_runtime_label(runtime_kind)} did not become ready after "
+                    f"{options.startup_timeout} seconds."
+                )
+            else:
+                print(
+                    f"{_runtime_label(runtime_kind)} exited before becoming ready "
+                    f"after {elapsed} seconds."
+                )
             _print_runtime_failure(log_path, runtime.poll())
             return 70
         print(
@@ -975,10 +982,16 @@ def _print_copy_progress(copied: int, total: int, elapsed: float) -> None:
     percent = (copied / total * 100) if total else 100
     rate = copied / elapsed if elapsed > 0 else 0
     remaining = (total - copied) / rate if rate > 0 else 0
+    if copied >= total:
+        status = "complete"
+    elif elapsed >= 5 and copied >= 64 * 1024 * 1024 and rate > 0:
+        status = f"about {int(remaining)} seconds remaining"
+    else:
+        status = "calculating remaining time"
     print(
         f"Model staging: {percent:5.1f}% "
         f"({_format_bytes(copied)} of {_format_bytes(total)}, "
-        f"about {int(remaining)} seconds remaining)"
+        f"{status})"
     )
 
 

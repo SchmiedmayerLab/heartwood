@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from contextlib import suppress
@@ -17,11 +19,15 @@ from importlib.metadata import version
 from pathlib import Path
 
 _VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"
+_COMPATIBILITY_MARKER = "_heartwood_vllm_transformers_compatibility"
+_REMOVED_CONFIG_MARKER = "_heartwood_vllm_removed_vulnerable_config"
 
 
 def _apply_transformers_compatibility() -> None:
     from transformers.configuration_utils import PreTrainedConfig
 
+    if getattr(PreTrainedConfig, _COMPATIBILITY_MARKER, False):
+        return
     original = PreTrainedConfig.__init_subclass__.__func__
 
     def compatible_init_subclass(
@@ -33,15 +39,49 @@ def _apply_transformers_compatibility() -> None:
         original(cls, *args, **kwargs)
 
     PreTrainedConfig.__init_subclass__ = classmethod(compatible_init_subclass)
+    setattr(PreTrainedConfig, _COMPATIBILITY_MARKER, True)
+
+
+def _apply_tokenizer_compatibility() -> None:
+    from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+
+    if hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended"):
+        return
+
+    @property
+    def all_special_tokens_extended(self: PreTrainedTokenizerBase) -> list[str]:
+        return self.all_special_tokens
+
+    PreTrainedTokenizerBase.all_special_tokens_extended = (  # type: ignore[attr-defined]
+        all_special_tokens_extended
+    )
 
 
 def _apply_vllm_security_backport() -> type[object]:
     from vllm.transformers_utils import config as config_module
 
-    removed = config_module._CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)
+    removed = getattr(config_module, _REMOVED_CONFIG_MARKER, None)
+    if removed is None:
+        removed = config_module._CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)
+        setattr(config_module, _REMOVED_CONFIG_MARKER, removed)
     if removed is None or removed.__name__ != "Nemotron_Nano_VL_Config":
         raise RuntimeError("the reviewed vLLM security backport no longer matches the runtime")
     return removed
+
+
+def activate_runtime_boundary() -> type[object]:
+    """Apply the reviewed compatibility and security boundary idempotently."""
+    _apply_transformers_compatibility()
+    _apply_tokenizer_compatibility()
+    return _apply_vllm_security_backport()
+
+
+def _configure_child_bootstrap() -> None:
+    runtime_bin = Path(__file__).resolve().parent
+    bootstrap = runtime_bin / "sitecustomize.py"
+    if not bootstrap.is_file():
+        raise RuntimeError(f"vLLM child bootstrap is unavailable: {bootstrap}")
+    os.environ["PYTHONPATH"] = str(runtime_bin)
 
 
 def _verify_runtime(removed_config: type[object]) -> None:
@@ -106,6 +146,27 @@ def _verify_runtime(removed_config: type[object]) -> None:
         if dynamic_loader_called:
             raise RuntimeError("the vulnerable vLLM dynamic configuration loader was called")
 
+    child = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            (
+                "from transformers.tokenization_utils_base import PreTrainedTokenizerBase; "
+                "assert hasattr(PreTrainedTokenizerBase, 'all_special_tokens_extended'); "
+                "from vllm.model_executor.models.registry import ModelRegistry; "
+                "print(ModelRegistry)"
+            ),
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ,
+    )
+    if child.returncode != 0:
+        detail = child.stderr.strip().splitlines()
+        summary = detail[-1] if detail else f"exit status {child.returncode}"
+        raise RuntimeError(f"vLLM child architecture import failed: {summary}")
+
     print(
         f"Transformers {transformers.__version__} integration and "
         "vLLM GHSA-8fr4-5q9j-m8gm, xgrammar GHSA-7rgv-gqhr-fxg3, and "
@@ -115,8 +176,8 @@ def _verify_runtime(removed_config: type[object]) -> None:
 
 def main() -> None:
     """Validate or start the vLLM command-line interface."""
-    _apply_transformers_compatibility()
-    removed_config = _apply_vllm_security_backport()
+    _configure_child_bootstrap()
+    removed_config = activate_runtime_boundary()
     if sys.argv[1:] == ["__heartwood_verify_runtime__"]:
         _verify_runtime(removed_config)
         return

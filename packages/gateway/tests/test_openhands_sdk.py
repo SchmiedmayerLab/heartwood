@@ -56,6 +56,8 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
     assert captured["load_user_skills"] is False
     assert captured["load_public_skills"] is False
     assert captured["load_project_skills"] is False
+    assert "invoke_skill" in str(captured["system_message_suffix"])
+    assert "not tools named after their identifiers" in str(captured["system_message_suffix"])
 
 
 def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:
@@ -249,6 +251,7 @@ def test_openhands_backend_allows_one_pending_action_and_continues(tmp_path: Pat
     pending = backend.submit_turn(session_id="session-1", prompt="create a file")
     tool_call = pending[1].tool_call
     assert tool_call is not None
+    assert tool_call.arguments == {"command": "pwd"}
 
     events = backend.resolve_confirmation(
         session_id="session-1",
@@ -429,13 +432,32 @@ def test_openhands_backend_rejects_parallel_pending_actions_as_one_sdk_batch(
     assert conversation.rejection_reasons == ["User rejected the pending action set"]
 
 
-def test_openhands_backend_pause_and_resume_translate_error_observation(
+def test_openhands_backend_excludes_action_rejected_by_sdk_validation(
+    tmp_path: Path,
+) -> None:
+    conversation = _InvalidThenCorrectedConversation()
+    backend = _backend(tmp_path, conversation)
+
+    events = backend.submit_turn(session_id="session-1", prompt="create report")
+
+    assert [event.kind for event in events] == [
+        BackendEventKind.ERROR,
+        BackendEventKind.TOOL_CALL_PROPOSED,
+        BackendEventKind.CONFIRMATION_REQUESTED,
+    ]
+    assert events[0].message == "invalid reset argument"
+    assert events[1].tool_call is not None
+    assert events[1].tool_call.tool_call_id == "corrected-call"
+    assert events[1].tool_call.arguments == {"command": "create report.md"}
+
+
+def test_openhands_backend_restored_resume_translates_error_observation(
     tmp_path: Path,
 ) -> None:
     conversation = _ErrorConversation()
+    conversation.state.execution_status.value = "running"
     backend = _backend(tmp_path, conversation)
 
-    backend.pause()
     events = backend.resume(session_id="session-1")
 
     assert conversation.state.execution_status.value == "finished"
@@ -448,6 +470,18 @@ def test_openhands_backend_pause_and_resume_translate_error_observation(
     assert events[1].message == "synthetic conversation error"
 
 
+def test_openhands_backend_idle_pause_and_resume_does_not_run_model(tmp_path: Path) -> None:
+    conversation = _FakeConversation()
+    backend = _backend(tmp_path, conversation)
+
+    backend.pause()
+    events = backend.resume(session_id="session-1")
+
+    assert events == ()
+    assert conversation.run_count == 0
+    assert conversation.state.execution_status.value == "idle"
+
+
 class MessageEvent:
     def __init__(self, text: str) -> None:
         self.source = "agent"
@@ -455,11 +489,12 @@ class MessageEvent:
 
 
 class ActionEvent:
-    def __init__(self, tool_call_id: str = "call-1") -> None:
+    def __init__(self, tool_call_id: str = "call-1", command: str = "pwd") -> None:
         self.tool_call_id = tool_call_id
         self.tool_name = "terminal"
         self.security_risk = SimpleNamespace(value="LOW")
         self.summary = "inspect the workspace"
+        self.action = {"command": command}
 
 
 class ObservationEvent:
@@ -476,8 +511,10 @@ class UserRejectObservation:
 
 
 class AgentErrorEvent:
-    def __init__(self) -> None:
+    def __init__(self, tool_call_id: str = "") -> None:
+        self.tool_call_id = tool_call_id
         self.detail = "synthetic conversation error"
+        self.error: str | None = None
 
 
 class _FailingAnalyzer:
@@ -552,6 +589,19 @@ class _ParallelConversation(_FakeConversation):
             callback(ObservationEvent("call-2"))
             callback(MessageEvent("Both workspace actions completed."))
             self.state.execution_status.value = "finished"
+
+
+class _InvalidThenCorrectedConversation(_FakeConversation):
+    def run(self) -> None:
+        callback = self.callback
+        assert callback is not None
+        callback(ActionEvent("invalid-call", "create report.md --reset"))
+        error = AgentErrorEvent("invalid-call")
+        del error.detail
+        error.error = "invalid reset argument"
+        callback(error)
+        callback(ActionEvent("corrected-call", "create report.md"))
+        self.state.execution_status.value = "waiting_for_confirmation"
 
 
 class _ErrorConversation(_FakeConversation):

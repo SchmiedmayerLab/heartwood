@@ -166,7 +166,7 @@ docker volume create heartwood-project
 
 docker run --rm -it \
   -v heartwood-project:/workspace \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
@@ -176,7 +176,7 @@ Then start a terminal session with container networking disabled:
 docker run --rm -it \
   --network none \
   -v heartwood-project:/workspace \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood launch --plain
 ```
 

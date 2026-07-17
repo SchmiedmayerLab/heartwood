@@ -491,6 +491,11 @@ summary:focus-visible {
 .conversation-meta span {
   color: #6c7870;
   font-size: 0.72rem;
+  white-space: pre-wrap;
+}
+
+.trace-message span {
+  white-space: pre-wrap;
 }
 
 .conversation-message p {
@@ -633,6 +638,15 @@ summary:focus-visible {
 
 .approval-batch-list li small {
   color: var(--muted-foreground);
+}
+
+.approval-batch-list pre {
+  max-height: 12rem;
+  margin: 6px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.72rem;
 }
 
 .approval-copy p {

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -22,7 +23,7 @@ from heartwood.core_adapter import (
     ToolExecution,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
-from heartwood.schemas import ActionConfirmationMode
+from heartwood.schemas import ActionConfirmationMode, JsonValue
 
 
 class OpenHandsSdkError(RuntimeError):
@@ -114,6 +115,7 @@ class OpenHandsSdkBackend:
         self._security_analyzer: _SecurityAnalyzer | None = None
         self._conversation_factory = conversation_factory or self._default_conversation_factory
         self._conversation: _Conversation | None = None
+        self._paused_execution_was_active: bool | None = None
 
     @property
     def backend_id(self) -> str:
@@ -227,11 +229,21 @@ class OpenHandsSdkBackend:
 
     def pause(self) -> None:
         """Pause the OpenHands conversation."""
-        if self._conversation is not None:
-            self._conversation.pause()
+        conversation = self._conversation
+        if conversation is None:
+            self._paused_execution_was_active = False
+            return
+        status = _execution_status(conversation)
+        self._paused_execution_was_active = status not in {"", "finished", "idle", "paused"}
+        if self._paused_execution_was_active:
+            conversation.pause()
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:
         """Resume OpenHands until the next stop."""
+        if self._paused_execution_was_active is False:
+            self._paused_execution_was_active = None
+            return ()
+        self._paused_execution_was_active = None
         self._captured.clear()
         try:
             self._get_conversation().run()
@@ -329,6 +341,12 @@ class OpenHandsSdkBackend:
         translated: list[BackendEvent] = []
         proposed: dict[str, ProposedToolCall] = {}
         observed: set[str] = set()
+        invalid_tool_call_ids = {
+            str(getattr(event, "tool_call_id", ""))
+            for event in self._captured
+            if type(event).__name__ in {"AgentErrorEvent", "ConversationErrorEvent"}
+            and getattr(event, "tool_call_id", None)
+        }
         for event in self._captured:
             event_name = type(event).__name__
             if event_name == "MessageEvent" and getattr(event, "source", None) == "agent":
@@ -343,6 +361,8 @@ class OpenHandsSdkBackend:
                     session_id=session_id,
                     analyzed_risk=_analyzed_risk(self._security_analyzer, event),
                 )
+                if tool_call.tool_call_id in invalid_tool_call_ids:
+                    continue
                 proposed[tool_call.tool_call_id] = tool_call
                 translated.append(
                     BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call)
@@ -357,14 +377,18 @@ class OpenHandsSdkBackend:
                 if tool_call_id:
                     observed.add(tool_call_id)
             elif event_name in {"AgentErrorEvent", "ConversationErrorEvent"}:
-                detail = str(getattr(event, "detail", "OpenHands conversation error"))
+                detail = str(
+                    getattr(event, "detail", None)
+                    or getattr(event, "error", None)
+                    or "OpenHands conversation error"
+                )
                 translated.append(BackendEvent(kind=BackendEventKind.ERROR, message=detail))
         pending = {
             tool_call_id: tool_call
             for tool_call_id, tool_call in proposed.items()
             if tool_call_id not in observed
         }
-        status = getattr(self._get_conversation().state.execution_status, "value", "")
+        status = _execution_status(self._get_conversation())
         if status == "waiting_for_confirmation":
             self._pending = pending
             translated.extend(
@@ -404,7 +428,40 @@ def _tool_call(
         tool_name=tool_name,
         risk=cast(Any, risk),
         summary=str(summary) if summary else f"run {tool_name}",
+        arguments=_tool_arguments(event),
     )
+
+
+def _tool_arguments(event: object) -> dict[str, JsonValue]:
+    """Return the exact structured action arguments supplied by OpenHands."""
+    action = getattr(event, "action", None)
+    if action is not None:
+        if callable(dump := getattr(action, "model_dump", None)):
+            action = dump(mode="json")
+        if isinstance(action, Mapping):
+            return _json_mapping(action)
+    tool_call = getattr(event, "tool_call", None)
+    raw = (
+        tool_call.get("arguments")
+        if isinstance(tool_call, Mapping)
+        else getattr(tool_call, "arguments", None)
+    )
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+    return _json_mapping(raw) if isinstance(raw, Mapping) else {}
+
+
+def _json_mapping(value: Mapping[object, object]) -> dict[str, JsonValue]:
+    normalized = json.loads(json.dumps(value, default=str))
+    return cast(dict[str, JsonValue], normalized) if isinstance(normalized, dict) else {}
+
+
+def _execution_status(conversation: _Conversation) -> str:
+    status = getattr(conversation.state, "execution_status", "")
+    return str(getattr(status, "value", status)).lower()
 
 
 def _analyzed_risk(analyzer: _SecurityAnalyzer | None, event: object) -> str | None:
@@ -479,7 +536,9 @@ def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
         system_message_suffix=(
             "Operate only inside the configured project directory. Do not inspect or modify "
             "the reserved .heartwood directory. Follow Heartwood data-use, egress, and "
-            "aggregate-export controls."
+            "aggregate-export controls. Skills are context resources, not tools named after "
+            "their identifiers. Activate a Skill only through the OpenHands invoke_skill tool "
+            "with its exact Skill identifier."
         ),
     )
 

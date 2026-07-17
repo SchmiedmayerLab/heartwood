@@ -163,7 +163,7 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
     )
     documentation = {
         "container-images.md": f"heartwood:{version}",
-        "carina-cli.md": (f"releases/download/{version}/heartwood-installer\n--version {version}"),
+        "carina-cli.md": f"releases/download/{version}/heartwood-installer",
         "platform-support.md": f"Release `{version}`\n`{version}-terra`",
         "releases.md": f"-f version={version}",
         "terra-jupyter-demo.md": f"heartwood:{version}-terra",
@@ -175,9 +175,9 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
 
-    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.2"}\n', encoding="utf-8")
+    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.3"}\n', encoding="utf-8")
     assert (
-        "skills/verified/example/metadata.json: 0.2.0-beta.2"
+        "skills/verified/example/metadata.json: 0.2.0-beta.3"
         in _release_verifier().source_version_errors(tmp_path, version)
     )
 

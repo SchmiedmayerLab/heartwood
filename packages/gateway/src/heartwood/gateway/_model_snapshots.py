@@ -50,6 +50,8 @@ class SnapshotDownloader(Protocol):
         repo_id: str,
         revision: str,
         local_dir: Path,
+        cache_dir: Path,
+        token: bool,
     ) -> str: ...
 
 
@@ -223,6 +225,8 @@ def download_model_snapshot(
                     repo_id=snapshot.source_repository,
                     revision=snapshot.source_revision,
                     local_dir=staging,
+                    cache_dir=staging / ".cache" / "huggingface",
+                    token=False,
                 )
             finally:
                 progress_stop.set()

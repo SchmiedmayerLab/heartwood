@@ -1,5 +1,11 @@
 # This source file is part of the Heartwood open-source project
+#
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
 # SPDX-License-Identifier: MIT
 
-version = "0.2.0-beta.3"
+"""Apply Heartwood's reviewed vLLM boundary in spawned Python interpreters."""
+
+from heartwood_vllm import activate_runtime_boundary
+
+activate_runtime_boundary()
