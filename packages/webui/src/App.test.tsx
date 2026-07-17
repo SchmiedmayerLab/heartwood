@@ -990,6 +990,7 @@ describe("App", () => {
     expect(
       within(modelPlan as HTMLElement).getByText(/Recommended: 8 CPU cores/u),
     ).toBeInTheDocument();
+    expect(modelPlan).toHaveTextContent("Up to 32,768 tokens");
     expect(
       within(modelPlan as HTMLElement).getByText(`Revision: ${"1".repeat(40)}`),
     ).toBeInTheDocument();

@@ -62,8 +62,22 @@ class _AgentContextFactory(Protocol):
         """Build one OpenHands agent context."""
 
 
+class _Llm(Protocol):
+    def model_copy(self, *, update: dict[str, object]) -> _Llm:
+        """Copy the model route with condenser-specific options."""
+
+    def reset_metrics(self) -> None:
+        """Separate condenser usage from the agent model metrics."""
+
+
+class _CondenserFactory(Protocol):
+    def __call__(self, **options: object) -> object:
+        """Build one OpenHands history condenser."""
+
+
 class _SdkModule(Protocol):
     AgentContext: _AgentContextFactory
+    LLMSummarizingCondenser: _CondenserFactory
 
 
 ConversationFactory = Callable[[Callable[[object], None]], _Conversation]
@@ -77,6 +91,9 @@ _AGENT_LLM_LOCAL_TIMEOUT_SECONDS = 600
 _AGENT_LLM_TIMEOUT_SECONDS = 180
 _AGENT_LLM_DEFAULT_MAX_MESSAGE_CHARS = 30_000
 _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN = 4
+_AGENT_CONDENSER_INPUT_FRACTION = 0.75
+_AGENT_CONDENSER_MAX_EVENTS = 240
+_AGENT_CONDENSER_KEEP_FIRST = 2
 
 
 class OpenHandsSdkBackend:
@@ -293,6 +310,7 @@ class OpenHandsSdkBackend:
         context = _agent_context(sdk, skills)
         agent = sdk.Agent(
             llm=llm,
+            condenser=_context_condenser(sdk, llm, self.profile),
             tools=[
                 sdk.Tool(
                     name=tools_module.TerminalTool.name,
@@ -459,6 +477,23 @@ def _llm_max_message_chars(profile: ModelProfile) -> int:
     return max(
         _AGENT_LLM_DEFAULT_MAX_MESSAGE_CHARS,
         profile.max_input_tokens * _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN,
+    )
+
+
+def _context_condenser(sdk: _SdkModule, llm: _Llm, profile: ModelProfile) -> object:
+    """Build OpenHands' native rolling summary within the active input budget."""
+    max_tokens = (
+        max(1, int(profile.max_input_tokens * _AGENT_CONDENSER_INPUT_FRACTION))
+        if profile.max_input_tokens is not None
+        else None
+    )
+    condenser_llm = llm.model_copy(update={"usage_id": "heartwood-condenser", "stream": False})
+    condenser_llm.reset_metrics()
+    return sdk.LLMSummarizingCondenser(
+        llm=condenser_llm,
+        max_tokens=max_tokens,
+        max_size=_AGENT_CONDENSER_MAX_EVENTS,
+        keep_first=_AGENT_CONDENSER_KEEP_FIRST,
     )
 
 

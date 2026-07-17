@@ -22,6 +22,7 @@ from heartwood.gateway import (
     ModelSnapshot,
     load_model_artifact_catalog,
     load_model_snapshot_catalog,
+    plan_local_context_window,
     recommended_model_choices,
 )
 
@@ -46,6 +47,46 @@ def test_repository_plan_selects_balanced_gguf_for_cpu() -> None:
     assert plan.model.context_window == 32_768
     assert "CPU cores" in str(plan.model.minimum_resource_envelope)
     assert "balanced single-file GGUF" in plan.selection_reason
+
+
+def test_context_planner_uses_stable_model_and_memory_bounded_tiers() -> None:
+    t4 = plan_local_context_window(
+        model_limit=131_072,
+        model_size_bytes=5 * 1024**3,
+        runtime="vllm",
+        available_memory_bytes=16 * 1024**3,
+    )
+    larger_gpu = plan_local_context_window(
+        model_limit=131_072,
+        model_size_bytes=5 * 1024**3,
+        runtime="vllm",
+        available_memory_bytes=48 * 1024**3,
+    )
+    unknown = plan_local_context_window(
+        model_limit=131_072,
+        model_size_bytes=None,
+        runtime="llama-cpp",
+        available_memory_bytes=None,
+    )
+
+    assert t4.effective_window == 32_768
+    assert t4.resource == "GPU memory"
+    assert "headroom" in t4.reason
+    assert larger_gpu.effective_window == 131_072
+    assert "full" in larger_gpu.reason
+    assert unknown.effective_window == 32_768
+    assert "safe default" in unknown.reason
+
+
+def test_context_planner_never_exceeds_a_non_tier_model_limit() -> None:
+    plan = plan_local_context_window(
+        model_limit=48_000,
+        model_size_bytes=4 * 1024**3,
+        runtime="llama-cpp",
+        available_memory_bytes=64 * 1024**3,
+    )
+
+    assert plan.effective_window == 32_768
 
 
 def test_repository_plan_prefers_standard_snapshot_when_gpu_runtime_is_available() -> None:
@@ -81,7 +122,7 @@ def test_repository_plan_bounds_context_from_model_metadata() -> None:
         gpu_available=True,
     )
 
-    assert plan.model.context_window == 32_768
+    assert plan.model.context_window == 131_072
 
 
 def test_repository_plan_reports_unsupported_formats_and_runtime_mismatch() -> None:
@@ -271,6 +312,7 @@ def test_repository_inspection_normalizes_metadata_and_detects_configured_custom
         (lambda choice: replace(choice, minimum_free_bytes=1), "storage metadata"),
         (lambda choice: replace(choice, license_posture=" "), "license posture"),
         (lambda choice: replace(choice, context_window=1024), "at least 2048"),
+        (lambda choice: replace(choice, context_window=131_073), "at most 131072"),
         (lambda choice: replace(choice, source_path="model.bin"), "one GGUF file"),
         (
             lambda choice: replace(choice, source_path="../model.gguf"),

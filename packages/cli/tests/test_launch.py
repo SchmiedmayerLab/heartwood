@@ -30,6 +30,7 @@ from heartwood.cli._launch import (
     _gguf_file,
     _interaction_command,
     _model_size,
+    _persist_effective_context,
     _preflight_vllm,
     _print_resource_assessment,
     _print_runtime_failure,
@@ -45,7 +46,13 @@ from heartwood.cli._launch import (
     run_launch,
 )
 from heartwood.cli._model_snapshot import verify_snapshot
-from heartwood.gateway import ProjectConfig, ProjectConfigStore, ProjectContext
+from heartwood.gateway import (
+    ModelSettings,
+    ProjectConfig,
+    ProjectConfigStore,
+    ProjectContext,
+    model_profile_from_preset,
+)
 
 
 def _options(
@@ -53,6 +60,7 @@ def _options(
     *,
     selected: bool = True,
     runtime: str = "vllm",
+    context_window: int = 32_768,
     **overrides: object,
 ) -> LaunchOptions:
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -72,6 +80,7 @@ def _options(
             path=project.models_dir / ("model.gguf" if runtime == "llama-cpp" else "model"),
             runtime=runtime,
             model_id="test-model",
+            context_window=context_window,
         )
     values: dict[str, object] = {
         "project": project,
@@ -122,7 +131,7 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert plan.platform_id == "carina"
     assert plan.allocation_required
     assert plan.context_window == 32_768
-    assert "Context: 32,768 tokens" in plan.format()
+    assert "Context capacity: up to 32,768 tokens" in plan.format()
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
@@ -258,7 +267,7 @@ def test_launch_scrubs_resource_and_runtime_preflight_environments(
     )
     monkeypatch.setattr(
         "heartwood.cli._launch._print_resource_assessment",
-        lambda _selection, env: observed.append(dict(env)),
+        lambda _selection, env, **_kwargs: observed.append(dict(env)),
     )
 
     def stop_after_preflight(_executable: Path, env: dict[str, str]) -> str:
@@ -418,7 +427,7 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    options = _options(tmp_path)
+    options = _options(tmp_path, context_window=131_072)
     model = tmp_path / ".heartwood" / "models" / "model"
     _snapshot(model)
     executable = tmp_path / "vllm"
@@ -455,14 +464,30 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
         "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
     )
     monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env: 48 * 1024**3,
+    )
     monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", FakeProcess)
     monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr("heartwood.cli._launch._ensure_setup", lambda *_args, **_kwargs: 0)
+    setup_options: list[dict[str, object]] = []
+
+    def ensure_setup(*_args: object, **kwargs: object) -> int:
+        setup_options.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._ensure_setup",
+        ensure_setup,
+    )
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
 
     assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 0
     assert observed_processes[0][0] == str(executable)
     assert "--enable-auto-tool-choice" in observed_processes[0]
+    context_index = observed_processes[0].index("--max-model-len")
+    assert observed_processes[0][context_index + 1] == "131072"
+    assert setup_options == [{"context_window": 131_072}]
     assert observed_runs[-1][1] == tmp_path
     assert "--workspace" not in observed_runs[-1][0]
     assert (tmp_path / ".heartwood" / "logs" / "local-model.log").is_file()
@@ -601,7 +626,8 @@ def test_resource_assessment_reports_context_and_memory_warnings(
     _print_resource_assessment(selection, {"PATH": "/usr/bin"})
 
     output = capsys.readouterr().out
-    assert "Context window: 32,768 tokens" in output
+    assert "Context window: 16,384 tokens selected automatically" in output
+    assert "model capacity: 32,768" in output
     assert "Warning: RAM may be insufficient" in output
     assert "Warning: GPU memory may be insufficient" in output
 
@@ -913,6 +939,27 @@ def test_setup_helper_propagates_setup_failure_and_missing_selection(
     assert _ensure_setup(_options(tmp_path / "failure"), {}) == 7
     assert len(observed) == 1
     assert "setup" in observed[0]
+
+
+def test_effective_context_is_persisted_in_the_shared_local_profile(tmp_path: Path) -> None:
+    options = _options(tmp_path)
+    adapter = select_platform_adapter({"HEARTWOOD_PLATFORM": "generic"})
+    store = ProjectConfigStore(
+        options.project,
+        ProjectConfig(
+            platform_id=adapter.adapter_id,
+            policy=adapter.default_policy_profile(),
+        ),
+    )
+    profile = model_profile_from_preset("local-openai-compatible", "heartwood-local-model")
+    settings = ModelSettings().with_profile(profile).selecting(profile.profile_id)
+    store.select_model_source("local", settings)
+
+    _persist_effective_context(store, 65_536)
+
+    persisted = store.load().model_settings.profile()
+    assert persisted.max_input_tokens == 61_440
+    assert persisted.max_output_tokens == 4_096
 
 
 def test_partition_discovery_and_selection(

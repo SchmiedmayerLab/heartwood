@@ -178,7 +178,7 @@ def test_snapshot_metadata_rejects_floating_revisions() -> None:
         ({"purpose": ""}, "purpose must be"),
         ({"expected_size_bytes": 0}, "storage metadata"),
         ({"minimum_free_bytes": 1}, "storage metadata"),
-        ({"context_window": 32_769}, "between 2048 and 32768"),
+        ({"context_window": 131_073}, "between 2048 and 131072"),
     ],
 )
 def test_snapshot_metadata_rejects_unsafe_values(changes: dict[str, object], message: str) -> None:

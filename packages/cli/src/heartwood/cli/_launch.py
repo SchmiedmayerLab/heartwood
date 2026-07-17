@@ -18,19 +18,23 @@ import tempfile
 import time
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 from packaging.version import InvalidVersion, Version
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
+    LocalContextPlan,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    estimate_local_runtime_memory,
     has_authenticated_jupyter_proxy,
     jupyter_proxy_url,
+    plan_local_context_window,
     verify_model_artifact,
 )
 
@@ -105,9 +109,9 @@ class LaunchPlan:
             f"Model: {self.model_root if self.model_root is not None else 'not selected'}",
             f"Runtime: {self.runtime if self.runtime is not None else 'not selected'}",
             (
-                f"Context: {self.context_window:,} tokens"
+                f"Context capacity: up to {self.context_window:,} tokens"
                 if self.context_window
-                else "Context: not selected"
+                else "Context capacity: not selected"
             ),
             f"State: {self.state_root}",
             f"Project: {self.project_root}",
@@ -124,7 +128,7 @@ class LocalRuntimeSelection:
     """Persisted local-model selection normalized for runtime launch."""
 
     model_root: Path
-    runtime: str
+    runtime: Literal["llama-cpp", "vllm"]
     model_id: str
     size_bytes: int | None
     artifact_sha256: str | None
@@ -249,7 +253,10 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
         return 69
     runtime_env = _runtime_environment(env, project=options.project)
-    _print_resource_assessment(selection, runtime_env)
+    context_plan = _context_plan(selection, runtime_env)
+    selection = replace(selection, context_window=context_plan.effective_window)
+    runtime_env["HEARTWOOD_LOCAL_MODEL_CONTEXT"] = str(selection.context_window)
+    _print_resource_assessment(selection, runtime_env, context_plan=context_plan)
     _stage(2, 6, "Validate the local inference runtime")
     if runtime_kind == "vllm":
         preflight_error = _preflight_vllm(runtime_executable, runtime_env)
@@ -337,7 +344,11 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         )
         runtime_env["HEARTWOOD_LOCAL_RUNTIME_ACTIVE"] = "1"
         _stage(5, 6, "Validate the shared Heartwood setup")
-        setup_code = _ensure_setup(options, runtime_env)
+        setup_code = _ensure_setup(
+            options,
+            runtime_env,
+            context_window=selection.context_window,
+        )
         if setup_code != 0:
             return setup_code
         interaction, label = _interaction_command(options, env=env)
@@ -478,9 +489,13 @@ def _local_model_selection(
     if selection is None:
         return None
     model = selection.resolved_path(project)
-    runtime = selection.runtime
-    if runtime == "auto":
+    runtime: Literal["llama-cpp", "vllm"]
+    if selection.runtime == "auto":
         runtime = "llama-cpp" if model.suffix.casefold() == ".gguf" else "vllm"
+    elif selection.runtime == "llama-cpp":
+        runtime = "llama-cpp"
+    else:
+        runtime = "vllm"
     return LocalRuntimeSelection(
         model_root=model,
         runtime=runtime,
@@ -494,29 +509,62 @@ def _local_model_selection(
 def _print_resource_assessment(
     selection: LocalRuntimeSelection,
     env: Mapping[str, str],
+    *,
+    context_plan: LocalContextPlan | None = None,
 ) -> None:
     """Report the selected context and a conservative memory preflight."""
+    plan = _context_plan(selection, env) if context_plan is None else context_plan
     model_bytes = selection.size_bytes
     if model_bytes is None and selection.model_root.exists():
         model_bytes = _model_size(selection.model_root)
+    print(
+        f"Context window: {plan.effective_window:,} tokens selected automatically "
+        f"(model capacity: {plan.model_limit:,})."
+    )
+    print(f"Context selection: {plan.reason}")
     if model_bytes is None:
-        print(f"Context window: {selection.context_window:,} tokens.")
         print("Resource check: model size is unavailable; memory could not be estimated.")
         return
 
-    context_bytes = selection.context_window * 128 * 1024
     system_required = max(
         8 * 1024**3,
-        int(model_bytes * 1.25) + context_bytes + 4 * 1024**3,
+        estimate_local_runtime_memory(
+            context_window=plan.effective_window,
+            model_size_bytes=model_bytes,
+            runtime="llama-cpp",
+        ),
     )
     system_available = _available_system_memory_bytes()
-    print(f"Context window: {selection.context_window:,} tokens.")
     _print_memory_result("RAM", system_required, system_available)
 
     if selection.runtime == "vllm":
-        gpu_required = int(model_bytes * 1.15) + context_bytes + 2 * 1024**3
+        gpu_required = estimate_local_runtime_memory(
+            context_window=plan.effective_window,
+            model_size_bytes=model_bytes,
+            runtime="vllm",
+        )
         gpu_available = _available_gpu_memory_bytes(env)
         _print_memory_result("GPU memory", gpu_required, gpu_available)
+
+
+def _context_plan(
+    selection: LocalRuntimeSelection,
+    env: Mapping[str, str],
+) -> LocalContextPlan:
+    model_bytes = selection.size_bytes
+    if model_bytes is None and selection.model_root.exists():
+        model_bytes = _model_size(selection.model_root)
+    available = (
+        _available_gpu_memory_bytes(env)
+        if selection.runtime == "vllm"
+        else _available_system_memory_bytes()
+    )
+    return plan_local_context_window(
+        model_limit=selection.context_window,
+        model_size_bytes=model_bytes,
+        runtime=selection.runtime,
+        available_memory_bytes=available,
+    )
 
 
 def _print_memory_result(label: str, required: int, available: int | None) -> None:
@@ -677,6 +725,7 @@ def _runtime_environment(
         "HEARTWOOD_IMAGE_FLAVOR",
         "HEARTWOOD_PLATFORM",
         "HEARTWOOD_PLATFORM_HOME",
+        "HEARTWOOD_LOCAL_MODEL_CONTEXT",
         "HEARTWOOD_LOCAL_RUNTIME_ACTIVE",
         "LOCAL_SCRATCH_JOB",
         "SLURM_JOB_ID",
@@ -744,7 +793,12 @@ def _catalog_contains_model(payload: object, model_id: str) -> bool:
     )
 
 
-def _ensure_setup(options: LaunchOptions, env: Mapping[str, str] | None = None) -> int:
+def _ensure_setup(
+    options: LaunchOptions,
+    env: Mapping[str, str] | None = None,
+    *,
+    context_window: int | None = None,
+) -> int:
     runtime_env = _runtime_environment(
         os.environ if env is None else env,
         project=options.project,
@@ -792,6 +846,8 @@ def _ensure_setup(options: LaunchOptions, env: Mapping[str, str] | None = None) 
         ).returncode
         if setup_code != 0:
             return setup_code
+    if context_window is not None:
+        _persist_effective_context(store, context_window)
     doctor_command = (
         sys.executable,
         "-m",
@@ -804,6 +860,24 @@ def _ensure_setup(options: LaunchOptions, env: Mapping[str, str] | None = None) 
         env=runtime_env,
         cwd=options.project.root,
     ).returncode
+
+
+def _persist_effective_context(store: ProjectConfigStore, context_window: int) -> None:
+    """Keep the active local OpenHands profile aligned with the launched runtime."""
+    output_budget = min(4096, max(512, context_window // 8))
+
+    def update(config: ProjectConfig) -> ProjectConfig:
+        profile = config.model_settings.profile()
+        if not profile.is_local:
+            raise LaunchConfigurationError("the active model profile is not local")
+        updated = replace(
+            profile,
+            max_input_tokens=context_window - output_budget,
+            max_output_tokens=output_budget,
+        )
+        return config.with_model_settings(config.model_settings.with_profile(updated))
+
+    store.update(update)
 
 
 def _resolve_slurm_partition(requested: str | None, env: Mapping[str, str]) -> str:

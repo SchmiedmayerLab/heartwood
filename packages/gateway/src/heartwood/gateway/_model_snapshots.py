@@ -94,7 +94,7 @@ class ModelSnapshot:
         if self.expected_size_bytes <= 0 or self.minimum_free_bytes < self.expected_size_bytes:
             raise ModelSnapshotError("snapshot storage metadata is invalid")
         if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
-            raise ModelSnapshotError("context_window must be between 2048 and 32768 tokens")
+            raise ModelSnapshotError("context_window must be between 2048 and 131072 tokens")
 
     def safe_dict(self) -> dict[str, object]:
         """Return non-secret catalog metadata."""

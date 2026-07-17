@@ -435,8 +435,8 @@ const SettingsContent = (props: UtilitySheetProps) => {
                       </strong>
                       <span>
                         {localComputeLabel(model.runtime)} ·{" "}
-                        {formatBytes(model.size_bytes)} ·{" "}
-                        {model.context_window.toLocaleString()} token context
+                        {formatBytes(model.size_bytes)} · Up to{" "}
+                        {model.context_window.toLocaleString()} tokens
                       </span>
                       <small>{model.purpose}</small>
                       <small>{model.availability_reason}</small>
@@ -720,8 +720,8 @@ const CustomLocalModelSetup = ({
             <strong>{plan.model.label}</strong>
             <span>
               {localComputeLabel(plan.model.runtime)} ·{" "}
-              {formatBytes(plan.model.size_bytes)} ·{" "}
-              {plan.model.context_window.toLocaleString()} token context
+              {formatBytes(plan.model.size_bytes)} · Up to{" "}
+              {plan.model.context_window.toLocaleString()} tokens
             </span>
             <small>{plan.selection_reason}</small>
             <small>{plan.model.purpose}</small>

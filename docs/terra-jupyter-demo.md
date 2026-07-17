@@ -282,7 +282,7 @@ heartwood models download qwen25-7b-instruct-awq-vllm
 heartwood launch --web
 ```
 
-Larger GPUs can use `qwen25-7b-instruct-vllm`. The reviewed recommendations use a 32,768-token context window. Before startup, Heartwood reports estimated and observed RAM and GPU memory, verifies the runtime, initializes the attached GPU, and stops with a diagnostic when the image, driver, model, or available memory is incompatible. Warnings are conservative; reduce model size or context rather than ignoring repeated out-of-memory failures.
+Larger GPUs can use `qwen25-7b-instruct-vllm`. The reviewed Qwen recommendations support up to 32,768 tokens, which is also the expected selection for the validated 16 GB T4 path. A compatible user-selected model can expose 64K or 128K capacity on a memory-rich GPU. Before startup, Heartwood selects and reports the effective context from model capacity and observed GPU memory, verifies the runtime, initializes the attached GPU, and stops with a diagnostic when the image, driver, model, or available memory is incompatible. Do not override the inference server independently; the persisted effective profile keeps CLI, browser, notebook, and OpenHands behavior aligned.
 
 Model download and model startup are separate operations. Downloads report transferred bytes and remain on the persistent disk. Startup can take several minutes while model files are loaded; the terminal reports elapsed time until the server is ready. On the validated 16 GB T4 configuration, the 4-bit model sustained about 26 generated tokens per second after loading; complete OpenHands turns still took longer because they included prompt processing, action review, and a second model response.
 

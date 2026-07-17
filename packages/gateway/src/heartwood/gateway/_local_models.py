@@ -109,6 +109,8 @@ class LocalModelChoice:
             raise ModelRepositoryError("local model license posture must not be empty")
         if self.context_window < 2048:
             raise ModelRepositoryError("local model context window must be at least 2048 tokens")
+        if self.context_window > MAXIMUM_LOCAL_CONTEXT_WINDOW:
+            raise ModelRepositoryError("local model context window must be at most 131072 tokens")
         if self.runtime == "llama-cpp":
             if self.source_path is None or not self.source_path.casefold().endswith(".gguf"):
                 raise ModelRepositoryError("CPU models require one GGUF file")

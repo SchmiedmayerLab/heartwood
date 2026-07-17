@@ -74,7 +74,11 @@ See [Project Files and State](project-state.md) for the full storage contract.
 
 ??? question "Why is the GPU unused or out of memory?"
 
-    The portable image always uses its CPU runtime. NVIDIA inference requires an explicit `-gpu-nvidia` image, a compatible NVIDIA driver, and enough accelerator memory for both the model and configured context window. Heartwood does not silently fall back to CPU after a GPU failure. Use a smaller recommended model or the portable image intentionally.
+    The portable image always uses its CPU runtime. NVIDIA inference requires an explicit `-gpu-nvidia` image, a compatible NVIDIA driver, and enough accelerator memory for both the model and selected context window. Heartwood does not silently fall back to CPU after a GPU failure. Use a smaller recommended model or the portable image intentionally.
+
+??? question "Why did Heartwood select a smaller context than the model supports?"
+
+    Repository metadata describes the model's maximum capacity, not what the current machine can run comfortably. At launch, Heartwood reserves memory headroom and selects the largest supported 16K, 32K, 64K, or 128K tier that fits its conservative estimate. The launch output shows the model capacity, effective selection, and reason. A smaller tier avoids predictable out-of-memory failures and is saved into the shared project profile; do not pass a different value directly to the inference server.
 
 See [Run a Model Locally](getting-started-offline.md) for model formats, CPU and GPU paths, resource planning, and offline use.
 
