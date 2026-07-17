@@ -75,6 +75,7 @@ printf 'Installing the locked vLLM environment.\n'
 "${root}/bootstrap/bin/uv" pip sync \
   --require-hashes --python "${root}/vllm/bin/python" images/gpu/vllm-requirements.txt
 install -m 0444 images/gpu/heartwood_vllm.py "${root}/vllm/bin/heartwood_vllm.py"
+install -m 0444 images/gpu/sitecustomize.py "${root}/vllm/bin/sitecustomize.py"
 install -m 0555 images/gpu/heartwood-vllm "${root}/vllm/bin/heartwood-vllm"
 
 export PATH="${root}/bootstrap/bin:${PATH}"

@@ -59,7 +59,7 @@ Choose where the model will run, then choose one of the models reported by that 
 
 Heartwood stores the selected model and a non-secret credential binding. A token entered in the browser remains only in the running gateway process. The project policy must authorize both model discovery and model use before a connection succeeds. Switching sources keeps saved profiles but clears the active choice until a model from the new source is selected. See [Connect a Model](model-connections.md) for deployment and credential details.
 
-Under **Local models**, each recommendation shows whether it uses CPU or an NVIDIA GPU, its download size, and approximate resource guidance. Expand **Other model** to enter a Hugging Face identifier. Heartwood inspects the repository without downloading it, selects a supported representation for the available runtime, and displays the immutable source, expected size, compute guidance, and source-reported license posture. Unsupported or ambiguous repositories return a not-yet-supported message and a link to report the model.
+Under **Local models**, each recommendation shows whether it uses CPU or an NVIDIA GPU, its download size, maximum context capacity, and approximate resource guidance. Expand **Other model** to enter a Hugging Face identifier. Heartwood inspects the repository without downloading it, selects a supported representation for the available runtime, and displays the immutable source, expected size, compute guidance, and source-reported license posture. Unsupported or ambiguous repositories return a not-yet-supported message and a link to report the model. `heartwood launch --web` selects the effective context from that capacity and observed memory, then saves the resulting profile before the browser becomes interactive.
 
 Selecting **Download model** starts a project-local transfer. The browser reports progress, verifies the completed content, persists the same selection used by the CLI, and then reports **Model runtime needed**. Stop a standalone `heartwood serve` process and start the model and browser together:
 
@@ -74,6 +74,8 @@ Runtime startup and scheduler allocation remain terminal operations because they
 Create or select a conversation, then describe the result you need. Heartwood displays messages, proposed commands and file edits, tool results, and completion status in one timeline.
 
 After you submit a task, an activity indicator remains in the conversation until Heartwood responds or asks for approval. If the wait becomes noticeable, the indicator reports elapsed time and explains that response time depends on the selected model and task. Keep the page open while it is active. This waiting message does not claim that a particular analysis step is running; named workflow steps appear only when the agent reports them. Local-model downloads are separate and show measured bytes and percentage completion in **Settings**.
+
+OpenHands automatically summarizes older working history before a long conversation exhausts the active model budget. This behavior is shared with the terminal and notebook; it does not create a browser-only transcript or replace the persisted session and audit records. See [Work with the Agent](using-heartwood.md#continue-a-long-conversation) for the limits of condensed history.
 
 ![Heartwood synthetic reference analysis showing the cohort, baseline, and aggregate-export conversation](assets/web-reference-analysis.png)
 

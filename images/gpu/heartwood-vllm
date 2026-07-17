@@ -8,4 +8,5 @@
 set -euo pipefail
 
 runtime_bin="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${runtime_bin}"
 exec "${runtime_bin}/python" "${runtime_bin}/heartwood_vllm.py" "$@"
