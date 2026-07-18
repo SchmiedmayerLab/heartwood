@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol
+
+from heartwood.schemas import JsonValue
 
 
 class BackendEventKind(StrEnum):
@@ -42,6 +44,7 @@ class ProposedToolCall:
     tool_name: str
     risk: Literal["low", "medium", "high", "unknown"]
     summary: str
+    arguments: dict[str, JsonValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

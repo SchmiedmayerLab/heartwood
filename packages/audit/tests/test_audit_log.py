@@ -68,6 +68,7 @@ def test_audit_export_scrubs_sensitive_payload_fields(tmp_path: Path) -> None:
             "path": "/workspace/private/participant-output.csv",
             "row": {"person_id": "person-1"},
             "summary": "bounded preview",
+            "arguments": {"command": "python run.py /workspace/private/participant-output.csv"},
             "apiKey": "inline-api-key",
             "nested": {
                 "Authorization": "Bearer inline-token",
@@ -81,6 +82,7 @@ def test_audit_export_scrubs_sensitive_payload_fields(tmp_path: Path) -> None:
     assert "person-1" not in persisted
     assert "participant-output.csv" not in persisted
     assert "bounded preview" not in persisted
+    assert "python run.py" not in persisted
     assert "inline-api-key" not in persisted
     assert "inline-token" not in persisted
     assert "inline-client-secret" not in persisted

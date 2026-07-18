@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: main-validation-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.ref_type == 'branch' && github.ref_name != 'main') }}
 
 permissions:
   contents: read

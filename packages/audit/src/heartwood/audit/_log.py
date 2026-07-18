@@ -114,6 +114,7 @@ class AuditLog:
 
 _SENSITIVE_KEYS = {
     "api_key",
+    "arguments",
     "authorization",
     "client_secret",
     "content",

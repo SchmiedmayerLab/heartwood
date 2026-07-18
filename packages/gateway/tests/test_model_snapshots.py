@@ -262,6 +262,9 @@ def test_snapshot_download_checks_capacity_and_uses_hugging_face_downloader(
     assert destination.is_dir()
     assert calls[0]["repo_id"] == snapshot.source_repository
     assert calls[0]["revision"] == snapshot.source_revision
+    local_dir = Path(str(calls[0]["local_dir"]))
+    assert calls[0]["cache_dir"] == local_dir / ".cache" / "huggingface"
+    assert calls[0]["token"] is False
 
 
 def test_snapshot_download_rejects_existing_content_without_source_record(

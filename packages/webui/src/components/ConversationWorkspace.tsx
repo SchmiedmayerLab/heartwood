@@ -289,6 +289,14 @@ const ApprovalRequest = ({
                 {control.toolName || "tool"}
                 {control.risk ? ` · ${control.risk} risk` : ""}
               </small>
+              {Object.keys(control.arguments).length > 0 ?
+                <pre
+                  tabIndex={0}
+                  aria-label={`Arguments for ${control.toolName || "tool"}`}
+                >
+                  {JSON.stringify(control.arguments, null, 2)}
+                </pre>
+              : null}
             </li>
           ))}
         </ol>

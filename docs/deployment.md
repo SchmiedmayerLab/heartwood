@@ -40,6 +40,8 @@ Heartwood keeps configuration, sessions, models, Skills, logs, caches, and audit
 
 The deployment may mount model storage separately at `.heartwood/models/`, but the logical project layout must remain unchanged. On a fresh project, Heartwood recognizes an otherwise empty `.heartwood/` containing that regular model mount and initializes the remaining state around it without removing model files. Researchers should not need deployment-specific workspace, state, model, or cache arguments.
 
+A native installation root is deployment software, not project state. Place it beside rather than inside the project directory so one installation can serve multiple projects without entering an agent's working boundary. The native installer confines its temporary home, package-manager caches, configuration, and working files to `<installation-root>/.installer/`, removes that transient directory after success, and retains it only after an interrupted installation so the same command can resume on approved storage.
+
 ## Configure Model Access
 
 Choose one or more model paths appropriate for the environment:

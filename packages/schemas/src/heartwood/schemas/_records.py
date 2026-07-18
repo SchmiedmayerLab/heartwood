@@ -197,6 +197,7 @@ class ConfirmationRequest(_HeartwoodRecord):
     tool_name: str = Field(min_length=1)
     risk: Literal["low", "medium", "high", "unknown"]
     summary: str = Field(min_length=1)
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ApprovalRecord(_HeartwoodRecord):

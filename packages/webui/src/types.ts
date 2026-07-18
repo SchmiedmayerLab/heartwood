@@ -102,6 +102,7 @@ export interface ApprovalControl {
   toolName: string;
   risk: string | null;
   summary: string | null;
+  arguments: Record<string, JsonValue>;
   decision: string | null;
 }
 

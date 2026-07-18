@@ -73,6 +73,9 @@ export const syntheticEvents = (): SessionEvent[] => [
       request_id: "session-test-toolcall-0-confirm",
       risk: "low",
       summary: "build the aggregate synthetic target-condition cohort",
+      arguments: {
+        command: "python run.py --output /project/cohort-summary.json",
+      },
       tool_call_id: "session-test-toolcall-0",
       tool_name: "terminal",
     },

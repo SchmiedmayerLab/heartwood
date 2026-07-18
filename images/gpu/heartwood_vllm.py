@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,8 @@ from importlib.metadata import version
 from pathlib import Path
 
 _VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"
+_COMPATIBILITY_MARKER = "_heartwood_compatibility_applied"
+_REMOVED_CONFIG_MARKER = "_heartwood_vllm_removed_vulnerable_config"
 
 
 def apply_transformers_compatibility() -> None:
@@ -25,7 +28,7 @@ def apply_transformers_compatibility() -> None:
     from transformers.configuration_utils import PreTrainedConfig
     from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
-    if getattr(PreTrainedConfig, "_heartwood_compatibility_applied", False):
+    if getattr(PreTrainedConfig, _COMPATIBILITY_MARKER, False):
         return
     original = PreTrainedConfig.__init_subclass__.__func__
 
@@ -38,7 +41,7 @@ def apply_transformers_compatibility() -> None:
         original(cls, *args, **kwargs)
 
     PreTrainedConfig.__init_subclass__ = classmethod(compatible_init_subclass)
-    PreTrainedConfig._heartwood_compatibility_applied = True
+    setattr(PreTrainedConfig, _COMPATIBILITY_MARKER, True)
 
     if not hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended"):
 
@@ -49,16 +52,35 @@ def apply_transformers_compatibility() -> None:
             added_by_content = {str(token): token for token in self.added_tokens_decoder.values()}
             return [added_by_content.get(token, token) for token in self.all_special_tokens]
 
-        PreTrainedTokenizerBase.all_special_tokens_extended = all_special_tokens_extended
+        PreTrainedTokenizerBase.all_special_tokens_extended = (  # type: ignore[attr-defined]
+            all_special_tokens_extended
+        )
 
 
 def _apply_vllm_security_backport() -> type[object]:
     from vllm.transformers_utils import config as config_module
 
-    removed = config_module._CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)
+    removed = getattr(config_module, _REMOVED_CONFIG_MARKER, None)
+    if removed is None:
+        removed = config_module._CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)
+        setattr(config_module, _REMOVED_CONFIG_MARKER, removed)
     if removed is None or removed.__name__ != "Nemotron_Nano_VL_Config":
         raise RuntimeError("the reviewed vLLM security backport no longer matches the runtime")
     return removed
+
+
+def activate_runtime_boundary() -> type[object]:
+    """Apply the reviewed compatibility and security boundary idempotently."""
+    apply_transformers_compatibility()
+    return _apply_vllm_security_backport()
+
+
+def _configure_child_bootstrap() -> None:
+    runtime_bin = Path(__file__).resolve().parent
+    bootstrap = runtime_bin / "sitecustomize.py"
+    if not bootstrap.is_file():
+        raise RuntimeError(f"vLLM child bootstrap is unavailable: {bootstrap}")
+    os.environ["PYTHONPATH"] = str(runtime_bin)
 
 
 def _verify_runtime(removed_config: type[object]) -> None:
@@ -172,8 +194,8 @@ assert cached.encode("test", add_special_tokens=False) == [1]
 
 def main() -> None:
     """Validate or start the vLLM command-line interface."""
-    apply_transformers_compatibility()
-    removed_config = _apply_vllm_security_backport()
+    _configure_child_bootstrap()
+    removed_config = activate_runtime_boundary()
     if sys.argv[1:] == ["__heartwood_verify_runtime__"]:
         _verify_runtime(removed_config)
         return

@@ -4,10 +4,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Apply the reviewed Transformers compatibility hook in every vLLM process."""
+"""Apply Heartwood's reviewed vLLM boundary in spawned Python interpreters."""
 
 from __future__ import annotations
 
-from heartwood_vllm import apply_transformers_compatibility
+from heartwood_vllm import activate_runtime_boundary
 
-apply_transformers_compatibility()
+activate_runtime_boundary()

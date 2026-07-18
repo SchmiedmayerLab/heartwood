@@ -52,13 +52,13 @@ In the Terra workspace, open **Analyses**, select the cloud icon, open the Jupyt
 **Portable CPU or hosted-model path:**
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra
+ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra
 ```
 
 **NVIDIA GPU local-model path:**
 
 ```text
-ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra-gpu-nvidia
+ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra-gpu-nvidia
 ```
 
 The image name ending in `-terra` is the portable choice. The image ending in `-terra-gpu-nvidia` is required for Heartwood-managed NVIDIA inference. Both images contain the application and inference software but contain no model weights and no provider credentials. Terra may label an exact third-party image as unverified; continue only after checking the complete trusted GHCR repository and immutable release tag.

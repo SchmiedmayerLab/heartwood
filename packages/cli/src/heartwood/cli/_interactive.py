@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+import json
 import shlex
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import cast
 
 from heartwood.gateway import ModelSettingsError, SessionGateway
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
@@ -102,6 +104,7 @@ class PendingAction:
     tool_name: str
     risk: str
     summary: str
+    arguments: dict[str, JsonValue] = field(default_factory=dict)
 
 
 class InteractiveSession:
@@ -223,12 +226,24 @@ def pending_actions(events: Sequence[SessionEvent]) -> tuple[PendingAction, ...]
                 tool_name=str(request.get("tool_name", "unknown-tool")),
                 risk=str(request.get("risk", "unknown")),
                 summary=str(request.get("summary", request.get("tool_name", "action"))),
+                arguments=(
+                    cast(dict[str, JsonValue], request["arguments"])
+                    if isinstance(request.get("arguments"), dict)
+                    else {}
+                ),
             )
         elif kind == EventKind.CONFIRMATION_RESOLVED.value:
             tool_call_id = event.payload.get("tool_call_id")
             if isinstance(tool_call_id, str):
                 pending.pop(tool_call_id, None)
     return tuple(pending.values())
+
+
+def format_action_arguments(arguments: dict[str, JsonValue]) -> tuple[str, ...]:
+    """Render exact action arguments consistently across terminal clients."""
+    if not arguments:
+        return ()
+    return tuple(json.dumps(arguments, indent=2, sort_keys=True).splitlines())
 
 
 def format_model_status(gateway: SessionGateway) -> str:

@@ -159,14 +159,14 @@ def test_skill_metadata_accepts_skill_md_aliases() -> None:
             "heartwood.phi-risk": "none",
             "heartwood.trust-tier": "verified",
             "heartwood.requires-network": "false",
-            "heartwood.version": "0.2.0-beta.2",
+            "heartwood.version": "0.2.0-beta.3",
             "heartwood.sig": "sigstore:synthetic-bundle",
         }
     )
     assert metadata.dataset_types == ("omop-cdm", "fhir")
     assert metadata.platforms == ("generic", "terra")
     assert metadata.requires_network is False
-    assert metadata.version == "0.2.0-beta.2"
+    assert metadata.version == "0.2.0-beta.3"
 
 
 @pytest.mark.parametrize(
@@ -256,8 +256,10 @@ def test_confirmation_request_bounds_risk_tier() -> None:
         tool_name="heartwood.synthetic.noop",
         risk="low",
         summary="run the synthetic aggregate no-op",
+        arguments={"command": "python run.py --output cohort-summary.json"},
     )
     assert request.risk == "low"
+    assert request.arguments["command"] == "python run.py --output cohort-summary.json"
     with pytest.raises(ValidationError):
         ConfirmationRequest.model_validate(
             {

@@ -37,6 +37,9 @@ describe("buildViewModel", () => {
     expect(viewModel.approvalControls).toEqual([
       expect.objectContaining({
         decision: null,
+        arguments: {
+          command: "python run.py --output /project/cohort-summary.json",
+        },
         risk: "low",
         summary: "build the aggregate synthetic target-condition cohort",
         targetId: "session-test-toolcall-0",
@@ -141,6 +144,47 @@ describe("buildViewModel", () => {
     ]);
   });
 
+  it("keeps exact action arguments in conversation replay after resolution", () => {
+    const viewModel = buildViewModel([
+      event(0, "tool_call.proposed", {
+        arguments: {
+          command: "create",
+          file_text: "heartwood-corrected-review-ok\n",
+          path: "/project/cohort-summary.txt",
+        },
+        risk: "medium",
+        summary: "Write the reviewed aggregate",
+        tool_call_id: "toolcall-1",
+        tool_name: "file_editor",
+      }),
+      event(1, "confirmation.requested", {
+        request: {
+          arguments: {
+            command: "create",
+            file_text: "heartwood-corrected-review-ok\n",
+            path: "/project/cohort-summary.txt",
+          },
+          tool_call_id: "toolcall-1",
+          tool_name: "file_editor",
+        },
+      }),
+      event(2, "confirmation.resolved", {
+        decision: "denied",
+        tool_call_id: "toolcall-1",
+      }),
+    ]);
+
+    expect(viewModel.approvalControls[0]?.decision).toBe("denied");
+    expect(viewModel.conversation[0]?.detail).toContain("Arguments:");
+    expect(viewModel.conversation[0]?.detail).toContain('"command": "create"');
+    expect(viewModel.conversation[0]?.detail).toContain(
+      '"path": "/project/cohort-summary.txt"',
+    );
+    expect(viewModel.conversation[0]?.detail).toContain(
+      '"file_text": "heartwood-corrected-review-ok\\n"',
+    );
+  });
+
   it("uses safe defaults for malformed optional values", () => {
     const viewModel = buildViewModel([
       event(0, "model_call.decision.recorded", {
@@ -191,6 +235,7 @@ describe("buildViewModel", () => {
     );
     expect(viewModel.approvalControls).toEqual([
       {
+        arguments: {},
         decision: "approved",
         label: "approved tool-call",
         risk: null,

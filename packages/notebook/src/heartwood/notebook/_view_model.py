@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 
 from heartwood.gateway import ModelProfile, ProjectContext, SessionGateway, jupyter_proxy_url
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
@@ -61,6 +61,7 @@ class ApprovalAction:
     tool_name: str
     risk: str
     summary: str
+    arguments: dict[str, JsonValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +335,11 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
                 tool_name=str(request.get("tool_name", "unknown-tool")),
                 risk=str(request.get("risk", "unknown")),
                 summary=str(request.get("summary", request.get("tool_name", "action"))),
+                arguments=(
+                    cast(dict[str, JsonValue], request["arguments"])
+                    if isinstance(request.get("arguments"), dict)
+                    else {}
+                ),
             )
         elif kind == EventKind.APPROVAL_RECORDED.value:
             approval = _mapping_payload(event.payload["approval"], "approval")

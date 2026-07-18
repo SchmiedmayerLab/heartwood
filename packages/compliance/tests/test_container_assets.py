@@ -293,7 +293,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "registered_model.inspect_model_cls()" in compatibility
     assert "get_cached_tokenizer" in compatibility
     assert "tokenizer_check = subprocess.run" in compatibility
-    assert "apply_transformers_compatibility" in sitecustomize
+    assert "activate_runtime_boundary" in sitecustomize
     assert 'export PYTHONPATH="${runtime_bin}"' in executable
     assert "${PYTHONPATH" not in executable
     assert '_VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"' in compatibility
@@ -309,6 +309,9 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "vllm.v1.structured_output import backend_xgrammar" in compatibility
     assert "from vllm.transformers_utils import config as config_module" in compatibility
     assert "vllm.transformers_utils.tokenizer" in compatibility
+    assert "vllm.model_executor.models.registry import ModelRegistry" in compatibility
+    assert 'os.environ["PYTHONPATH"] = str(runtime_bin)' in compatibility
+    assert "activate_runtime_boundary()" in sitecustomize
     assert '"model_type": "qwen2"' in compatibility
     assert "trust_remote_code=False" in compatibility
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
@@ -482,9 +485,16 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "HEARTWOOD_MODEL_CACHE" not in installer
     assert "exec %q" in installer
     assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
+    assert "installer release ${installer_release} does not match bundle" in installer
+    assert "__HEARTWOOD_RELEASE_VERSION__" in installer
+    assert "__HEARTWOOD_RELEASE_VERSION__" in packager
+    assert "--version VERSION" not in installer
+    assert "releases/latest/download" not in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
+    assert "[A-Za-z0-9._+-]{0,127}" in packager
     assert "git archive --format=tar HEAD" in packager
     assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
+    assert "native package version is unsafe" in packager
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow
