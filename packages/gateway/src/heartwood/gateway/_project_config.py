@@ -125,7 +125,8 @@ class LocalModelSelection:
             raise ProjectConfigError("local model minimum_free_bytes must cover its size")
         if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
             raise ProjectConfigError(
-                "local model context_window must be between 2048 and 32768 tokens"
+                f"local model context_window must be between 2048 and "
+                f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
             )
         for field_name, value in (
             ("license_posture", self.license_posture),

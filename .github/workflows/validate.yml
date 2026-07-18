@@ -20,6 +20,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  model-sources:
+    name: Verify Recommended Model Sources
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify immutable Hugging Face revisions
+        run: python3 deploy/verify_model_sources.py --source-root . --allow-unavailable
   reuse:
     name: REUSE Compliance
     uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.2

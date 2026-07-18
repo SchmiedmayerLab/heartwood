@@ -135,7 +135,8 @@ RUN if [ -d "${HEARTWOOD_JUPYTER_PREFIX}" ]; then \
       /opt/heartwood/.venv/bin/python -m ipykernel install \
         --prefix "${HEARTWOOD_JUPYTER_PREFIX}" \
         --name heartwood \
-        --display-name "Python 3 (Heartwood)"; \
+        --display-name "Python 3 (Heartwood)" \
+        --env IPYTHONDIR "/tmp/heartwood-ipython"; \
     fi
 
 WORKDIR ${HEARTWOOD_PLATFORM_HOME}

@@ -63,8 +63,22 @@ class _AgentContextFactory(Protocol):
         """Build one OpenHands agent context."""
 
 
+class _Llm(Protocol):
+    def model_copy(self, *, update: dict[str, object]) -> _Llm:
+        """Copy the model route with condenser-specific options."""
+
+    def reset_metrics(self) -> None:
+        """Separate condenser usage from the agent model metrics."""
+
+
+class _CondenserFactory(Protocol):
+    def __call__(self, **options: object) -> object:
+        """Build one OpenHands history condenser."""
+
+
 class _SdkModule(Protocol):
     AgentContext: _AgentContextFactory
+    LLMSummarizingCondenser: _CondenserFactory
 
 
 ConversationFactory = Callable[[Callable[[object], None]], _Conversation]
@@ -78,6 +92,9 @@ _AGENT_LLM_LOCAL_TIMEOUT_SECONDS = 600
 _AGENT_LLM_TIMEOUT_SECONDS = 180
 _AGENT_LLM_DEFAULT_MAX_MESSAGE_CHARS = 30_000
 _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN = 4
+_AGENT_CONDENSER_INPUT_FRACTION = 0.75
+_AGENT_CONDENSER_MAX_EVENTS = 240
+_AGENT_CONDENSER_KEEP_FIRST = 2
 
 
 class OpenHandsSdkBackend:
@@ -305,6 +322,7 @@ class OpenHandsSdkBackend:
         context = _agent_context(sdk, skills)
         agent = sdk.Agent(
             llm=llm,
+            condenser=_context_condenser(sdk, llm, self.profile),
             tools=[
                 sdk.Tool(
                     name=tools_module.TerminalTool.name,
@@ -519,6 +537,23 @@ def _llm_max_message_chars(profile: ModelProfile) -> int:
     )
 
 
+def _context_condenser(sdk: _SdkModule, llm: _Llm, profile: ModelProfile) -> object:
+    """Build OpenHands' native rolling summary within the active input budget."""
+    max_tokens = (
+        max(1, int(profile.max_input_tokens * _AGENT_CONDENSER_INPUT_FRACTION))
+        if profile.max_input_tokens is not None
+        else None
+    )
+    condenser_llm = llm.model_copy(update={"usage_id": "heartwood-condenser", "stream": False})
+    condenser_llm.reset_metrics()
+    return sdk.LLMSummarizingCondenser(
+        llm=condenser_llm,
+        max_tokens=max_tokens,
+        max_size=_AGENT_CONDENSER_MAX_EVENTS,
+        keep_first=_AGENT_CONDENSER_KEEP_FIRST,
+    )
+
+
 def _backend_error(error: Exception) -> BackendEvent:
     return BackendEvent(
         kind=BackendEventKind.ERROR,
@@ -526,7 +561,10 @@ def _backend_error(error: Exception) -> BackendEvent:
     )
 
 
-def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
+def _agent_context(
+    sdk: _SdkModule,
+    skills: list[object],
+) -> object:
     """Build the context from explicitly verified Skills only."""
     return sdk.AgentContext(
         skills=skills,
@@ -535,10 +573,14 @@ def _agent_context(sdk: _SdkModule, skills: list[object]) -> object:
         load_project_skills=False,
         system_message_suffix=(
             "Operate only inside the configured project directory. Do not inspect or modify "
-            "the reserved .heartwood directory. Follow Heartwood data-use, egress, and "
-            "aggregate-export controls. Skills are context resources, not tools named after "
+            "reserved .heartwood state. Skills are context resources, not tools named after "
             "their identifiers. Activate a Skill only through the OpenHands invoke_skill tool "
-            "with its exact Skill identifier."
+            "with its exact Skill identifier. An explicitly loaded Skill may read or execute "
+            "only the files under the Skill location returned by invoke_skill; never modify "
+            "that location or inspect neighboring .heartwood content. Resolve a Skill-relative "
+            "file such as scripts/run.py from the returned Skill location, never from the "
+            "project directory. Follow Heartwood data-use, egress, and "
+            "aggregate-export controls."
         ),
     )
 

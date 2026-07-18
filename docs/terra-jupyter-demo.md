@@ -29,6 +29,10 @@ Four choices determine the setup:
 
 The terminal, browser, and notebook use the same model selection, sessions, action decisions, and `.heartwood/` project state. You do not configure three separate Heartwood installations.
 
+!!! tip "Choose the first validation path"
+
+    For the shortest first test, use the portable Terra image with an authorized hosted or research-environment model. To demonstrate offline inference, use the NVIDIA Terra image with the recommended 4-bit model and a T4-class GPU or better. The CPU local-model path is portable, but a complete agent turn can take several minutes.
+
 ## Follow the Workflow
 
 | Step | Outcome |
@@ -39,10 +43,11 @@ The terminal, browser, and notebook use the same model selection, sessions, acti
 | 4. Choose an interface | The terminal works first; the browser and notebook reuse the same state. |
 | 5. Run the synthetic task | One bounded task exercises Skills, action review, and aggregate output. |
 | 6. Verify the session | Replay and audit export prove that the interfaces share the session record. |
+| 7. Stop compute safely | Heartwood services stop, Terra compute pauses, and the retained disk preserves the project. |
 
 ## Step 1: Create the Cloud Environment
 
-In the Terra workspace, open **Analyses**, select the cloud icon, open the Jupyter environment settings, and choose **Customize** or **Custom Environment** under **Application Configuration**. Select exactly one immutable release image for the intended model path:
+In the Terra workspace, open **Analyses**, select the cloud icon, open the Jupyter environment settings, and choose **Customize** or **Custom Environment** under **Application Configuration**. For a GPU environment, enable the GPU before choosing CPU, memory, disk, or a custom image because Terra can reset those fields when the GPU control changes. Enter the image last, then review the complete configuration before creating the environment. Select exactly one immutable release image for the intended model path:
 
 **Portable CPU or hosted-model path:**
 
@@ -56,7 +61,7 @@ ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra
 ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra-gpu-nvidia
 ```
 
-The image name ending in `-terra` is the portable choice. The image ending in `-terra-gpu-nvidia` is required for Heartwood-managed NVIDIA inference. Both images contain the application and inference software but contain no model weights and no provider credentials.
+The image name ending in `-terra` is the portable choice. The image ending in `-terra-gpu-nvidia` is required for Heartwood-managed NVIDIA inference. Both images contain the application and inference software but contain no model weights and no provider credentials. Terra may label an exact third-party image as unverified; continue only after checking the complete trusted GHCR repository and immutable release tag.
 
 Choose resources for the model path rather than for the Heartwood image alone. These are practical starting configurations for this tutorial, not universal requirements:
 
@@ -66,7 +71,7 @@ Choose resources for the model path rather than for the Heartwood image alone. T
 | Recommended 7B CPU model | Portable Terra | 8 CPUs and 32 GB memory | 75 GB or more |
 | Recommended 4-bit 7B GPU model | NVIDIA Terra | 8 CPUs, 48 GB memory, and one NVIDIA T4 with 16 GB VRAM or better | 75 GB or more |
 
-Keep Terra's 30-minute autopause unless the workflow requires a reviewed alternative. Set the machine and persistent disk before selecting **Create** or **Create/Replace**, review Terra's cost estimate, and start with the smallest profile that meets Heartwood's model guidance. Terra documents that recreating a Cloud Environment can take up to ten minutes; a first custom-image pull can take longer, but investigate rather than waiting indefinitely if startup approaches 30 minutes. Keep the persistent disk when replacing or pausing the environment. Terra preserves files under `/home/jupyter` on that disk; important long-term results should also be copied to workspace storage according to the project's data-management policy.
+Keep Terra's 30-minute autopause unless the workflow requires a reviewed alternative. Set the machine and persistent disk before selecting **Create** or **Create/Replace**, review Terra's cost estimate, and start with the smallest profile that meets Heartwood's model guidance. Terra documents that recreating a Cloud Environment can take up to ten minutes; a first custom-image pull can take longer, but investigate rather than waiting indefinitely if startup approaches 30 minutes. Configure or pause the environment from the workspace dashboard or cloud-environment manager: opening the terminal route can resume paused compute. Keep the persistent disk when replacing or pausing the environment. Terra preserves files under `/home/jupyter` on that disk; important long-term results should also be copied to workspace storage according to the project's data-management policy.
 
 | Item | Persists when the disk is retained? | Guidance |
 |---|---|---|
@@ -134,6 +139,14 @@ Heartwood puts the selected model first; before a selection, it puts the best av
 
 ## Step 4: Choose an Interface
 
+All three interfaces use the same project and gateway, but they do not have identical platform responsibilities:
+
+| Interface | Terra role | Important limitation |
+|---|---|---|
+| Terminal | Baseline setup, local-model startup, conversation, and reliable fallback | Keep the terminal process open while it supervises a local model or browser service. |
+| Browser | Visual setup, conversation, grouped action review, and audit inspection | Open it only through Terra's authenticated Jupyter proxy; do not expose port 8767 publicly. |
+| Notebook | Project detection, bounded task submission, result checks, replay, and audit beside an analysis | It reuses a configured model connection and does not supervise a downloaded model. |
+
 ### Terminal
 
 The terminal is the baseline interface and the best fallback when a browser route is unavailable. From the project directory, run:
@@ -189,15 +202,15 @@ Choose one interface to own the task and its decision:
 - **Terminal-owned turn:** run `heartwood --session-id terra-demo`, submit the task, and decide the complete action group in that terminal. Do not run the notebook task or approval cells for the same turn.
 - **Browser-owned turn:** create or select a browser conversation, submit the task, and decide the complete action group there. Use that browser session identifier for later replay; do not run the notebook task or approval cells for the same turn.
 
-Submit this task through the selected interface:
+Submit this bounded acceptance task through the selected interface. The explicit command keeps this platform check focused on model-to-OpenHands tool use rather than asking a small local model to discover the packaged Skill path:
 
 ```text
-Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Read the tables in input, require age 18 or older, apply an aggregate count floor of 20, write cohort-summary.json, and report aggregate quality checks without row-level values.
+Call the terminal tool to execute this exact command: python /opt/heartwood/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result.
 ```
 
 Review every member of the pending OpenHands action set. Select **Allow all once** only when every command, path, and output matches the request. Exercise **Reject all** on a separate synthetic proposal. OpenHands currently returns a grouped action set, so Heartwood applies one decision to the complete displayed group rather than implying that members can be approved independently.
 
-The expected result reports 24 source participants, 39 source condition rows, 20 cohort participants, 35 cohort condition rows, passing integrity checks, and no row-level values. A matching result validates the integration workflow, not biomedical correctness for another dataset.
+The expected target-condition cohort result reports 24 source participants, 39 source condition rows, 20 cohort participants, 35 cohort condition rows, passing integrity checks, and no row-level values. A matching result validates the integration workflow, not biomedical correctness for another dataset.
 
 This is a capability check for the selected model, not a guarantee that every model will produce the required action plan. If a model does not propose the repository-verified workflow or create the expected aggregate artifact, reject unexpected actions and record the model as not passing this acceptance task.
 
@@ -235,6 +248,14 @@ if has_authenticated_jupyter_proxy():
 
 The terminal, notebook, and browser should report the same persisted events. Use one active writer for a session; independent processes writing the same file-backed session concurrently are not supported.
 
+## Step 7: Stop Compute Safely
+
+Finish the active turn and export any required audit record before stopping services. Exit the interactive terminal with `/exit`, or press `Ctrl+C` in the terminal supervising `heartwood serve`, `heartwood launch`, or `heartwood launch --web`.
+
+Return to the Terra workspace dashboard, open the Jupyter environment details, and select **Pause**. Retain the persistent disk so the project directory, `.heartwood/` state, downloaded models, and tutorial results remain available. Wait until the dashboard reports **Paused** and the compute charge is gone; a small retained-disk charge may remain. Do not open the terminal route merely to confirm the pause because that route can request running compute again.
+
+Resume the environment only when more work is needed, then return to the same project directory before starting Heartwood. Run `heartwood doctor` after an image replacement or when readiness differs from the previous session.
+
 ## Optional: Run a Local Model on Terra
 
 ### Portable CPU Path
@@ -254,22 +275,26 @@ Heartwood resolves the source to an immutable revision, displays expected storag
 
 ### NVIDIA GPU Path
 
-The NVIDIA Terra image adds the GPU inference runtime but still contains no model weights. When an attached GPU is visible, the same model catalog puts the GPU recommendation before CPU alternatives. On a T4-class environment, use the 4-bit coding recommendation:
+The NVIDIA Terra image adds the GPU inference runtime but still contains no model weights. When an attached GPU is visible, the same model catalog puts the GPU recommendation before CPU alternatives. On a T4-class environment, use the 4-bit instruction recommendation that passes the synthetic OpenHands tool-use check:
 
 ```bash
-heartwood models download qwen25-coder-7b-instruct-awq-vllm
+heartwood models download qwen25-7b-instruct-awq-vllm
 heartwood launch --web
 ```
 
-Larger GPUs can use `qwen25-7b-instruct-vllm`. The reviewed recommendations use a 32,768-token context window. Before startup, Heartwood reports estimated and observed RAM and GPU memory, verifies the runtime, initializes the attached GPU, and stops with a diagnostic when the image, driver, model, or available memory is incompatible. Warnings are conservative; reduce model size or context rather than ignoring repeated out-of-memory failures.
+Larger GPUs can use `qwen25-7b-instruct-vllm`. The reviewed Qwen recommendations support up to 32,768 tokens, which is also the expected selection for the validated 16 GB T4 path. A compatible user-selected model can expose a larger capacity on a memory-rich GPU, including advanced tiers above 128K when its metadata and available memory support them. Before startup, Heartwood selects and reports the effective context from model capacity and observed GPU memory, verifies the runtime, initializes the attached GPU, and stops with a diagnostic when the image, driver, model, or available memory is incompatible. Do not override the inference server independently; the persisted effective profile keeps CLI, browser, notebook, and OpenHands behavior aligned.
 
-Model download and model startup are separate operations. Downloads report transferred bytes and remain on the persistent disk. Startup can take several minutes while model files are loaded; the terminal reports elapsed time until the server is ready.
+Model download and model startup are separate operations. Downloads report transferred bytes and remain on the persistent disk. Startup can take several minutes while model files are loaded; the terminal reports elapsed time until the server is ready. On the validated 16 GB T4 configuration, the 4-bit model sustained about 26 generated tokens per second after loading; complete OpenHands turns still took longer because they included prompt processing, action review, and a second model response.
 
 ## Troubleshoot the Terra Workflow
 
 ### Jupyter Opens a 404 Page
 
 Wait until the Cloud Environment finishes starting, then use the workspace terminal's **Jupyter Notebook** link. If the normal Jupyter file browser still fails, inspect the Cloud Environment error before changing Heartwood settings. The Heartwood image preserves Terra's Jupyter entrypoint; reinstalling packages inside the container is not a repair path.
+
+### The Cloud Environment Controls Appear Stuck
+
+Return to the workspace dashboard and open the cloud-environment manager rather than repeatedly loading the terminal route. Loading the terminal can resume paused compute, and changing the GPU control can clear machine or custom-image selections. Re-enter the configuration in this order: custom environment, GPU, CPU and memory, disk, then image.
 
 ### The Heartwood Browser Route Returns 404
 

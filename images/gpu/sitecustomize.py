@@ -6,6 +6,8 @@
 
 """Apply Heartwood's reviewed vLLM boundary in spawned Python interpreters."""
 
+from __future__ import annotations
+
 from heartwood_vllm import activate_runtime_boundary
 
 activate_runtime_boundary()

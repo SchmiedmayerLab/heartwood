@@ -76,11 +76,15 @@ See [Project Files and State](project-state.md) for the full storage contract.
 
 ??? question "Why does local model startup take several minutes?"
 
-    Heartwood verifies the artifact, checks memory, starts the inference server, loads the model, and waits for a health response before opening the interface. The launcher reports elapsed time every 15 seconds. If it exits, inspect `.heartwood/logs/local-model.log` and the diagnostic printed by the launcher.
+    Heartwood verifies the artifact, checks memory, starts the inference server, loads the model, and waits for a health response before opening the interface. The launcher reports elapsed time every 15 seconds. If the runtime exits before readiness, the launcher reports an early exit rather than waiting for the full timeout. Inspect `.heartwood/logs/local-model.log` and the diagnostic printed by the launcher.
 
 ??? question "Why is the GPU unused or out of memory?"
 
-    The portable image always uses its CPU runtime. NVIDIA inference requires an explicit `-gpu-nvidia` image, a compatible NVIDIA driver, and enough accelerator memory for both the model and configured context window. Heartwood does not silently fall back to CPU after a GPU failure. Use a smaller recommended model or the portable image intentionally.
+    The portable image always uses its CPU runtime. NVIDIA inference requires an explicit `-gpu-nvidia` image, a compatible NVIDIA driver, and enough accelerator memory for both the model and selected context window. Heartwood does not silently fall back to CPU after a GPU failure. Use a smaller recommended model or the portable image intentionally.
+
+??? question "Why did Heartwood select a smaller context than the model supports?"
+
+    Repository metadata describes the model's maximum capacity, not what the current machine can run comfortably. At launch, Heartwood reserves memory headroom and selects the largest supported power-of-two tier from 16K through 1M that fits its conservative estimate. The launch output shows the model capacity, effective selection, and reason. A smaller tier avoids predictable out-of-memory failures and is saved into the shared project profile; do not pass a different value directly to the inference server. Values above 128K normally require a long-context model and substantially more memory, and can increase response latency even when they fit.
 
 See [Run a Model Locally](getting-started-offline.md) for model formats, CPU and GPU paths, resource planning, and offline use.
 
@@ -121,6 +125,10 @@ See [Connect a Model](model-connections.md) for each supported connection type a
 ??? question "Why can a notebook replay a session but not submit a task?"
 
     The notebook bridge shares project state; it does not start a downloaded model. Configure the project first and keep `heartwood launch --web` running for a Heartwood-managed local model. Use one active writer for each session.
+
+??? question "Why did opening Terra's terminal resume a paused environment?"
+
+    The terminal route is an application route and can request running compute. Use the workspace dashboard's cloud controls or the Cloud Environments manager to inspect, pause, replace, or delete compute without first opening the terminal. Keep the persistent disk when the project must survive replacement.
 
 See [Browser and Notebooks](web-interface.md) for interface setup and [Use Heartwood on Terra](terra-jupyter-demo.md#troubleshoot-the-terra-workflow) for platform-specific checks.
 

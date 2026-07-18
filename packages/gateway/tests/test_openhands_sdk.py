@@ -23,6 +23,7 @@ from heartwood.gateway._openhands_sdk import (
     _agent_context,
     _analyzed_risk,
     _configure_upstream_defaults,
+    _context_condenser,
     _llm_max_message_chars,
     _llm_resilience_options,
     _security_configuration,
@@ -49,15 +50,24 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
         captured.update(options)
         return object()
 
-    context = _agent_context(SimpleNamespace(AgentContext=agent_context), ["verified-skill"])
+    context = _agent_context(
+        SimpleNamespace(AgentContext=agent_context),
+        ["verified-skill"],
+    )
 
     assert context is not None
     assert captured["skills"] == ["verified-skill"]
     assert captured["load_user_skills"] is False
     assert captured["load_public_skills"] is False
     assert captured["load_project_skills"] is False
-    assert "invoke_skill" in str(captured["system_message_suffix"])
-    assert "not tools named after their identifiers" in str(captured["system_message_suffix"])
+    suffix = str(captured["system_message_suffix"])
+    assert "invoke_skill" in suffix
+    assert "not tools named after their identifiers" in suffix
+    assert "location returned by invoke_skill" in suffix
+    assert "scripts/run.py" in suffix
+    assert "never from the project directory" in suffix
+    assert "/opt/heartwood" not in suffix
+    assert str(Path.cwd()) not in suffix
 
 
 def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:
@@ -150,6 +160,70 @@ def test_openhands_aligns_local_event_capacity_with_input_budget() -> None:
 
     assert _llm_max_message_chars(local) == 114_688
     assert _llm_max_message_chars(hosted) == 30_000
+
+
+def test_openhands_context_condenser_uses_the_active_model_budget() -> None:
+    copied: dict[str, object] = {}
+    options: dict[str, object] = {}
+
+    class FakeLlm:
+        reset = False
+
+        def model_copy(self, *, update: dict[str, object]) -> FakeLlm:
+            copied.update(update)
+            return FakeLlm()
+
+        def reset_metrics(self) -> None:
+            self.reset = True
+
+    def condenser(**values: object) -> object:
+        options.update(values)
+        return object()
+
+    profile = ModelProfile(
+        profile_id="local",
+        model="openai/local",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
+        max_input_tokens=28_672,
+        max_output_tokens=4_096,
+    )
+
+    _context_condenser(
+        SimpleNamespace(LLMSummarizingCondenser=condenser),
+        FakeLlm(),
+        profile,
+    )
+
+    assert copied == {"usage_id": "heartwood-condenser", "stream": False}
+    assert options["max_tokens"] == 21_504
+    assert options["max_size"] == 240
+    assert options["keep_first"] == 2
+    assert cast(FakeLlm, options["llm"]).reset is True
+
+
+def test_openhands_context_condenser_keeps_an_event_limit_without_token_metadata() -> None:
+    llm = SimpleNamespace(model_copy=lambda **_kwargs: SimpleNamespace(reset_metrics=lambda: None))
+    options: dict[str, object] = {}
+
+    def condenser(**values: object) -> object:
+        options.update(values)
+        return object()
+
+    sdk = SimpleNamespace(LLMSummarizingCondenser=condenser)
+    profile = ModelProfile(
+        profile_id="hosted",
+        model="openai/model",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    _context_condenser(sdk, llm, profile)
+
+    assert options["max_tokens"] is None
+    assert options["max_size"] == 240
 
 
 def test_openhands_security_configuration_uses_upstream_defense_in_depth() -> None:

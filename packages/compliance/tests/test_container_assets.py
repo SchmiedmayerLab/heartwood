@@ -114,6 +114,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "      jq \\" in platform
     assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
     assert "ipykernel install" in platform
+    assert '--env IPYTHONDIR "/tmp/heartwood-ipython"' in platform
     assert "heartwood-workspace" not in platform
     assert "heartwood-project" not in platform
     assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
@@ -220,7 +221,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     launcher = _read("images/gpu/start_vllm.sh")
     verifier = _read("images/gpu/verify_runtime.sh")
     compatibility = _read("images/gpu/heartwood_vllm.py")
-    child_bootstrap = _read("images/gpu/sitecustomize.py")
+    sitecustomize = _read("images/gpu/sitecustomize.py")
+    executable = _read("images/gpu/heartwood-vllm")
     lock = _read("images/gpu/vllm-requirements.txt")
     overrides = _read("images/gpu/vllm-overrides.txt")
 
@@ -284,8 +286,16 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "GPU runtime image contains a model artifact" in verifier
     assert 'cls.__module__.startswith("vllm.")' in compatibility
     assert "PreTrainedConfig.__init_subclass__ = classmethod" in compatibility
+    assert "_heartwood_compatibility_applied" in compatibility
     assert 'hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended")' in compatibility
-    assert "return self.all_special_tokens" in compatibility
+    assert "self.added_tokens_decoder.values()" in compatibility
+    assert 'ModelRegistry.models.get("Qwen2ForCausalLM")' in compatibility
+    assert "registered_model.inspect_model_cls()" in compatibility
+    assert "get_cached_tokenizer" in compatibility
+    assert "tokenizer_check = subprocess.run" in compatibility
+    assert "activate_runtime_boundary" in sitecustomize
+    assert 'export PYTHONPATH="${runtime_bin}"' in executable
+    assert "${PYTHONPATH" not in executable
     assert '_VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"' in compatibility
     assert "_CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)" in compatibility
     assert (
@@ -301,7 +311,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "vllm.transformers_utils.tokenizer" in compatibility
     assert "vllm.model_executor.models.registry import ModelRegistry" in compatibility
     assert 'os.environ["PYTHONPATH"] = str(runtime_bin)' in compatibility
-    assert "activate_runtime_boundary()" in child_bootstrap
+    assert "activate_runtime_boundary()" in sitecustomize
     assert '"model_type": "qwen2"' in compatibility
     assert "trust_remote_code=False" in compatibility
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)

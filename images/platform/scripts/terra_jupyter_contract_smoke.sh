@@ -75,6 +75,9 @@ spec = heartwood.get("spec", {})
 argv = spec.get("argv", [])
 if not argv or "/opt/heartwood/.venv/bin/python" not in argv[0]:
     raise SystemExit(f"Heartwood kernel does not use the Heartwood Python: {argv}")
+environment = spec.get("env", {})
+if environment.get("IPYTHONDIR") != "/tmp/heartwood-ipython":
+    raise SystemExit(f"Heartwood kernel does not isolate incompatible IPython startup files: {environment}")
 '
 
 "${heartwood_python}" - <<'PY'
