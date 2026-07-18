@@ -60,12 +60,22 @@ Agent terminal actions run with the permissions of the Heartwood process. Review
 
 Heartwood is under active pre-1.0 development. See [Supported Environments](docs/platform-support.md) for the current interface and deployment boundaries. Planned work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
 
-## Contribute
 
-See [Contributing](CONTRIBUTING.md) for the development environment, test commands, repository conventions, and review expectations.
+## Contributing
+
+Contributions to this project are welcome. Please make sure to read the [contribution guide](https://github.com/SchmiedmayerLab/.github/blob/main/CONTRIBUTING.md) and the [Contributor Covenant Code of Conduct](https://github.com/SchmiedmayerLab/.github/blob/main/CODE_OF_CONDUCT.md) first.
 
 The technical ownership and reuse boundaries are documented in [System Architecture](design/03-architecture.md).
 
+
 ## License
 
-Heartwood is released under the MIT License. See [LICENSE](LICENSE), [CONTRIBUTORS.md](CONTRIBUTORS.md), and [NOTICE](NOTICE).
+This project is licensed under the MIT License. See [Licenses](LICENSES) and [Contributors](CONTRIBUTORS.md) for more information.
+
+
+## Our Research
+
+For more information, visit the [Schmiedmayer Lab GitHub organization](https://github.com/SchmiedmayerLab).
+
+![Stanford and Stanford Medicine logos](https://raw.githubusercontent.com/SchmiedmayerLab/.github/main/assets/stanford-footer-light.png#gh-light-mode-only)
+![Stanford and Stanford Medicine logos](https://raw.githubusercontent.com/SchmiedmayerLab/.github/main/assets/stanford-footer-dark.png#gh-dark-mode-only)
