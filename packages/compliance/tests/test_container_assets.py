@@ -491,6 +491,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "--version VERSION" not in installer
     assert "releases/latest/download" not in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
+    assert "[A-Za-z0-9._+-]{0,127}" in packager
     assert "git archive --format=tar HEAD" in packager
     assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
     assert "native package version is unsafe" in packager
