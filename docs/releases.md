@@ -14,12 +14,12 @@ Heartwood releases use Semantic Versioning without a `v` prefix. Examples includ
 
 ## Create a Release
 
-`VERSION.toml` is the canonical release version. Prepare a release through a reviewed pull request that updates this value, every workspace and web package version, runtime version constants, lockfiles, and versioned user-guide examples together. CI rejects inconsistent package or guide versions, and the release workflow refuses an input that differs from the canonical source version. Python source declarations retain the Semantic Versioning spelling, while Python lock metadata uses the equivalent normalized Python version, such as `0.2.0b2` for `0.2.0-beta.2`.
+`VERSION.toml` is the canonical release version. Prepare a release through a reviewed pull request that updates this value, every workspace and web package version, runtime version constants, lockfiles, and versioned user-guide examples together. CI rejects inconsistent package or guide versions, and the release workflow refuses an input that differs from the canonical source version. Python source declarations retain the Semantic Versioning spelling, while Python lock metadata uses the equivalent normalized Python version, such as `0.2.0b3` for `0.2.0-beta.3`.
 
 Start the protected workflow from the current `main` branch:
 
 ```bash
-gh workflow run create-release.yml --ref main -f version=0.2.0-beta.2
+gh workflow run create-release.yml --ref main -f version=0.2.0-beta.3
 ```
 
 Every `main` commit runs the `Main Validation` workflow. Its dependency graph calls the repository validation, CodeQL, Python, web, secret scan, container smoke, native asset, CPU image, and GPU image workflows and emits `Release Candidate Ready` only after every dependency succeeds. The release workflow accepts only strict Semantic Versioning, requires every packaged source version to match, refuses an existing tag or published release, and binds the candidate to the current `main` commit. It checks `Release Candidate Ready` once for that exact commit and fails immediately when main validation is absent, incomplete, skipped, cancelled, or failed. It then verifies the immutable generic, Terra, generic GPU, and Terra GPU images and rebuilds and tests the versioned native installation bundle.
@@ -48,7 +48,7 @@ The release workflow is intentionally serialized. If publication is interrupted 
 If only the Pages deployment fails after the latest release in its channel is public, rerun it from `main` without changing the release:
 
 ```bash
-gh workflow run publish-documentation.yml --ref main -f version=0.2.0-beta.2
+gh workflow run publish-documentation.yml --ref main -f version=0.2.0-beta.3
 ```
 
 The recovery workflow verifies the canonical version, Git tag, release state, target commit, and stable or preview channel position before it can update the site. It rejects older releases so recovery cannot move either public channel backward. Existing version content must match on a rerun, and the generated branch is pushed only after every local publication check succeeds.

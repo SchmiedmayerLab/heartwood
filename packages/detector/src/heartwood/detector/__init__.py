@@ -27,4 +27,4 @@ __all__ = [
     "platform_detection_evidence",
 ]
 
-__version__ = "0.2.0-beta.2"
+__version__ = "0.2.0-beta.3"

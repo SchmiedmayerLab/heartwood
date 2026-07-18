@@ -100,6 +100,8 @@ The terminal interface supports arrow-key navigation and displays available acti
 | `/audit-export` | Create a scrubbed JSON Lines audit export. |
 | `/exit` | Close the interface without deleting project state. |
 
+Resuming continues an unfinished OpenHands execution restored from session state. Pausing and resuming an already idle or finished turn records the session control without sending a new model request or reviving a rejected action.
+
 Use a session identifier when separate conversations should share the same project files:
 
 ```bash

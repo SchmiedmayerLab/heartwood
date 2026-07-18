@@ -19,6 +19,8 @@ Heartwood uses two locations with separate purposes:
 - The **installation root** holds versioned application and inference environments and may be shared by several Heartwood projects.
 - The **project directory** holds the files the agent may edit and the project's private `.heartwood/` state.
 
+Place these as separate sibling directories on the same approved Carina project storage. Keeping the installation outside the agent's project boundary prevents a session from treating application runtimes or installer caches as research files, while still allowing one installation to serve several projects.
+
 ## Follow the Workflow
 
 | Step | Outcome |
@@ -33,39 +35,38 @@ The Stanford AI API Gateway is an alternative to steps 3 and 4 when that route i
 
 ## Step 1: Prepare Private Storage
 
-Choose a writable group project with sufficient quota. The current recommended GPU snapshot is approximately 15.2 GB, and Carina also needs enough job-local scratch to stage it. Another model may require substantially different storage, RAM, or GPU memory; inspect its Heartwood plan before downloading it.
+Choose the writable project storage assigned by Carina; do not infer it from a home directory or inspect unrelated projects. Carina project paths commonly follow `/projects/<project-owner>/<project-id>`, but use the exact path supplied for the project. The catalog includes a smaller approximately 5.6 GB AWQ snapshot for 16 GB GPUs and the approximately 15.2 GB full snapshot used by this larger-GPU validation workflow. Carina also needs enough job-local scratch to stage the selected model. Another model may require substantially different storage, RAM, or GPU memory; inspect its Heartwood plan before downloading it.
 
 ```bash
-INSTALL_ROOT=/projects/<group>/<user>/heartwood-installation
-PROJECT=/projects/<group>/<user>/heartwood-synthetic-demo
-
-mkdir -p -m 700 "$INSTALL_ROOT" "$PROJECT"
-cd "$PROJECT"
+cd /projects/<project-owner>/<project-id>
+mkdir -p -m 700 heartwood-installation heartwood-synthetic-demo
 ```
 
 Keep the project separate from the installation root. Heartwood will create `.heartwood/` in the current directory; no state or model paths need to be exported.
 
-## Step 2: Install Release 0.2.0-beta.2
+## Step 2: Install Heartwood
 
-Load Carina's supported package manager and download the immutable installer:
+Enter the dedicated installation directory, load Carina's supported package manager, and download the `0.2.0-beta.3` installer. Each published installer is bound to its own release and downloads only the matching bundle and checksum manifest. It takes no version argument. The installer uses the current directory as its installation root.
 
 ```bash
+cd heartwood-installation
 module load micromamba/2.3.3
-curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.2/heartwood-installer
+curl --fail --location --output heartwood-installer \
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.3/heartwood-installer
 chmod +x heartwood-installer
-./heartwood-installer \
-  --root "$INSTALL_ROOT" \
-  --platform carina \
-  --version 0.2.0-beta.2
-export PATH="$INSTALL_ROOT/bin:$PATH"
+./heartwood-installer --platform carina
+rm heartwood-installer
+export PATH="$PWD/bin:$PATH"
 ```
 
-The installer verifies the release bundle, creates versioned source and runtime environments, installs the locked Heartwood application, installs the hash-locked vLLM environment, and validates the vLLM and PyTorch runtime imports together with the packaged CUDA build. It does not create project state, download a model, or store a credential.
+The platform selection is bound into the installed launcher. Do not export `HEARTWOOD_PLATFORM` for normal use. During installation, package-manager homes, downloads, caches, configuration, and temporary files stay under `heartwood-installation/.installer/`. A successful installation removes that entire transient directory, while the explicit `rm` above removes the downloaded installer itself. Versioned application and inference runtimes remain because they are the installed product and allow rollback. If installation is interrupted after runtime creation starts, `.installer/` remains so rerunning the same installer can reuse downloads; successful retry removes it.
+
+The installer verifies the release bundle, creates versioned source and runtime environments from a persistent bootstrap interpreter, prohibits implicit package-manager interpreter downloads, installs the locked Heartwood application and hash-locked vLLM environment, validates vLLM, PyTorch, CUDA packaging, and fresh-child architecture imports, and binds Carina into the installed command. It does not create project state, download a model, or store a credential. `--root <path>` remains available for reviewed automation, but it is unnecessary in this workflow.
 
 Confirm the installation and project readiness:
 
 ```bash
+cd ../heartwood-synthetic-demo
 heartwood --version
 heartwood doctor
 ```
@@ -74,7 +75,7 @@ Before setup, `heartwood doctor` reports `setup-required`. This is expected.
 
 ## Step 3: Prepare a Local GPU Model
 
-From the synthetic project directory, run `heartwood`, choose **On this device**, and select the recommended GPU model. The same operation is available as explicit commands:
+From the synthetic project directory, run `heartwood`, choose **On this device**, and select a recommended GPU model. This documented workflow uses the full Qwen2.5 7B snapshot on Carina's larger L40S GPUs; use the smaller AWQ catalog option when the available GPU has 16 GB of memory. Heartwood confines public Hugging Face transfer state to `.heartwood/cache/model-transfer/`, disables implicit Hugging Face credentials, and removes the transfer cache after a successful verified download:
 
 ```bash
 heartwood models local
@@ -110,6 +111,8 @@ heartwood launch
 
 Heartwood discovers Carina GPU partitions and prefers the scheduler default. Review the displayed request and answer `y` only when it is appropriate. If no default is available, pass one of the displayed names with `--partition`.
 
+A new development allocation consumes only the capacity granted to that job; it does not cancel an existing normal or long job. Existing work changes only if a user or operator explicitly cancels it or normal scheduler policy preempts it. Check the current Carina queue and QoS guidance before requesting another GPU because account and user limits can change, and exit Heartwood normally when validation is complete so the allocation is released promptly.
+
 After allocation, Heartwood:
 
 1. verifies the selected snapshot;
@@ -130,6 +133,10 @@ Ask for one bounded action in the project, inspect the complete action set, and 
 ```text
 Create carina-smoke.txt in this project containing exactly heartwood-carina-synthetic-ok followed by one newline. Propose one file create action and stop.
 ```
+
+Review the structured arguments, not only the model-written summary. A terminal action must show the complete command and every path; a file action must show its operation, destination, and content. Reject the whole set when an argument is missing, a path leaves the project or approved installation, or the proposed result is incomplete or scientifically inaccurate.
+
+Repository-verified synthetic Skills provide deterministic integration evidence, not research validity. Inspect their aggregate output independently, and treat free-form model interpretation or report writing as a draft that requires domain review. A successful tool exit does not make the model's narrative accurate, clinically valid, or appropriate for controlled data.
 
 Use `/replay` to confirm that the proposal, grouped decision, tool result, and agent response persist. Export the scrubbed record with `/audit-export`. Do not collect prompt text, model output, broad file listings, environment dumps, credentials, or participant-level records as external validation evidence.
 

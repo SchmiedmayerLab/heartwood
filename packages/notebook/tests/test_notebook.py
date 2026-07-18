@@ -162,6 +162,11 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
                     "tool_name": tool_name,
                     "risk": risk,
                     "summary": summary,
+                    "arguments": (
+                        {"command": "python run.py --output cohort-summary.json"}
+                        if tool_name == "terminal"
+                        else {}
+                    ),
                 }
             },
         )
@@ -185,7 +190,12 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     assert [action.target_id for action in pending[0].actions] == ["tool-1", "tool-2"]
     assert approval_items == (
         "Review complete action set (2 actions): pending",
-        "1. Run the synthetic cohort command (terminal, medium risk)",
+        (
+            "1. Run the synthetic cohort command (terminal, medium risk)\n"
+            "Arguments:\n{\n"
+            '  "command": "python run.py --output cohort-summary.json"\n'
+            "}"
+        ),
         "2. Write the aggregate result (file_editor, unknown risk)",
     )
 

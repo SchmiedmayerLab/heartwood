@@ -163,7 +163,7 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
     )
     documentation = {
         "container-images.md": f"heartwood:{version}",
-        "carina-cli.md": (f"releases/download/{version}/heartwood-installer\n--version {version}"),
+        "carina-cli.md": f"releases/download/{version}/heartwood-installer",
         "platform-support.md": f"Release `{version}`\n`{version}-terra`",
         "releases.md": f"-f version={version}",
         "terra-jupyter-demo.md": f"heartwood:{version}-terra",
@@ -175,9 +175,9 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
 
-    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.2"}\n', encoding="utf-8")
+    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.3"}\n', encoding="utf-8")
     assert (
-        "skills/verified/example/metadata.json: 0.2.0-beta.2"
+        "skills/verified/example/metadata.json: 0.2.0-beta.3"
         in _release_verifier().source_version_errors(tmp_path, version)
     )
 
@@ -202,6 +202,7 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
 
 def test_main_validation_owns_release_readiness_dependencies() -> None:
     workflow = Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8")
+    dependency_review = Path(".github/workflows/dependency-review.yml").read_text(encoding="utf-8")
     called_workflows = {
         "codeql": "codeql.yml",
         "containers": "container-image.yml",
@@ -230,6 +231,13 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert 'if $event == "pull_request" then' in readiness
     assert '.containers.result == "skipped"' in readiness
     assert 'to_entries | all(.value.result == "success")' in readiness
+    assert "group: main-validation-${{ github.ref }}" in workflow
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' || "
+        "(github.ref_type == 'branch' && github.ref_name != 'main') }}" in workflow
+    )
+    assert "group: dependency-review-${{ github.ref }}" in dependency_review
+    assert "cancel-in-progress: true" in dependency_review
 
 
 def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:

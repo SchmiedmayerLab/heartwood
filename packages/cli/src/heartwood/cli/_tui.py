@@ -25,6 +25,7 @@ from heartwood.cli._interactive import (
     InteractionActivity,
     InteractionResult,
     InteractiveSession,
+    format_action_arguments,
     interaction_activity,
 )
 from heartwood.session import SessionEvent
@@ -202,9 +203,13 @@ class HeartwoodTerminalApp(App[None]):
         action_log = self.query_one("#approval-actions", RichLog)
         action_log.clear()
         for index, action in enumerate(actions, 1):
-            action_log.write(
-                f"{index}. {action.summary}\n   {action.tool_name} · {action.risk.title()} risk"
-            )
+            details = [
+                f"{index}. {action.summary}",
+                f"   {action.tool_name} · {action.risk.title()} risk",
+            ]
+            if action.arguments:
+                details.extend(("   Arguments:", *format_action_arguments(action.arguments)))
+            action_log.write("\n".join(details))
         composer.disabled = True
         composer.placeholder = "Resolve the action set to continue"
         status.remove_class("working", "error")

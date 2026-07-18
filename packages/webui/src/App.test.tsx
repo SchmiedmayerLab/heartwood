@@ -835,6 +835,11 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
 
     const allow = await screen.findByLabelText("Allow all 1 action once");
+    const argumentsRegion = screen.getByLabelText("Arguments for terminal");
+    expect(argumentsRegion).toHaveAttribute("tabindex", "0");
+    expect(argumentsRegion).toHaveTextContent(
+      "python run.py --output /project/cohort-summary.json",
+    );
     fireEvent.click(allow);
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));

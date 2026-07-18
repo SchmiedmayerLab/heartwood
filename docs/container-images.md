@@ -22,10 +22,10 @@ Use the Terra-derived image when Terra must retain ownership of Jupyter, the not
 
 | Image | Platforms | Purpose |
 |---|---|---|
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2` | AMD64 and ARM64 | Versioned generic runtime and the normal container starting point. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3` | AMD64 and ARM64 | Versioned generic runtime and the normal container starting point. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
 | `edge` and `edge-*` | Flavor-specific | Latest validated `main` build for development, not a stable release. |
 | `sha-<git-sha>` and `sha-<git-sha>-*` | Flavor-specific | Immutable images for one repository commit. |
 
@@ -44,7 +44,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood serve --host 0.0.0.0
 ```
 
@@ -63,7 +63,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood
 ```
 
@@ -86,14 +86,14 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood models local
 
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
@@ -104,14 +104,14 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood models inspect <owner/model>
 
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood models download <owner/model>
 ```
 
@@ -125,7 +125,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood launch --web --host 0.0.0.0
 ```
 
@@ -137,7 +137,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   --network none \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
   heartwood launch --plain
 ```
 

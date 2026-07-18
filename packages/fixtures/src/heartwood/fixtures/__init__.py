@@ -12,4 +12,4 @@ from heartwood.fixtures.lint import FixtureFinding, lint_fixture_tree, main
 
 __all__ = ["FixtureFinding", "__version__", "lint_fixture_tree", "main"]
 
-__version__ = "0.2.0-beta.2"
+__version__ = "0.2.0-beta.3"

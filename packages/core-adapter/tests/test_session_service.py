@@ -296,6 +296,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
         tool_name="terminal",
         risk="medium",
         summary="run the first bounded command",
+        arguments={"command": "python first.py"},
     )
     second = ProposedToolCall(
         tool_call_id="session-local-action-2",
@@ -340,6 +341,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
     )
 
     assert restored_ids == [first.tool_call_id, second.tool_call_id]
+    assert restored_backend.restored_pending[0].arguments == {"command": "python first.py"}
     assert restored_backend.resolutions == [(first.tool_call_id, True)]
     assert any(
         event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value for event in result.events
@@ -400,9 +402,13 @@ def test_backend_configuration_fails_before_route_decision(tmp_path: Path) -> No
 
 
 def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
+    private_detail = (
+        "tool validation failed for path /project/rejected.txt with "
+        "file_text=heartwood-corrected-review-ok"
+    )
     backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
-        response=(BackendEvent(kind=BackendEventKind.ERROR, message="backend unavailable"),),
+        response=(BackendEvent(kind=BackendEventKind.ERROR, message=private_detail),),
     )
     service = SessionService.local_default(
         tmp_path,
@@ -415,7 +421,14 @@ def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
     )
 
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
-    assert result.events[-1].payload["reason"] == "backend unavailable"
+    assert result.events[-1].payload["reason"] == private_detail
+    assert private_detail in json.dumps(
+        [event.model_dump(mode="json") for event in service.replay_events()]
+    )
+    audit_text = service.store.audit_path.read_text(encoding="utf-8")
+    assert private_detail not in audit_text
+    assert "heartwood-corrected-review-ok" not in audit_text
+    assert '"reason":"[scrubbed]"' in audit_text
 
 
 def test_empty_prompt_is_rejected_before_backend(tmp_path: Path) -> None:

@@ -409,13 +409,45 @@ def test_beginner_guides_explain_one_project_and_local_server_lifecycle() -> Non
 def test_carina_runbook_uses_project_local_release_workflow() -> None:
     runbook = _read("docs/carina-cli.md")
 
-    assert f"## Step 2: Install Release {_declared_version()}" in runbook
-    assert f"--version {_declared_version()}" in runbook
+    assert "## Step 2: Install Heartwood" in runbook
+    assert "uses the current directory as its installation root" in runbook
+    assert f"releases/download/{_declared_version()}/heartwood-installer" in runbook
+    assert "./heartwood-installer --platform carina" in runbook
+    assert "Each published installer is bound to its own release" in runbook
+    assert "rm heartwood-installer" in runbook
     assert "project's private `.heartwood/` state" in runbook
+    assert "/projects/<project-owner>/<project-id>" in runbook
+    assert "mkdir -p -m 700 heartwood-installation heartwood-synthetic-demo" in runbook
+    assert "PROJECT_STORAGE=" not in runbook
+    assert "INSTALL_ROOT=" not in runbook
+    assert "PROJECT=" not in runbook
+    assert "VERSION=" not in runbook
+    assert "UV_CACHE_DIR=" not in runbook
+    assert "HF_HOME=" not in runbook
+    assert "--version 0.2.0" not in runbook
+    assert "removes that entire transient directory" in runbook
+    assert "successful retry removes it" in runbook
     assert "heartwood models download qwen25-7b-instruct-vllm" in runbook
     assert "heartwood launch" in runbook
     assert "HEARTWOOD_ROOT" not in runbook
     assert "--model-root" not in runbook
+
+
+def test_native_installer_defaults_to_current_directory_and_confines_state() -> None:
+    installer = _read("deploy/install.sh")
+    assert 'root="${PWD}"' in installer
+    assert 'installer_state="${root}/.installer"' in installer
+    assert 'export HOME="${installer_state}/home"' in installer
+    assert 'export TMPDIR="${installer_state}/tmp"' in installer
+    assert 'export UV_CACHE_DIR="${installer_state}/cache/uv"' in installer
+    assert 'export MAMBA_ROOT_PREFIX="${installer_state}/cache/mamba"' in installer
+    assert "export HEARTWOOD_PLATFORM=carina" in installer
+    assert 'installer_release="__HEARTWOOD_RELEASE_VERSION__"' in installer
+    assert "HEARTWOOD_INSTALL_MINIMUM_FREE_GIB" not in installer
+    assert "--minimum-free-gib N" in installer
+    assert "--version VERSION" not in installer
+    assert "releases/latest/download" not in installer
+    assert 'root="${PWD}"' in installer
 
 
 def test_terra_runbook_tracks_platform_and_model_setup() -> None:

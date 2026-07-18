@@ -54,7 +54,7 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
       case "tool_call.proposed":
         addConversationMessage(viewModel, event, {
           content: `Proposed tool: ${stringValue(event.payload.tool_name)}`,
-          detail: stringValue(event.payload.summary) || null,
+          detail: actionDetail(event.payload),
           label: "Trace",
           role: "trace",
         });
@@ -155,6 +155,7 @@ const confirmationApproval = (
     toolName,
     risk: stringValue(request.risk) || null,
     summary: stringValue(request.summary) || null,
+    arguments: recordValue(request.arguments),
     decision: null,
   };
 };
@@ -181,6 +182,7 @@ const recordConfirmation = (
       toolName: "",
       risk: null,
       summary: null,
+      arguments: {},
       decision,
     });
   }
@@ -255,4 +257,16 @@ export const stringValue = (value: JsonValue | undefined): string => {
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
   return "";
+};
+
+const actionDetail = (payload: Record<string, JsonValue>): string | null => {
+  const summary = stringValue(payload.summary);
+  const argumentsValue = recordValue(payload.arguments);
+  const argumentsText =
+    Object.keys(argumentsValue).length > 0 ?
+      JSON.stringify(argumentsValue, null, 2)
+    : "";
+  if (summary && argumentsText)
+    return `${summary}\nArguments:\n${argumentsText}`;
+  return summary || argumentsText || null;
 };

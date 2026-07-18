@@ -32,6 +32,7 @@ from heartwood.cli._launch import (
     _model_size,
     _persist_effective_context,
     _preflight_vllm,
+    _print_copy_progress,
     _print_resource_assessment,
     _print_runtime_failure,
     _reentry_command,
@@ -558,14 +559,7 @@ def test_launch_reports_early_runtime_exit_without_claiming_timeout(
             return 42
 
         def terminate(self) -> None:
-            pass
-
-        def wait(self, timeout: float | None = None) -> int:
-            del timeout
-            return 42
-
-        def kill(self) -> None:
-            pass
+            pytest.fail("an exited process must not be terminated")
 
     monkeypatch.setattr(
         "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
@@ -1198,3 +1192,19 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
     assert _stage_model(source_directory, directory_destination) == directory_destination
     assert (directory_destination / "weights.safetensors").read_bytes() == b"synthetic"
     assert _model_size(source_directory) > 0
+
+
+def test_model_staging_progress_waits_for_a_stable_eta(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    total = 14 * 1024 * 1024 * 1024
+
+    _print_copy_progress(1536, total, 0.001)
+    _print_copy_progress(128 * 1024 * 1024, total, 8)
+    _print_copy_progress(total, total, 20)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert "calculating remaining time" in lines[0]
+    assert "seconds remaining" not in lines[0]
+    assert "seconds remaining" in lines[1]
+    assert lines[2].endswith("complete)")
