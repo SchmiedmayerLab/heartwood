@@ -492,10 +492,12 @@ summary:focus-visible {
   color: #6c7870;
   font-size: 0.72rem;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .trace-message span {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .conversation-message p {
@@ -521,8 +523,7 @@ summary:focus-visible {
   gap: 2px;
 }
 
-.trace-message strong,
-.trace-message span {
+.trace-message strong {
   overflow-wrap: anywhere;
 }
 
