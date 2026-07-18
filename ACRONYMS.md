@@ -10,145 +10,66 @@ SPDX-License-Identifier: MIT
 
 # Glossary and Acronyms
 
-This glossary defines acronyms, platform names, formats, and specialized terms used throughout Heartwood documentation.
+This reference defines the specialized terms used in Heartwood's user and architecture documentation.
 
-## Workflow Languages and Engines
+## Heartwood and Agent Terms
 
-| Term | Expansion | What it is |
-|---|---|---|
-| WDL | Workflow Description Language | Workflow language maintained by the OpenWDL community and commonly executed by Cromwell |
-| CWL | Common Workflow Language | Vendor-neutral open standard for describing computational workflows and tools |
-| Cromwell | *(project name)* | Workflow engine that executes WDL and selected CWL workflows |
-| Nextflow | *(project name)* | Framework and domain-specific language for computational workflows |
-| Hail | *(project name)* | Genomics analysis framework that can use Apache Spark |
-| Spark | *(name)* | Distributed compute engine for large datasets |
-
-## GA4GH Interoperability Standards
-
-| Term | Expansion | What it is |
-|---|---|---|
-| GA4GH | Global Alliance for Genomics and Health | Standards body for genomic/health data sharing |
-| DRS | Data Repository Service | Standard API to fetch a data object by ID, cloud-agnostic |
-| WES | Workflow Execution Service | Standard API to submit a workflow to any platform |
-| TES | Task Execution Service | Standard API to run one containerized task anywhere |
-| TRS | Tool Registry Service | Standard API for sharing tools/workflows (used by Dockstore) |
-
-## Health Data and Genomics Standards and Formats
-
-| Term | Expansion | What it is |
-|---|---|---|
-| OMOP | Observational Medical Outcomes Partnership | The community that defined a common health-data schema |
-| CDM | Common Data Model | The standardized schema itself (usually "OMOP CDM") |
-| OHDSI | Observational Health Data Sciences and Informatics | Community/tooling around OMOP (pronounced "Odyssey") |
-| QC | Quality Control | Checks that validate data, code, or analysis outputs before use |
-| FHIR | Fast Healthcare Interoperability Resources | HL7's modern clinical-data exchange standard ("fire") |
-| HL7 | Health Level Seven | The healthcare-standards organization |
-| CDR | Curated Data Repository | All of Us's curated dataset (lives in BigQuery) |
-| DICOM | Digital Imaging and Communications in Medicine | Medical imaging file/exchange standard |
-| VCF | Variant Call Format | Text format listing genomic variants |
-| BAM | Binary Alignment Map | Compressed file of sequencing reads aligned to a genome |
-
-## Compliance and Security
-
-| Term | Expansion | What it is |
-|---|---|---|
-| PHI | Protected Health Information | Individually identifiable health information protected under applicable US regulation |
-| HIPAA | Health Insurance Portability and Accountability Act | US legal framework that includes privacy and security requirements for protected health information |
-| BAA | Business Associate Agreement | Contract defining permitted protected-health-information processing by a covered entity's business associate |
-| VPC | Virtual Private Cloud | An isolated private network in a cloud |
-| VPC-SC | VPC Service Controls | Google's "perimeter" that blocks data egress |
-| IRB | Institutional Review Board | Ethics board that approves human-subjects research |
-| DAC | Data Access Committee | Body that approves access to a controlled dataset |
-| TRE | Trusted Research Environment | Secure enclave for sensitive data (e.g. UKB-RAP) |
-| SBOM | Software Bill of Materials | Inventory of components/dependencies in a build |
-| SHA | Secure Hash Algorithm | Family of cryptographic hashes; SHA-256 is used for content pinning |
-| SPDX | Software Package Data Exchange | Standard for per-file license/copyright metadata (used by REUSE) |
-| TLS | Transport Layer Security | Encryption protocol used to secure network connections |
-
-## Cloud and Infrastructure
-
-| Term | Expansion | What it is |
-|---|---|---|
-| AMD64 | 64-bit Advanced Micro Devices architecture | x86-64 CPU architecture identifier used by Linux Docker images |
-| ARM64 | 64-bit Arm architecture | CPU architecture identifier used by Apple Silicon, AWS Graviton, and Arm Linux runners |
-| GCP | Google Cloud Platform | Google's cloud |
-| AWS | Amazon Web Services | Amazon's cloud |
-| VM | Virtual Machine | A virtualized computer instance |
-| CPU | Central Processing Unit | General-purpose processor used for local inference when no accelerator is available |
-| CUDA | Compute Unified Device Architecture | NVIDIA GPU runtime and programming stack used by optional accelerated inference profiles |
-| GID | Group Identifier | Numeric Unix group id used to run containers as a stable non-root group |
-| GPU | Graphics Processing Unit | Accelerator used for model inference and other parallel computations |
-| UID | User Identifier | Numeric Unix user id used to run containers as a stable non-root user |
-| vCPU | virtual CPU | A virtual processor core on a VM |
-| VRAM | Video Random Access Memory | Accelerator memory used to load model weights and inference buffers on a GPU |
-| OS | Operating System | System software such as Linux that manages hardware and application processes |
-| CDN | Content Delivery Network | External static-asset hosting, forbidden for the runtime web UI |
-| DNS | Domain Name System | Resolves hostnames to network addresses |
-| HTTP(S) | HyperText Transfer Protocol (Secure) | The web request protocol |
-| IPv6 | Internet Protocol version 6 | Network address format used by bracketed loopback and service endpoints |
-| PR | Pull Request | Proposed code or documentation change reviewed before merge |
-| RAM | Random Access Memory | Volatile memory required to load local model weights, runtime buffers, and active sessions |
-| REST | Representational State Transfer | HTTP API style used by the session gateway |
-| SSE | Server-Sent Events | One-way streaming over HTTP (fallback for live agent output) |
-| SSH | Secure Shell | Encrypted remote terminal protocol used to access environments such as Carina |
-| WS | WebSocket | Bidirectional streaming over one TCP connection (primary transport for live agent sessions) |
-| PSC | Private Service Connect | GCP private connectivity to a service (no public internet) |
-| PE | Private Endpoint | Azure private network entry to a service (no public ingress) |
-| QEMU | Quick Emulator | CPU emulation layer used by container CI to run non-native architecture smoke tests |
-
-## Container Registries
-
-| Term | Expansion |
+| Term | Meaning |
 |---|---|
-| GCR | Google Container Registry |
-| GAR | Google Artifact Registry |
-| GHCR | GitHub Container Registry |
-| OCI | Open Container Initiative (open standard for images & artifacts) |
+| AI | Artificial intelligence. Heartwood uses a language model to interpret requests and propose coding actions. |
+| API | Application programming interface used by software components to communicate. |
+| CLI | Command-line interface. Heartwood's terminal command is `heartwood`. |
+| LLM | Large language model used by the OpenHands agent runtime. |
+| LiteLLM | Provider-compatibility library used through OpenHands. |
+| OpenHands | Upstream SDK that owns Heartwood's agent conversation, coding tools, confirmation stops, persistence, and context condensation. |
+| SDK | Software development kit. Heartwood integrates the public OpenHands SDK rather than maintaining another agent loop. |
+| Skill | A reviewed `SKILL.md` procedure, with optional scripts and resources, supplied to the OpenHands agent context. |
+| UI | User interface, including Heartwood's terminal and browser presentations. |
+| vLLM | GPU-oriented model server used by Heartwood's NVIDIA and Carina local-inference paths. |
 
-## AI and Agent Stack
+## Research and Security Terms
 
-| Term | Expansion | What it is |
+| Term | Expansion | Meaning |
 |---|---|---|
-| AI | Artificial Intelligence | Broad term for systems that perform tasks associated with human intelligence |
-| AWQ | Activation-aware Weight Quantization | Model quantization method used to reduce GPU memory requirements while retaining inference quality |
-| LLM | Large Language Model | Model used by the OpenHands conversation runtime |
-| GGUF | GPT-Generated Unified Format | llama.cpp model artifact format used for local inference profiles |
-| ML | Machine Learning | Statistical/modeling techniques that learn patterns from data |
-| NLP | Natural Language Processing | Computing over human-language text |
-| NL | Natural Language | Plain human language (e.g. "NL query") |
-| SQL | Structured Query Language | Language for querying databases ("sequel") |
-| vLLM | *(project name)* | High-throughput engine for serving LLMs on GPUs |
-| LiteLLM / Ollama / llama.cpp | *(project names)* | Model-routing proxy / local model runners |
-| SKILL.md | *(file name)* | Portable directory format for agent instructions, scripts, references, and assets |
+| BAA | Business Associate Agreement | Contract that can govern a service provider's handling of protected health information. |
+| CDM | Common Data Model | Standardized schema; Heartwood's synthetic reference fixtures resemble a small subset of the OMOP CDM. |
+| HIPAA | Health Insurance Portability and Accountability Act | US legal framework that includes privacy and security requirements for protected health information. |
+| IRB | Institutional Review Board | Body responsible for oversight of human-subjects research. |
+| OMOP | Observational Medical Outcomes Partnership | Community data model used by Heartwood's synthetic reference workflow. |
+| PHI | Protected Health Information | Individually identifiable health information protected under applicable US regulation. |
 
-## Programming and Interoperability
+## Models and Compute
 
-| Term | Expansion | What it is |
+| Term | Expansion | Meaning |
 |---|---|---|
-| API | Application Programming Interface | Defined mechanism through which software components communicate |
-| ASGI | Asynchronous Server Gateway Interface | Python interface used for async web servers and applications |
-| CLI | Command-Line Interface | Text-based interface used from a terminal |
-| SDK | Software Development Kit | Libraries and tools used to integrate with a software platform |
-| PyPI | Python Package Index | Public Python package registry; unavailable when a deployment disables runtime network access |
-| JSON | JavaScript Object Notation | Lightweight structured-data format used for schemas and events |
-| JSONL | JSON Lines | One JSON object per line, used for scrubbed audit exports |
-| JIT | Just-In-Time | Compilation performed at runtime, including optional accelerator-kernel compilation |
-| TOML | Tom's Obvious Minimal Language | Configuration format used for Python project metadata and the skill bundle catalog |
-| YAML | YAML Ain't Markup Language | Human-readable configuration format used for workflows and metadata |
-| NDJSON | Newline-Delimited JSON | One JSON record per line; the FHIR bulk-export format |
-| CI/CD | Continuous Integration / Continuous Delivery | Automated build/test/release pipeline |
-| SPI | Service Provider Interface | A stable interface a platform/model/data adapter implements |
-| SPA | Single-Page Application | A web app that loads once and updates in place (the researcher web UI) |
-| UI | User Interface | The screens and controls a person uses to operate software |
-| UX | User Experience | The overall user workflow and interaction quality |
+| AMD64 | 64-bit x86 architecture | Architecture used by common Linux servers and Heartwood's NVIDIA images. |
+| ARM64 | 64-bit Arm architecture | Architecture used by Apple Silicon and Arm Linux systems. |
+| AWQ | Activation-aware Weight Quantization | Quantization format supported by selected vLLM model artifacts. |
+| CPU | Central Processing Unit | General-purpose processor used by the portable local-inference image. |
+| CUDA | Compute Unified Device Architecture | NVIDIA software stack used by GPU inference. |
+| GGUF | GPT-Generated Unified Format | Model file format used by Heartwood's llama.cpp path. |
+| GPU | Graphics Processing Unit | Accelerator used by Heartwood's NVIDIA local-inference paths. |
+| llama.cpp | Open-source inference project | Local model runtime used by Heartwood's portable CPU images. |
+| RAM | Random Access Memory | Main system memory used by Heartwood and local inference. |
+| Slurm | Cluster workload manager | Scheduler used to request Carina compute. |
+| vCPU | Virtual Central Processing Unit | Compute-unit label used by cloud environments such as Terra. |
+| VRAM | Video Random Access Memory | GPU memory used for model weights, context, and inference buffers. |
 
-## Platforms and Organizations
+## Software, Data, and Deployment
 
-| Term | Expansion | What it is |
+| Term | Expansion | Meaning |
 |---|---|---|
-| UKB-RAP | UK Biobank – Research Analysis Platform | DNAnexus-based environment for UK Biobank |
-| CGC | Cancer Genomics Cloud | Seven Bridges–powered platform |
-| AnVIL | Analysis, Visualization, and Informatics Lab-space | NHGRI's Terra-based platform |
-| NIH | National Institutes of Health | US biomedical research agency (runs All of Us) |
-| NHLBI | National Heart, Lung, and Blood Institute | NIH institute behind BioData Catalyst |
-| NHGRI | National Human Genome Research Institute | NIH institute behind AnVIL |
+| ASGI | Asynchronous Server Gateway Interface | Python interface used by Heartwood's web gateway. |
+| CI | Continuous Integration | Automated repository checks for code, documentation, images, and release artifacts. |
+| GHCR | GitHub Container Registry | Registry that publishes Heartwood container images. |
+| HTTP / HTTPS | Hypertext Transfer Protocol / HTTP Secure | Protocols used by model and browser APIs; remote model routes require HTTPS. |
+| JSON | JavaScript Object Notation | Structured-data format used by Heartwood contracts and configuration. |
+| JSONL | JSON Lines | One JSON object per line, used for audit exports and event storage. |
+| OCI | Open Container Initiative | Standards used for container images and registry manifests. |
+| REST | Representational State Transfer | HTTP API style used by the Heartwood session gateway. |
+| REUSE | Software licensing specification and tool | Checks file-level copyright and license declarations. |
+| SHA-256 | Secure Hash Algorithm 256-bit | Digest used to verify released and downloaded artifacts. |
+| SPDX | Software Package Data Exchange | Standard identifiers used for source-file license declarations. |
+| SSH | Secure Shell | Encrypted remote terminal protocol used to access environments such as Carina. |
+| TOML | Tom's Obvious Minimal Language | Configuration format used for project and release metadata. |
+| UID / GID | User Identifier / Group Identifier | Numeric Unix identities used to map container file ownership to the host user. |

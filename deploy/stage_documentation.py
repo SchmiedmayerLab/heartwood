@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shutil
 import tempfile
 import tomllib
@@ -34,6 +35,32 @@ _REFERENCE_FILES = (
     "LICENSE",
     "NOTICE",
 )
+_DOCUMENTATION_FILES = (
+    "carina-cli.md",
+    "cli-reference.md",
+    "container-images.md",
+    "deployment.md",
+    "getting-started-offline.md",
+    "getting-started.md",
+    "installation.md",
+    "model-connections.md",
+    "platform-images.md",
+    "platform-support.md",
+    "platforms.md",
+    "project-state.md",
+    "releases.md",
+    "terra-jupyter-demo.ipynb",
+    "terra-jupyter-demo.md",
+    "troubleshooting.md",
+    "using-heartwood.md",
+    "web-interface.md",
+)
+_DOCUMENTATION_ASSETS = (
+    "web-action-review.png",
+    "web-action-review.png.license",
+    "web-reference-analysis.png",
+    "web-reference-analysis.png.license",
+)
 _CANONICAL_DIRECTORIES = ("docs", "design", "documentation")
 _CANONICAL_FILES = (
     "README.md",
@@ -41,23 +68,10 @@ _CANONICAL_FILES = (
     "VERSION.toml",
     *_REFERENCE_FILES,
 )
-_REPOSITORY_DIRECTORIES = (
-    "evals",
-    "fixtures",
-    "images",
-    "packages/audit",
-    "packages/cli",
-    "packages/compliance",
-    "packages/core-adapter",
-    "packages/gateway",
-    "packages/model-policy",
-    "packages/notebook",
-    "packages/skills",
-    "packages/webui",
-    "skills",
-)
-_STAGE_MARKER = ".heartwood-documentation-stage"
-_STAGE_MARKER_CONTENT = "heartwood.documentation-stage.v1\n"
+_LEGACY_STAGE_MARKER = ".heartwood-documentation-stage"
+_LEGACY_STAGE_MARKER_CONTENT = "heartwood.documentation-stage.v1\n"
+_STAGE_MARKER_SUFFIX = ".heartwood-documentation-stage"
+_STAGE_MARKER_VERSION = "heartwood.documentation-stage.v2"
 _LEGACY_STAGE_ENTRIES = {
     "README.md",
     "design",
@@ -103,30 +117,33 @@ def stage_documentation(source_root: Path, output_root: Path) -> None:
     output_root.parent.mkdir(parents=True, exist_ok=True)
     temporary_root = Path(tempfile.mkdtemp(prefix=f".{output_root.name}.", dir=output_root.parent))
     try:
-        (temporary_root / _STAGE_MARKER).write_text(
-            _STAGE_MARKER_CONTENT,
-            encoding="utf-8",
-        )
-        readme = (source_root / "README.md").read_text(encoding="utf-8")
+        site_home = (source_root / "documentation" / "index.md").read_text(encoding="utf-8")
         repository_base = f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}"
-        for relative_path in (*_REPOSITORY_DIRECTORIES, "AGENTS.md"):
-            readme = readme.replace(
-                f"]({relative_path})",
-                f"]({repository_base}/{relative_path})",
-            )
-
         contributing = (source_root / "CONTRIBUTING.md").read_text(encoding="utf-8")
         contributing = contributing.replace(
             "](AGENTS.md)",
             f"]({repository_base}/AGENTS.md)",
         )
+        contributing = contributing.replace(
+            "](documentation/index.md)",
+            "](index.md)",
+        )
 
-        (temporary_root / "README.md").write_text(readme, encoding="utf-8")
-        (temporary_root / "index.md").write_text('--8<-- "README.md"\n', encoding="utf-8")
+        (temporary_root / "index.md").write_text(
+            site_home.replace("](../", "]("),
+            encoding="utf-8",
+        )
         for filename in _REFERENCE_FILES:
             shutil.copy2(source_root / filename, temporary_root / filename)
         (temporary_root / "CONTRIBUTING.md").write_text(contributing, encoding="utf-8")
-        shutil.copytree(source_root / "docs", temporary_root / "docs")
+        documentation_root = temporary_root / "docs"
+        documentation_root.mkdir()
+        for filename in _DOCUMENTATION_FILES:
+            shutil.copy2(source_root / "docs" / filename, documentation_root / filename)
+        asset_root = documentation_root / "assets"
+        asset_root.mkdir()
+        for filename in _DOCUMENTATION_ASSETS:
+            shutil.copy2(source_root / "docs" / "assets" / filename, asset_root / filename)
 
         design_root = temporary_root / "design"
         design_root.mkdir()
@@ -144,22 +161,47 @@ def stage_documentation(source_root: Path, output_root: Path) -> None:
             _assert_replaceable_output(source_root, output_root)
             shutil.rmtree(output_root)
         temporary_root.replace(output_root)
+        _stage_marker(output_root).write_text(
+            _stage_marker_content(output_root),
+            encoding="utf-8",
+        )
     finally:
         shutil.rmtree(temporary_root, ignore_errors=True)
 
 
 def _assert_replaceable_output(source_root: Path, output_root: Path) -> None:
-    marker = output_root / _STAGE_MARKER
     try:
-        marker_content = marker.read_text(encoding="utf-8")
+        marker_content = _stage_marker(output_root).read_text(encoding="utf-8")
     except OSError:
         marker_content = None
-    if marker_content == _STAGE_MARKER_CONTENT:
+    if marker_content == _stage_marker_content(output_root):
+        return
+    try:
+        legacy_marker_content = (output_root / _LEGACY_STAGE_MARKER).read_text(encoding="utf-8")
+    except OSError:
+        legacy_marker_content = None
+    if legacy_marker_content == _LEGACY_STAGE_MARKER_CONTENT:
         return
     legacy_default = source_root / "build" / "documentation"
     if output_root == legacy_default and _looks_like_legacy_stage(output_root):
         return
     raise ValueError("documentation output already exists without a valid Heartwood staging marker")
+
+
+def _stage_marker(output_root: Path) -> Path:
+    return output_root.parent / f".{output_root.name}{_STAGE_MARKER_SUFFIX}"
+
+
+def _stage_marker_content(output_root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(path for path in output_root.rglob("*") if path.is_file()):
+        digest.update(path.relative_to(output_root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as staged_file:
+            for chunk in iter(lambda: staged_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return f"{_STAGE_MARKER_VERSION}\ntree-sha256={digest.hexdigest()}\n"
 
 
 def _looks_like_legacy_stage(output_root: Path) -> bool:

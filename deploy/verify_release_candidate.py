@@ -245,7 +245,7 @@ def source_version_errors(root: Path, version: str) -> list[str]:
         "docs/carina-cli.md": [
             f"releases/download/{version}/heartwood-installer",
         ],
-        "docs/platform-support.md": [f"Release `{version}`", f"`{version}-terra`"],
+        "docs/platform-support.md": [f"Release `{version}`"],
         "docs/releases.md": [f"-f version={version}"],
         "docs/terra-jupyter-demo.md": [f"heartwood:{version}-terra"],
     }

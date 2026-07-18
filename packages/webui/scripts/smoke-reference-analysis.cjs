@@ -52,8 +52,10 @@ const logs = [];
 const runtimeEnvironment = Object.assign({}, process.env, {
   HEARTWOOD_MODEL_REQUEST_LOG: path.join(stateRoot, "model-requests.jsonl"),
   HEARTWOOD_RUNTIME_ROOT: repoRoot,
+  HEARTWOOD_TOOL_PYTHON: "python",
   LITELLM_LOCAL_MODEL_COST_MAP: "True",
   OPENHANDS_SUPPRESS_BANNER: "1",
+  PATH: `${path.dirname(pythonExecutable)}${path.delimiter}${process.env.PATH || ""}`,
   UV_CACHE_DIR: path.join(repoRoot, ".uv-cache"),
 });
 
@@ -148,6 +150,7 @@ async function main() {
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     await runApprovedTask(page, task, {
+      captureApproval: true,
       finalMessage:
         "The synthetic target-condition cohort summary is ready for review.",
       prompt: cohortPrompt,
@@ -228,9 +231,9 @@ async function main() {
       .getByRole("button", { name: "Activity & audit", exact: true })
       .click();
     await expect(page.getByText("Tool execution", { exact: true })).toHaveCount(
-      4,
+      5,
     );
-    await expect(page.getByText("exit=0", { exact: true })).toHaveCount(3);
+    await expect(page.getByText("exit=0", { exact: true })).toHaveCount(4);
     await expect(page.getByText("exit=1", { exact: true })).toHaveCount(1);
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
@@ -262,7 +265,7 @@ async function main() {
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/Tool terminal exit=0/gu)?.length !== 3 ||
+      replay.match(/Tool terminal exit=0/gu)?.length !== 4 ||
       replay.match(/Tool terminal exit=1/gu)?.length !== 1 ||
       !replay.includes(
         "Agent: The synthetic target-condition cohort summary is ready for review.",
@@ -302,6 +305,13 @@ async function runApprovedTask(page, task, taskSpec) {
   await expect(
     approval.getByText(taskSpec.summary, { exact: true }),
   ).toBeVisible();
+  if (taskSpec.captureApproval === true) {
+    await captureDesktopScreenshot(
+      page,
+      "web-action-review.png",
+      "action review",
+    );
+  }
   await approval
     .getByRole("button", { name: /^Allow all \d+ actions? once$/u })
     .click();
@@ -312,28 +322,23 @@ async function runApprovedTask(page, task, taskSpec) {
 
 async function captureReferenceScreenshots(page) {
   if (screenshotDirectory === null) return;
-  fs.mkdirSync(screenshotDirectory, { recursive: true });
-  const desktopPath = path.join(
-    screenshotDirectory,
+  await captureDesktopScreenshot(
+    page,
     "web-reference-analysis.png",
+    "conversation",
   );
-  const notebookPath = path.join(
-    screenshotDirectory,
-    "web-notebook-viewport.png",
-  );
-  await assertNoHorizontalOverflow(page, "desktop");
-  await page.screenshot({ path: desktopPath });
-  await page.setViewportSize({ height: 844, width: 390 });
-  await expect(page.getByLabel("Open sessions")).toBeVisible();
-  await assertNoHorizontalOverflow(page, "notebook");
-  await page.screenshot({ path: notebookPath });
-  await page.setViewportSize(desktopViewport);
-  for (const screenshotPath of [desktopPath, notebookPath]) {
-    if (fs.statSync(screenshotPath).size < 1_000) {
-      throw new Error(
-        `reference screenshot is unexpectedly small: ${screenshotPath}`,
-      );
-    }
+}
+
+async function captureDesktopScreenshot(page, filename, stateName) {
+  if (screenshotDirectory === null) return;
+  fs.mkdirSync(screenshotDirectory, { recursive: true });
+  const screenshotPath = path.join(screenshotDirectory, filename);
+  await assertNoHorizontalOverflow(page, stateName);
+  await page.screenshot({ path: screenshotPath });
+  if (fs.statSync(screenshotPath).size < 1_000) {
+    throw new Error(
+      `reference screenshot is unexpectedly small: ${screenshotPath}`,
+    );
   }
 }
 

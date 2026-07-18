@@ -10,43 +10,24 @@ SPDX-License-Identifier: MIT
 
 # Use Heartwood on Stanford Carina
 
-Use the Carina workflow when Heartwood should run directly in a Carina terminal and request GPU compute through Slurm. This guide installs the command, prepares one synthetic project, downloads a local model, requests an explicitly reviewed allocation, and verifies one bounded agent action.
+Heartwood runs natively in a Carina terminal. It can use the Stanford AI API Gateway without requesting a GPU or launch a local model through an explicitly reviewed Slurm allocation.
 
-Use an isolated directory containing no protected health information. Do not inspect unrelated project directories, environment contents, or cluster data as part of validation. Carina currently uses the interactive terminal interface; no authenticated Heartwood browser route is claimed.
+Use an isolated project directory and begin with synthetic files. Do not inspect unrelated project directories or cluster data while learning the workflow.
 
-Heartwood uses two locations with separate purposes:
+## 1. Prepare Project Storage
 
-- The **installation root** holds versioned application and inference environments and may be shared by several Heartwood projects.
-- The **project directory** holds the files the agent may edit and the project's private `.heartwood/` state.
+Connect to Carina and enter the writable project storage assigned to the research project. Carina 2.0 project directories normally follow `/projects/<PI>/<projectID>/main`; use the exact path provided to your team.
 
-Place these as separate sibling directories on the same approved Carina project storage. Keeping the installation outside the agent's project boundary prevents a session from treating application runtimes or installer caches as research files, while still allowing one installation to serve several projects.
-
-## Follow the Workflow
-
-| Step | Outcome |
-|---|---|
-| 1. Prepare storage | The installation and synthetic project use separate private directories. |
-| 2. Install Heartwood | The immutable native release and packaged GPU runtime are available. |
-| 3. Prepare a model | A verified model snapshot is stored with the project. |
-| 4. Launch | Heartwood requests a reviewed Slurm allocation and supervises the model server. |
-| 5. Validate | One allowed and one rejected synthetic action confirm the session and audit path. |
-
-The Stanford AI API Gateway is an alternative to steps 3 and 4 when that route is authorized for the project.
-
-## Step 1: Prepare Private Storage
-
-Choose the writable project storage assigned by Carina; do not infer it from a home directory or inspect unrelated projects. Carina project paths commonly follow `/projects/<project-owner>/<project-id>`, but use the exact path supplied for the project. The catalog includes a smaller approximately 5.6 GB AWQ snapshot for 16 GB GPUs and the approximately 15.2 GB full snapshot used by this larger-GPU validation workflow. Carina also needs enough job-local scratch to stage the selected model. Another model may require substantially different storage, RAM, or GPU memory; inspect its Heartwood plan before downloading it.
+Create separate installation and agent project directories:
 
 ```bash
-cd /projects/<project-owner>/<project-id>
-mkdir -p -m 700 heartwood-installation heartwood-synthetic-demo
+cd /projects/<PI>/<projectID>/main
+mkdir -p -m 700 heartwood-installation heartwood-demo
 ```
 
-Keep the project separate from the installation root. Heartwood will create `.heartwood/` in the current directory; no state or model paths need to be exported.
+Keeping the installation beside the project prevents the agent from treating application runtimes as analysis files.
 
-## Step 2: Install Heartwood
-
-Enter the dedicated installation directory, load Carina's supported package manager, and download the `0.2.0-beta.3` installer. Each published installer is bound to its own release and downloads only the matching bundle and checksum manifest. It takes no version argument. The installer uses the current directory as its installation root.
+## 2. Install Heartwood
 
 ```bash
 cd heartwood-installation
@@ -59,114 +40,88 @@ rm heartwood-installer
 export PATH="$PWD/bin:$PATH"
 ```
 
-The platform selection is bound into the installed launcher. Do not export `HEARTWOOD_PLATFORM` for normal use. During installation, package-manager homes, downloads, caches, configuration, and temporary files stay under `heartwood-installation/.installer/`. A successful installation removes that entire transient directory, while the explicit `rm` above removes the downloaded installer itself. Versioned application and inference runtimes remain because they are the installed product and allow rollback. If installation is interrupted after runtime creation starts, `.installer/` remains so rerunning the same installer can reuse downloads; successful retry removes it.
+The installer uses the current directory as its root, verifies the release assets, and installs both Heartwood and its Carina vLLM runtime. Dependency resolution can take several minutes and reports seven numbered stages. A successful installation removes temporary installer state.
 
-The installer verifies the release bundle, creates versioned source and runtime environments from a persistent bootstrap interpreter, prohibits implicit package-manager interpreter downloads, installs the locked Heartwood application and hash-locked vLLM environment, validates vLLM, PyTorch, CUDA packaging, and fresh-child architecture imports, and binds Carina into the installed command. It does not create project state, download a model, or store a credential. `--root <path>` remains available for reviewed automation, but it is unnecessary in this workflow.
-
-Confirm the installation and project readiness:
+Enter the separate project:
 
 ```bash
-cd ../heartwood-synthetic-demo
+cd ../heartwood-demo
 heartwood --version
 heartwood doctor
 ```
 
-Before setup, `heartwood doctor` reports `setup-required`. This is expected.
+Before model setup, `heartwood doctor` reports `setup-required`.
 
-## Step 3: Prepare a Local GPU Model
+After reconnecting, restore the command and return to the project:
 
-From the synthetic project directory, run `heartwood`, choose **On this device**, and select a recommended GPU model. This documented workflow uses the full Qwen2.5 7B snapshot on Carina's larger L40S GPUs; use the smaller AWQ catalog option when the available GPU has 16 GB of memory. Heartwood confines public Hugging Face transfer state to `.heartwood/cache/model-transfer/`, disables implicit Hugging Face credentials, and removes the transfer cache after a successful verified download:
+```bash
+cd /projects/<PI>/<projectID>/main/heartwood-installation
+module load micromamba/2.3.3
+export PATH="$PWD/bin:$PATH"
+cd ../heartwood-demo
+```
+
+## 3. Choose a Model Path
+
+### Stanford AI API Gateway
+
+This path needs no model download or GPU allocation. Confirm that the project has access to the [Stanford AI API Gateway](https://uit.stanford.edu/service/ai-api-gateway), then run `heartwood`, choose **Stanford AI API Gateway**, enter the issued token at the private prompt, and select one of the aliases returned by the service.
+
+The current Stanford service terms, GenAI Evaluation Matrix, Data Risk Assessment, project authorization, and Carina controls determine which data may use the route. Technical connectivity does not authorize agent tools or export.
+
+### Local GPU Model
+
+List compatible models:
 
 ```bash
 heartwood models local
+```
+
+For the L40S hardware in Carina 2.0, the full synthetic-demo model can be prepared with:
+
+```bash
 heartwood models download qwen25-7b-instruct-vllm
 ```
 
-Heartwood downloads the pinned Hugging Face snapshot into `.heartwood/models/`, displays transfer progress, removes transient transfer metadata, writes provenance and an exact `SHA256SUMS`, verifies every file, and saves the selected model in `.heartwood/config.toml`.
+Heartwood downloads the immutable public snapshot into the project, reports progress, verifies the files, and saves the selection. Review its storage and memory plan before transfer. The model is intended for synthetic tool-use demonstrations, not biomedical or production validation.
 
-To use another Hugging Face repository, inspect it first:
-
-```bash
-heartwood models inspect <owner/model>
-heartwood models download <owner/model>
-```
-
-Carina includes the vLLM runtime, so Heartwood accepts a standard repository snapshot only when Hugging Face metadata identifies a text-generation model family supported by the packaged tool-call parser. It resolves the source to an immutable revision and reports approximate download, disk, RAM, and GPU-memory requirements. Custom model code, embedding models, unknown parser families, and unsupported formats fail before download and link to the issue chooser. A successful plan establishes packaging compatibility, not model quality, biomedical suitability, license approval, or authorization for Carina data.
-
-Review the project-local selection without requesting compute:
+Preview the compute request without submitting it:
 
 ```bash
 heartwood launch --dry-run
 ```
 
-The plan shows the project, model, vLLM runtime, detected GPU partition, requested GPU, CPU, memory, and time. It contains no credential or manually supplied storage path.
+## 4. Launch the Local Model
 
-## Step 4: Launch the Session
-
-Start Heartwood from the same project directory:
+From the project directory:
 
 ```bash
 heartwood launch
 ```
 
-Heartwood discovers Carina GPU partitions and prefers the scheduler default. Review the displayed request and answer `y` only when it is appropriate. If no default is available, pass one of the displayed names with `--partition`.
+Heartwood discovers Carina's `dev`, `normal`, and `long` GPU partitions and proposes an allocation. Review the partition, GPU, CPU, memory, time, project, and model before answering `y`. Use `--partition <name>` only when the detected default is not appropriate.
 
-A new development allocation consumes only the capacity granted to that job; it does not cancel an existing normal or long job. Existing work changes only if a user or operator explicitly cancels it or normal scheduler policy preempts it. Check the current Carina queue and QoS guidance before requesting another GPU because account and user limits can change, and exit Heartwood normally when validation is complete so the allocation is released promptly.
+Inside the allocation, Heartwood stages the verified model to job-local scratch, starts vLLM, reports startup progress, validates the connection, and opens the terminal conversation. Exiting the conversation stops the model server, removes the scratch copy, and releases the interactive allocation.
 
-After allocation, Heartwood:
+Carina's login nodes are for setup and job submission, not model inference. Do not start vLLM directly on a login node.
 
-1. verifies the selected snapshot;
-2. validates the packaged vLLM environment;
-3. checks job-local scratch capacity and stages the model there;
-4. starts vLLM on loopback and reports elapsed startup time while waiting;
-5. validates the shared model, policy, and action settings;
-6. opens the interactive terminal session.
+## 5. Try a Synthetic Task
 
-First model startup can take several minutes. If startup fails, Heartwood prints the relevant tail of `.heartwood/logs/local-model.log` and exits the allocation cleanly. The vLLM process and staged scratch copy are removed when the session ends.
-
-Use `--gpus`, `--cpus`, `--memory`, and `--time` only for a reviewed task that needs different resources. `--no-allocate` prohibits scheduler submission, and `--yes-request-allocation` is reserved for reviewed automation.
-
-## Step 5: Run a Synthetic Action Check
-
-Ask for one bounded action in the project, inspect the complete action set, and allow it once. Then ask for a separate action and reject it. For example:
-
-```text
-Create carina-smoke.txt in this project containing exactly heartwood-carina-synthetic-ok followed by one newline. Propose one file create action and stop.
-```
-
-Review the structured arguments, not only the model-written summary. A terminal action must show the complete command and every path; a file action must show its operation, destination, and content. Reject the whole set when an argument is missing, a path leaves the project or approved installation, or the proposed result is incomplete or scientifically inaccurate.
-
-Repository-verified synthetic Skills provide deterministic integration evidence, not research validity. Inspect their aggregate output independently, and treat free-form model interpretation or report writing as a draft that requires domain review. A successful tool exit does not make the model's narrative accurate, clinically valid, or appropriate for controlled data.
-
-Use `/replay` to confirm that the proposal, grouped decision, tool result, and agent response persist. Export the scrubbed record with `/audit-export`. Do not collect prompt text, model output, broad file listings, environment dumps, credentials, or participant-level records as external validation evidence.
-
-After exiting, run:
+Use [Work with Heartwood](using-heartwood.md) to submit a bounded task in `heartwood-demo`. Review the complete action group, allow only the intended synthetic action, and separately exercise rejection. Replay and export the session before ending the allocation:
 
 ```bash
-heartwood doctor
+heartwood replay
+heartwood audit export
 ```
 
-A configured local model reports `compute-required` on the login node because inference needs a Slurm allocation. This is healthy. `recovery-required` identifies an actual project configuration or in-allocation failure.
+The Carina interface is currently the terminal. No authenticated Heartwood browser route is documented for Carina.
 
-## Alternative: Use the Stanford AI API Gateway
+## Carina Help
 
-The managed route does not require a local model download or GPU allocation. Start Heartwood from the project, choose **Stanford AI API Gateway**, enter the individually issued token at the hidden prompt, and select one of the aliases returned by the service:
-
-```bash
-heartwood
-```
-
-Heartwood stores only the selected alias and a non-secret credential binding. A token entered at the prompt remains in the running process and must be entered again after restart unless Carina supplies an approved platform secret binding. It is not written to `.heartwood/`, command arguments, logs, events, or audit exports.
-
-The Stanford service agreement, GenAI Evaluation Matrix, Data Risk Assessment, project authorization, and Carina controls determine whether a route may receive a particular data classification. A successful connection does not authorize agent tools or data export.
-
-See [Work with the Agent](using-heartwood.md) for terminal controls and [Platform Support and Validation](platform-support.md) for the distinction between CI validation, live validation, and institutional approval.
-
-Carina currently has no documented authenticated browser-proxy integration for Heartwood. Use the interactive terminal interface on Carina; the browser is the local and Terra presentation surface until a platform route is implemented and live-validated.
-
-## Continue from Here
-
-- Use [Work with the Agent](using-heartwood.md) for requests, grouped action review, session controls, replay, and audit export.
-- Use [Run a Model Locally](getting-started-offline.md) for the shared model lifecycle and format constraints.
-- Use [Troubleshooting](troubleshooting.md) for readiness, model, and connection problems; retain the launcher's Carina-specific scheduler and runtime diagnostic when opening an issue.
-- Use [Platform Support and Validation](platform-support.md#stanford-carina) before making claims about the current release or controlled-data readiness.
+- [Connect to Carina](https://docs.carina.stanford.edu/connect)
+- [Stanford AI API Gateway](https://uit.stanford.edu/service/ai-api-gateway)
+- [Stanford GenAI Tool Evaluation Matrix](https://uit.stanford.edu/ai/genai-tool-matrix)
+- [Slurm partitions and GPU requests](https://docs.carina.stanford.edu/slurm-carina)
+- [Software modules](https://docs.carina.stanford.edu/software)
+- [Carina troubleshooting](https://docs.carina.stanford.edu/troubleshooting)
+- [Heartwood troubleshooting](troubleshooting.md)

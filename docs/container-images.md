@@ -10,30 +10,24 @@ SPDX-License-Identifier: MIT
 
 # Run Heartwood in a Container
 
-The generic Heartwood image is the easiest way to use the complete CLI and browser interface without installing Python, Node.js, OpenHands, or a local inference server on the host. It contains the Heartwood application, web assets, repository-verified Skills, OpenHands SDK, and CPU llama.cpp runtime. It contains no model weights and no credentials.
+The generic container is the recommended workstation setup. It includes Heartwood, the browser application, bundled Skills, OpenHands, and the CPU inference runtime. It contains no model weights or credentials.
 
-Use the Terra-derived image when Terra must retain ownership of Jupyter, the notebook route, user identity, and persistent disk. Use the native installer on environments such as Carina where the scheduler and shared filesystem are more important than container portability.
-
-!!! note "Before you begin"
-
-    Install Docker, confirm that it can pull from `ghcr.io`, and choose a host directory the agent may modify. Start with synthetic or non-sensitive files.
+You need Docker Engine or Docker Desktop, enough disk for the image and project, and a Bash-compatible shell on macOS or Linux. The examples use Unix ownership and mount syntax. On Windows, run them from Windows Subsystem for Linux or adapt the user and bind-mount options for the local Docker setup.
 
 ## Choose an Image
 
-| Image | Platforms | Purpose |
+| Image | Architecture | Use |
 |---|---|---|
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3` | AMD64 and ARM64 | Versioned generic runtime and the normal container starting point. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-gpu-nvidia` | AMD64 | Generic runtime with an isolated vLLM environment for compatible NVIDIA deployments. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra` | AMD64 | Terra Jupyter base with the Heartwood payload added. |
-| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra-gpu-nvidia` | AMD64 | Terra-derived image with the isolated vLLM environment. |
-| `edge` and `edge-*` | Flavor-specific | Latest validated `main` build for development, not a stable release. |
-| `sha-<git-sha>` and `sha-<git-sha>-*` | Flavor-specific | Immutable images for one repository commit. |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3` | AMD64 and ARM64 | Hosted models, existing services, or portable CPU inference |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-gpu-nvidia` | AMD64 | Local inference on a compatible NVIDIA host |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra` | AMD64 | Terra with hosted models or portable CPU inference |
+| `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-terra-gpu-nvidia` | AMD64 | Terra with local NVIDIA inference |
 
-The portable generic image remains the default. The NVIDIA variants use a pinned CUDA 11.8 vLLM environment so they remain compatible with the NVIDIA driver baseline observed on Terra. A GPU image still requires a suitable model, enough accelerator memory, a driver that supports CUDA 11.8, and deployment-specific validation.
+Use the non-Terra images on ordinary Docker hosts. Terra images preserve Terra's Jupyter runtime and are selected through the Terra cloud-environment configuration.
 
-## Quick Start the Browser
+## Start the Browser
 
-Create or enter the directory the agent may edit, then mount that directory at `/workspace`:
+Create or enter the host directory the agent may modify:
 
 ```bash
 mkdir heartwood-demo
@@ -48,15 +42,13 @@ docker run --rm -it \
   heartwood serve --host 0.0.0.0
 ```
 
-Open `http://127.0.0.1:8767/`. Heartwood treats `/workspace` as the project and creates `/workspace/.heartwood/`. One project mount therefore preserves source files, configuration, sessions, downloaded models, Skills, logs, and audit records across replacement containers. The examples in this guide run the container as the current host user so a new bind-mounted project is writable on Linux without changing its ownership; `HOME=/tmp` gives that remapped process a writable temporary home while durable Heartwood state remains in the project.
+Open `http://127.0.0.1:8767/`. Complete model setup in the browser and keep the container running while you work.
 
-Complete model setup in the browser, create a conversation, and submit a bounded first task. Keep the container process running while the browser is in use. Press `Ctrl+C` to stop it; the mounted project remains on the host.
+The host directory is mounted at `/workspace`, the image's starting directory. Heartwood treats it as the project and keeps project state in that mount, so source files, settings, sessions, and downloaded models survive replacement containers.
 
-`/workspace` is the image's default mount target and working directory, not a separate Heartwood workspace setting. Mounting another directory and selecting it with Docker's `--workdir` changes the project in exactly the same way as changing directories before running the native CLI. Platform images such as Terra use their platform's persistent home directory instead of imposing this generic mount convention.
+The command maps the container process to the current host user for bind-mount compatibility. Managed deployments should instead prepare project ownership for a reviewed non-root identity.
 
-The image defaults to non-root user `10001:10001`; the commands in this guide override that identity with the current host user for bind-mount compatibility. Installed application, Skill, and inference-runtime files remain root-owned. For managed deployments, either retain the default identity and prepare project ownership explicitly or use a reviewed non-root user mapping that can write the project. Do not make the application root writable merely to avoid a host-permission problem.
-
-The same project can use the terminal interface instead:
+## Start the Terminal
 
 ```bash
 docker run --rm -it \
@@ -67,28 +59,11 @@ docker run --rm -it \
   heartwood
 ```
 
-If Docker reports that `/workspace` is not writable, review the user-mapping guidance below before changing permissions.
+## Run a Local CPU Model
 
-## Use a Hosted or Existing Model Service
-
-Start `heartwood serve`, open **Settings**, and select a platform connection, OpenAI, Anthropic, or Custom API. A token entered in the browser remains only in the gateway process. Heartwood stores the selected model and non-secret binding in the project, not the token.
-
-The deployment must allow the selected catalog and completion routes. A container connection does not establish that a provider is suitable for protected data; the exact agreement, covered service, identity, retention, region, and network controls remain deployment decisions.
-
-For production automation, provide credentials through a platform secret facility, mounted credential file, or managed identity and configure the corresponding non-secret binding. Do not bake credentials into a Dockerfile, image layer, label, build argument, or project file.
-
-## Download and Run a Local Model
-
-List the current recommendations, then download one into the project's `.heartwood/models/` directory:
+Download a listed public model into the mounted project:
 
 ```bash
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  --env HOME=/tmp \
-  -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
-  heartwood models local
-
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
@@ -97,27 +72,7 @@ docker run --rm -it \
   heartwood models download qwen25-7b-instruct-q4_k_m
 ```
 
-You can instead inspect and prepare another Hugging Face model. The image chooses CPU llama.cpp for a supported single-file GGUF repository; the NVIDIA image chooses vLLM for a supported standard snapshot:
-
-```bash
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  --env HOME=/tmp \
-  -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
-  heartwood models inspect <owner/model>
-
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  --env HOME=/tmp \
-  -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
-  heartwood models download <owner/model>
-```
-
-The download requires network access and sufficient project storage. Heartwood reports the automatic runtime and resource plan, shows transfer progress, verifies the immutable source and content, and records the selection without copying the model into an image layer. Unsupported or ambiguous repositories fail before transfer and link to the [GitHub issue-template chooser](https://github.com/SchmiedmayerLab/heartwood/issues/new/choose) for a model-support request.
-
-Start the model and browser together:
+Then start the model and browser:
 
 ```bash
 docker run --rm -it \
@@ -129,45 +84,30 @@ docker run --rm -it \
   heartwood launch --web --host 0.0.0.0
 ```
 
-For a no-network terminal demonstration after the artifact is present:
+The portable image runs llama.cpp on CPU. A 7B model needs substantial disk and memory and may take several minutes per agent turn. Review the resource plan before downloading.
+
+## Run a Local NVIDIA Model
+
+Use the explicit GPU image, Docker's NVIDIA runtime, and a model listed for vLLM:
 
 ```bash
 docker run --rm -it \
+  --gpus all \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
-  --network none \
+  -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
-  heartwood launch --plain
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-gpu-nvidia \
+  heartwood launch --web --host 0.0.0.0
 ```
 
-The portable image runs llama.cpp on CPU. Attaching a GPU does not accelerate that path. To use the explicit AMD64 NVIDIA variant on a 16 GB GPU, download `qwen25-7b-instruct-awq-vllm`, retain the same project mount, and start the container with GPU access such as Docker's `--gpus all`. Larger GPUs can use `qwen25-7b-instruct-vllm`. The image supplies vLLM but still downloads model weights only after that explicit project-level command. Before startup, Heartwood initializes CUDA, selects a power-of-two context tier from 16K through 1M bounded by model capacity and conservative observed memory, and persists that effective budget for every interface. The reviewed Qwen recommendations currently have a 32K capacity; capacities above 128K are intended only for compatible long-context models on memory-rich systems.
+Download the compatible GPU model through the same image before launch. The host needs a supported NVIDIA driver and enough GPU memory for the model and selected context. Heartwood reports an error instead of silently falling back to CPU.
 
-## Runtime Security Controls
+## Preserve and Protect the Project
 
-The image supports a read-only application filesystem, dropped Linux capabilities, `no-new-privileges`, a bounded process limit, and writable project and temporary mounts. The exact controls depend on the deployment because Heartwood must still reach an authorized hosted model or expose the browser port when those features are selected.
+- Keep the complete host project directory, including its hidden Heartwood state.
+- Do not place provider tokens in image layers, build arguments, labels, or project files.
+- Bind the browser to loopback for local use; use an authenticated platform proxy for remote access.
+- Add deployment-specific read-only filesystems, dropped capabilities, process limits, and egress controls where required.
 
-Provider credentials are supplied directly to the in-process OpenHands model client after route authorization. Heartwood removes configured provider-key values from terminal subprocess environments. This is not a hard same-user process boundary; use an OpenHands remote workspace or platform-native isolation when tools must be unable to access the model identity.
-
-The NVIDIA variants retain the CUDA 11.8 runtime required by the validated Terra driver baseline. Their secured launcher removes the vLLM configuration path affected by [GHSA-8fr4-5q9j-m8gm](https://github.com/vllm-project/vllm/security/advisories/GHSA-8fr4-5q9j-m8gm) before loading a model, replaces vLLM's vulnerable exact xgrammar pin with its first patched compatible release, and overrides the legacy HTTP graph with an idna release containing the complete denial-of-service fix. Image construction and every launch verify the configuration regression, structured-output backend, and security overrides. Heartwood rejects the packaged raw vLLM executable; an explicitly supplied external vLLM executable must be version 0.11.1 or newer.
-
-## Terra Images
-
-The Terra image starts from the pinned Terra Jupyter Python base and preserves its `jupyter` user, home directory, notebook server, kernel setup, entrypoint, port `8000`, and Leonardo route behavior. Heartwood is installed under `/opt/heartwood`; a separate `Python 3 (Heartwood)` kernel is registered without replacing Terra's environment.
-
-Terra tags are intentionally AMD64 Docker schema-2 manifests. Leonardo image auto-detection rejects the multi-platform Open Container Initiative index used by the generic tag. Follow [Heartwood on Terra](terra-jupyter-demo.md) for project storage, notebook proxy, and synthetic validation.
-
-## Publication and Validation
-
-Pull requests build and validate the generic AMD64 and ARM64 images, Terra-compatible image, GPU dependency stages, no-weight contract, real OpenHands loopback flow, grouped action confirmation, local llama.cpp inference, project persistence, Jupyter routes, and notebook proxy behavior with synthetic data.
-
-Publication builds candidates by digest, tests the exact staged descriptors, creates immutable commit tags, and moves `edge` only after validation. Release promotion copies those verified descriptors to the Semantic Version tags. Generic architecture manifests include supply-chain attestations. Terra disables index-producing attestations to preserve Leonardo's required single-manifest format.
-
-See [Build a Platform-Specific Image](platform-images.md) for the extension contract and [Platform Support and Validation](platform-support.md) for the distinction between implementation, continuous-integration validation, live validation, and institutional approval.
-
-## Continue from Here
-
-- Use [Get Started](getting-started.md#step-3-choose-a-model) for the guided model and first-task workflow.
-- Use [Connect a Model](model-connections.md) for hosted, research-environment, local-service, and custom connections.
-- Use [Run a Model Locally](getting-started-offline.md) before downloading weights or selecting a GPU model.
-- Use [Troubleshooting](troubleshooting.md) for project permissions, model startup, browser access, or persistence problems.
+[Run a Model Locally](getting-started-offline.md) explains model inspection and offline use. [Deployment](deployment.md) covers operator responsibilities.

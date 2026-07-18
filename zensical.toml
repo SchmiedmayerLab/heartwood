@@ -16,45 +16,48 @@ copyright = "Copyright Stanford University and the Heartwood project authors"
 extra_css = ["stylesheets/extra.css"]
 nav = [
     { "Home" = "index.md" },
-    { "Start Here" = [
+    { "Get Started" = [
         { "Get Started" = "docs/getting-started.md" },
         { "Choose an Environment" = "docs/platforms.md" },
-        { "Work with the Agent" = "docs/using-heartwood.md" },
-        { "Troubleshooting" = "docs/troubleshooting.md" },
+        { "Install Heartwood" = "docs/installation.md" },
+        { "Projects and Persistent State" = "docs/project-state.md" },
     ] },
-    { "Interfaces" = [
-        { "Browser and Notebooks" = "docs/web-interface.md" },
+    { "Using Heartwood" = [
+        { "Work with Heartwood" = "docs/using-heartwood.md" },
+        { "Terminal, Browser, and Notebook" = "docs/web-interface.md" },
     ] },
     { "Models" = [
-        { "Connect a Model" = "docs/model-connections.md" },
+        { "Choose a Model" = "docs/model-connections.md" },
         { "Run a Model Locally" = "docs/getting-started-offline.md" },
     ] },
-    { "Platform Guides" = [
+    { "Environments" = [
         { "Containers" = "docs/container-images.md" },
-        { "Use Heartwood on Terra" = "docs/terra-jupyter-demo.md" },
-        { "Use Heartwood on Stanford Carina" = "docs/carina-cli.md" },
+        { "Terra" = "docs/terra-jupyter-demo.md" },
+        { "Stanford Carina" = "docs/carina-cli.md" },
+        { "Supported Environments" = "docs/platform-support.md" },
     ] },
-    { "Deployment" = [
+    { "For Operators" = [
         { "Deployment Overview" = "docs/deployment.md" },
-        { "Platform-Specific Images" = "docs/platform-images.md" },
-        { "Support and Validation" = "docs/platform-support.md" },
-        { "Release Heartwood" = "docs/releases.md" },
+        { "Security and Data Boundaries" = "design/05-security-compliance.md" },
     ] },
-    { "How Heartwood Works" = [
-        { "Product Scope" = "design/01-overview.md" },
+    { "Architecture" = [
+        { "Product and Scope" = "design/01-overview.md" },
         { "System Architecture" = "design/03-architecture.md" },
-        { "Security and Compliance" = "design/05-security-compliance.md" },
-        { "Skills and Extensions" = "design/04-skills.md" },
+        { "Deployment Architecture" = "design/02-platforms.md" },
+        { "Skills" = "design/04-skills.md" },
         { "Audit and Reproducibility" = "design/06-observability-audit.md" },
-        { "Platform Architecture" = "design/02-platforms.md" },
-        { "Testing and Evaluation" = "design/07-testing-eval.md" },
-        { "Engineering and Releases" = "design/08-development.md" },
+        { "Testing and Evidence" = "design/07-testing-eval.md" },
     ] },
     { "Reference" = [
-        { "Project Files and State" = "docs/project-state.md" },
+        { "Command Reference" = "docs/cli-reference.md" },
+        { "Troubleshooting" = "docs/troubleshooting.md" },
         { "Glossary and Acronyms" = "ACRONYMS.md" },
-        { "Documentation Guide" = "docs/README.md" },
+    ] },
+    { "Project" = [
         { "Contributing" = "CONTRIBUTING.md" },
+        { "Development and Release Engineering" = "design/08-development.md" },
+        { "Build a Platform Image" = "docs/platform-images.md" },
+        { "Release Heartwood" = "docs/releases.md" },
         { "License" = "LICENSE" },
     ] },
 ]

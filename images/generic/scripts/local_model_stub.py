@@ -30,6 +30,33 @@ def _tool_result_failed(messages: list[object]) -> bool:
     return '"is_error": true' in serialized or any(code != 0 for code in exit_codes)
 
 
+def _terminal_call(
+    call_id: str,
+    command: str,
+    summary: str,
+    *,
+    security_risk: str = "LOW",
+) -> dict[str, object]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "terminal",
+            "arguments": json.dumps(
+                {
+                    "command": command,
+                    "is_input": False,
+                    "reset": False,
+                    "security_risk": security_risk,
+                    "summary": summary,
+                    "timeout": 10,
+                },
+                sort_keys=True,
+            ),
+        },
+    }
+
+
 class LocalModelHandler(BaseHTTPRequestHandler):
     """Handle one content-free chat-completion request for the stub profile."""
 
@@ -133,13 +160,17 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             }
             finish_reason = "stop"
         else:
-            runtime_root = Path(os.environ.get("HEARTWOOD_RUNTIME_ROOT", Path.cwd())).resolve()
+            runtime_root = os.environ.get("HEARTWOOD_RUNTIME_ROOT") or None
+            tool_python = os.environ.get("HEARTWOOD_TOOL_PYTHON") or sys.executable
+            script_root = (
+                '"$HEARTWOOD_RUNTIME_ROOT"/skills/verified'
+                if runtime_root is not None
+                else shlex.quote(str(Path.cwd() / "skills" / "verified"))
+            )
             cohort_command = " ".join(
                 (
-                    shlex.quote(sys.executable),
-                    shlex.quote(
-                        str(runtime_root / "skills/verified/omop-cohort-summary/scripts/run.py")
-                    ),
+                    shlex.quote(tool_python),
+                    f"{script_root}/omop-cohort-summary/scripts/run.py",
                     "--data-root",
                     "input",
                     "--target-condition-concept-id 201826",
@@ -150,10 +181,8 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             )
             baseline_command = " ".join(
                 (
-                    shlex.quote(sys.executable),
-                    shlex.quote(
-                        str(runtime_root / "skills/verified/baseline-model/scripts/run.py")
-                    ),
+                    shlex.quote(tool_python),
+                    f"{script_root}/baseline-model/scripts/run.py",
                     "--data-root",
                     "input",
                     "--target-condition-concept-id 201826",
@@ -162,10 +191,8 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             )
             export_command = " ".join(
                 (
-                    shlex.quote(sys.executable),
-                    shlex.quote(
-                        str(runtime_root / "skills/verified/aggregate-export/scripts/run.py")
-                    ),
+                    shlex.quote(tool_python),
+                    f"{script_root}/aggregate-export/scripts/run.py",
                     "--summary cohort-summary.json",
                     "--aggregate-count-floor 20",
                     "--output aggregate-export.json",
@@ -195,37 +222,28 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "failure": "run the failing synthetic command",
                 "generic": "run a bounded offline smoke command",
             }
+            command = "curl https://example.invalid" if medium_risk else commands[task_kind]
+            summary = "run a medium-risk network command" if medium_risk else summaries[task_kind]
+            tool_calls = [
+                _terminal_call(
+                    call_ids[task_kind],
+                    command,
+                    summary,
+                    security_risk="MEDIUM" if medium_risk else "LOW",
+                )
+            ]
+            if task_kind == "cohort" and not medium_risk:
+                tool_calls.append(
+                    _terminal_call(
+                        "call-heartwood-reference-analysis-read",
+                        "cat cohort-summary.json",
+                        "read the generated aggregate cohort summary",
+                    )
+                )
             message = {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {
-                        "id": call_ids[task_kind],
-                        "type": "function",
-                        "function": {
-                            "name": "terminal",
-                            "arguments": json.dumps(
-                                {
-                                    "command": (
-                                        "curl https://example.invalid"
-                                        if medium_risk
-                                        else commands[task_kind]
-                                    ),
-                                    "is_input": False,
-                                    "reset": False,
-                                    "security_risk": "LOW",
-                                    "summary": (
-                                        "run a medium-risk network command"
-                                        if medium_risk
-                                        else summaries[task_kind]
-                                    ),
-                                    "timeout": 10,
-                                },
-                                sort_keys=True,
-                            ),
-                        },
-                    }
-                ],
+                "tool_calls": tool_calls,
             }
             finish_reason = "tool_calls"
         response = {

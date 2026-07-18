@@ -10,71 +10,69 @@ SPDX-License-Identifier: MIT
 
 # Deploy Heartwood
 
-This section is for platform operators, research-computing teams, and reviewers preparing Heartwood for a specific environment. Researchers starting an existing deployment should use [Get Started](getting-started.md) or [Choose Where to Run Heartwood](platforms.md).
+This guide is for platform operators and research-computing teams. A deployment must define the application artifact, durable project storage, authorized model routes, security boundary, and support owner.
 
-A complete deployment answers five questions in order: which artifact runs, where project state persists, how models and credentials are reached, which controls form the security boundary, and what evidence supports the deployment claim.
+## Select the Artifact
 
-```mermaid
-flowchart LR
-    ARTIFACT["Select artifact"] --> STORAGE["Provide durable project storage"]
-    STORAGE --> MODEL["Configure authorized model access"]
-    MODEL --> BOUNDARY["Establish isolation and policy"]
-    BOUNDARY --> EVIDENCE["Validate the exact deployment"]
-```
+| Environment | Artifact |
+|---|---|
+| General Docker host | Generic multi-platform image |
+| Compatible NVIDIA Docker host | Explicit AMD64 NVIDIA image |
+| Terra | Terra-derived portable or NVIDIA image |
+| Stanford Carina | Native release installer |
+| Another managed platform | No supported artifact; validate an integration before offering it |
 
-## Choose the Deployment Artifact
-
-| Environment | Artifact | Why |
-|---|---|---|
-| Workstation or general Linux host | Generic container image | Complete portable application with AMD64 and ARM64 support |
-| Compatible NVIDIA host | Explicit NVIDIA container image | Adds the packaged GPU inference environment without embedding model weights |
-| Terra | Terra-derived image | Preserves Terra's Jupyter, user, storage, entrypoint, and Leonardo routing contract |
-| Scheduler-managed host such as Carina | Native release bundle | Integrates with the host package manager, shared storage, and scheduler |
-| Another managed notebook platform | Validated platform-derived image | Preserves platform behavior while adding the shared Heartwood payload |
-
-Do not install Heartwood a second time inside a published Heartwood image. Do not use the generic image when the platform requires a specific base image or entrypoint.
+Do not replace a platform-required base image or entrypoint with the generic image. Do not install Heartwood again inside a published Heartwood image.
 
 ## Provide Durable Project Storage
 
-Heartwood keeps configuration, sessions, models, Skills, logs, caches, and audit data under `<project>/.heartwood/`. The deployment must make the whole project directory durable across process restarts, container replacement, platform pause, and scheduler transitions.
+The whole project directory must survive process restart, container replacement, platform pause, and scheduler transitions. Heartwood stores configuration, sessions, downloaded models, Skills, logs, caches, and audit data under `<project>/.heartwood/`.
 
-The deployment may mount model storage separately at `.heartwood/models/`, but the logical project layout must remain unchanged. On a fresh project, Heartwood recognizes an otherwise empty `.heartwood/` containing that regular model mount and initializes the remaining state around it without removing model files. Researchers should not need deployment-specific workspace, state, model, or cache arguments.
+The deployment may mount model storage separately at `.heartwood/models/`, but users should still start every interface from the project and should not need workspace or state arguments.
 
-A native installation root is deployment software, not project state. Place it beside rather than inside the project directory so one installation can serve multiple projects without entering an agent's working boundary. The native installer confines its temporary home, package-manager caches, configuration, and working files to `<installation-root>/.installer/`, removes that transient directory after success, and retains it only after an interrupted installation so the same command can resume on approved storage.
+A native installation root is application software, not project state. Place it outside the project boundary.
 
 ## Configure Model Access
 
-Choose one or more model paths appropriate for the environment:
+Offer one or more routes that the institution has reviewed:
 
-- a platform-managed research connection with a non-secret credential binding;
-- a hosted provider authorized by exact endpoint and deployment policy;
-- an existing OpenAI-compatible service;
-- a project-local model served by the portable CPU or explicit NVIDIA runtime.
+- a platform-managed model connection;
+- OpenAI or Anthropic through an authorized account;
+- an existing OpenAI-compatible service; or
+- a local model served by the packaged CPU or NVIDIA runtime.
 
-Images contain no model weights and no provider credentials. Supply credentials through a session-only prompt, platform secret, mounted credential file, or managed identity. Keep values out of image layers, labels, build arguments, project configuration, logs, and examples.
+Images contain no model weights or credentials. Use an interactive prompt, platform secret, mounted credential file, or managed identity. Keep values out of image layers, build arguments, project configuration, logs, and examples.
+
+Managed platform connections need explicit catalog and completion endpoints, credential bindings, and policy allowlists. Technical reachability is not a data-use approval.
 
 ## Establish the Security Boundary
 
-Heartwood authorizes model routes, configures OpenHands action confirmation, constrains its own file operations to the project, and produces a content-minimized audit export. The deployment remains responsible for operating-system isolation, user identity, storage permissions, network enforcement, provider contracts, data authorization, and export controls.
+Heartwood authorizes model routes, applies the selected OpenHands confirmation mode, confines its own file operations to the project, and produces a scrubbed audit export.
 
-OpenHands terminal tools run with the permissions of the Heartwood process. Use a supported OpenHands remote workspace or platform-native sandbox when agent tools must be isolated from model credentials or files outside the project.
+The deployment remains responsible for:
 
-## Validate Before Use
+- operating-system and process isolation;
+- user identity and storage permissions;
+- network and egress enforcement;
+- model-provider agreements and retention;
+- dataset access and export rules;
+- backup, monitoring, incident response, and support.
 
-Validation progresses through distinct claims:
+Agent terminal tools run with the Heartwood process's operating-system permissions. Environment-variable filtering reduces accidental credential exposure but is not hard process isolation.
 
-1. **Implemented:** the repository contains the integration and tests.
-2. **CI-validated:** automated checks exercise the artifact with synthetic data.
-3. **Live-validated:** an immutable artifact passes the synthetic workflow in the real platform control plane.
-4. **Institution-approved:** the deploying institution approves the exact artifact, model route, identity, data use, network controls, and evidence.
+## Validate the Deployment
 
-Do not infer a later claim from an earlier one. [Platform Support and Validation](platform-support.md) records the current evidence for each published path.
+Before offering Heartwood:
 
-## Continue with the Technical Guides
+1. verify the exact immutable artifact and architecture;
+2. start it under the intended user and persistent mount;
+3. confirm the supported terminal, browser, notebook, and proxy paths;
+4. validate every authorized model connection without exposing credentials;
+5. exercise allow and reject decisions with synthetic files;
+6. restart the process and confirm project and session recovery;
+7. inspect a scrubbed audit export; and
+8. document the support contact and approved data uses.
 
-- [Container Images](container-images.md) documents tags, mounts, local inference, runtime controls, and publication behavior.
-- [Build a Platform-Specific Image](platform-images.md) documents the declarative platform-image extension contract.
-- [Release Heartwood](releases.md) documents the protected release process.
-- [Platform Architecture](../design/02-platforms.md) explains why platform-specific artifacts exist.
-- [Security and Compliance](../design/05-security-compliance.md) defines the threat and governance boundaries.
-- [Troubleshooting](troubleshooting.md) provides the user-facing readiness and diagnostic flow that a deployment must support.
+Repository tests validate software contracts with synthetic fixtures. They do not provide institutional approval for a deployment.
+
+See [Supported Environments](platform-support.md), [Security and Data Boundaries](../design/05-security-compliance.md), and [Build a Platform-Specific Image](platform-images.md).
