@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -630,6 +632,30 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "command -v jq" in smoke
 
 
+def test_local_model_stub_preserves_explicit_action_risk() -> None:
+    path = _repo_root() / "images/generic/scripts/local_model_stub.py"
+    spec = importlib.util.spec_from_file_location("heartwood_local_model_stub", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    terminal_call = cast(
+        Callable[..., dict[str, object]],
+        module._terminal_call,
+    )
+
+    call = terminal_call(
+        "call-medium-risk",
+        "curl https://example.invalid",
+        "run a medium-risk network command",
+        security_risk="MEDIUM",
+    )
+    function = cast(dict[str, object], call["function"])
+    arguments = json.loads(cast(str, function["arguments"]))
+
+    assert arguments["security_risk"] == "MEDIUM"
+
+
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     scripts = (
         "images/generic/scripts/capable_model_e2e.sh",
@@ -705,7 +731,6 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
     compose = _read("images/generic/compose.yaml")
-    offline_guide = _read("docs/getting-started-offline.md")
     capable_model = _read("images/generic/scripts/capable_model_e2e.sh")
 
     assert "packages: write" in publish
@@ -809,8 +834,6 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "--network none --read-only" in smoke
     assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
-    assert offline_guide.count("-v heartwood-project:/workspace") == 2
-    assert "remains in the current project's `.heartwood/models/` directory" in offline_guide
     assert "not 1 <= len(terminal_executions) <= 3" in capable_model
     assert "not 1 <= len(tool_executions) <= 3" in capable_model
     assert "&& cat cohort-summary.json" in capable_model

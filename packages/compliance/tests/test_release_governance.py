@@ -164,7 +164,7 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
     documentation = {
         "container-images.md": f"heartwood:{version}",
         "carina-cli.md": f"releases/download/{version}/heartwood-installer",
-        "platform-support.md": f"Release `{version}`\n`{version}-terra`",
+        "platform-support.md": f"Release `{version}`",
         "releases.md": f"-f version={version}",
         "terra-jupyter-demo.md": f"heartwood:{version}-terra",
     }

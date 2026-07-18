@@ -21,7 +21,7 @@ uv sync --locked --all-extras --all-groups --python 3.12
 uv run heartwood --version
 ```
 
-Read [AGENTS.md](AGENTS.md) for repository rules and the [documentation index](docs/README.md) for the current operational and technical contracts. Run Heartwood from the repository root only when the repository itself should be the active project. Its local `.heartwood/` directory is private runtime state and must not be committed.
+Read [AGENTS.md](AGENTS.md) for repository rules and the [documentation home](documentation/index.md) for the current operational and technical contracts. Run Heartwood from the repository root only when the repository itself should be the active project. Its local `.heartwood/` directory is private runtime state and must not be committed.
 
 ## Make a Change
 

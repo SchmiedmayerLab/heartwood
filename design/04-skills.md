@@ -10,48 +10,49 @@ SPDX-License-Identifier: MIT
 
 # Skills and Extensions
 
-## Format: `SKILL.md`
+Heartwood uses the OpenHands `SKILL.md` format for reusable procedures. A Skill supplies instructions and optional scripts or resources to the agent context; it does not execute independently.
 
-Skills use the open **`SKILL.md`** standard (a directory with a `SKILL.md` file plus optional `scripts/`, `references/`, `assets/`), loaded natively by the agent core with progressive disclosure: name and description load at startup, the body loads on activation, and resources load on reference. The standard is portable across common agent and editor hosts, so a Skill authored for Heartwood remains valid elsewhere.
+## Bundled Skills
 
-## Heartwood Metadata
+The repository includes a small verified bundle for synthetic reference workflows. Verification means the source, metadata, scripts, fixture behavior, and OpenHands loading contract are tested in the repository. It does not mean clinical, statistical, security, license, or institutional certification.
 
-Skills carry a namespaced `heartwood.*` block in the `metadata` field, so they stay valid in any `SKILL.md` host while Heartwood enforces the load-bearing fields in code rather than through model self-report:
+Bundled Skills are read-only application content and are available to every project.
 
-```yaml
-metadata:
-  heartwood.dataset-types: "omop-cdm"
-  heartwood.platforms: "terra,dnanexus,generic"
-  heartwood.phi-risk: "reads-phi"        # none | reads-phi | writes-outside-boundary
-  heartwood.trust-tier: "verified"       # verified | community | experimental
-  heartwood.requires-network: "false"
-  heartwood.version: "1.3.0"
-  heartwood.sig: "sigstore:<bundle-ref>"
+## Metadata
+
+Heartwood adds metadata beside `SKILL.md` for:
+
+- stable Skill identity and version;
+- supported data and platform context;
+- requested tools and network posture;
+- expected input and output scope;
+- review tier and source provenance; and
+- compatible Heartwood version.
+
+The OpenHands loader remains authoritative for the Skill format. Heartwood metadata adds deployment trust and audit information without creating another prompt or tool protocol.
+
+## Project Extensions
+
+Users can inspect and install a mounted local source:
+
+```bash
+heartwood skills inspect /path/to/skill
+heartwood skills install /path/to/skill --approve
 ```
 
-## Auto-Detection
+Installation:
 
-Detection is a fast, auditable, offline-testable pipeline that reports evidence and confidence without executing code, changing installed Skills, or asserting an unsupported dataset identity. Repository-verified bundled Skills remain available to OpenHands; the current runtime does not narrow that bundle by platform or dataset.
+1. validates metadata and the native OpenHands loader;
+2. rejects symbolic links, path traversal, and unsupported files;
+3. displays identity, trust tier, declared tools, network posture, and requested permissions for review;
+4. copies into a temporary project-local directory;
+5. verifies the copied contents; and
+6. atomically publishes the extension and records the approval.
 
-1. **Platform** — env-var / file probes (`WORKSPACE_*`/`GOOGLE_PROJECT` → Terra; `DX_*` → DNAnexus; SB config → Seven Bridges; else generic). Pure code, no tokens.
-2. **Dataset** — the current integration fixture produces a deterministic synthetic OMOP fingerprint. A normal unconfigured runtime must report no detected dataset until a real data-source adapter supplies schema or format evidence such as OMOP table-name sets in `INFORMATION_SCHEMA`, VCF/BAM/DICOM magic bytes, or FHIR NDJSON structure.
-3. **Selection boundary** — the runtime currently makes the small checked-in bundle available to OpenHands without dataset filtering. A dataset-aware selector must emit a visible, logged proposal with a researcher correction path and cannot bypass installation-time approval for community or experimental Skills.
+Installed extensions live in `.heartwood/skills/` and apply only to that project.
 
-Detection uses no model call. OpenHands receives repository-verified Skill metadata at startup and loads full bodies on activation through native progressive disclosure. Dataset-aware narrowing is not implemented and cannot be represented as a current capability.
+## Trust Boundary
 
-## Current Packaging and Trust
+Heartwood loads the bundled directory and explicitly installed project extensions. It does not automatically load arbitrary workspace, user-home, marketplace, or remote Skills.
 
-- **Current bundle.** `skills/bundle.toml` selects checked-in `SKILL.md` directories. The repository gate validates metadata consistency, declared tools, network posture, entrypoint confinement, deterministic tests, and provenance-field shape before the image includes them. OpenHands loads the resulting read-only bundle without runtime network access.
-- **Reference analysis.** `omop-cohort-summary` defines an adult target-condition cohort and aggregate quality checks, `baseline-model` fits an age-only logistic baseline for recorded condition history and reports training diagnostics without holdout claims, and `aggregate-export` suppresses results below the configured count floor. These Skills are deterministic synthetic integration implementations; their outputs are not clinical, statistical, export, or institutional approval.
-- **Current trust meaning.** `verified` means repository-verified: the Skill is checked in, selected by the bundle, and accepted by local validation and tests. Existing `heartwood.sig` values are provenance placeholders; the repository does not perform cryptographic Sigstore verification. Repository verification is not clinical, statistical, security, or institutional approval.
-- **Extensions.** `community` and `experimental` Skills can be installed only from a mounted local directory after explicit review. Heartwood does not fetch external Skills or maintain a parallel registry at runtime.
-
-## Runtime Extension Installation
-
-`heartwood skills inspect <mounted-directory>` verifies and displays one extension before installation. `heartwood skills install <mounted-directory> --approve` records the installation-time decision, rejects unsupported tools, required network access, malformed metadata, path escapes, symbolic links, and bundled-name replacement, and atomically copies the source into deployment-persistent Skill storage. `heartwood skills remove <name>` removes only installed extensions. The web Skills panel exposes the same inspect, approve, install, list, and remove operations through the gateway.
-
-The gateway gives OpenHands both the read-only bundled directory and the persistent installed directory. OpenHands performs native progressive disclosure across both. Automatic user, public-marketplace, and project-workspace Skill loading is disabled so a workspace cannot bypass installation review or override a repository-verified Skill. Installed Skills do not create a second activation protocol and do not trigger repeated conversational approval.
-
-## External Distribution Boundary
-
-Remote Skill acquisition, release channels, cross-publication, cryptographic source verification, and revocation are unavailable. Sub-agent bundles remain outside the current single-agent contract.
+The project owner remains responsible for reviewing the source instructions and scripts before installation. The resumable session can retain Skill invocation details; the content-minimized audit projection retains the tool category without invocation arguments. A Skill cannot bypass model policy or OpenHands action confirmation.

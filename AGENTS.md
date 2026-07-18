@@ -22,15 +22,17 @@ When project direction changes, update the relevant design document first, then 
 
 | Need | Source |
 |---|---|
-| Product summary and documentation index | [README.md](README.md) |
-| Documentation roles and status vocabulary | [docs/README.md](docs/README.md) |
+| Repository summary | [README.md](README.md) |
+| Published documentation home and user journey | [documentation/index.md](documentation/index.md) |
 | First-use installation, project, model, and interface flow | [docs/getting-started.md](docs/getting-started.md) |
 | Workstation, Terra, Carina, and managed-environment selection | [docs/platforms.md](docs/platforms.md) |
+| Native installation | [docs/installation.md](docs/installation.md) |
 | Project boundary, persistence, and `.heartwood/` layout | [docs/project-state.md](docs/project-state.md) |
 | Local model selection, download, runtime, and offline workflow | [docs/getting-started-offline.md](docs/getting-started-offline.md) |
 | Deployment artifact, persistence, model-route, and validation responsibilities | [docs/deployment.md](docs/deployment.md) |
 | Current platform implementation and validation status | [docs/platform-support.md](docs/platform-support.md) |
 | Browser workflow, model setup, actions, audit, CLI parity, and notebook layout | [docs/web-interface.md](docs/web-interface.md) |
+| Command reference | [docs/cli-reference.md](docs/cli-reference.md) |
 | Readiness states, common setup and runtime failures, and safe diagnostic collection | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Project scope, users, and reference workflow | [design/01-overview.md](design/01-overview.md) |
 | Target platforms and deployment assumptions | [design/02-platforms.md](design/02-platforms.md) |
@@ -50,6 +52,7 @@ When project direction changes, update the relevant design document first, then 
 - Use Python for the core, session gateway, OpenHands adapter, model settings, adapters, CLI, schemas, policy layer, audit log, replay tests, synthetic fixtures, Docker entrypoint, notebook API, and widgets; use TypeScript on the Stanford Spezi web stack for the researcher web UI. See [design/08-development.md](design/08-development.md).
 - Keep one core repository through the controlled-data reference workflow unless a reviewed design change establishes independent ownership, release cadence, and versioned contracts.
 - Use synthetic fixtures only in source control, public examples, and CI. Live PHI must not be recorded into fixtures, replay traces, tests, or public logs.
+- Attribute Heartwood only to the Schmiedmayer Lab at Stanford University; do not add legacy organizational attributions.
 
 ## Working Rules
 
@@ -65,16 +68,17 @@ When project direction changes, update the relevant design document first, then 
 
 - Documentation should be standalone project material, not conversational or version-relative narrative.
 - Keep current operational instructions in `docs/`, durable rationale in the numbered `design/` documents, and planned implementation, acceptance criteria, dependencies, and delivery status in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
-- Use the status terms defined in [docs/README.md](docs/README.md); do not present implemented or CI-validated behavior as live-validated or institution-approved.
+- State current support conservatively; do not present implemented or CI-validated behavior as live-validated or institution-approved.
 - Avoid meta-commentary about how the document was created.
 - Keep Markdown prose and list items on single logical lines; do not hard-wrap sentences.
 - Preserve tables, headings, fenced code blocks, and intentional blank-line structure.
 - Do not use project documentation as a development log, backlog, or implementation discussion.
+- Keep run-specific timings, transcripts, failures, and validation evidence in CI artifacts or pull requests. Add only durable operational conclusions to user or design documentation.
 
 ## Acronyms
 
-This project spans several jargon-heavy domains, so all acronyms are tracked in [ACRONYMS.md](ACRONYMS.md).
+This project spans several jargon-heavy domains, so specialized terms used in public documentation are tracked in [ACRONYMS.md](ACRONYMS.md).
 
-Whenever a new acronym is introduced anywhere in the project, add it to [ACRONYMS.md](ACRONYMS.md) with its expansion and a one-line description, placed in the appropriate group.
+When a new acronym or specialized platform term is introduced in public documentation, add it to [ACRONYMS.md](ACRONYMS.md) when a first-time reader would need the definition.
 
 Keep glossary entries concise, keep groups roughly alphabetical, avoid duplicates, and update an existing entry if its meaning is clarified.

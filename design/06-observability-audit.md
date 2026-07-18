@@ -10,43 +10,37 @@ SPDX-License-Identifier: MIT
 
 # Audit and Reproducibility
 
-## Two Records
+Heartwood keeps two related records with different privacy and recovery purposes.
 
-OpenHands persists conversation state for execution and resume. Heartwood translates the relevant conversation events into its versioned session command/event stream and derives a separate hash-chained audit log. The OpenHands store is the execution substrate; the Heartwood log is the product and compliance record consumed by the CLI, notebook bridge, web UI, replay, and export.
+## Resumable Session
 
-Per session, Heartwood records:
+The project session preserves the researcher-facing conversation, action details, tool observations, lifecycle state, and OpenHands persistence required to continue work. Replay reconstructs the same ordered session after restart.
 
-- commands and actor identity;
-- platform and dataset detection proposals with evidence and confidence;
-- selected model profile identifier, which equals the connection identifier for catalog-selected models, endpoint, capability tier, action-confirmation mode, and route decision without credentials or the provider catalog;
-- researcher and agent message events in the in-boundary session stream;
-- proposed tool name and risk in both records, with the model-generated action summary and exact structured action arguments retained only in the in-boundary session stream for review and replay;
-- confirmation request and allow-once or reject result when the selected mode requires review;
-- tool completion status in both records, with detailed result presentation retained only in the in-boundary session stream;
-- Skill identity, trust, verification, and installation decision when applicable;
-- export request, policy decision, and attestation metadata, with filesystem destinations scrubbed from the exported audit record;
-- error occurrence and non-content classification fields, with detailed backend and validation reasons retained only in the private session stream for troubleshooting and replay.
+Session records remain inside the project boundary and may contain sensitive content. They are not an export format.
 
-The exported audit record omits message content, model-generated action summaries, structured action arguments, detailed error reasons, filesystem paths, row values, and sensitive tool payloads. These fields remain available only where required in the in-boundary operational state.
+## Audit Record
+
+The audit store derives content-minimized records from gateway events. It records:
+
+- platform and model-route decisions;
+- action mode and risk classification;
+- action-group membership;
+- allow or reject decisions;
+- tool names, status, and exit codes;
+- Skill installation decisions and the generic tool category used for session activation;
+- errors represented by bounded codes; and
+- export creation.
+
+It excludes raw prompts, model responses, command text, file contents, paths, row values, credentials, and detailed exceptions by default.
 
 ## Tamper Evidence
 
-Each Heartwood audit event includes the previous event hash. Editing, deleting, or reordering persisted records breaks chain verification. This detects local modification but does not prevent a user with filesystem control from deleting the entire record. Deployment-owned signing, checkpointing, and authoritative copies are separate controls required where institutional policy demands them.
+Audit entries form a local hash chain. This detects changes within the exported sequence; it does not provide an external timestamp, signature, immutable store, or independent custody.
 
-## Researcher Activity
+The deployment may copy reviewed exports into its evidence system. Heartwood does not silently transmit them.
 
-The CLI, notebook, and web UI render the same plain-language sequence from the shared event stream. The conversation remains primary; route policy, selected confirmation mode, Skill identity, action risk, confirmations, tool status, and export details are available without forcing a researcher to approve deployment policy or repository-verified Skill activation repeatedly. Auto-approved low-risk actions still produce proposed-action and execution events, so reduced prompting does not remove activity or audit visibility.
+## Reproducibility
 
-## Replay and Resume
+Session replay shows what the researcher and agent observed, including Skill invocation details retained by the session. Local-model provenance records the immutable model source and artifact identity. Installed Skill metadata records the available procedure version. These elements support investigation and repetition but do not prove that a model response or scientific result will be identical.
 
-Heartwood event replay reconstructs the complete researcher-facing transcript, activity state, exact proposed-action arguments, resolved decisions, and pending action set. Private replay retains detailed error reasons needed for diagnosis; the derived audit record replaces those reasons with a content-minimized marker. OpenHands conversation persistence restores execution state. The gateway adapter owns the mapping between these stores so clients never depend on OpenHands private persistence formats.
-
-## Field Feedback Boundary
-
-Heartwood does not export field-feedback trajectories. Raw prompts, model responses, tool payloads, row values, and credentials do not leave the deployment by default.
-
-Validated synthetic fixtures can become replay tests and Skill improvements. Improvements return as reviewed code or new images rather than hidden telemetry; external Skill releases remain subject to the distribution boundary in [Skills and Extensions](04-skills.md).
-
-## Anti-Goals
-
-Heartwood does not send silent telemetry, export raw protected data, treat local hash chaining as immutable storage, or require a network service to persist and inspect the audit trail.
+Only synthetic sessions may become public fixtures or repository replay tests.

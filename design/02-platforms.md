@@ -8,100 +8,58 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Platform Architecture
+# Deployment Architecture
 
-This document records platform rationale, common deployment assumptions, and interoperability boundaries. Current implementation and validation status is maintained separately in [Platform Support and Validation](../docs/platform-support.md).
+Heartwood supports three deployment shapes: a generic container or native process, a Terra-derived Jupyter image, and a native Stanford Carina installation.
 
-## Shared Deployment Model
+## Shared Application
 
-Research platforms generally split into a **control plane** for identity, data catalogs, and environment management and a **compute plane** where analysis code runs. The compute plane commonly has two lanes:
+Every artifact carries the same Python application, gateway contracts, OpenHands adapter, model settings, Skills, policy layer, session persistence, and audit implementation. Container and Terra artifacts also carry the built browser application; the published native archive does not. Platform integrations may change the base image, installation method, scheduler handoff, persistent path checks, model routes, or proxy path. They must not create another agent or state model.
 
-- **Interactive lane:** a persistent or resumable environment used through Jupyter, RStudio, or a shell. Heartwood runs here, using the platform's storage, identity, and authenticated routing.
-- **Batch lane:** a workflow engine such as Cromwell, a Common Workflow Language executor, or Nextflow runs an ephemeral task. Heartwood does not emit batch workflows; batch execution remains outside the interactive runtime.
+## Generic Deployment
 
-## Current Support Boundary
+The generic image is the portable workstation and server artifact. It uses `/workspace` as its default working directory and supports AMD64 and ARM64. The portable image includes CPU llama.cpp; the AMD64 NVIDIA variant adds vLLM.
 
-The generic image and Terra-derived image are implemented and CI-validated. The Terra path still requires live synthetic workspace validation before it can be called live-validated. Stanford Carina has an implemented native installation and launch path with the validation status recorded in [Platform Support and Validation](../docs/platform-support.md). All of Us, AnVIL, Seven Bridges, Velsera, DNAnexus, and UK Biobank Research Analysis Platform are architectural reference environments, not current support claims or delivery commitments.
+The generic native installer provides the terminal and Heartwood's Python notebook API but no Jupyter kernel, inference server, or built browser application. Notebook use requires an operator-configured Jupyter environment that exposes the installed API. The installation connects to hosted or existing services unless the operator installs a compatible local server.
 
-## Platform Characteristics
+## Terra
 
-The following characteristics explain the adapter and image boundaries. They do not assert that Heartwood is implemented, validated, or planned for every named environment.
+The Terra image extends a Terra Jupyter base and preserves its user, home, notebook service, entrypoint, kernel behavior, persistent disk, and Leonardo routing. Heartwood registers a separate kernel and serves its browser through Jupyter Server Proxy.
 
-### Terra / All of Us / AnVIL
-Runs on GCP and Azure. The **Leonardo** service provisions a Cloud Environment — a VM that boots a Docker container running Jupyter/RStudio, with `/home` on a detachable disk that survives autopause. Optional Dataproc/Spark (for Hail) and GPU. Custom interactive images **extend a Terra base image** (`terra-jupyter-python`, etc.); home is `/home/jupyter`; images come from GAR/GCR, GHCR, or public Docker Hub. Heartwood uses the directory containing the terminal command, notebook, or browser process as the project and stores `.heartwood/` there; `/home/jupyter` is persistent platform storage and an initial location, not a fixed Heartwood workspace. All of Us curated data (the CDR) is OMOP-derived in **BigQuery** inside the Researcher Workbench boundary. Runtime package access may be restricted by workspace networking, so deployment images must be self-contained. In-container web UIs are surfaced through **`jupyter-server-proxy`** under the Leonardo proxy, inheriting Terra identity.
+The project must be a dedicated directory below Terra's persistent `/home/jupyter` mount. Portable and NVIDIA image variants share the application contract. Terra publication uses the registry manifest format accepted by Leonardo.
 
-### Seven Bridges / Velsera (CGC, Cavatica, BioData Catalyst)
-CWL-first, primarily AWS. **Data Studio** launches JupyterLab/RStudio on a chosen instance — the interactive home here. Batch tools pair a Docker image with a CWL description that maps input/output ports. Images live in the Seven Bridges Image Registry (`images.sbgenomics.com`).
+## Stanford Carina
 
-### DNAnexus / UK Biobank RAP
-Runs on AWS; compute is apps/applets. Interactive jobs expose a browser UI via an HTTPS proxy; **JupyterLab runs inside a Docker container** (a session snapshot is a tarball of the container). Docker is loaded via `docker pull` or, offline, `docker save` → a DNAnexus Asset → `docker load`. **Network is off by default** unless a job explicitly requests it. A browser UI is exposed either through **`jupyter-server-proxy`** inside dxJupyterLab or by declaring **`httpsApp`** ports, which the worker's HTTPS proxy authenticates by project role. Institution-approved Bedrock endpoints can use VPC endpoints or PrivateLink; the deployment remains responsible for agreements, regional settings, logging, retention, and data-use authorization.
+The Carina installer places versioned Heartwood and vLLM environments on approved project storage. The project is a separate current directory. Local inference uses an explicit Slurm request, stages the verified model to job-local scratch, supervises vLLM, and releases compute when the interactive process exits.
 
-### Generic
-Any Linux/Jupyter VM. The generic adapter runs heartwood without platform lock-in and is the baseline for development and self-hosted TREs.
+The Stanford AI API Gateway is the built-in managed alternative to local inference. The terminal is the documented Carina interface.
 
 ## Model Placement
 
-When deployment policy blocks general egress, model access must remain inside an approved perimeter or use an explicitly authorized private route:
+Heartwood normalizes every selected model into one non-secret profile and one policy endpoint. The model may run:
 
-| Cloud | Example in-perimeter model path | Deployment controls required |
-|---|---|---|
-| GCP (Terra / All of Us) | Vertex AI | Applicable agreement, covered model/service, regional controls, VPC-SC or private connectivity where required, and endpoint allowlisting. |
-| Azure (Terra-Azure) | Azure OpenAI | Applicable agreement, covered deployment, regional and retention controls, VNet/private endpoint where required, and endpoint allowlisting. |
-| AWS (Seven Bridges / DNAnexus) | Amazon Bedrock | Applicable agreement, covered model/service, regional and retention controls, PrivateLink/VPC endpoint where required, and endpoint allowlisting. |
-| Any | Local Ollama, vLLM, SGLang, or llama.cpp | Verified model provenance, sufficient hardware, loopback/private binding, and platform egress controls. |
+- in the Heartwood process's environment through a packaged local server;
+- in an existing loopback OpenAI-compatible service;
+- behind an institution-managed endpoint; or
+- at a hosted provider authorized by deployment policy.
 
-OpenHands `LLM` and LiteLLM provide provider compatibility across these paths. Heartwood discovers models through built-in or platform-provided connections, materializes the selection as one non-secret model profile, and denies the turn unless the profile's declared normalized policy endpoint is allowlisted. Catalog discovery has its own exact endpoint allowlist. A configured custom base URL must share those endpoints' origin; provider-native routing without a custom base remains subject to authoritative platform network controls. No connection is itself a compliance claim.
-
-Local inference uses one OpenAI-compatible model-server contract rather than one runtime in every artifact. The portable generic and platform-derived images retain the pinned llama.cpp CPU runtime because it is small, works on AMD64 and ARM64, and does not require a vendor GPU stack. Explicit NVIDIA image variants may add a pinned vLLM runtime when throughput, concurrency, and GPU-native model formats justify the larger vendor-specific artifact. The portable images remain the default; GPU variants are no-weight, initially AMD64-only, and share the same Heartwood application payload and command contract. The gateway exposes one small central recommendation catalog and can inspect another Hugging Face `owner/model` to choose a compatible GGUF or standard snapshot for the available runtime. Generic deployments may alternatively compose the portable image with a digest-pinned upstream vLLM service. Terra requires a separately validated GPU-derived image because one custom environment image must preserve its Jupyter base, entrypoint, user, storage, and Leonardo contract while adding the GPU runtime. Heartwood owns runtime discovery, policy, readiness checks, resource guidance, and reproducible launch profiles; it does not fork either inference engine or maintain a second agent path.
-
-Stanford deployments may also expose the Stanford AI API Gateway as a platform-provided OpenAI-compatible research connection. The gateway configuration uses its exact model aliases, external Bearer-token reference, `GET /v1/models` catalog route, and `POST /v1/chat/completions` route through the existing connection and policy contracts. The gateway normalizes access to models from several upstream providers and supports streamed chat-completion deltas; Heartwood must therefore discover aliases rather than maintain the provider list captured in documentation. Stanford's current service documentation and GenAI Evaluation Matrix remain authoritative for data classifications, covered models, required agreements, and project review. Technical connectivity, a Stanford-hosted endpoint, or a gateway API key does not independently authorize protected health information or agent tool access.
+Model discovery and model use are separately authorized. A connection is not a compliance claim.
 
 ## Interface Routing
 
-Notebook-oriented platforms commonly expose an interactive container through an authenticated proxy. Heartwood reuses that route by serving the browser interface in the container rather than introducing new ingress or a separate Heartwood login.
+Local browser use binds to loopback. Terra reuses the authenticated Jupyter proxy instead of adding another login or public port. The web application uses relative API paths so the same built assets work under the proxy prefix.
 
-```mermaid
-flowchart LR
-    B["Researcher browser"]
-    subgraph CP["platform control plane (authenticated)"]
-        PROXY["Platform proxy<br/>Leonardo · Data Studio · httpsApp"]
-    end
-    subgraph VM["interactive container — inside the data boundary"]
-        direction TB
-        JSP["jupyter-server-proxy"]
-        UI["Researcher web UI (SPA)"]
-        GW["Session gateway"]
-        AS["OpenHands conversation<br/>tools · confirmation"]
-        JSP --> UI
-        UI --> GW
-        GW --> AS
-    end
-    B -->|identity inherited| PROXY
-    PROXY -->|sub-path · WS/SSE| JSP
-```
+The terminal remains available when browser routing is absent. The notebook bridge calls the same gateway services from the project process and does not introduce a second remote service.
 
-| Platform | Surfacing mechanism | Identity |
-|---|---|---|
-| Terra / All of Us / AnVIL | `jupyter-server-proxy` under the Leonardo proxy | Terra / Google |
-| Seven Bridges / Velsera | `jupyter-server-proxy` under Data Studio | Data Studio session |
-| DNAnexus / UK Biobank RAP | `jupyter-server-proxy` first; `httpsApp` ports as a platform-native upgrade | Worker HTTPS proxy, gated by project role |
-| Generic | `jupyter-server-proxy`, or a direct localhost port for development | Whatever fronts Jupyter |
+## Platform Adapter Boundary
 
-The web UI is built for sub-path serving (relative asset and API/WS bases), ships self-contained assets (no external CDN), uses WebSocket with a Server-Sent Events fallback, and rehydrates on reconnect by replaying the event log — so it survives autopause and proxy quirks. Identity is inherited from the platform proxy, and the session gateway is the only browser-facing application API.
+Platform adapters own:
 
-## Data-Use Policy
+- environment detection;
+- default route and action policy;
+- persistent-storage checks;
+- scheduler and local-scratch integration;
+- proxy URL construction; and
+- platform-specific readiness evidence.
 
-Technical reachability is not permission. Platform adapters and deployment policy must encode the current dataset rules rather than assuming that infrastructure access permits a model or export route:
-
-- **All of Us.** A deployment policy must be versioned and validated against the current [Policy Questions](https://support.researchallofus.org/hc/en-us/articles/34814131370388-Policy-Questions) and [Data and Statistics Dissemination Policy](https://support.researchallofus.org/hc/en-us/articles/22346276580372-Data-and-Statistics-Dissemination-Policy) before any support claim. The current repository contains no validated All of Us policy adapter.
-- **UK Biobank Research Analysis Platform.** A deployment policy must validate the platform's current output-review and small-number rules before any support claim; see [Guidance on Data Downloads and Exemptions](https://community.ukbiobank.ac.uk/hc/en-gb/articles/31972311370013-Guidance-on-Data-Downloads-and-Exemptions) and [Reporting Small Numbers in Research Outputs](https://community.ukbiobank.ac.uk/hc/en-gb/articles/24842092764061-Reporting-small-numbers-in-results-in-research-outputs-using-UK-Biobank-data). The current repository contains no validated UK Biobank Research Analysis Platform policy adapter.
-
-A conforming deployment keeps participant-level processing in boundary, uses platform network controls as the authoritative egress boundary, denies unallowlisted model routes in Heartwood, applies dataset-specific aggregate-export policy, and produces an egress attestation for review. The current repository demonstrates these application contracts with synthetic data; controlled-data enforcement and platform policy require separate live validation.
-
-## Batch Portability Boundary
-
-Heartwood does not emit batch pipelines. Portable batch execution belongs in a pinned image and established CWL, WDL, or Nextflow infrastructure, with Dockstore and GA4GH DRS, WES, TES, and TRS as interoperability boundaries.
-
-## Platform Image Rationale
-
-One no-weight image per platform variant is built from the base declared in the platform manifest; the Terra variant extends `terra-jupyter-python`. Dependencies, OpenHands, local runtime binaries, and repository-verified Skills are vendored and checked at build time, while model weights live on a mounted platform disk or behind a configured endpoint. OpenHands LocalWorkspace tools run inside the interactive container; deployments requiring stronger isolation must use a validated remote workspace or platform sandbox.
+The [platform-image contract](../docs/platform-images.md) defines how another integration must preserve the shared application.

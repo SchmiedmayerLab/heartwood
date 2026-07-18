@@ -8,74 +8,34 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Platform Support and Validation
+# Supported Environments
 
-This page records the evidence available for release `0.2.0-beta.3`. Start with [Choose Where to Run Heartwood](platforms.md) when deciding which setup to use; this page is the detailed reference for operators and reviewers.
+Release `0.2.0-beta.3` is pre-1.0 software. The table describes available artifacts and documented interfaces, not institutional authorization for controlled data.
 
-An implemented feature, automated test, or published artifact is not evidence of institutional approval. The [Documentation Guide](README.md#documentation-status) defines each status term, and [Platform Architecture](../design/02-platforms.md) explains the underlying deployment assumptions.
+| Environment | Artifact | Architecture | Interfaces | Local inference |
+|---|---|---|---|---|
+| Docker workstation or Linux host | Generic container | AMD64, ARM64 | Terminal, browser, notebook bridge | Packaged CPU llama.cpp |
+| NVIDIA Docker host | Generic GPU container | AMD64 | Terminal, browser, notebook bridge | Packaged NVIDIA vLLM |
+| Terra Jupyter | Terra-derived container | AMD64 | Terminal, authenticated browser proxy, notebook | CPU llama.cpp |
+| Terra Jupyter with GPU | Terra-derived GPU container | AMD64 | Terminal, authenticated browser proxy, notebook | NVIDIA vLLM |
+| Stanford Carina | Native installer | AMD64 Linux | Terminal | NVIDIA vLLM through Slurm |
+| Generic native Linux | Native installer | Platform-dependent | Terminal; Python notebook API when operator-integrated | External service required |
 
-!!! info "How to read this page"
+## Current Boundaries
 
-    Use **Current Status** for the release-level claim, then read the matching platform section for the exact automated and live evidence. The final institutional decision always belongs to the deploying organization.
+- Published images contain no model weights or provider credentials.
+- Where packaged, the terminal and browser provide the complete researcher conversation and setup workflow. The notebook bridge does not supervise local models or manage Skills.
+- Stanford Carina has no documented authenticated Heartwood browser route.
+- Terra browser access depends on the complete authenticated Jupyter proxy path.
+- One process may write a session at a time; concurrent independent writers are unsupported.
+- Bundled data detection and biomedical workflows use synthetic fixtures. Heartwood does not identify or authorize a real biomedical dataset.
+- Recommended local models are demonstration choices, not biomedical, production, benchmark, license, or institutional approval.
+- Another managed research platform requires its own reviewed image, storage, identity, proxy, and policy integration.
 
-## Current Status
+## Evidence and Approval
 
-| Platform path | Available artifact | Current claim | Required deployment work |
-|---|---|---|---|
-| Generic Linux or Jupyter environment | Generic release container for AMD64 and ARM64 | Implemented and CI-validated | Validate the host's identity, storage, network, model, and data controls |
-| Terra Jupyter | Terra-derived release image for AMD64 | Implemented and CI-validated | Publish and validate a corrected immutable GPU image, then obtain any required institutional review |
-| Stanford Carina | Native release installer and bundle | Implemented and CI-validated | Complete the synthetic workflow from the published release on Carina, then obtain any required institutional review |
+Automated checks protect the documented project, model, session, interface, container, Terra, and Carina contracts with synthetic data. They do not reproduce an institution's identity, data, network, or approval controls.
 
-No listed path is automatically approved for protected health information or another controlled dataset.
+Real-platform checks are useful deployment evidence but do not establish a business associate agreement, dataset authorization, clinical validity, or institutional approval. The deploying institution must review the exact artifact, model route, credentials, data use, network controls, and operational ownership.
 
-## Validation Evidence
-
-### Generic Container
-
-The published tags are `0.2.0-beta.3`, `edge`, and immutable `sha-<git-sha>` tags. Continuous integration builds native AMD64 and ARM64 artifacts and checks the no-weight image contract, centrally recommended and user-selected model planning, OpenHands loopback conversation, grouped action confirmation, mounted llama.cpp inference, one-project-volume recovery, browser workflow, audit export, CLI replay, responsive browser layout, and notebook-proxy behavior.
-
-These checks use synthetic fixtures. A self-hosted deployment must still validate the exact host, identity, storage, network, provider, model, and data-use controls.
-
-### Terra
-
-The published tags are `0.2.0-beta.3-terra`, `edge-terra`, and immutable `sha-<git-sha>-terra` tags. Terra tags use the single-platform Docker schema-2 format required by Leonardo.
-
-Continuous integration builds from the real pinned Terra base on `main` and checks the Jupyter environment, Heartwood kernel, inherited entrypoint, notebook route, Leonardo-compatible manifest, dedicated project placement under persistent storage, restart persistence, exact authenticated browser routing through Jupyter Server Proxy, portable and NVIDIA runtime metadata, deployment-aware model recommendations, the shared local-model contract, OpenHands synthetic workflow, mounted llama.cpp inference, secured vLLM configuration loading, CLI, notebook bridge, and audit export.
-
-Real Terra workspace validation remains required before a supported or institution-approved deployment claim. Synthetic Terra testing has exercised image acceptance, the inherited Jupyter service, the Heartwood kernel, current-directory project state on the retained disk, model download progress, NVIDIA T4 discovery, the authenticated proxy path, CLI and web gateway sessions, grouped allow and reject decisions, notebook execution, exact aggregate results, replay, and scrubbed audit export. These observations inform the documented workflow but do not confer live-validated status on the `0.2.0-beta.3` artifact. Unmodified GPU local-model startup is not yet live-validated. The release contract pins the tool-capable Qwen2.5 Instruct AWQ revision and verifies the Transformers compatibility boundary in a real vLLM architecture-inspection subprocess; it remains CI-validated until an immutable published artifact completes the live workflow. Heartwood detects Terra and applies exact allowlists for its built-in model routes, but it does not infer authorization for workspace data, BigQuery, a hosted model, or exports.
-
-### Stanford Carina
-
-Release `0.2.0-beta.3` provides the native installation bundle; no Carina-specific container image is published. Continuous integration verifies the installer layout, locked Heartwood and vLLM environments, Micromamba bootstrap, vLLM and PyTorch runtime imports, Slurm handoff, exact current-directory project preservation, runtime supervision, setup, session lifecycle, shutdown, scratch cleanup, recommended and user-selected model planning, verified download, GPU-partition discovery, explicit compute consent, grouped OpenHands confirmation, narrow-terminal interaction, Stanford AI API Gateway connection, and both permitted confirmation modes.
-
-Live synthetic platform testing covered the complete beta.3 workflow on one NVIDIA L40S GPU. Installation started in the selected project-storage directory without external path, cache, home, or version inputs; completed all seven stages in 893 seconds; removed transient installer state; kept both application environments on the persistent bootstrap interpreter; and bound Carina into the installed launcher. The pinned Qwen2.5 7B snapshot staged to job-local scratch, vLLM became ready in 124 seconds, and the in-allocation diagnostic passed its model, project, policy, scratch, scheduler, and GPU checks. The session invoked a repository-verified synthetic cohort Skill, displayed exact structured arguments before review and in replay, allowed one bounded terminal action, rejected file actions without creating them, excluded an invalid proposal, paused and resumed an idle session without another model call, verified a content-minimized hash-chained audit export while retaining private diagnostics, exited normally, and preserved 16 unrelated normal-QoS tasks. The tested 7B model also produced unacceptable free-form narrative drafts, so deterministic Skill results and successful tool execution are not evidence of research validity. Carina remains implemented and CI-validated until the immutable beta.3 artifact repeats the live workflow; the supported presentation is the terminal, and no authenticated browser-proxy route, controlled-data approval, or research-validity claim is made.
-
-## Shared Image Contract
-
-The generic and Terra images contain the same Heartwood application, OpenHands SDK adapter, model connections, local recommendations, Hugging Face planner, repository-verified Skills, CLI, notebook bridge, browser interface, policy layer, and audit implementation. The portable images also contain the supported CPU llama.cpp runtime. They contain no model weights or provider credentials.
-
-Explicit `edge-gpu-nvidia` and `edge-terra-gpu-nvidia` variants add a pinned CUDA 11.8 vLLM environment without changing the Heartwood application or embedding weights. The portable tags remain the default. GPU execution requires a driver compatible with CUDA 11.8, a suitable model, enough accelerator memory, and deployment-specific validation. The secured launcher verifies the model-configuration security backport, checks CUDA initialization, and reports the selected context together with conservative RAM and GPU-memory guidance before starting vLLM.
-
-Session and audit state remain under the current project's `.heartwood/` directory. Sequential CLI, notebook, and browser access to one project is implemented; concurrent independent processes writing the same session are not supported.
-
-The Terra image extends `us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6`. No support claim applies to another Terra base until its Jupyter, Leonardo, user, storage, proxy, and publication contracts have been validated independently.
-
-## Support Claim Boundary
-
-Repository continuous integration demonstrates software integration with synthetic fixtures. It does not establish a business associate agreement, Health Insurance Portability and Accountability Act eligibility, dataset authorization, private networking, identity binding, retention policy, clinical validity, or institutional approval.
-
-A path becomes live-validated only after an immutable published artifact completes the documented synthetic workflow in the real control plane, including startup, routing, persistent storage, pause and resume, model discovery, profile authorization, action confirmation, Skills, replay, and scrubbed audit export. The [Terra guide](terra-jupyter-demo.md) and [Carina guide](carina-cli.md) define the current platform workflows.
-
-## Authoritative Platform References
-
-- [Terra custom cloud environment tutorial](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks)
-- [Terra cloud environment customization](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app)
-- [Terra architecture and persistent-disk mounts](https://support.terra.bio/hc/en-us/articles/360058163311-Terra-architecture-where-your-data-and-tools-live)
-- [Accessing workspace-bucket data from a notebook](https://support.terra.bio/hc/en-us/articles/360046617372-Accessing-data-from-the-workspace-Bucket-in-a-notebook)
-- [DataBiosphere Terra Docker image catalog](https://github.com/DataBiosphere/terra-docker)
-
-## Continue from Here
-
-- Researchers should return to [Choose Where to Run Heartwood](platforms.md) and follow the matching platform guide.
-- Operators should use [Deploy Heartwood](deployment.md) to map the artifact, storage, model route, security boundary, and validation evidence.
-- Reviewers should continue with [Security and Compliance](../design/05-security-compliance.md) and [Testing and Evaluation](../design/07-testing-eval.md).
+Follow the [Terra](terra-jupyter-demo.md), [Carina](carina-cli.md), or [container](container-images.md) guide for the supported user path.

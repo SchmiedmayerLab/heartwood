@@ -8,37 +8,39 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Testing and Evaluation
+# Testing and Evidence
 
-Verification runs only on synthetic data in public development and continuous integration. Merge and release gates must not add latency or hidden model calls to a researcher’s live session.
+Heartwood separates software correctness, model interoperability, platform behavior, and institutional approval. Public development and continuous integration use synthetic data only.
 
-## Implemented Layers
+## Test Layers
 
-1. **Pure-code tests.** Detector evidence, endpoint normalization, deployment policy, credentials, action settings, upstream analyzer composition, audit chaining and scrubbing, adapters, model connections, provider catalogs, model settings, recommendation filtering, Hugging Face repository inspection, CPU and GPU plan selection, unsupported and ambiguous format errors, artifact integrity, and Skill metadata are tested without a model call or network access.
-2. **Deterministic replay.** Synthetic command and event fixtures verify session reconstruction, approval state, audit export, and the ordered cohort, baseline, and aggregate-export results. Prompt or response content from controlled-data sessions must never become a fixture.
-3. **Skill tests.** Every bundled Skill has metadata validation, root-confinement checks, deterministic script tests, and synthetic failure cases. The reference fixture contains 24 participants, both outcome classes, target and non-target condition records, and a count-floor boundary; tests require the cohort, training-only baseline, and aggregate export to agree. The `verified` tier means repository verification; it is not cryptographic, clinical, statistical, security, or institutional certification.
-4. **Interface contracts.** CLI, notebook, REST, WebSocket, Server-Sent Events, and web view models consume the same gateway services and session events. Cross-interface tests change project model and action settings through one surface, restart the gateway, and require the other surfaces to observe the persisted state; concurrent configuration tests require independent gateway stores to preserve both updates. Tests require the recommendation catalog, arbitrary Hugging Face plan, immutable provenance, automatic runtime choice, resource-bounded context tier, persisted effective profile budget, resource guidance, transfer status, verified selection, and unsupported-model issue path to agree across interfaces. Vitest, Testing Library, and Playwright cover first-run readiness, provider-source preparation, local-model preparation, compute gating, focus and settings refresh, grouped action review, and desktop and narrow Jupyter layouts. Packaged-gateway and Jupyter-proxy tests cover deployment transports. A real-browser system test uses the built interface, live gateway, OpenHands SDK, loopback model fixture, terminal tool, session-localized inputs, all three reference Skills, repeated action approval, successful and failed tool outcomes, persisted aggregate artifacts, audit download, and CLI replay of the browser-created session.
-5. **Runtime integration.** Native AMD64 and ARM64 jobs build the no-weight runtime. With runtime networking disabled, a deterministic OpenAI-compatible fixture exposes a model-list route, the shared catalog selects that model, and a real OpenHands conversation executes the target-condition cohort Skill before exercising allow, reject, low-risk automatic execution, medium-risk confirmation, audit export, native Skill load, REST, notebook, and proxy paths. Context tests require model metadata up to the guarded 1M ceiling, deterministic resource-bounded tiers, the 32K unknown-resource fallback, and the persisted runtime/input/output budget to remain aligned. Adapter tests require every OpenHands agent to receive the upstream summarizing condenser with a threshold derived from the active input budget and an event-count fallback when provider metadata is absent. Native release validation exercises the packaged generic and emulated Carina installer layouts without downloading a model or vLLM. A process-level Carina emulator drives the real CLI through GPU-partition discovery, a filtered Slurm handoff, snapshot verification and staging, runtime preflight, loopback readiness, noninteractive setup, doctor, session opening, process shutdown, and scratch cleanup; it verifies software contracts but is not evidence of real Slurm, NVIDIA, vLLM, or model behavior. A separate job downloads and verifies a tiny CI-only artifact on the runner, mounts it read-only, and performs a real llama.cpp load and completion with runtime networking disabled. CPU-hosted GPU-image verification imports the pinned runtime, checks its CUDA-enabled build metadata and reviewed security backports, exercises vLLM's tokenizer cache in a child process, and resolves a Qwen architecture through vLLM's isolated model-inspection subprocess. A live launch with an attached GPU separately initializes CUDA before model loading.
-6. **Capable-model acceptance.** A resource-qualified local or scheduled release run explicitly downloads a pinned recommended artifact outside the image, mounts it read-only, disables container networking, and requires a native OpenHands tool proposal, successful execution of the target-condition cohort Skill, exact aggregate counts and quality flags, model-route records, action-mode records, no error events, and audit export. This gate validates model-to-agent interoperability but does not replace deterministic approval tests or establish a biomedical, production, or benchmark-backed capability tier.
-7. **External-source preflight.** Pull requests and releases resolve every recommended Hugging Face repository at its immutable commit through the provider API. Unit tests validate catalog structure without network access; the pull-request preflight detects deleted repositories, mismatched revisions, and copy errors when the provider responds but reports a warning during a bounded provider outage. Release creation remains strict and fails unless every immutable source resolves.
+1. **Unit tests** cover project paths, detector evidence, model and endpoint normalization, policy, credentials, action settings, artifact verification, Skills, audit chaining, and scrubbing.
+2. **Contract tests** require the CLI, browser, notebook, REST, and incremental transports to consume the same gateway commands and events.
+3. **OpenHands conformance tests** cover messages, action groups, allow, reject, tool execution, errors, persistence, resume, Skills, and context condensation through public SDK behavior.
+4. **Browser system tests** run the built application against a live gateway and deterministic loopback model, execute synthetic Skills, persist outputs, export audit data, and replay the browser session through the CLI.
+5. **Container tests** build native architectures, exercise no-weight and offline contracts, load a small mounted llama.cpp artifact, and validate Terra Jupyter and proxy behavior.
+6. **Platform orchestration tests** exercise Terra image contracts and Carina installation, scheduler planning, scratch staging, runtime supervision, and cleanup with controlled infrastructure.
+7. **Capable-model checks** use an explicitly downloaded model to require a real OpenHands tool proposal and exact synthetic output.
 
-## Capability Tiers
+## Evidence Boundaries
 
-Model profiles carry `autonomous`, `supervised`, or `experimental` as deployment-reviewed capability metadata. `PolicyProfile.allowed_capability_tiers` determines which labels may submit a turn and defaults to `supervised`. Capability tiers do not select action behavior. `PolicyProfile.allowed_action_confirmation_modes` independently defaults to `always-confirm`; a deployment must explicitly permit `confirm-risky` before a researcher can enable low-risk automatic execution.
+- A passing unit or integration test shows the tested software contract.
+- A capable-model check shows interoperability for one pinned model, runtime, prompt, and hardware.
+- A platform test shows behavior for one immutable artifact in that control plane.
+- Institutional approval requires a separate review of data, identity, routes, agreements, operations, and evidence.
 
-No model has a repository-backed production capability claim yet. Assigning a tier beyond supervised requires pinned model and harness identities, reproducible coding and biomedical benchmarks, documented hardware, failure analysis, and independent review. Configuration alone is not benchmark evidence.
+No earlier layer implies a later one.
 
-## Required Evaluation Evidence
+## Required Regression Coverage
 
-- **OpenHands compatibility.** Every SDK or tools upgrade must pass real event translation, single- and multi-action set confirmation, whole-set rejection, automatic low-risk execution, restoration of every unresolved action, route reauthorization before an approved continuation, native Skill loading, terminal and file execution, and offline container integration. Tests must assert the upstream set-level contract unless OpenHands introduces and Heartwood adopts a supported selective-action API.
-- **Model capability.** A capability tier requires a pinned model and quantization, runtime and hardware identity, coding and biomedical benchmark results, policy-adherence results, and documented failure analysis. Endpoint validation or artifact integrity is not capability evidence.
-- **Action-risk behavior.** Managed use of `confirm-risky` requires representative benign, ambiguous, destructive, encoded, prompt-injected, and network-capable action cases with a documented acceptance threshold. The evaluation exercises OpenHands analyzers; it does not introduce a second runtime classifier.
-- **Credential exposure.** Every configured environment-referenced model key, including inactive-profile references, must be absent from OpenHands terminal subprocess values. Mounted credential files and managed identities require deployment tests proving the intended least-privilege and tool-access boundary; a shared interactive user is not evidence of isolation.
-- **Data-source detection.** A real adapter requires positive, negative, partial-schema, permission-denied, and ambiguous-data cases. It must report no match rather than reuse a synthetic fingerprint when evidence is absent.
-- **Biomedical Skills.** Controlled-data readiness requires deterministic tests, malformed-input and boundary cases, output-schema checks, independent clinical or statistical review, and deployment-specific export-policy verification.
-- **Platform support.** CI evidence verifies software contracts; live-platform evidence verifies an immutable published artifact in the actual control plane. Institution approval remains a separate deployment decision.
-- **Model-graded evaluation.** A model judge may be used only when its identity, prompts, retention, reproducibility, failure modes, and data boundary are approved and recorded.
+Changes to OpenHands integration must cover real typed events, grouped confirmation, rejection, restoration, tools, Skills, and offline container behavior.
 
-## Continuous Integration Sequence
+Changes to model setup must cover service discovery, route policy, secret handling, public Hugging Face inspection, artifact verification, resource planning, runtime readiness, and interface parity.
 
-Repository validation, Python lint and types, unit and reference-workflow replay tests, web unit and mocked-browser checks, the live browser-to-CLI reference analysis and its synthetic documentation screenshots, native no-weight image builds, OpenHands offline reference integration, mounted llama.cpp integration in the generic and Terra images, Terra Jupyter contracts, and publication manifest checks form the current sequence. BuildKit produces software bill of materials and provenance attestations for the generic published image. Cryptographic release and Skill signing are not implemented and must not be claimed.
+Changes to a platform must cover user identity, persistent storage, startup, proxy or terminal access, model routes, action decisions, restart, and scrubbed audit export.
+
+Changes to biomedical Skills must cover deterministic synthetic inputs, malformed and boundary cases, output schemas, and explicit limitations.
+
+## Scientific Claims
+
+Artifact integrity, successful tool execution, and an agent's narrative are not evidence of biomedical validity. Scientific evaluation requires a named dataset, method, benchmark, reviewer, acceptance threshold, and failure analysis outside the ordinary agent session.
