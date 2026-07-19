@@ -10,6 +10,8 @@ SPDX-License-Identifier: MIT
 
 # Work with Heartwood
 
+% TODO: Make this all a bit more extensive and approachable if we can; there might be elements in there that might be hard for someone with limited technical knoweldge to understand.
+
 Heartwood provides an interactive coding conversation around one project. The normal cycle is request, proposal, review, execution, and result.
 
 ## Start or Resume

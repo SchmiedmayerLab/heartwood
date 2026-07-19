@@ -18,9 +18,12 @@ Run `heartwood --help` or `heartwood <command> --help` for the authoritative opt
 |---|---|
 | `heartwood` | Configure the project when needed, then open the interactive terminal |
 | `heartwood doctor` | Inspect project, model, policy, and compute readiness |
+% TODO: I why is this only for local models? Coundn't this just be used to start heartwood? What's different to the main command and chat? I don't fully get this? 
 | `heartwood launch` | Start a downloaded model and open the terminal; request Carina compute when needed |
 | `heartwood serve` | Serve the browser for a hosted or already-running model |
+% TODO: So this is lauch and serve at the same; why do these three commands exist?
 | `heartwood launch --web` | Start a downloaded model and serve the browser |
+% TODO: Not fully get this, what does replay does?
 | `heartwood replay` | Replay the default session |
 | `heartwood audit export` | Export the scrubbed audit record |
 

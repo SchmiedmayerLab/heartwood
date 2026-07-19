@@ -8,6 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
+% TODO: I think that configuration can be a bit more technical, we should also highlight the constraints and configuration elements that heartwood can define here ...
+
 # Deploy Heartwood
 
 This guide is for platform operators and research-computing teams. A deployment must define the application artifact, durable project storage, authorized model routes, security boundary, and support owner.

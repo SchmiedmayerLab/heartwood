@@ -8,6 +8,8 @@ SPDX-License-Identifier: MIT
 
 -->
 
+% TODO: Not sure if this makes sense here, isn't that only applicable to a subset of elements in the documentation. And generally figure out what do do here ... we might also be able to merge that into other files that already touch on this and therefore might resuce the overall number of files?! It seems a bit redundant and mighe be part of some other elements to be conslidated?
+
 # Choose an Environment
 
 Heartwood should run in the approved computing environment that already contains the files it may use. The environment determines the installation, persistent storage, model routes, and available interfaces.

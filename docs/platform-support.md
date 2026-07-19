@@ -10,6 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Supported Environments
 
+% TODO: Make this more generic than one release; it should actually be a bit more extensive as it seems like this might be more technical in nature. Ensure that it doesn't duplicate information from other pages; make sure that its going a bit more detailed and maybe be a platform guide on how to add additional environments? Maybe also adjust the title and positionign accordingly ...
 Release `0.2.0-beta.3` is pre-1.0 software. The table describes available artifacts and documented interfaces, not institutional authorization for controlled data.
 
 | Environment | Artifact | Architecture | Interfaces | Local inference |

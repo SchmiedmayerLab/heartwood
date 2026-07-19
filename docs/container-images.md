@@ -29,6 +29,7 @@ Use the non-Terra images on ordinary Docker hosts. Terra images preserve Terra's
 
 Create or enter the host directory the agent may modify:
 
+% TODO: This needs more explaination, why do we create a directory here, why is this important? Be sure this is approachable and understandable, maybe link ot the project/file on disk layout documentation as well. It needs to be understandablwwhat we do here ...
 ```bash
 mkdir heartwood-demo
 cd heartwood-demo
@@ -44,10 +45,12 @@ docker run --rm -it \
 
 Open `http://127.0.0.1:8767/`. Complete model setup in the browser and keep the container running while you work.
 
+% TODO: What is `/workspace`? Make this approachable and explain a user what this is/what's relevant?
 The host directory is mounted at `/workspace`, the image's starting directory. Heartwood treats it as the project and keeps project state in that mount, so source files, settings, sessions, and downloaded models survive replacement containers.
 
 The command maps the container process to the current host user for bind-mount compatibility. Managed deployments should instead prepare project ownership for a reviewed non-root identity.
 
+% TODO: All the following elements need way more context and explain why and when one would use all these things?
 ## Start the Terminal
 
 ```bash
@@ -63,6 +66,8 @@ docker run --rm -it \
 
 Download a listed public model into the mounted project:
 
+% TODO: Why doesn't the model have a normal Huggingface format? Do we still have pre-configured models? I think we should remove that and highlight that a user can select the best model from huggingface they want to use.
+% TODO: We MUST crate a page that explains the best ways to select a local model, e.g., how to browse HuggingFace, what are good leaderboards there, how to map the parameter counts to local RAM/Graphics power as well as some of our recommendations. We can then link to that page everytime we reference a local model identiifer ...
 ```bash
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
@@ -103,6 +108,7 @@ docker run --rm -it \
 
 Download the compatible GPU model through the same image before launch. The host needs a supported NVIDIA driver and enough GPU memory for the model and selected context. Heartwood reports an error instead of silently falling back to CPU.
 
+% TODO: THis doesn't seem approachable to me ... what are concrete things that one should follow there? The lists here are strange ....
 ## Preserve and Protect the Project
 
 - Keep the complete host project directory, including its hidden Heartwood state.

@@ -10,6 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Projects and Persistent State
 
+% TODO: Mkae this even a bit more extensible, this might be good for someone to know about but in generaly well written and approachable, ensure that we add some more rlevant context where it might be helpful ...
 Heartwood works on one project at a time. The project is exactly the directory where the Heartwood command, browser server, or notebook process starts.
 
 ## Set the Project Boundary

@@ -8,8 +8,12 @@ SPDX-License-Identifier: MIT
 
 -->
 
+% TODO: I am not too sure if parts of this are the right focus for the initial documentation landing page.
+% TODO: Each sentence in the MD should be on a new line to enable easier git diffs; use this as a general rule for the complete repo.
+
 # Heartwood
 
+% TODO: This might not be the best summary; it should be clear what the goal is. The fact that it works in a proejct directory and saves version history is not the main feature? It should be more alligned with secure research with PHI data using local LLMs as well as secure PHI and compliant PHI systems. The key features will be automatically detected environments, skills, and research-alligned workflows. We will have to embed that in future versions way more; the core harness here is just the base infrastrcture for this ...
 Heartwood is a coding agent for biomedical research environments. It works inside one project directory, lets you review proposed actions, and keeps the same model settings and session history available from the terminal, browser, and notebook.
 
 ## Start with Your Environment
@@ -22,7 +26,10 @@ Heartwood is a coding agent for biomedical research environments. It works insid
 | Stanford Carina | [Use Heartwood on Stanford Carina](../docs/carina-cli.md) |
 | An existing institutional deployment | [Get Started](../docs/getting-started.md) |
 
-The container is the easiest local starting point because it includes the command, browser interface, coding-agent runtime, bundled Skills, and CPU inference software. It does not include model weights or credentials. Terra uses a dedicated image that preserves Jupyter, while Carina uses a native installation that can request scheduled GPU compute.
+The container is the easiest local starting point because it includes the command, browser interface, coding-agent runtime, bundled Skills, and CPU inference software. 
+% TODO: Is this really the first things we need to convey on the initial page? 
+It does not include model weights or credentials. 
+Terra uses a dedicated image that preserves Jupyter, while Carina uses a native installation that can request scheduled GPU compute.
 
 ## Learn the Core Workflow
 
@@ -52,9 +59,12 @@ Heartwood's guided setup can connect to:
 - a model on the current machine, including one downloaded from Hugging Face;
 - OpenAI;
 - Anthropic; or
+% TODO: Do we really have Stanford as a dedicated selection? Should be approachable byeond Stanford. Shouldn't this rather be generic and maybe we just use the Stanford interface as an example in the relevant parts of the documentation?
 - Stanford AI API Gateway.
 
-Generic deployments can also configure another compatible service. Interactive credentials remain in the terminal or browser process where they were entered.
+Generic deployments can also configure another compatible service. 
+% TODO: Is this relevant for this landing page, should we rather highlight the extensibility and functionality on this main page.
+Interactive credentials remain in the terminal or browser process where they were entered.
 
 [Choose a Model](../docs/model-connections.md) compares these options. [Run a Model Locally](../docs/getting-started-offline.md) explains downloads, CPU and GPU inference, resource checks, and offline use.
 
@@ -75,6 +85,8 @@ For deeper detail, read [Deployment](../docs/deployment.md), [Security and Data 
 | Which environments and interfaces are available? | [Supported Environments](../docs/platform-support.md) |
 | How does Heartwood work internally? | [Architecture Overview](../design/01-overview.md) |
 
+
+% TODO: Check that this renders well.
 
 ## Contributing
 

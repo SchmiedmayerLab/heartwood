@@ -10,6 +10,8 @@ SPDX-License-Identifier: MIT
 
 # Use Heartwood on Terra
 
+% TODO: Assume that someone doesn't know too much about Terra, provide way more detailed steps here and even provide some more context about what Terra is and what it does if we can ...
+% TOOD: Ensure that make it easier to find elements that someone might be looking for; generally explain the context and needs there as much as we can, always provide context why things are done and improve the layout and mechanisms to make this a bit more approachable ...
 Use the Terra image when the analysis already lives in a Terra workspace. It preserves Jupyter and adds the Heartwood terminal, browser application, notebook kernel, and optional local-model runtimes.
 
 Begin in a synthetic workspace with no protected health information. A working image does not authorize a dataset or model route.
@@ -40,10 +42,13 @@ In the Terra workspace:
 
 Keep the persistent disk when replacing the compute environment. Terra stores Jupyter persistent-disk files under `/home/jupyter`. Provider tokens held by a Heartwood process do not persist.
 
+% TOOD: How? Where?!
 When startup completes, confirm that normal Jupyter opens and that **Python 3 (Heartwood)** appears in the kernel list. Do not install another copy of Heartwood inside the image.
 
 ## 2. Create a Project
 
+% TODO: This is not great, it assumes that someone wants to play around with some demo data; we should make this an option (maybe a selector), but in general this guid should be how to use this productively on Terra, not a toy project.  ... maybe rather point to the Jupyter Notebook as an example that should be seperate from a guid how to use terra. Maybe that's a good way to differentiate that?
+% TODO: Where? How?
 Open the Terra terminal:
 
 ```bash
@@ -62,12 +67,14 @@ heartwood doctor
 
 The included CSV files are synthetic. Copy only the files that the agent should use into a real project directory.
 
+% TODO: Make this more of a "how to successfully setup everything and we demo you everything" type of getting tarted guide.
 ## 3. Choose an Interface and Connect a Model
 
 Choose the interface that will own the conversation. A hosted-provider token remains only in the process where it is entered; terminal, browser, and notebook processes do not share token values.
 
 ### Terminal
 
+% TODO: this is not really approachable ... and IMO it's actually not a bad way ot iteract with the system.
 The terminal is the baseline and the fallback when a browser proxy is unavailable. Run:
 
 ```bash
@@ -94,8 +101,10 @@ For a downloaded local model, stop the setup service and run:
 heartwood launch --web
 ```
 
+% TODO: This al eels a bit off, we should separate the notebook route into a seprate documentaiton under this; it's quite specific to Terra ...
 Both commands print the authenticated Terra route when the required runtime metadata is available. Otherwise open `terra-jupyter-demo.ipynb` with the **Python 3 (Heartwood)** kernel and run its first code cell to generate **Open Heartwood in a new tab**.
 
+% TODO: This is not helpful at all?! What is the path that terra users shoudl use; sholdn't that be displayed in the console and therefore be very apporachable? Not a good idea to show what might not be the right thing ...
 Do not use `http://127.0.0.1:8767/` from your computer and do not guess a shortened `/proxy/8767/` path. Terra requires its complete authenticated Jupyter proxy URL.
 
 ### Notebook

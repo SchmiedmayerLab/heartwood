@@ -10,8 +10,11 @@ SPDX-License-Identifier: MIT
 
 # Choose a Model
 
+% TODO: I think this guide is generally well written; it is lacking some deails and it might be good to make it a bit more appraochabe ...
+
 Heartwood needs a language model to interpret requests and propose coding actions. A connection describes where that model runs and how the current deployment may reach it.
 
+% TODO: Make this more approachable ...
 !!! note "Connection is not authorization"
 
     A successful connection proves technical reachability. The project owner must still verify the endpoint, account, retention settings, agreements, region, and permitted data classification.
@@ -64,6 +67,7 @@ Generic projects can explicitly authorize the selected Custom API origin. Manage
 
 ## Keep Credentials Out of Project State
 
+% TODO: I think we should actually save the tokens in a secure way if we can ... there most be some good ways to do that ...
 Heartwood does not store token values in project configuration, session events, logs, or audit exports.
 
 - Interactive tokens remain only in the terminal or browser-service process.

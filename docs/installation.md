@@ -8,6 +8,7 @@ SPDX-License-Identifier: MIT
 
 -->
 
+% TODO: We should link this page more to the docker container images page; maybe there should be an installation landing page that gives an overview and then has the two pages linked at the bottom or even a better way to format and approach this? This is a stange mixtrue of mentioning docker but never going into detail. The overall setup and differences should be clearer, there should also be better guidiance here and avoid any duplications with other pages ... 
 # Install Heartwood
 
 Use the container on a workstation when possible. Choose the native installer for a Linux environment that cannot run Docker or must integrate with host storage and scheduling.
@@ -26,6 +27,7 @@ Use the container on a workstation when possible. Choose the native installer fo
 
 [Run Heartwood in a Container](container-images.md) provides the normal workstation path.
 
+% TODO: Make this a bit more approachable and provide some more context where we can ...
 ## Install a Published Release on Linux
 
 The generic native installer requires `curl`, `tar`, `sha256sum`, [uv](https://docs.astral.sh/uv/), and at least 8 GiB of free space. Keep the installation outside every project the agent may modify.
