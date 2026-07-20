@@ -128,7 +128,6 @@ def import_local_model(
             imported_path = temporary / source.name
             shutil.copy2(source, imported_path, follow_symlinks=False)
         else:
-            imported_path = temporary
             _copy_directory(source, temporary)
         provenance = {
             "schema_version": "heartwood.local-model-import.v1",
