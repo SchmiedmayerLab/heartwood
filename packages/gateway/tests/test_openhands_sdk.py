@@ -79,7 +79,7 @@ def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:
         api_key_env="OPENAI_API_KEY",
     )
     local_profile = ModelProfile(
-        profile_id="local",
+        profile_id="heartwood",
         model="openai/local",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
@@ -110,7 +110,7 @@ def test_openhands_defaults_are_quiet_offline_and_allow_deployment_override(
 
 def test_openhands_bounds_interactive_model_retries() -> None:
     local = ModelProfile(
-        profile_id="local",
+        profile_id="heartwood",
         model="openai/local",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
@@ -142,7 +142,7 @@ def test_openhands_bounds_interactive_model_retries() -> None:
 
 def test_openhands_aligns_local_event_capacity_with_input_budget() -> None:
     local = ModelProfile(
-        profile_id="local",
+        profile_id="heartwood",
         model="openai/local",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
@@ -181,7 +181,7 @@ def test_openhands_context_condenser_uses_the_active_model_budget() -> None:
         return object()
 
     profile = ModelProfile(
-        profile_id="local",
+        profile_id="heartwood",
         model="openai/local",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
@@ -271,7 +271,7 @@ def test_openhands_backend_reports_selected_confirmation_mode(tmp_path: Path) ->
     backend = _backend(tmp_path, _FakeConversation(), mode="confirm-risky")
 
     assert backend.action_confirmation_mode == "confirm-risky"
-    assert backend.model_profile_id == "local"
+    assert backend.model_profile_id == "heartwood"
 
 
 def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> None:
@@ -410,7 +410,7 @@ def test_openhands_backend_does_not_create_conversation_until_first_agent_operat
 
     backend = OpenHandsSdkBackend(
         profile=ModelProfile(
-            profile_id="local",
+            profile_id="heartwood",
             model="openai/local-model",
             base_url="http://127.0.0.1:8765/v1",
             policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
@@ -701,7 +701,7 @@ def _backend(
 
     return OpenHandsSdkBackend(
         profile=ModelProfile(
-            profile_id="local",
+            profile_id="heartwood",
             model="openai/local-model",
             base_url="http://127.0.0.1:8765/v1",
             policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",

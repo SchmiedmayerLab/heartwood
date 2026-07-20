@@ -12,20 +12,20 @@ storage_policy = "Artifacts are downloaded only after an explicit CLI or web req
 
 [models.qwen25-7b-instruct-q4_k_m]
 status = "implemented"
-purpose = "Local model for synthetic tool-use demonstrations; not reviewed for biomedical use."
+purpose = "Heartwood-managed model for synthetic tool-use demonstrations; not reviewed for biomedical use."
 runtime_profile = "llama-cpp-cpu"
 artifact_manifest = "images/generic/local-runtime/models/qwen25-7b-instruct-q4_k_m.toml"
 quality_claim = false
-quality_claim_scope = "Demo-quality local agent output only; no biomedical, production, or benchmark claim."
+quality_claim_scope = "Demo-quality Heartwood-managed agent output only; no biomedical, production, or benchmark claim."
 production_use = false
 
 [models.qwen25-coder-7b-instruct-q4_k_m]
 status = "implemented"
-purpose = "Local coding model for synthetic demonstrations; not reviewed for biomedical use."
+purpose = "Heartwood-managed coding model for synthetic demonstrations; not reviewed for biomedical use."
 runtime_profile = "llama-cpp-cpu"
 artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
 quality_claim = false
-quality_claim_scope = "Demo-quality local coding output only; no biomedical, production, or benchmark claim."
+quality_claim_scope = "Demo-quality Heartwood-managed coding output only; no biomedical, production, or benchmark claim."
 production_use = false
 
 [models.llama-cpp-stories260k-ci]

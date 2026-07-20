@@ -30,7 +30,11 @@ from heartwood.adapters.registry import LocalRegistryAdapter, RegistryBoundaryEr
 def test_generic_platform_adapter_conforms() -> None:
     adapter = GenericPlatformAdapter()
     assert_platform_adapter_conforms(adapter)
+    capabilities = adapter.capabilities()
     policy = adapter.default_policy_profile()
+    assert capabilities.interfaces == ("terminal", "web", "notebook")
+    assert capabilities.browser_route == "direct"
+    assert capabilities.model_sources == ("heartwood", "openai", "anthropic", "custom")
     assert policy.credential_allowlist == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
     assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
     assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
@@ -41,12 +45,16 @@ def test_carina_platform_adapter_conforms_and_defaults_to_local_only() -> None:
     assert_platform_adapter_conforms(adapter)
     detection = adapter.detect({"HEARTWOOD_PLATFORM": "carina"})
     policy = adapter.default_policy_profile()
+    capabilities = adapter.capabilities()
     assert detection.adapter_id == "carina"
     assert detection.confidence > 0.0
     assert adapter.data_mounts() == ()
     assert policy.platform_id == "carina"
     assert policy.allowed_action_confirmation_modes == ("always-confirm", "confirm-risky")
     assert policy.credential_allowlist == ()
+    assert capabilities.interfaces == ("terminal",)
+    assert capabilities.scheduler == "slurm"
+    assert capabilities.model_sources == ("heartwood", "stanford-ai-api-gateway")
 
 
 def test_terra_platform_adapter_conforms_and_uses_provisioned_compute() -> None:
@@ -54,6 +62,7 @@ def test_terra_platform_adapter_conforms_and_uses_provisioned_compute() -> None:
     assert_platform_adapter_conforms(adapter)
     detection = adapter.detect({"GOOGLE_PROJECT": "synthetic-project"})
     policy = adapter.default_policy_profile()
+    capabilities = adapter.capabilities()
     assert detection.adapter_id == "terra"
     assert detection.confidence > 0.0
     assert policy.platform_id == "terra"
@@ -61,6 +70,8 @@ def test_terra_platform_adapter_conforms_and_uses_provisioned_compute() -> None:
     assert policy.credential_allowlist == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
     assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
     assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
+    assert capabilities.browser_route == "jupyter-proxy"
+    assert capabilities.model_sources == ("heartwood", "openai", "anthropic", "custom")
     assert select_platform_adapter({"GOOGLE_PROJECT": "synthetic-project"}).adapter_id == "terra"
 
 

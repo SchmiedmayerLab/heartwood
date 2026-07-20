@@ -326,7 +326,7 @@ jobs:
             --output /tmp/heartwood-model/stories260K.gguf
           test "$(stat --format=%s /tmp/heartwood-model/stories260K.gguf)" -eq 1185376
           echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  /tmp/heartwood-model/stories260K.gguf" | sha256sum --check -
-      - name: Prepare staged Terra managed local model
+      - name: Prepare staged Terra Heartwood-managed model
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
@@ -340,7 +340,7 @@ jobs:
           -c 'mkdir -p /home/jupyter/model-analysis &&
           cd /home/jupyter/model-analysis &&
           exec heartwood models download llama-cpp-stories260k-ci'
-      - name: Run staged Terra managed local-model launch smoke
+      - name: Run staged Terra Heartwood-managed model launch smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-

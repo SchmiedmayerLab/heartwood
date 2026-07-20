@@ -57,7 +57,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
     scratch.mkdir()
 
     carina_env = {"HEARTWOOD_PLATFORM": "carina"}
-    persist_deployment_profile(project, model_source="local", env=carina_env)
+    persist_deployment_profile(project, model_source="heartwood", env=carina_env)
     adapter = select_platform_adapter(carina_env)
     ProjectConfigStore(
         project,
@@ -210,11 +210,12 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
             "heartwood.cli",
             "--session-id",
             "carina-integration",
-            "launch",
+            "--plain",
+            "runtime",
+            "start",
             "--yes-request-allocation",
             "--startup-timeout",
             "10",
-            "--plain",
         ),
         check=False,
         capture_output=True,
@@ -227,7 +228,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "GPU partition: dev" in completed.stdout
-    assert "[1/6] Verify the selected local model" in completed.stdout
+    assert "[1/6] Verify the selected Heartwood-managed model" in completed.stdout
     assert "[6/6] Open session carina-integration" in completed.stdout
     assert "Readiness: ready" in completed.stdout
     assert "recovery-required" not in completed.stdout
@@ -247,7 +248,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
     assert runtime_environment["path"].startswith(str(runtime_root / "bootstrap" / "bin"))
     config = tomllib.loads(project.config_path.read_text(encoding="utf-8"))
     assert config["platform_id"] == "carina"
-    assert config["model_source"] == "local"
-    assert config["models"]["active_profile"] == "local"
+    assert config["model_source"] == "heartwood"
+    assert config["models"]["active_profile"] == "heartwood"
     assert (project.runtime_dir / "synthetic-vllm-stopped").is_file()
     assert not any(scratch.iterdir())

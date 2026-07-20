@@ -67,8 +67,8 @@ while time.time() < deadline:
 raise SystemExit("loopback model fixture did not become ready")
 PY
 
-heartwood models refresh local | tee -a "${transcript}"
-heartwood models connect local heartwood-local-runtime \
+heartwood models refresh heartwood | tee -a "${transcript}"
+heartwood models connect heartwood heartwood-managed-runtime \
   | tee -a "${transcript}"
 heartwood models add inactive-smoke \
   --model openai/heartwood-inactive-runtime \
@@ -76,26 +76,23 @@ heartwood models add inactive-smoke \
   --policy-endpoint http://127.0.0.1:8765/v1/chat/completions \
   --credential-kind environment \
   --api-key-env HEARTWOOD_UNUSED_MODEL_API_KEY | tee -a "${transcript}"
-heartwood models validate local | tee -a "${transcript}"
-heartwood --session-id "${session_id}" detect | tee -a "${transcript}"
-heartwood --session-id "${session_id}" chat \
+heartwood models validate heartwood | tee -a "${transcript}"
+heartwood --session-id "${session_id}" \
   --prompt "Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Use the localized OMOP reference tables, minimum age 18, aggregate count floor 20, and write cohort-summary.json. Report the cohort definition and quality checks without row-level values." \
   | tee -a "${transcript}"
-heartwood --session-id "${session_id}" allow \
-  call-heartwood-reference-analysis | tee -a "${transcript}"
-heartwood --session-id "${rejected_session_id}" chat \
+heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
+heartwood --session-id "${rejected_session_id}" \
   --prompt "Propose the bounded synthetic action for rejection." | tee -a "${transcript}"
-heartwood --session-id "${rejected_session_id}" reject \
-  call-heartwood-offline-smoke | tee -a "${transcript}"
+heartwood --session-id "${rejected_session_id}" reject | tee -a "${transcript}"
 heartwood actions set auto-approve-low-risk | tee -a "${transcript}"
-heartwood --session-id "${automatic_session_id}" chat \
+heartwood --session-id "${automatic_session_id}" \
   --prompt "Run the bounded low-risk automatic integration check." \
   | tee "${automatic_transcript}" | tee -a "${transcript}"
-heartwood --session-id "${risky_session_id}" chat \
+heartwood --session-id "${risky_session_id}" \
   --prompt "Propose the medium-risk network check for review." \
   | tee "${risky_transcript}" | tee -a "${transcript}"
 heartwood --session-id "${risky_session_id}" reject \
-  call-heartwood-offline-smoke | tee -a "${risky_transcript}" | tee -a "${transcript}"
+  | tee -a "${risky_transcript}" | tee -a "${transcript}"
 heartwood --session-id "${session_id}" audit export \
   --output "${audit_copy}" | tee -a "${transcript}"
 

@@ -27,7 +27,7 @@ def test_audit_log_appends_hash_chained_events(tmp_path: Path) -> None:
     )
     second = log.append(
         session_id="session-1",
-        event_type="detection.proposed",
+        event_type="session.paused",
         occurred_at="2026-01-01T00:00:01Z",
         payload={"platform": "generic"},
     )

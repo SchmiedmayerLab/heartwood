@@ -20,10 +20,6 @@ variable "TERRA_BASE_IMAGE" {
   default = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
 }
 
-variable "TERRA_BASE_PLATFORM" {
-  default = "linux/amd64"
-}
-
 variable "TERRA_CI_BASE_IMAGE" {
   default = "heartwood-terra-ci-base:local"
 }
@@ -49,7 +45,8 @@ target "runtime-gpu-nvidia" {
 
 target "runtime" {
   context = "."
-  dockerfile = "images/generic/Dockerfile"
+  dockerfile = "images/Dockerfile"
+  target = "runtime-image"
   platforms = ["linux/amd64", "linux/arm64"]
   pull = true
   cache-from = ["type=gha"]
@@ -66,17 +63,21 @@ target "runtime" {
 
 target "_terra_common" {
   context = "."
-  dockerfile = "images/platform/Dockerfile"
+  dockerfile = "images/Dockerfile"
+  target = "platform-runtime-image"
   pull = true
   platforms = ["linux/amd64"]
   args = {
     HEARTWOOD_PLATFORM = "terra"
-    HEARTWOOD_PLATFORM_BASE_IMAGE = "${TERRA_BASE_IMAGE}"
-    HEARTWOOD_PLATFORM_BASE_PLATFORM = "${TERRA_BASE_PLATFORM}"
-    HEARTWOOD_RUNTIME_ARCH = "amd64"
-    HEARTWOOD_PLATFORM_HOME = "/home/jupyter"
-    HEARTWOOD_PLATFORM_USER = "jupyter"
+    HEARTWOOD_BASE_IMAGE = "${TERRA_BASE_IMAGE}"
+    HEARTWOOD_BASE_PLATFORM = "linux/amd64"
+    HEARTWOOD_RUNTIME_HOME = "/home/jupyter"
+    HEARTWOOD_RUNTIME_USER = "jupyter"
+    HEARTWOOD_WORKDIR = "/home/jupyter"
+    HEARTWOOD_CREATE_USER = "false"
     HEARTWOOD_JUPYTER_PREFIX = "/opt/conda"
+    HEARTWOOD_INSTALL_JUPYTER_KERNEL = "true"
+    HEARTWOOD_UV_PYTHON_PREFERENCE = "managed"
   }
 }
 
@@ -113,8 +114,7 @@ target "terra-ci" {
   inherits = ["_terra_common"]
   pull = false
   args = {
-    HEARTWOOD_PLATFORM_BASE_IMAGE = "${TERRA_CI_BASE_IMAGE}"
-    HEARTWOOD_PLATFORM_BASE_PLATFORM = "linux/amd64"
+    HEARTWOOD_BASE_IMAGE = "${TERRA_CI_BASE_IMAGE}"
     HEARTWOOD_IMAGE_FLAVOR = "terra-ci"
   }
   tags = ["${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-ci"]

@@ -295,7 +295,7 @@ def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progre
             status = str(app.query_one("#status", Static).render())
             assert "Still working on your task" in status
             assert "elapsed" in status
-            assert "local models can take several minutes" not in status
+            assert "managed models can take several minutes" not in status
 
     asyncio.run(exercise())
 

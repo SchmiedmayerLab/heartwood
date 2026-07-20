@@ -4,13 +4,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Deterministic, propose-not-commit platform detection.
+"""Deterministic platform detection.
 
 The platform probe inspects environment markers only. It never calls a model,
-reads participant-level data, or loads a skill; it returns a *proposal* — the
-platform, a confidence, and the evidence behind it — for a human to confirm.
-
-See ``design/04-skills.md`` (auto-detection) and ``design/03-architecture.md``.
+reads participant-level data, or loads a skill. The result selects an adapter;
+it does not grant data or model authorization.
 """
 
 from __future__ import annotations

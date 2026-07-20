@@ -22,8 +22,6 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
   conversation: [],
   approvalControls: [],
   context: {
-    platform: null,
-    dataset: null,
     modelEndpoint: null,
     modelDecision: null,
     modelReason: null,
@@ -51,17 +49,20 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
           role: "agent",
         });
         break;
-      case "tool_call.proposed":
+      case "tool_call.proposed": {
+        const action = actionPresentation(event.payload);
         addConversationMessage(viewModel, event, {
-          content: `Proposed tool: ${stringValue(event.payload.tool_name)}`,
-          detail: actionDetail(event.payload),
+          content: `Proposed ${toolLabel(event.payload.tool_name)}`,
+          detail: action.summary,
           label: "Trace",
           role: "trace",
+          technicalDetail: action.arguments,
         });
         break;
+      }
       case "tool.execution.recorded":
         addConversationMessage(viewModel, event, {
-          content: `Ran ${stringValue(event.payload.tool_name) || "tool"}`,
+          content: `Ran ${toolLabel(event.payload.tool_name)}`,
           detail:
             stringValue(event.payload.summary) ||
             `Exit ${stringValue(event.payload.exit_code) || "unknown"}`,
@@ -85,13 +86,6 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
         viewModel.context.modelDecision =
           stringValue(decision.decision) || null;
         viewModel.context.modelReason = stringValue(decision.reason) || null;
-        break;
-      }
-      case "detection.proposed": {
-        const platform = recordValue(event.payload.platform);
-        const dataset = recordValue(event.payload.dataset);
-        viewModel.context.platform = stringValue(platform.adapter_id) || null;
-        viewModel.context.dataset = stringValue(dataset.dataset_type) || null;
         break;
       }
       case "error.recorded": {
@@ -130,6 +124,7 @@ const addConversationMessage = (
     id?: string;
     label: string;
     role: SessionViewModel["conversation"][number]["role"];
+    technicalDetail?: string | null;
   },
 ): void => {
   if (!message.content) return;
@@ -140,6 +135,7 @@ const addConversationMessage = (
     label: message.label,
     content: message.content,
     detail: message.detail ?? null,
+    technicalDetail: message.technicalDetail ?? null,
   });
 };
 
@@ -215,7 +211,6 @@ const activityLabel = (kind: EventKind): string =>
     "command.received": "Command received",
     "confirmation.requested": "Confirmation requested",
     "confirmation.resolved": "Confirmation resolved",
-    "detection.proposed": "Detection proposed",
     "error.recorded": "Error",
     "model_call.decision.recorded": "Model route decision",
     "policy.decision.recorded": "Policy decision",
@@ -259,14 +254,27 @@ export const stringValue = (value: JsonValue | undefined): string => {
   return "";
 };
 
-const actionDetail = (payload: Record<string, JsonValue>): string | null => {
+const actionPresentation = (
+  payload: Record<string, JsonValue>,
+): { arguments: string | null; summary: string | null } => {
   const summary = stringValue(payload.summary);
   const argumentsValue = recordValue(payload.arguments);
   const argumentsText =
     Object.keys(argumentsValue).length > 0 ?
       JSON.stringify(argumentsValue, null, 2)
     : "";
-  if (summary && argumentsText)
-    return `${summary}\nArguments:\n${argumentsText}`;
-  return summary || argumentsText || null;
+  return {
+    arguments: argumentsText || null,
+    summary: summary || null,
+  };
+};
+
+const toolLabel = (value: JsonValue | undefined): string => {
+  const toolName = stringValue(value);
+  return (
+    {
+      file_editor: "file change",
+      terminal: "terminal command",
+    }[toolName] ?? (toolName ? `${toolName} action` : "tool action")
+  );
 };

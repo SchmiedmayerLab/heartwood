@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -15,10 +17,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from heartwood.adapters import DataSourceAdapter, PlatformAdapter
-from heartwood.adapters.data import LocalFilesystemDataSourceAdapter
+from heartwood.adapters import PlatformAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter, select_platform_adapter
-from heartwood.audit import AuditLog
+from heartwood.audit import AuditIntegrityError, AuditLog
 from heartwood.core_adapter._facade import (
     AgentBackend,
     BackendEvent,
@@ -29,7 +30,7 @@ from heartwood.core_adapter._facade import (
 )
 from heartwood.core_adapter._state import FileSessionStore
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
+from heartwood.schemas import AuditEvent, ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
 
@@ -48,7 +49,6 @@ class SessionService:
         *,
         store: FileSessionStore,
         platform_adapter: PlatformAdapter,
-        data_source_adapter: DataSourceAdapter,
         backend: AgentBackend,
         policy_profile: PolicyProfile | None = None,
         env: Mapping[str, str] | None = None,
@@ -57,13 +57,12 @@ class SessionService:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
         self.platform_adapter = platform_adapter
-        self.data_source_adapter = data_source_adapter
         self.backend = backend
         self.policy_profile = policy_profile or platform_adapter.default_policy_profile()
         self.policy = ModelPolicyEngine(self.policy_profile)
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
-        self.backend.restore_pending(_pending_tool_calls(self.store.read_events()))
+        self.backend.restore_pending(_pending_tool_calls(self.replay_events()))
 
     @classmethod
     def synthetic_default(
@@ -79,7 +78,6 @@ class SessionService:
         return cls(
             store=FileSessionStore(workspace, session_id),
             platform_adapter=platform,
-            data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
             backend=DeterministicAgentBackend(),
             env={} if env is None else env,
             clock=(lambda: "2026-01-01T00:00:00Z") if clock is None else clock,
@@ -90,7 +88,7 @@ class SessionService:
         cls,
         workspace: Path,
         *,
-        session_id: str = "session-local",
+        session_id: str = "session-main",
         backend: AgentBackend | None = None,
         policy_profile: PolicyProfile | None = None,
         env: Mapping[str, str] | None = None,
@@ -103,7 +101,6 @@ class SessionService:
         return cls(
             store=store,
             platform_adapter=platform,
-            data_source_adapter=LocalFilesystemDataSourceAdapter.synthetic_omop(),
             backend=DeterministicAgentBackend() if backend is None else backend,
             policy_profile=policy_profile,
             env=active_env,
@@ -118,7 +115,6 @@ class SessionService:
                 f"store session {self.store.session_id}"
             )
             raise ValueError(msg)
-        self.store.append_command(command)
         command_kind = _kind_value(command.kind)
         events = [
             self._record_event(
@@ -130,9 +126,7 @@ class SessionService:
                 },
             )
         ]
-        if command_kind == CommandKind.DETECT.value:
-            events.append(self._handle_detect())
-        elif command_kind in {CommandKind.CHAT.value, CommandKind.RUN.value}:
+        if command_kind == CommandKind.CHAT.value:
             events.extend(self._handle_task(command))
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
             events.extend(self._handle_action_decision(command))
@@ -186,33 +180,16 @@ class SessionService:
         return SessionResult(events=tuple(events))
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
-        """Return persisted session events after verifying the audit chain."""
-        self.audit_log.verify()
-        return self.store.read_events()
+        """Return events after verifying their one-to-one audit correspondence."""
+        audit_events = self.audit_log.read()
+        self.audit_log.verify(audit_events)
+        events = self.store.read_events()
+        _verify_event_correspondence(audit_events, events)
+        return events
 
     def close(self) -> None:
         """Release backend resources."""
         self.backend.close()
-
-    def _handle_detect(self) -> SessionEvent:
-        platform = self.platform_adapter.detect(self.env)
-        dataset = self.data_source_adapter.fingerprint()
-        return self._record_event(
-            EventKind.DETECTION_PROPOSED,
-            {
-                "platform": {
-                    "adapter_id": platform.adapter_id,
-                    "confidence": platform.confidence,
-                    "evidence": list(platform.evidence),
-                },
-                "dataset": {
-                    "source_id": self.data_source_adapter.source_id,
-                    "dataset_type": dataset.dataset_type,
-                    "confidence": dataset.confidence,
-                    "evidence": list(dataset.evidence),
-                },
-            },
-        )
 
     def _handle_task(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
         prompt_value = command.payload.get("prompt")
@@ -451,21 +428,38 @@ class SessionService:
 
     def _record_event(self, kind: EventKind, payload: dict[str, JsonValue]) -> SessionEvent:
         sequence = self.store.next_sequence()
-        audit_event = self.audit_log.append(
-            session_id=self.store.session_id,
-            event_type=kind.value,
-            occurred_at=self.clock(),
-            payload=_audit_payload(kind, payload),
-        )
+        audit_events = self.audit_log.read()
+        self.audit_log.verify(audit_events)
+        if len(audit_events) != sequence:
+            raise AuditIntegrityError(
+                "session event and audit logs have different lengths before append"
+            )
+        previous_event_hash = audit_events[-1].event_hash if audit_events else None
+        occurred_at = self.clock()
         event = SessionEvent(
             event_id=f"{self.store.session_id}-event-{sequence:06d}",
             session_id=self.store.session_id,
             sequence=sequence,
             kind=kind,
-            occurred_at=audit_event.occurred_at,
+            occurred_at=occurred_at,
             payload=payload,
-            previous_event_hash=audit_event.previous_event_hash,
+            previous_event_hash=previous_event_hash,
         )
+        audit_payload = {
+            **_audit_payload(kind, payload),
+            "session_event_hash": _session_event_hash(event),
+        }
+        audit_event = self.audit_log.append(
+            session_id=self.store.session_id,
+            event_type=kind.value,
+            occurred_at=occurred_at,
+            payload=audit_payload,
+        )
+        if (
+            audit_event.sequence != event.sequence
+            or audit_event.previous_event_hash != previous_event_hash
+        ):
+            raise AuditIntegrityError("audit log changed during session event append")
         self.store.append_event(event)
         return event
 
@@ -475,6 +469,44 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
     if kind != EventKind.ERROR_RECORDED:
         return payload
     return {key: "[scrubbed]" if key == "reason" else value for key, value in payload.items()}
+
+
+def _session_event_hash(event: SessionEvent) -> str:
+    """Bind the complete replay event to its content-minimized audit record."""
+    canonical = json.dumps(
+        event.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _verify_event_correspondence(
+    audit_events: tuple[AuditEvent, ...],
+    events: tuple[SessionEvent, ...],
+) -> None:
+    """Reject tampered, truncated, or partially persisted replay streams."""
+    if len(audit_events) != len(events):
+        raise AuditIntegrityError("session event and audit logs have different lengths")
+    for expected_sequence, (audit_event, event) in enumerate(
+        zip(audit_events, events, strict=True)
+    ):
+        if event.sequence != expected_sequence:
+            raise AuditIntegrityError(f"session event sequence gap at {event.event_id}")
+        if (
+            audit_event.sequence != event.sequence
+            or audit_event.session_id != event.session_id
+            or audit_event.event_type != _kind_value(event.kind)
+            or audit_event.occurred_at != event.occurred_at
+            or audit_event.previous_event_hash != event.previous_event_hash
+        ):
+            raise AuditIntegrityError(
+                f"session event does not match audit record at {event.event_id}"
+            )
+        recorded_hash = audit_event.payload.get("session_event_hash")
+        if recorded_hash != _session_event_hash(event):
+            raise AuditIntegrityError(f"session event hash mismatch at {event.event_id}")
 
 
 def _require_tool_call(event: BackendEvent) -> ProposedToolCall:

@@ -10,7 +10,7 @@ moving_channel = "edge"
 default_platform = "terra"
 
 [defaults]
-dockerfile = "images/platform/Dockerfile"
+dockerfile = "images/Dockerfile"
 runtime_home = "/opt/heartwood"
 web_port = 8767
 web_host = "127.0.0.1"
@@ -65,16 +65,16 @@ live_workspace_validation_required = true
 
 [platforms.terra.required_env_contains]
 PATH = ["/opt/llama.cpp", "/opt/conda/bin", "/usr/local/bin"]
-LD_LIBRARY_PATH = ["/opt/llama.cpp"]
+LD_LIBRARY_PATH = ["/usr/local/cuda/lib64", "/usr/local/nvidia/lib64"]
 JUPYTER_PATH = ["/opt/conda/share/jupyter"]
 
 [[platforms.terra.required_evidence]]
 name = "local-ci-smoke"
-description = "Build the no-weight Terra CI image through the production platform Dockerfile; verify arbitrary current-directory project isolation and restart persistence; exercise the inherited Jupyter contract, Heartwood UI, readiness API, and both notebook proxy routes; and run the OpenHands loopback smoke with Docker networking disabled."
+description = "Build the no-weight Terra CI image through the shared production image assembly; verify arbitrary current-directory project isolation and restart persistence; exercise the inherited Jupyter contract, Heartwood UI, readiness API, and both notebook proxy routes; and run the OpenHands loopback smoke with Docker networking disabled."
 
 [[platforms.terra.required_evidence]]
 name = "main-publish-real-terra"
-description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run current-directory persistence, Jupyter, Leonardo, Heartwood proxy, OpenHands, and mounted local-inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."
+description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run current-directory persistence, Jupyter, Leonardo, Heartwood proxy, OpenHands, and mounted Heartwood-managed inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."
 
 [[platforms.terra.required_evidence]]
 name = "live-terra-smoke"

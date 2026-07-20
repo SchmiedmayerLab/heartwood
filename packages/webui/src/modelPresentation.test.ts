@@ -32,6 +32,28 @@ const settings: ModelSettings = {
   profiles: [],
   connections: [
     {
+      connection_id: "heartwood",
+      label: "Run with Heartwood",
+      protocol: "openai-compatible",
+      model_prefix: "openai/",
+      source: "built-in",
+      credential_kind: "none",
+      policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+      catalog_endpoint: "http://127.0.0.1:8765/v1/models",
+      base_url: "http://127.0.0.1:8765/v1",
+      api_key_env: null,
+      api_key_file: null,
+      api_version: null,
+      aws_region_name: null,
+      aws_profile_name: null,
+      description: "",
+      static_models: [],
+      group: "heartwood-managed",
+      group_label: "Run with Heartwood",
+      accepts_token: false,
+      credential_status: "configured",
+    },
+    {
       connection_id: "research",
       label: "Research Models",
       protocol: "static",
@@ -48,6 +70,8 @@ const settings: ModelSettings = {
       aws_profile_name: null,
       description: "",
       static_models: [],
+      group: "research-environment",
+      group_label: "Research environment",
       accepts_token: false,
       credential_status: "configured",
     },
@@ -65,6 +89,13 @@ const settings: ModelSettings = {
     },
   ],
   source_options: [],
+  credential_store: {
+    backends: ["process"],
+    default_backend: "process",
+    persistence_available: false,
+    persistence_description: "Current Heartwood process only",
+  },
+  credential_bindings: [],
 };
 
 describe("modelProfileLabel", () => {
@@ -72,6 +103,27 @@ describe("modelProfileLabel", () => {
     expect(
       modelProfileLabel(profile("research", "litellm_proxy/coder"), settings),
     ).toBe("Research Models · coder");
+  });
+
+  it("hides the managed runtime identifier from the primary label", () => {
+    expect(
+      modelProfileLabel(
+        profile("heartwood", "openai/heartwood-managed-runtime"),
+        settings,
+      ),
+    ).toBe("Run with Heartwood · Managed model");
+  });
+
+  it("uses the selected managed model's friendly name", () => {
+    expect(
+      modelProfileLabel(
+        {
+          ...profile("heartwood", "openai/heartwood-managed-model"),
+          description: "Qwen 2.5 Coder 7B",
+        },
+        settings,
+      ),
+    ).toBe("Run with Heartwood · Qwen 2.5 Coder 7B");
   });
 
   it("uses an advanced preset label when no connection exists", () => {

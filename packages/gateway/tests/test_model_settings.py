@@ -121,9 +121,9 @@ def test_profile_accepts_bracketed_ipv6_loopback_without_credentials() -> None:
 
 
 def test_settings_add_select_and_remove_profiles() -> None:
-    settings = ModelSettings().with_profile(_local_profile()).selecting("local")
+    settings = ModelSettings().with_profile(_local_profile()).selecting("heartwood")
 
-    removed = settings.without_profile("local")
+    removed = settings.without_profile("heartwood")
 
     assert removed.active_profile is None
     assert removed.profiles == ()
@@ -149,7 +149,7 @@ def test_presets_are_non_secret_openhands_configuration_hints() -> None:
         "anthropic",
         "azure-openai",
         "bedrock",
-        "local-openai-compatible",
+        "heartwood-managed",
         "openai",
         "vertex-ai",
     }
@@ -157,7 +157,7 @@ def test_presets_are_non_secret_openhands_configuration_hints() -> None:
 
 
 def test_provider_preset_builds_a_selected_profile_without_secret_values() -> None:
-    local = model_profile_from_preset("local-openai-compatible", "local-model")
+    local = model_profile_from_preset("heartwood-managed", "local-model")
     openai = model_profile_from_preset("openai", "openai/configured-model")
 
     assert local.model == "openai/local-model"
@@ -353,7 +353,7 @@ def test_profile_mapping_applies_defaults_and_rejects_empty_optional_values() ->
 
 def _local_profile() -> ModelProfile:
     return ModelProfile(
-        profile_id="local",
+        profile_id="heartwood",
         model="openai/local-model",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",

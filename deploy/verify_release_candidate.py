@@ -241,13 +241,12 @@ def source_version_errors(root: Path, version: str) -> list[str]:
         if found != expected_python_version
     )
     expected_references = {
-        "docs/container-images.md": [f"heartwood:{version}"],
-        "docs/carina-cli.md": [
+        "documentation/platforms/containers.md": [f"heartwood:{version}"],
+        "documentation/platforms/carina.md": [
             f"releases/download/{version}/heartwood-installer",
         ],
-        "docs/platform-support.md": [f"Release `{version}`"],
-        "docs/releases.md": [f"-f version={version}"],
-        "docs/terra-jupyter-demo.md": [f"heartwood:{version}-terra"],
+        "documentation/platforms/terra.md": [f"heartwood:{version}-terra"],
+        "documentation/models/offline.md": [f"heartwood:{version}"],
     }
     for relative_path, references in expected_references.items():
         content = (root / relative_path).read_text(encoding="utf-8")

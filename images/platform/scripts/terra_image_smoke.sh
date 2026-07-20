@@ -20,12 +20,13 @@ fi
 
 test -x "${runtime_root}/.venv/bin/heartwood"
 test -x "${runtime_root}/.venv/bin/python"
-test -f "${runtime_root}/docs/terra-jupyter-demo.ipynb"
-test -f "${runtime_root}/docs/terra-jupyter-demo.md"
+test -f "${runtime_root}/documentation/assets/examples/terra-heartwood.ipynb"
+test -f "${runtime_root}/documentation/platforms/terra.md"
 test -d "${runtime_root}/packages/webui/dist"
 test -f "${runtime_root}/images/generic/scripts/offline_stack_smoke.sh"
 test -f "${runtime_root}/packages/webui/dist/index.html"
-heartwood serve --help >/dev/null
+heartwood --help >/dev/null
+heartwood gateway serve --help >/dev/null
 test -d "${platform_home}"
 
 heartwood --version
@@ -42,8 +43,8 @@ checks = {item["check_id"]: item for item in readiness["checks"]}
 assert readiness["platform_id"] == "terra"
 assert Path(readiness["project_root"]).resolve() == expected
 assert checks["terra-project-storage"]["status"] == "pass"
-assert checks["terra-gpu-runtime"]["summary"] == (
-    "Portable Terra runtime selected; local models use CPU inference"
+assert checks["terra-gpu"]["summary"] == (
+    "Portable Terra runtime selected; Heartwood-managed models use CPU inference"
 )
 ' <<<"${readiness_json}"
 HEARTWOOD_EXPECTED_PROJECT="${project_root}" "${heartwood_python}" - <<'PY'
@@ -70,8 +71,9 @@ assert gateway.project_readiness()["project_root"] == str(expected)
 
 session = NotebookSession(session_id="terra-image-smoke")
 assert session.project.root == expected
-view = session.detect()
+view = session.pause()
 assert view.session_id == "terra-image-smoke"
+assert view.paused
 assert not has_authenticated_jupyter_proxy(env={})
 proxy_env = {"GOOGLE_PROJECT": "heartwood-ci", "CLUSTER_NAME": "terra-image-smoke"}
 assert has_authenticated_jupyter_proxy(env=proxy_env)

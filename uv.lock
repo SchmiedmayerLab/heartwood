@@ -1503,7 +1503,6 @@ name = "heartwood-cli"
 version = "0.2.0b3"
 source = { editable = "packages/cli" }
 dependencies = [
-    { name = "heartwood-compliance" },
     { name = "heartwood-gateway" },
     { name = "heartwood-session" },
     { name = "packaging" },
@@ -1513,7 +1512,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "heartwood-compliance", editable = "packages/compliance" },
     { name = "heartwood-gateway", editable = "packages/gateway" },
     { name = "heartwood-session", editable = "packages/session" },
     { name = "packaging", specifier = "==26.2" },
@@ -1587,6 +1585,7 @@ dependencies = [
     { name = "heartwood-session" },
     { name = "heartwood-skills" },
     { name = "huggingface-hub" },
+    { name = "keyring" },
     { name = "openai" },
     { name = "tomli-w" },
 ]
@@ -1608,6 +1607,7 @@ requires-dist = [
     { name = "heartwood-session", editable = "packages/session" },
     { name = "heartwood-skills", editable = "packages/skills" },
     { name = "huggingface-hub", specifier = "==1.23.0" },
+    { name = "keyring", specifier = "==25.7.0" },
     { name = "openai", specifier = "==2.45.0" },
     { name = "openhands-sdk", marker = "extra == 'agent'", specifier = "==1.36.0" },
     { name = "openhands-tools", marker = "extra == 'agent'", specifier = "==1.36.0" },

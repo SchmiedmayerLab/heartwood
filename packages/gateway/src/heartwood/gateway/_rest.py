@@ -17,7 +17,9 @@ from urllib.parse import parse_qs, urlsplit
 from pydantic import ValidationError
 
 from heartwood.gateway._action_settings import ActionSettingsError
+from heartwood.gateway._credentials import CredentialStoreError
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._local_model_contract import DEFAULT_LOCAL_CONTEXT_WINDOW
 from heartwood.gateway._local_models import ModelRepositoryError
 from heartwood.gateway._model_artifacts import ModelArtifactError
 from heartwood.gateway._model_catalog import ModelCatalogError
@@ -28,6 +30,7 @@ from heartwood.gateway._model_settings import (
 from heartwood.gateway._project_config import ProjectConfigError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
+from heartwood.gateway._startup import InterfaceKind
 from heartwood.schemas import JsonValue
 from heartwood.session import SessionCommand, validate_session_id
 
@@ -63,12 +66,39 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(self.gateway.sessions()))
         if parts == ("sessions",) and request.method == "POST":
             return self._handle_session_creation(body=request.body)
+        if parts == ("sessions", "default") and request.method == "POST":
+            return RestResponse(status_code=200, body=_json_object(self.gateway.default_session()))
         if parts == ("project", "readiness") and request.method == "GET":
             try:
                 readiness = self.gateway.project_readiness()
             except ProjectConfigError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(readiness))
+        if parts == ("project", "capabilities") and request.method == "GET":
+            return RestResponse(
+                status_code=200,
+                body=_json_object(self.gateway.platform_capabilities()),
+            )
+        if parts == ("project", "startup") and request.method == "GET":
+            query = parse_qs(parsed.query)
+            interface = query.get("interface", ["web"])[0]
+            if interface not in {"terminal", "web", "notebook"}:
+                return _error(422, "interface must be terminal, web, or notebook")
+            try:
+                port = _optional_int(query.get("port", [None])[0]) or 8767
+                startup = self.gateway.startup_plan(
+                    interface=cast(InterfaceKind, interface),
+                    port=port,
+                )
+            except (ProjectConfigError, ValueError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(startup))
+        if parts == ("project", "initialize") and request.method == "POST":
+            try:
+                startup = self.gateway.initialize_project()
+            except (ProjectConfigError, OSError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(startup))
         if len(parts) == 2 and parts[0] == "sessions" and request.method == "GET":
             try:
                 session_id = validate_session_id(parts[1])
@@ -97,7 +127,23 @@ class RestGateway:
         if parts == ("settings", "models") and request.method == "GET":
             try:
                 settings = self.gateway.model_settings()
-            except ModelSettingsError as error:
+            except (CredentialStoreError, ModelSettingsError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(settings))
+        if parts == ("settings", "credentials") and request.method == "GET":
+            try:
+                settings = self.gateway.credential_settings()
+            except CredentialStoreError as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(settings))
+        if (
+            len(parts) == 3
+            and parts[:2] == ("settings", "credentials")
+            and request.method == "DELETE"
+        ):
+            try:
+                settings = self.gateway.forget_credential(parts[2])
+            except (CredentialStoreError, ModelCatalogError) as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(settings))
         if parts == ("settings", "skills") and request.method == "GET":
@@ -132,7 +178,7 @@ class RestGateway:
             if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
                 return _error(422, "model_id must be a string")
             if set(payload) != {"model_id"}:
-                return _error(422, "local model download contains unsupported fields")
+                return _error(422, "Heartwood-managed model download contains unsupported fields")
             try:
                 download = self.gateway.download_local_model(payload["model_id"])
             except (ModelArtifactError, ModelRepositoryError) as error:
@@ -140,11 +186,13 @@ class RestGateway:
             return RestResponse(status_code=202, body=_json_object(download))
         if parts == ("settings", "models", "downloads", "custom") and request.method == "POST":
             return self._handle_custom_model_download(body=request.body)
+        if parts == ("settings", "models", "imports") and request.method == "POST":
+            return self._handle_local_model_import(body=request.body)
         if parts == ("settings", "models", "validation") and request.method == "GET":
             profile_id = parse_qs(parsed.query).get("profile_id", [None])[0]
             try:
                 validation = self.gateway.validate_model_profile(profile_id)
-            except ModelSettingsError as error:
+            except (CredentialStoreError, ModelSettingsError) as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(validation))
         if parts == ("settings", "models", "profiles") and request.method == "POST":
@@ -306,6 +354,35 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=202, body=_json_object(download))
 
+    def _handle_local_model_import(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        required = {"license", "path", "repository", "revision"}
+        allowed = {*required, "context_window"}
+        if not isinstance(payload, dict) or set(payload) - allowed or not required <= set(payload):
+            return _error(
+                422,
+                "model import requires path, repository, revision, and license",
+            )
+        if any(not isinstance(payload[field], str) for field in required):
+            return _error(422, "model import text fields must be strings")
+        context_window = payload.get("context_window", DEFAULT_LOCAL_CONTEXT_WINDOW)
+        if not isinstance(context_window, int) or isinstance(context_window, bool):
+            return _error(422, "context_window must be an integer")
+        try:
+            imported = self.gateway.import_local_model(
+                Path(payload["path"]),
+                source_repository=payload["repository"],
+                source_revision=payload["revision"],
+                license_posture=payload["license"],
+                context_window=context_window,
+            )
+        except (ModelRepositoryError, ProjectConfigError, OSError) as error:
+            return _error(422, error)
+        return RestResponse(status_code=201, body=_json_object(imported))
+
     def _handle_model_source(self, *, body: str) -> RestResponse:
         try:
             payload = json.loads(body)
@@ -328,7 +405,7 @@ class RestGateway:
             return _error(400, "request body must be valid JSON")
         if not isinstance(payload, dict):
             return _error(422, "request body must be an object")
-        allowed = {"base_url", "connection_id", "manual", "model_id", "token"}
+        allowed = {"base_url", "connection_id", "manual", "model_id", "remember", "token"}
         if set(payload) - allowed:
             return _error(422, "model connection contains unsupported fields")
         connection_id = payload.get("connection_id")
@@ -336,6 +413,7 @@ class RestGateway:
         token = payload.get("token")
         base_url = payload.get("base_url")
         manual = payload.get("manual", False)
+        remember = payload.get("remember", False)
         if not isinstance(connection_id, str) or not isinstance(model_id, str):
             return _error(422, "connection_id and model_id must be strings")
         if token is not None and not isinstance(token, str):
@@ -344,6 +422,8 @@ class RestGateway:
             return _error(422, "base_url must be a string when provided")
         if not isinstance(manual, bool):
             return _error(422, "manual must be a boolean")
+        if not isinstance(remember, bool):
+            return _error(422, "remember must be a boolean")
         try:
             settings = self.gateway.connect_model(
                 connection_id,
@@ -351,8 +431,9 @@ class RestGateway:
                 token=token,
                 base_url=base_url,
                 manual=manual,
+                remember=remember,
             )
-        except (ModelCatalogError, ModelSettingsError) as error:
+        except (CredentialStoreError, ModelCatalogError, ModelSettingsError) as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(settings))
 
@@ -363,13 +444,14 @@ class RestGateway:
             return _error(400, "request body must be valid JSON")
         if not isinstance(payload, dict):
             return _error(422, "request body must be an object")
-        allowed = {"base_url", "connection_id", "refresh", "token"}
+        allowed = {"base_url", "connection_id", "refresh", "remember", "token"}
         if set(payload) - allowed:
             return _error(422, "model catalog request contains unsupported fields")
         connection_id = payload.get("connection_id")
         token = payload.get("token")
         base_url = payload.get("base_url")
         refresh = payload.get("refresh", False)
+        remember = payload.get("remember", False)
         if not isinstance(connection_id, str):
             return _error(422, "connection_id must be a string")
         if token is not None and not isinstance(token, str):
@@ -378,14 +460,17 @@ class RestGateway:
             return _error(422, "base_url must be a string when provided")
         if not isinstance(refresh, bool):
             return _error(422, "refresh must be a boolean")
+        if not isinstance(remember, bool):
+            return _error(422, "remember must be a boolean")
         try:
             catalog = self.gateway.discover_models(
                 connection_id,
                 token=token,
                 base_url=base_url,
                 refresh=refresh,
+                remember=remember,
             )
-        except ModelCatalogError as error:
+        except (CredentialStoreError, ModelCatalogError) as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(catalog))
 

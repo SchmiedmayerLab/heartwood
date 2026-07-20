@@ -30,8 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "${project_root}"
-heartwood launch --web --host 127.0.0.1 --port "${port}" \
-  --startup-timeout "${startup_timeout}" >"${log_file}" 2>&1 &
+heartwood --interface web --host 127.0.0.1 --port "${port}" >"${log_file}" 2>&1 &
 launch_pid="$!"
 
 ready=""
@@ -59,7 +58,7 @@ if payload.get("state") != "ready":
 checks = {item["check_id"]: item for item in payload.get("checks", [])}
 if checks.get("terra-project-storage", {}).get("status") != "pass":
     raise SystemExit("managed launch did not confirm Terra persistent project storage")
-if checks.get("terra-gpu-runtime", {}).get("status") != "pass":
+if checks.get("terra-gpu", {}).get("status") != "pass":
     raise SystemExit("managed launch did not confirm the portable Terra runtime")
 PY
     then
@@ -93,4 +92,4 @@ if [ "${launch_message}" != "yes" ]; then
   echo "Heartwood managed Terra launch did not report ${expected_proxy}." >&2
   exit 1
 fi
-echo "Terra managed local-model launch smoke: ok"
+echo "Terra Heartwood-managed model launch smoke: ok"

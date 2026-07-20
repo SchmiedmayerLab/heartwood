@@ -14,6 +14,7 @@ from pathlib import Path
 from heartwood.adapters import (
     AdapterDetection,
     DatasetFingerprint,
+    PlatformCapabilities,
     RegistryVerification,
     SkillReference,
     assert_data_source_adapter_conforms,
@@ -35,6 +36,22 @@ class FakePlatformAdapter:
         """Return a generic proposal for synthetic environments."""
         evidence = ("synthetic env mapping inspected",) if env else ("no markers required",)
         return AdapterDetection(adapter_id=self.adapter_id, confidence=1.0, evidence=evidence)
+
+    def capabilities(self) -> PlatformCapabilities:
+        """Return deterministic synthetic capabilities."""
+        return PlatformCapabilities(
+            platform_id=self.adapter_id,
+            display_name="Synthetic platform",
+            interfaces=("terminal",),
+            browser_route="unavailable",
+            managed_runtimes=(),
+            scheduler="none",
+            persistent_storage="Synthetic project storage",
+            credential_backends=("process",),
+            model_sources=("heartwood",),
+            managed_model_connections=(),
+            validation_level="ci",
+        )
 
     def data_mounts(self) -> tuple[Path, ...]:
         """Return a synthetic data mount."""

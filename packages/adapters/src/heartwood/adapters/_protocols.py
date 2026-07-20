@@ -11,9 +11,17 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from heartwood.schemas import JsonValue, PolicyProfile
+
+type ModelSourceId = Literal[
+    "anthropic",
+    "custom",
+    "heartwood",
+    "openai",
+    "stanford-ai-api-gateway",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +31,41 @@ class AdapterDetection:
     adapter_id: str
     confidence: float
     evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformCapabilities:
+    """User-facing capabilities supplied by one deployment adapter."""
+
+    platform_id: str
+    display_name: str
+    interfaces: tuple[Literal["terminal", "web", "notebook"], ...]
+    browser_route: Literal["direct", "jupyter-proxy", "unavailable"]
+    managed_runtimes: tuple[Literal["llama-cpp", "vllm"], ...]
+    scheduler: Literal["none", "provisioned", "slurm"]
+    persistent_storage: str
+    credential_backends: tuple[
+        Literal["process", "keyring", "mounted-file", "managed-identity"], ...
+    ]
+    model_sources: tuple[ModelSourceId, ...]
+    managed_model_connections: tuple[str, ...]
+    validation_level: Literal["ci", "ci-and-live-synthetic"]
+
+    def safe_dict(self) -> dict[str, object]:
+        """Return a serializable capability representation."""
+        return {
+            "platform_id": self.platform_id,
+            "display_name": self.display_name,
+            "interfaces": list(self.interfaces),
+            "browser_route": self.browser_route,
+            "managed_runtimes": list(self.managed_runtimes),
+            "scheduler": self.scheduler,
+            "persistent_storage": self.persistent_storage,
+            "credential_backends": list(self.credential_backends),
+            "model_sources": list(self.model_sources),
+            "managed_model_connections": list(self.managed_model_connections),
+            "validation_level": self.validation_level,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +103,9 @@ class PlatformAdapter(Protocol):
 
     def detect(self, env: Mapping[str, str]) -> AdapterDetection:
         """Propose whether the provided environment belongs to this platform."""
+
+    def capabilities(self) -> PlatformCapabilities:
+        """Return stable product capabilities for this platform."""
 
     def data_mounts(self) -> tuple[Path, ...]:
         """Return data mount paths visible inside the platform boundary."""

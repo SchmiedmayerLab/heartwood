@@ -54,6 +54,10 @@ fi
   'import torch, vllm; from importlib.metadata import version; assert torch.version.cuda == "11.8", f"unexpected CUDA build: {torch.version.cuda}"; print(version("vllm"), torch.__version__, torch.version.cuda)'
 "${vllm_executable}" __heartwood_verify_runtime__
 
-verify_no_model_artifacts /opt /home
+if (($#)); then
+  verify_no_model_artifacts "$@"
+else
+  verify_no_model_artifacts /opt /home
+fi
 
 echo "GPU runtime verification passed"

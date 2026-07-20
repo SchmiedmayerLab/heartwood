@@ -12,8 +12,7 @@ import os
 from pathlib import Path
 from typing import TextIO
 
-from heartwood.audit import scrub_json_value
-from heartwood.session import SessionCommand, SessionEvent, validate_session_id
+from heartwood.session import SessionEvent, validate_session_id
 
 
 class SessionStoreBoundaryError(ValueError):
@@ -39,19 +38,10 @@ class FileSessionStore:
         if self.session_dir != self.root and self.root not in self.session_dir.parents:
             msg = f"session path escapes workspace root: {session_id}"
             raise SessionStoreBoundaryError(msg)
-        self.commands_path = self.session_dir / "commands.jsonl"
         self.events_path = self.session_dir / "events.jsonl"
         self.audit_path = self.session_dir / "audit.jsonl"
         self.audit_export_path = self.session_dir / "audit-export.jsonl"
         self._next_sequence: int | None = None
-
-    def append_command(self, command: SessionCommand) -> None:
-        """Persist one command envelope."""
-        self._prepare_session_dir()
-        safe_payload = scrub_json_value(command.payload)
-        safe_command = command.model_copy(update={"payload": safe_payload})
-        with _open_private_text(self.commands_path, append=True) as file:
-            file.write(safe_command.model_dump_json() + "\n")
 
     def append_event(self, event: SessionEvent) -> None:
         """Persist one session event envelope."""
@@ -71,12 +61,10 @@ class FileSessionStore:
         return tuple(SessionEvent.model_validate_json(line) for line in lines if line)
 
     def next_sequence(self) -> int:
-        """Return the next session-event sequence number."""
+        """Return the next sequence without advancing until the event is durable."""
         if self._next_sequence is None:
             self._next_sequence = len(self.read_events())
-        sequence = self._next_sequence
-        self._next_sequence += 1
-        return sequence
+        return self._next_sequence
 
     def write_audit_export(self, content: str) -> None:
         """Write the scrubbed audit export as an owner-only file."""

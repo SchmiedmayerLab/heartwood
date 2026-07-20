@@ -58,11 +58,11 @@ def _events(response: RestResponse) -> list[Mapping[str, JsonValue]]:
     return cast(list[Mapping[str, JsonValue]], events)
 
 
-def _gateway(workspace: Path) -> SessionGateway:
+def _gateway(workspace: Path, *, env: dict[str, str] | None = None) -> SessionGateway:
     workspace.mkdir(parents=True, exist_ok=True)
     return SessionGateway(
         project=ProjectContext(workspace),
-        env={},
+        env={} if env is None else env,
         backend_id="deterministic",
     )
 
@@ -102,6 +102,20 @@ def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -
     assert first.project.config_path != second.project.config_path
 
 
+def test_rest_ensures_one_shared_default_session(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path / "project")
+    rest = RestGateway(gateway)
+
+    first = rest.handle(RestRequest(method="POST", path="/sessions/default"))
+    second = rest.handle(RestRequest(method="POST", path="/sessions/default"))
+
+    assert first.status_code == 200
+    assert first.body == second.body
+    assert first.body["session_id"] == "session-main"
+    assert first.body["title"] == "Main session"
+    assert gateway.sessions() == {"sessions": [first.body]}
+
+
 def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) -> None:
     entered = Event()
     release = Event()
@@ -122,7 +136,7 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
     command = SessionCommand(
         command_id="command-1",
         session_id="session-1",
-        kind=CommandKind.DETECT,
+        kind=CommandKind.PAUSE,
         actor_id="synthetic-user",
         created_at="2026-01-01T00:00:00Z",
         payload={},
@@ -165,18 +179,18 @@ def test_rest_command_routes_through_session_service_and_streams_events(tmp_path
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.DETECT),
+            body=_command(CommandKind.PAUSE),
         )
     )
 
     assert response.status_code == 200
     assert [event["kind"] for event in _events(response)] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.DETECTION_PROPOSED.value,
+        EventKind.SESSION_PAUSED.value,
     ]
     assert [event.kind for event in stream.receive()] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.DETECTION_PROPOSED.value,
+        EventKind.SESSION_PAUSED.value,
     ]
 
 
@@ -211,7 +225,7 @@ def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) 
             "letters, numbers, dots, hyphens, or underscores"
         )
     }
-    assert list((tmp_path / ".heartwood" / "sessions").iterdir()) == []
+    assert not (tmp_path / ".heartwood").exists()
 
 
 def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
@@ -221,7 +235,7 @@ def test_rest_command_persists_gateway_audit_log(tmp_path: Path) -> None:
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.DETECT),
+            body=_command(CommandKind.PAUSE),
         )
     )
 
@@ -242,7 +256,7 @@ def test_rest_delivers_generated_scrubbed_audit_export(tmp_path: Path) -> None:
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.DETECT),
+            body=_command(CommandKind.PAUSE),
         )
     )
     unavailable = rest.handle(RestRequest(method="GET", path="/sessions/session-1/audit-export"))
@@ -302,7 +316,7 @@ def test_task_streams_confirmation_request_after_route_authorization(tmp_path: P
             method="POST",
             path="/sessions/session-1/commands",
             body=_command(
-                CommandKind.RUN,
+                CommandKind.CHAT,
                 prompt="run",
             ),
         )
@@ -342,7 +356,7 @@ def test_allow_once_streams_confirmation_resolution_and_execution(tmp_path: Path
             method="POST",
             path="/sessions/session-1/commands",
             body=_command(
-                CommandKind.RUN,
+                CommandKind.CHAT,
                 prompt="run",
             ),
         )
@@ -383,7 +397,7 @@ def test_rest_rejects_malformed_and_mismatched_commands(tmp_path: Path) -> None:
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.DETECT, session_id="other-session"),
+            body=_command(CommandKind.PAUSE, session_id="other-session"),
         )
     )
 
@@ -408,6 +422,110 @@ def test_rest_rejects_invalid_replay_cursor(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 400
+
+
+def test_rest_exposes_shared_startup_contract_and_initializes_explicitly(tmp_path: Path) -> None:
+    project = tmp_path / "analysis"
+    gateway = _gateway(project)
+    rest = RestGateway(gateway)
+
+    capabilities = rest.handle(RestRequest(method="GET", path="/project/capabilities"))
+    startup = rest.handle(
+        RestRequest(method="GET", path="/project/startup?interface=notebook&port=9000")
+    )
+    invalid_interface = rest.handle(
+        RestRequest(method="GET", path="/project/startup?interface=desktop")
+    )
+    invalid_port = rest.handle(RestRequest(method="GET", path="/project/startup?port=none"))
+
+    assert capabilities.status_code == 200
+    assert capabilities.body["platform_id"] == "generic"
+    assert startup.status_code == 200
+    assert startup.body["phase"] == "project-review"
+    assert startup.body["interface"] == "notebook"
+    assert invalid_interface.status_code == 422
+    assert invalid_port.status_code == 422
+    assert not (project / ".heartwood").exists()
+
+    initialized = rest.handle(RestRequest(method="POST", path="/project/initialize"))
+
+    assert initialized.status_code == 200
+    assert initialized.body["phase"] == "connection-required"
+    assert (project / ".heartwood").is_dir()
+
+
+def test_rest_reports_and_forgets_credentials_without_returning_secrets(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    gateway.credential_store.save("OPENAI_API_KEY", "synthetic-secret")
+    rest = RestGateway(gateway)
+
+    available = rest.handle(RestRequest(method="GET", path="/settings/credentials"))
+    forgotten = rest.handle(RestRequest(method="DELETE", path="/settings/credentials/openai"))
+    unknown = rest.handle(RestRequest(method="DELETE", path="/settings/credentials/unknown"))
+    credential_free = rest.handle(RestRequest(method="DELETE", path="/settings/credentials/local"))
+
+    assert available.status_code == 200
+    assert "synthetic-secret" not in json.dumps(available.body)
+    assert any(
+        binding["binding_id"] == "OPENAI_API_KEY" and binding["configured"] is True
+        for binding in cast(list[dict[str, JsonValue]], available.body["bindings"])
+    )
+    assert forgotten.status_code == 200
+    assert unknown.status_code == 422
+    assert credential_free.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_status"),
+    [
+        ("{", 400),
+        ("{}", 422),
+        (
+            json.dumps(
+                {
+                    "path": 1,
+                    "repository": "example/model",
+                    "revision": "1" * 40,
+                    "license": "Apache-2.0",
+                }
+            ),
+            422,
+        ),
+        (
+            json.dumps(
+                {
+                    "path": "/missing/model.gguf",
+                    "repository": "example/model",
+                    "revision": "1" * 40,
+                    "license": "Apache-2.0",
+                    "context_window": True,
+                }
+            ),
+            422,
+        ),
+        (
+            json.dumps(
+                {
+                    "path": "/missing/model.gguf",
+                    "repository": "example/model",
+                    "revision": "1" * 40,
+                    "license": "Apache-2.0",
+                }
+            ),
+            422,
+        ),
+    ],
+)
+def test_rest_rejects_invalid_local_model_imports(
+    tmp_path: Path,
+    body: str,
+    expected_status: int,
+) -> None:
+    response = RestGateway(_gateway(tmp_path)).handle(
+        RestRequest(method="POST", path="/settings/models/imports", body=body)
+    )
+
+    assert response.status_code == expected_status
 
 
 def test_rest_reads_and_selects_action_confirmation_mode(tmp_path: Path) -> None:
@@ -448,6 +566,7 @@ def test_rest_rejects_malformed_action_confirmation_selection(tmp_path: Path) ->
 
 def test_rest_reports_malformed_persisted_settings(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
+    gateway.initialize_project()
     (tmp_path / ".heartwood" / "config.toml").write_text("{", encoding="utf-8")
     rest = RestGateway(gateway)
 
@@ -464,7 +583,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     gateway = _gateway(tmp_path)
     rest = RestGateway(gateway)
     profile = {
-        "profile_id": "local",
+        "profile_id": "custom-loopback",
         "model": "openai/local-model",
         "policy_endpoint": "http://127.0.0.1:8765/v1/chat/completions",
         "capability_tier": "supervised",
@@ -475,7 +594,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "api_version": None,
         "aws_region_name": None,
         "aws_profile_name": None,
-        "description": "Local fixture",
+        "description": "Compatible-service fixture",
     }
 
     initial = rest.handle(RestRequest(method="GET", path="/settings/models"))
@@ -490,26 +609,28 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         RestRequest(
             method="PUT",
             path="/settings/models/active",
-            body=json.dumps({"profile_id": "local"}),
+            body=json.dumps({"profile_id": "custom-loopback"}),
         )
     )
     validated = rest.handle(
-        RestRequest(method="GET", path="/settings/models/validation?profile_id=local")
+        RestRequest(method="GET", path="/settings/models/validation?profile_id=custom-loopback")
     )
     artifacts = rest.handle(RestRequest(method="GET", path="/settings/models/artifacts"))
-    removed = rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/local"))
+    removed = rest.handle(
+        RestRequest(method="DELETE", path="/settings/models/profiles/custom-loopback")
+    )
     assert initial.status_code == 200
     assert initial.body["model_source"] is None
     source_options = cast(list[dict[str, JsonValue]], initial.body["source_options"])
     assert [option["source_id"] for option in source_options] == [
-        "local",
+        "heartwood",
         "openai",
         "anthropic",
-        "stanford-ai-api-gateway",
+        "custom",
     ]
     connections = cast(list[dict[str, JsonValue]], initial.body["connections"])
     assert [connection["connection_id"] for connection in connections] == [
-        "local",
+        "heartwood",
         "openai",
         "anthropic",
         "custom-api",
@@ -518,7 +639,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "token" not in connection and "api_key" not in connection for connection in connections
     )
     assert saved.status_code == 200
-    assert selected.body["active_profile"] == "local"
+    assert selected.body["active_profile"] == "custom-loopback"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
     assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v1"
@@ -534,6 +655,38 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
+
+
+def test_rest_reserves_the_heartwood_managed_profile(tmp_path: Path) -> None:
+    rest = RestGateway(_gateway(tmp_path))
+    profile = {
+        "profile_id": "heartwood",
+        "model": "openai/custom-model",
+        "policy_endpoint": "http://127.0.0.1:8765/v1/chat/completions",
+        "capability_tier": "supervised",
+        "base_url": "http://127.0.0.1:8765/v1",
+        "credential_kind": "none",
+        "api_key_env": None,
+        "api_key_file": None,
+        "api_version": None,
+        "aws_region_name": None,
+        "aws_profile_name": None,
+        "description": "Attempted replacement",
+    }
+
+    saved = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/profiles",
+            body=json.dumps(profile),
+        )
+    )
+    removed = rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/heartwood"))
+
+    assert saved.status_code == 422
+    assert "reserved by Heartwood" in str(saved.body["error"])
+    assert removed.status_code == 422
+    assert "managed by Heartwood" in str(removed.body["error"])
 
 
 def test_local_model_availability_reflects_installed_runtime_executables(
@@ -611,14 +764,14 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
         RestRequest(
             method="POST",
             path="/settings/models/catalog",
-            body=json.dumps({"connection_id": "local", "refresh": True}),
+            body=json.dumps({"connection_id": "heartwood", "refresh": True}),
         )
     )
     connected = rest.handle(
         RestRequest(
             method="POST",
             path="/settings/models/connect",
-            body=json.dumps({"connection_id": "local", "model_id": "local-coder"}),
+            body=json.dumps({"connection_id": "heartwood", "model_id": "local-coder"}),
         )
     )
 
@@ -635,13 +788,13 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
         }
     ]
     assert connected.status_code == 200
-    assert connected.body["active_profile"] == "local"
+    assert connected.body["active_profile"] == "heartwood"
     profiles = cast(list[dict[str, JsonValue]], connected.body["profiles"])
     assert profiles[0]["model"] == "openai/local-coder"
-    assert gateway.config_store.load().model_source == "local"
+    assert gateway.config_store.load().model_source == "heartwood"
     restarted = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
-    assert restarted.model_settings()["active_profile"] == "local"
-    assert restarted.config_store.load().model_source == "local"
+    assert restarted.model_settings()["active_profile"] == "heartwood"
+    assert restarted.config_store.load().model_source == "heartwood"
     switched = RestGateway(restarted).handle(
         RestRequest(
             method="PUT",
@@ -654,16 +807,17 @@ def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) 
     assert switched.body["model_source"] == "openai"
     assert restarted.project_readiness()["state"] == "setup-required"
     assert any(
-        profile["profile_id"] == "local"
+        profile["profile_id"] == "heartwood"
         for profile in cast(list[dict[str, JsonValue]], switched.body["profiles"])
     )
 
 
 def test_rest_shares_project_readiness_and_model_source_setup(tmp_path: Path) -> None:
-    gateway = _gateway(tmp_path)
+    gateway = _gateway(tmp_path, env={"HEARTWOOD_PLATFORM": "carina"})
     rest = RestGateway(gateway)
 
     initial = rest.handle(RestRequest(method="GET", path="/project/readiness"))
+    initial_settings = rest.handle(RestRequest(method="GET", path="/settings/models"))
     configured = rest.handle(
         RestRequest(
             method="PUT",
@@ -676,14 +830,25 @@ def test_rest_shares_project_readiness_and_model_source_setup(tmp_path: Path) ->
     assert initial.status_code == 200
     assert initial.body["state"] == "setup-required"
     assert initial.body["project_root"] == str(tmp_path)
+    assert [
+        option["source_id"]
+        for option in cast(list[dict[str, JsonValue]], initial_settings.body["source_options"])
+    ] == ["heartwood", "stanford-ai-api-gateway"]
+    assert [
+        connection["connection_id"]
+        for connection in cast(list[dict[str, JsonValue]], initial_settings.body["connections"])
+    ] == ["heartwood"]
     assert configured.status_code == 200
     assert configured.body["model_source"] == "stanford-ai-api-gateway"
     connections = cast(list[dict[str, JsonValue]], configured.body["connections"])
     assert any(
         connection["connection_id"] == "stanford-ai-api-gateway" for connection in connections
     )
+    assert not {"openai", "anthropic", "custom-api"} & {
+        str(connection["connection_id"]) for connection in connections
+    }
     assert readiness.body["state"] == "setup-required"
-    assert gateway.config_store.load().policy.policy_id == ("generic-stanford-ai-api-gateway")
+    assert gateway.config_store.load().policy.policy_id == ("carina-stanford-ai-api-gateway")
     assert (
         rest.handle(
             RestRequest(
@@ -699,7 +864,7 @@ def test_rest_shares_project_readiness_and_model_source_setup(tmp_path: Path) ->
             RestRequest(
                 method="PUT",
                 path="/settings/models/source",
-                body=json.dumps({"source_id": "local", "extra": True}),
+                body=json.dumps({"source_id": "heartwood", "extra": True}),
             )
         ).status_code
         == 422
@@ -950,17 +1115,17 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
         ("snapshot", "qwen25-7b-instruct-vllm", model_cache),
     ]
     config = gateway.config_store.load()
-    assert config.model_source == "local"
+    assert config.model_source == "heartwood"
     assert config.local_model is not None
     assert config.local_model.artifact_id == "qwen25-7b-instruct-vllm"
-    assert config.model_settings.active_profile == "local"
-    assert config.model_settings.profile().model == "openai/heartwood-local-model"
+    assert config.model_settings.active_profile == "heartwood"
+    assert config.model_settings.profile().model == "openai/heartwood-managed-model"
     assert config.model_settings.profile().max_input_tokens == 28_672
     assert config.model_settings.profile().max_output_tokens == 4_096
     restarted = _gateway(tmp_path)
-    assert restarted.model_settings()["active_profile"] == "local"
+    assert restarted.model_settings()["active_profile"] == "heartwood"
     assert restarted.project_readiness()["state"] == "compute-required"
-    with pytest.raises(ModelRepositoryError, match="unknown local model: missing"):
+    with pytest.raises(ModelRepositoryError, match="unknown Heartwood-managed model: missing"):
         gateway.download_local_model_now("missing")
 
 
@@ -1021,14 +1186,14 @@ def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> N
             RestRequest(
                 method="POST",
                 path="/settings/models/catalog",
-                body=json.dumps({"connection_id": "local", "refresh": "yes"}),
+                body=json.dumps({"connection_id": "heartwood", "refresh": "yes"}),
             )
         ),
         rest.handle(
             RestRequest(
                 method="POST",
                 path="/settings/models/connect",
-                body=json.dumps({"connection_id": "local", "model_id": 7}),
+                body=json.dumps({"connection_id": "heartwood", "model_id": 7}),
             )
         ),
         rest.handle(RestRequest(method="DELETE", path="/settings/models/profiles/missing")),

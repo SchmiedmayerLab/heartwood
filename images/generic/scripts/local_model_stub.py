@@ -73,7 +73,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "object": "list",
                 "data": [
                     {
-                        "id": "heartwood-local-runtime",
+                        "id": "heartwood-managed-runtime",
                         "object": "model",
                         "created": 0,
                         "owned_by": "heartwood",
@@ -148,7 +148,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "baseline": "The training-only age baseline is ready for review.",
                 "export": "The count-floor-controlled aggregate export is ready for review.",
                 "failure": "The synthetic failure check unexpectedly succeeded.",
-                "generic": "Synthetic local model response.",
+                "generic": "Synthetic Heartwood-managed model response.",
             }
             message = {
                 "role": "assistant",
@@ -247,9 +247,9 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             }
             finish_reason = "tool_calls"
         response = {
-            "id": "chatcmpl-heartwood-local-runtime",
+            "id": "chatcmpl-heartwood-managed-runtime",
             "object": "chat.completion",
-            "model": "heartwood-local-runtime",
+            "model": "heartwood-managed-runtime",
             "choices": [
                 {
                     "index": 0,

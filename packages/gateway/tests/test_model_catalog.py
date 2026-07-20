@@ -37,12 +37,17 @@ def test_built_in_connections_are_non_secret_and_researcher_facing() -> None:
         connection.connection_id: connection for connection in BUILT_IN_MODEL_CONNECTIONS
     }
 
-    assert set(connections) == {"anthropic", "custom-api", "local", "openai"}
-    assert connections["local"].label == "Local"
+    assert set(connections) == {"anthropic", "custom-api", "heartwood", "openai"}
+    assert connections["heartwood"].label == "Run with Heartwood"
+    assert connections["heartwood"].group == "heartwood-managed"
+    assert connections["openai"].group == "hosted-provider"
+    assert connections["custom-api"].group == "compatible-service"
+    assert connections["heartwood"].presentation_order < connections["openai"].presentation_order
     assert connections["custom-api"].description.startswith("A service")
     for connection in connections.values():
         connection.validate(configurable=connection.connection_id == "custom-api")
         serialized = connection.safe_dict({})
+        assert serialized["group_label"]
         assert "token" not in serialized
         assert "api_key" not in serialized
 
@@ -80,6 +85,7 @@ def test_platform_connection_manifest_supports_multi_model_research_service(
     assert research.label == "Research AI Service"
     assert research.static_models == ("coding-large", "coding-small")
     assert research.source == "platform"
+    assert research.group == "research-environment"
 
 
 @pytest.mark.parametrize(
@@ -528,7 +534,7 @@ def test_generic_project_authorizes_only_the_selected_custom_api_route(
     assert "second-transient-secret" not in persisted
 
 
-def test_managed_project_does_not_widen_policy_for_custom_api(tmp_path: Path) -> None:
+def test_terra_custom_api_uses_an_explicit_project_policy(tmp_path: Path) -> None:
     project = _project(tmp_path / "managed-custom")
     gateway = SessionGateway(
         project=project,
@@ -538,15 +544,15 @@ def test_managed_project_does_not_widen_policy_for_custom_api(tmp_path: Path) ->
         ),
     )
 
-    with pytest.raises(ModelCatalogError, match="denied"):
-        gateway.discover_models(
-            "custom-api",
-            token="transient-secret",
-            base_url="https://custom.example/v1",
-        )
+    gateway.discover_models(
+        "custom-api",
+        token="transient-secret",
+        base_url="https://custom.example/v1",
+    )
 
-    assert gateway.config_store.load().policy.policy_id != "generic-custom-api"
-    assert not project.config_path.exists()
+    policy = gateway.config_store.load().policy
+    assert policy.policy_id == "terra-custom-api"
+    assert "https://custom.example/v1/chat/completions" in policy.allowed_model_endpoints
 
 
 def _openai_connection() -> ModelConnection:
@@ -778,7 +784,7 @@ def test_manifest_rejects_unreadable_duplicate_and_malformed_connections(
         (manifest({**base, "unsupported": True}), "unsupported fields"),
         (manifest({**base, "static_models": "model"}), "list of strings"),
         (manifest({**base, "description": 7}), "description"),
-        (manifest({**base, "connection_id": "local"}), "ids must be unique"),
+        (manifest({**base, "connection_id": "heartwood"}), "ids must be unique"),
     )
     for index, (payload, message) in enumerate(cases):
         path = tmp_path / f"invalid-{index}.json"

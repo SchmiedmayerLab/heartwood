@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-from heartwood.adapters import AdapterDetection
+from heartwood.adapters import AdapterDetection, PlatformCapabilities
 from heartwood.detector import Platform, detect_platform
 from heartwood.schemas import PolicyProfile
 
@@ -33,6 +33,22 @@ class TerraPlatformAdapter:
             self.adapter_id,
             0.0,
             ("Terra platform evidence not found", *detection.evidence),
+        )
+
+    def capabilities(self) -> PlatformCapabilities:
+        """Return capabilities for a provisioned Terra cloud environment."""
+        return PlatformCapabilities(
+            platform_id=self.adapter_id,
+            display_name="Terra",
+            interfaces=("terminal", "web", "notebook"),
+            browser_route="jupyter-proxy",
+            managed_runtimes=("llama-cpp", "vllm"),
+            scheduler="provisioned",
+            persistent_storage="A dedicated project under /home/jupyter",
+            credential_backends=("process", "mounted-file", "managed-identity"),
+            model_sources=("heartwood", "openai", "anthropic", "custom"),
+            managed_model_connections=(),
+            validation_level="ci-and-live-synthetic",
         )
 
     def data_mounts(self) -> tuple[Path, ...]:

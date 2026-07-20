@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal, assert_never
 
 from heartwood.adapters.platform import select_platform_adapter
+from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._model_catalog import ModelConnection, model_connections_from_mapping
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._project import ProjectContext, ProjectStateError
@@ -27,7 +28,13 @@ from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
 
 ReadinessState = Literal["ready", "setup-required", "compute-required", "recovery-required"]
-ModelSource = Literal["anthropic", "local", "openai", "stanford-ai-api-gateway"]
+ModelSource = Literal[
+    "anthropic",
+    "custom",
+    "heartwood",
+    "openai",
+    "stanford-ai-api-gateway",
+]
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
 
@@ -39,6 +46,19 @@ class ReadinessCheck:
     check_id: str
     status: Literal["pass", "warning", "fail"]
     summary: str
+
+    def safe_dict(self) -> dict[str, object]:
+        """Return content-safe metadata, adding recovery guidance when needed."""
+        if self.status == "pass":
+            return asdict(self)
+        diagnostic = diagnostic_for(self.check_id)
+        return {
+            **asdict(self),
+            "code": diagnostic.code,
+            "title": diagnostic.title,
+            "next_action": diagnostic.next_action,
+            "documentation_path": diagnostic.documentation_path,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,12 +77,10 @@ class ModelSourceOption:
 
 MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
     ModelSourceOption(
-        source_id="local",
-        connection_id="local",
-        label="On this device",
-        description=(
-            "Use a recommended model, another supported Hugging Face model, or an existing service."
-        ),
+        source_id="heartwood",
+        connection_id="heartwood",
+        label="Run with Heartwood",
+        description=("Let Heartwood download or import a model and run it in this environment."),
     ),
     ModelSourceOption(
         source_id="openai",
@@ -77,12 +95,36 @@ MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
         description="Use the models available to an Anthropic token.",
     ),
     ModelSourceOption(
+        source_id="custom",
+        connection_id="custom-api",
+        label="Other compatible service",
+        description="Connect to an approved service that implements the OpenAI API format.",
+    ),
+    ModelSourceOption(
         source_id="stanford-ai-api-gateway",
         connection_id="stanford-ai-api-gateway",
-        label="Stanford AI API Gateway",
-        description="Use models authorized through Stanford's managed gateway.",
+        label="Research environment",
+        description="Use a model connection already provided by this research environment.",
     ),
 )
+
+
+def model_source_options(
+    env: Mapping[str, str] | None = None,
+) -> tuple[ModelSourceOption, ...]:
+    """Return model-source choices appropriate for the detected environment."""
+    active_env = dict(os.environ if env is None else env)
+    adapter = select_platform_adapter(active_env)
+    available = set(adapter.capabilities().model_sources)
+    return tuple(option for option in MODEL_SOURCE_OPTIONS if option.source_id in available)
+
+
+def model_source_for_connection(connection_id: str) -> ModelSource:
+    """Return the public setup source represented by one connection id."""
+    for option in MODEL_SOURCE_OPTIONS:
+        if option.connection_id == connection_id:
+            return option.source_id
+    raise ProjectConfigError(f"model connection has no setup source: {connection_id}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +140,14 @@ class DeploymentReadiness:
 
     def safe_dict(self) -> dict[str, object]:
         """Return serializable diagnostics without secrets."""
-        return asdict(self)
+        return {
+            "state": self.state,
+            "platform_id": self.platform_id,
+            "project_root": self.project_root,
+            "state_root": self.state_root,
+            "evidence": list(self.evidence),
+            "checks": [check.safe_dict() for check in self.checks],
+        }
 
 
 def inspect_deployment(
@@ -120,6 +169,18 @@ def inspect_deployment(
                 f"Project is writable at {project.root}"
                 if writable
                 else f"Project is not writable at {project.root}"
+            ),
+        )
+    )
+    broad_project = project.root in {Path(project.root.anchor), Path.home().resolve()}
+    checks.append(
+        ReadinessCheck(
+            "project-boundary",
+            "fail" if broad_project else "pass",
+            (
+                "Choose a dedicated project directory instead of a filesystem or home root"
+                if broad_project
+                else "Project boundary is appropriately scoped"
             ),
         )
     )
@@ -169,13 +230,28 @@ def inspect_deployment(
     else:
         checks.append(ReadinessCheck("configuration", "warning", "Setup is incomplete"))
 
+    configured_source = config.model_source if config is not None else None
+    source_supported = configured_source in adapter.capabilities().model_sources
+    checks.append(
+        ReadinessCheck(
+            "model-source",
+            "pass" if source_supported else "warning" if configured_source is None else "fail",
+            (
+                "Model connection is selected"
+                if source_supported
+                else "No model connection selected"
+                if configured_source is None
+                else "Selected model connection is unavailable on this platform"
+            ),
+        )
+    )
     active_model = _active_model_profile(config)
     checks.append(
         ReadinessCheck(
             "model",
             "pass" if active_model else "warning",
             (
-                f"Active model: {active_model.profile_id}"
+                f"Active model: {_active_model_label(config, active_model)}"
                 if active_model
                 else "No active model selected"
             ),
@@ -188,7 +264,7 @@ def inspect_deployment(
         )
         checks.append(ReadinessCheck("model-credential", credential_status, credential_summary))
     managed_local_available = False
-    if config is not None and config.model_source == "local":
+    if config is not None and config.model_source == "heartwood":
         selection = config.local_model
         managed_local_available = (
             selection is not None and selection.resolved_path(project).exists()
@@ -198,11 +274,11 @@ def inspect_deployment(
                 "local-model-artifact",
                 "pass" if managed_local_available else "warning",
                 (
-                    f"Selected local model is available: {selection.artifact_id}"
+                    f"Selected Heartwood-managed model is available: {selection.artifact_id}"
                     if managed_local_available and selection is not None
                     else (
-                        "No downloaded local model is selected; "
-                        "an existing local service is required"
+                        "No downloaded Heartwood-managed model is selected; "
+                        "an existing compatible service is required"
                     )
                 ),
             )
@@ -277,6 +353,11 @@ def persist_deployment_profile(
     """Persist the selected platform, route policy, and connection in config.toml."""
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
+    capabilities = adapter.capabilities()
+    if model_source not in capabilities.model_sources:
+        raise ProjectConfigError(
+            f"{capabilities.display_name} does not provide the {model_source} model source"
+        )
     platform_policy = adapter.default_policy_profile()
     store = ProjectConfigStore(
         project,
@@ -284,6 +365,10 @@ def persist_deployment_profile(
     )
     configured_connections: tuple[ModelConnection, ...] = ()
     if model_source == "stanford-ai-api-gateway":
+        if not capabilities.managed_model_connections:
+            raise ProjectConfigError(
+                "the detected environment does not provide a managed research connection"
+            )
         all_connections = model_connections_from_mapping(_stanford_connection_manifest())
         configured_connections = tuple(
             connection for connection in all_connections if connection.source == "platform"
@@ -305,7 +390,7 @@ def persist_deployment_profile(
                 "notes": "Stanford gateway route; data eligibility requires deployment approval.",
             }
         )
-    elif model_source in {"anthropic", "local", "openai"}:
+    elif model_source in {"anthropic", "custom", "heartwood", "openai"}:
         policy = platform_policy
     else:  # pragma: no cover - protected by the public type and CLI choices
         raise ProjectConfigError(f"unsupported model source: {model_source}")
@@ -364,6 +449,12 @@ def _active_model_profile(config: ProjectConfig | None) -> ModelProfile | None:
         return None
 
 
+def _active_model_label(config: ProjectConfig | None, profile: ModelProfile) -> str:
+    if profile.profile_id == "heartwood" and config is not None and config.local_model is not None:
+        return config.local_model.display_name or profile.description or profile.model
+    return profile.description or profile.model
+
+
 def _credential_readiness(
     profile: ModelProfile, env: Mapping[str, str]
 ) -> tuple[Literal["pass", "warning", "fail"], str, bool]:
@@ -396,7 +487,7 @@ def _configuration_is_coherent(config: ProjectConfig) -> bool:
     model = _active_model_profile(config)
     if model is None or config.model_source is None:
         return False
-    if config.model_source == "local":
+    if config.model_source == "heartwood":
         source_matches = model.is_local
     elif config.model_source == "stanford-ai-api-gateway":
         source_matches = (
@@ -407,6 +498,8 @@ def _configuration_is_coherent(config: ProjectConfig) -> bool:
                 for connection in config.additional_connections
             )
         )
+    elif config.model_source == "custom":
+        source_matches = model.profile_id == "custom-api"
     else:
         source_matches = model.profile_id == config.model_source
     if not source_matches:
@@ -439,7 +532,7 @@ def _carina_compute_checks(
             ),
             False,
         )
-    local_model = model_source == "local"
+    local_model = model_source == "heartwood"
     if not allocation:
         return (
             (
@@ -447,15 +540,17 @@ def _carina_compute_checks(
                     "slurm-allocation",
                     "warning",
                     (
-                        "Local model is configured; request a Carina allocation to start it"
+                        "Heartwood-managed model is configured; request a Carina "
+                        "allocation to start it"
                         if local_model
-                        else "No Slurm allocation; one is required only for local inference"
+                        else "No Slurm allocation; one is required only for "
+                        "Heartwood-managed inference"
                     ),
                 ),
                 ReadinessCheck(
                     "job-scratch",
                     "warning",
-                    "Job-local scratch will be checked after allocation",
+                    "Allocation scratch will be checked after allocation",
                 ),
                 ReadinessCheck(
                     "gpu",
@@ -479,11 +574,11 @@ def _carina_compute_checks(
                 "job-scratch",
                 "pass" if scratch_ready else requirement_status,
                 (
-                    f"Writable job-local scratch detected at {scratch_path}"
+                    f"Writable allocation scratch detected at {scratch_path}"
                     if scratch_ready
-                    else "Active local-model allocation has no writable job scratch"
+                    else "Active managed-model allocation has no writable job scratch"
                     if local_model
-                    else "No writable job-local scratch detected"
+                    else "No writable allocation scratch detected"
                 ),
             ),
             ReadinessCheck(
@@ -492,7 +587,7 @@ def _carina_compute_checks(
                 (
                     "NVIDIA GPU is visible"
                     if gpu
-                    else "Active local-model allocation has no visible NVIDIA GPU"
+                    else "Active managed-model allocation has no visible NVIDIA GPU"
                     if local_model
                     else "No NVIDIA GPU evidence detected"
                 ),
@@ -543,21 +638,21 @@ def _terra_environment_checks(
         visible = gpu_visible(env)
         checks.append(
             ReadinessCheck(
-                "terra-gpu-runtime",
+                "terra-gpu",
                 "pass" if visible else "warning",
                 (
                     "Terra NVIDIA runtime and attached GPU detected"
                     if visible
-                    else "Terra NVIDIA runtime detected; attach a GPU before local GPU inference"
+                    else "Terra NVIDIA runtime detected; attach a GPU before managed GPU inference"
                 ),
             )
         )
     elif gpu_runtime == "none":
         checks.append(
             ReadinessCheck(
-                "terra-gpu-runtime",
+                "terra-gpu",
                 "pass",
-                "Portable Terra runtime selected; local models use CPU inference",
+                "Portable Terra runtime selected; Heartwood-managed models use CPU inference",
             )
         )
     return tuple(checks)

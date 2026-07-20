@@ -10,38 +10,32 @@ import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
 import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
 import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
-import {
-  Database,
-  LoaderCircle,
-  Menu,
-  Pencil,
-  ShieldCheck,
-} from "lucide-react";
+import { LoaderCircle, Menu, Pencil, ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import type { ActionSettings, SessionContext, SessionSummary } from "../types";
+import type { ActionSettings, SessionSummary } from "../types";
 
 interface WorkspaceHeaderProps {
   actionSettings: ActionSettings | null;
-  context: SessionContext;
   modelDetail: string | null;
   modelLabel: string;
   modelStatus: "checking" | "denied" | "ready" | "setup";
+  platformLabel: string;
+  projectLabel: string;
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
-  onDetect: () => void;
   onOpenMenu: () => void;
   onRename: (title: string) => void;
 }
 
 export const WorkspaceHeader = ({
   actionSettings,
-  context,
   modelDetail,
   modelLabel,
   modelStatus,
+  platformLabel,
+  projectLabel,
   requestStatus,
   session,
-  onDetect,
   onOpenMenu,
   onRename,
 }: WorkspaceHeaderProps) => {
@@ -111,29 +105,12 @@ export const WorkspaceHeader = ({
             requestStatus={requestStatus}
             session={session}
           />
-          <Tooltip tooltip="Detect platform and dataset">
-            <Button
-              aria-label="Detect environment"
-              disabled={session === null || requestStatus === "busy"}
-              size="sm"
-              variant="outline"
-              onClick={onDetect}
-            >
-              <Database size={17} />
-            </Button>
-          </Tooltip>
         </div>
       </div>
 
       <dl className="context-strip" aria-label="Session context">
-        <ContextFact
-          label="Platform"
-          value={context.platform ?? "Not detected"}
-        />
-        <ContextFact
-          label="Dataset"
-          value={context.dataset ?? "Not detected"}
-        />
+        <ContextFact label="Project" value={projectLabel} />
+        <ContextFact label="Platform" value={platformLabel} />
         <ContextFact
           label="Model"
           value={modelLabel}

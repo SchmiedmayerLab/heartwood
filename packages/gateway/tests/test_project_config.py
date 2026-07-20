@@ -41,18 +41,18 @@ def test_project_config_round_trip_uses_one_toml_file(tmp_path: Path) -> None:
     project = ProjectContext(tmp_path)
     store = ProjectConfigStore(project, _default_config(project))
     profile = ModelProfile(
-        profile_id="local",
-        model="openai/heartwood-local-model",
+        profile_id="heartwood",
+        model="openai/heartwood-managed-model",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
         credential_kind="none",
     )
     configured = ProjectConfig(
         platform_id="generic",
-        model_source="local",
+        model_source="heartwood",
         policy=select_platform_adapter({}).default_policy_profile(),
         model_settings=ModelSettings(
-            active_profile="local",
+            active_profile="heartwood",
             profiles=(profile,),
         ),
     )
@@ -63,8 +63,8 @@ def test_project_config_round_trip_uses_one_toml_file(tmp_path: Path) -> None:
     assert project.config_path.stat().st_mode & 0o777 == 0o600
     with project.config_path.open("rb") as file:
         persisted = tomllib.load(file)
-    assert persisted["model_source"] == "local"
-    assert persisted["models"]["active_profile"] == "local"
+    assert persisted["model_source"] == "heartwood"
+    assert persisted["models"]["active_profile"] == "heartwood"
     assert not (project.state_root / "models.json").exists()
     assert not (project.state_root / "actions.json").exists()
 
@@ -84,8 +84,8 @@ def test_project_config_updates_serialize_across_store_instances(tmp_path: Path)
     first = ProjectConfigStore(project, _default_config(project))
     second = ProjectConfigStore(project, _default_config(project))
     profile = ModelProfile(
-        profile_id="local",
-        model="openai/heartwood-local-model",
+        profile_id="heartwood",
+        model="openai/heartwood-managed-model",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
         credential_kind="none",
@@ -133,7 +133,7 @@ def test_local_model_selection_stays_under_project_model_root(tmp_path: Path) ->
         artifact_id="reviewed",
         path=".heartwood/models/reviewed/model.gguf",
     )
-    assert configured.model_source == "local"
+    assert configured.model_source == "heartwood"
     assert configured.local_model.resolved_path(project) == model
     with pytest.raises(ProjectConfigError, match=r"under \.heartwood/models"):
         store.select_local_model(artifact_id="outside", path=tmp_path / "outside.gguf")
@@ -169,13 +169,13 @@ def test_project_config_selects_local_model_and_profile_atomically(tmp_path: Pat
     model.write_bytes(b"synthetic")
     store = ProjectConfigStore(project, _default_config(project))
     profile = ModelProfile(
-        profile_id="local",
-        model="openai/heartwood-local-model",
+        profile_id="heartwood",
+        model="openai/heartwood-managed-model",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
         credential_kind="none",
     )
-    settings = ModelSettings(active_profile="local", profiles=(profile,))
+    settings = ModelSettings(active_profile="heartwood", profiles=(profile,))
 
     configured = store.select_local_model(
         artifact_id="reviewed",
@@ -183,7 +183,7 @@ def test_project_config_selects_local_model_and_profile_atomically(tmp_path: Pat
         settings=settings,
     )
 
-    assert configured.model_source == "local"
+    assert configured.model_source == "heartwood"
     assert configured.local_model is not None
     assert configured.model_settings == settings
     assert store.load() == configured
@@ -268,7 +268,7 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
                 path=".heartwood/models/model",
                 runtime="unsupported",
             ),
-            "unsupported local model runtime",
+            "unsupported Heartwood-managed model runtime",
         ),
         (
             LocalModelSelection(artifact_id="model", path=".heartwood/models"),

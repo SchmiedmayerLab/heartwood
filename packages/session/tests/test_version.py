@@ -32,7 +32,7 @@ def test_session_command_contract_serializes_enum_values() -> None:
     command = SessionCommand(
         command_id="command-1",
         session_id="session-1",
-        kind=CommandKind.DETECT,
+        kind=CommandKind.PAUSE,
         actor_id="synthetic-user",
         created_at="2026-01-01T00:00:00Z",
         payload={"scope": "environment"},
@@ -41,7 +41,7 @@ def test_session_command_contract_serializes_enum_values() -> None:
         "schema_version": "heartwood.session-command.v1",
         "command_id": "command-1",
         "session_id": "session-1",
-        "kind": "detect",
+        "kind": "pause",
         "actor_id": "synthetic-user",
         "created_at": "2026-01-01T00:00:00Z",
         "payload": {"scope": "environment"},
@@ -54,12 +54,12 @@ def test_session_event_contract_carries_hash_chain_pointer() -> None:
         event_id="event-1",
         session_id="session-1",
         sequence=0,
-        kind=EventKind.DETECTION_PROPOSED,
+        kind=EventKind.SESSION_PAUSED,
         occurred_at="2026-01-01T00:00:01Z",
         payload={"platform": "generic", "confidence": 1.0},
         previous_event_hash=None,
     )
-    assert event.kind == "detection.proposed"
+    assert event.kind == "session.paused"
     assert event.sequence == 0
 
 
@@ -73,7 +73,7 @@ def test_session_ids_reject_unsafe_or_oversized_values(session_id: str) -> None:
         SessionCommand(
             command_id="command-1",
             session_id=session_id,
-            kind=CommandKind.DETECT,
+            kind=CommandKind.PAUSE,
             actor_id="synthetic-user",
             created_at="2026-01-01T00:00:00Z",
         )

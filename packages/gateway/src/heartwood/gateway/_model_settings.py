@@ -271,13 +271,13 @@ class ModelPreset:
 
 MODEL_PRESETS: tuple[ModelPreset, ...] = (
     ModelPreset(
-        preset_id="local-openai-compatible",
-        label="Local OpenAI-Compatible",
+        preset_id="heartwood-managed",
+        label="Heartwood-managed model",
         model_prefix="openai/",
         credential_kind="none",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
-        description="Ollama, vLLM, SGLang, llama.cpp, or another loopback endpoint.",
+        description="The loopback inference service supervised by Heartwood.",
     ),
     ModelPreset(
         preset_id="openai",

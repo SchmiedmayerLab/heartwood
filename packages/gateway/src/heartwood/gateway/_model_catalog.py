@@ -24,10 +24,25 @@ from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
 type ConnectionProtocol = Literal["anthropic", "openai", "openai-compatible", "static"]
 type ConnectionSource = Literal["built-in", "platform", "user"]
+type ConnectionGroup = Literal[
+    "compatible-service", "heartwood-managed", "hosted-provider", "research-environment"
+]
 type ModelAvailability = Literal["available", "experimental", "unsupported"]
 
 _CONNECTION_PROTOCOLS = {"anthropic", "openai", "openai-compatible", "static"}
 _CONNECTION_SOURCES = {"built-in", "platform", "user"}
+_CONNECTION_GROUP_LABELS: dict[ConnectionGroup, str] = {
+    "heartwood-managed": "Run with Heartwood",
+    "research-environment": "Research environment",
+    "hosted-provider": "Hosted providers",
+    "compatible-service": "Other compatible services",
+}
+_CONNECTION_GROUP_ORDER: dict[ConnectionGroup, int] = {
+    "heartwood-managed": 0,
+    "research-environment": 1,
+    "hosted-provider": 2,
+    "compatible-service": 3,
+}
 _CREDENTIAL_KINDS = {"environment", "file", "managed-identity", "none"}
 _CATALOG_TIMEOUT_SECONDS = 30.0
 _CATALOG_MAX_RETRIES = 1
@@ -172,6 +187,22 @@ class ModelConnection:
         """Return the provider-facing identifier from a normalized execution model."""
         return execution_model.removeprefix(self.model_prefix)
 
+    @property
+    def group(self) -> ConnectionGroup:
+        """Return the shared researcher-facing category for this connection."""
+        if self.connection_id == "heartwood":
+            return "heartwood-managed"
+        if self.source == "platform":
+            return "research-environment"
+        if self.source == "user":
+            return "compatible-service"
+        return "hosted-provider"
+
+    @property
+    def presentation_order(self) -> int:
+        """Return the shared connection ordering key used by every interface."""
+        return _CONNECTION_GROUP_ORDER[self.group]
+
     def credential_status(self, env: Mapping[str, str]) -> str:
         """Return whether the referenced credential is available."""
         if self.credential_kind in {"managed-identity", "none"}:
@@ -206,6 +237,8 @@ class ModelConnection:
         """Return API-safe connection metadata."""
         return {
             **asdict(self),
+            "group": self.group,
+            "group_label": _CONNECTION_GROUP_LABELS[self.group],
             "accepts_token": self.credential_kind == "environment",
             "credential_status": self.credential_status(env),
         }
@@ -395,8 +428,8 @@ class ModelCatalogService:
 
 BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
     ModelConnection(
-        connection_id="local",
-        label="Local",
+        connection_id="heartwood",
+        label="Run with Heartwood",
         protocol="openai-compatible",
         model_prefix="openai/",
         source="built-in",
@@ -404,7 +437,7 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         base_url="http://127.0.0.1:8765/v1",
         catalog_endpoint="http://127.0.0.1:8765/v1/models",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
-        description="Models reported by the local runtime.",
+        description="Models served by the runtime Heartwood manages for this project.",
     ),
     ModelConnection(
         connection_id="openai",
@@ -432,7 +465,7 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
     ),
     ModelConnection(
         connection_id="custom-api",
-        label="Custom API",
+        label="Other compatible service",
         protocol="openai-compatible",
         model_prefix="openai/",
         source="user",
@@ -486,8 +519,7 @@ def custom_model_connection(base_url: str, *, has_token: bool) -> ModelConnectio
     """Build a validated custom OpenAI-compatible connection."""
     normalized_base = base_url.strip().rstrip("/")
     _validate_base_url(normalized_base)
-    parsed = urlsplit(normalized_base)
-    loopback = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+    requires_token = custom_model_connection_requires_token(normalized_base)
     credential_kind: CredentialKind = "environment" if has_token else "none"
     connection = ModelConnection(
         connection_id="custom-api",
@@ -502,12 +534,20 @@ def custom_model_connection(base_url: str, *, has_token: bool) -> ModelConnectio
         policy_endpoint=f"{normalized_base}/chat/completions",
         description="A service that implements the OpenAI API format.",
     )
-    if not has_token and not loopback:
+    if not has_token and requires_token:
         raise ModelCatalogError(
             "a remote custom API requires a token or managed platform connection"
         )
     connection.validate()
     return connection
+
+
+def custom_model_connection_requires_token(base_url: str) -> bool:
+    """Return whether a custom endpoint is remote and therefore needs a token."""
+    normalized_base = base_url.strip().rstrip("/")
+    _validate_base_url(normalized_base)
+    parsed = urlsplit(normalized_base)
+    return not (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "::1", "localhost"})
 
 
 def _connection_from_mapping(value: object) -> ModelConnection:

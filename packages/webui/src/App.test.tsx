@@ -23,7 +23,10 @@ import type {
   ActionSettings,
   AuditExport,
   CustomLocalModelDownloadRequest,
+  CredentialSettings,
   LocalModelChoice,
+  LocalModelImportRequest,
+  LocalModelImportResult,
   ModelArtifacts,
   ModelCatalog,
   ModelCatalogRequest,
@@ -43,6 +46,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  StartupPlan,
 } from "./types";
 
 const settings = (): ModelSettings => ({
@@ -51,7 +55,13 @@ const settings = (): ModelSettings => ({
   model_source: null,
   profiles: [],
   connections: [
-    modelConnection("local", "Local", "built-in", "configured", false),
+    modelConnection(
+      "heartwood",
+      "Run with Heartwood",
+      "built-in",
+      "configured",
+      false,
+    ),
     modelConnection(
       "research-ai",
       "Research AI Service",
@@ -61,22 +71,28 @@ const settings = (): ModelSettings => ({
     ),
     modelConnection("openai", "OpenAI", "built-in", "missing", true),
     modelConnection("anthropic", "Anthropic", "built-in", "missing", true),
-    modelConnection("custom-api", "Custom API", "user", "missing", true),
+    modelConnection(
+      "custom-api",
+      "Other compatible service",
+      "user",
+      "missing",
+      true,
+    ),
   ],
   presets: [
     {
-      preset_id: "local-openai-compatible",
-      label: "Local OpenAI-Compatible",
+      preset_id: "heartwood-managed",
+      label: "Heartwood-managed model",
       model_prefix: "openai/",
       credential_kind: "none",
       api_key_env: null,
       base_url: "http://127.0.0.1:8765/v1",
       policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
-      description: "Local runtime",
+      description: "Heartwood-managed model",
     },
   ],
   source_options: [
-    modelSource("local", "local", "On this device"),
+    modelSource("heartwood", "heartwood", "Run with Heartwood"),
     modelSource("openai", "openai", "OpenAI"),
     modelSource("anthropic", "anthropic", "Anthropic"),
     modelSource(
@@ -85,6 +101,14 @@ const settings = (): ModelSettings => ({
       "Stanford AI API Gateway",
     ),
   ],
+  credential_store: {
+    backends: ["process", "keyring"],
+    default_backend: "process",
+    persistence_available: true,
+    persistence_description:
+      "System credential store for this Heartwood environment",
+  },
+  credential_bindings: [],
 });
 
 const actions = (): ActionSettings => ({
@@ -118,6 +142,7 @@ class FakeClient implements HeartwoodClient {
   currentDownloads: ModelDownload[] = [];
   downloadedArtifact: string | null = null;
   customDownloadRequest: CustomLocalModelDownloadRequest | null = null;
+  localImportRequest: LocalModelImportRequest | null = null;
   inspectedRepository: ModelRepositoryRequest | null = null;
   repositoryError: Error | null = null;
   customModel: LocalModelChoice | null = null;
@@ -129,9 +154,28 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve(this.currentReadiness);
   }
 
+  getStartupPlan(): Promise<StartupPlan> {
+    return Promise.resolve(startupPlan(this.currentReadiness));
+  }
+
+  initializeProject(): Promise<StartupPlan> {
+    this.currentReadiness = projectReadiness("setup-required");
+    return Promise.resolve(startupPlan(this.currentReadiness));
+  }
+
   listSessions(): Promise<SessionList> {
     this.listCalls += 1;
     return Promise.resolve({ sessions: this.currentSessions });
+  }
+
+  ensureDefaultSession(): Promise<SessionSummary> {
+    const existing = this.currentSessions.find(
+      (session) => session.session_id === "session-main",
+    );
+    if (existing) return Promise.resolve(existing);
+    const created = sessionSummary("session-main", "Main session");
+    this.currentSessions = [created, ...this.currentSessions];
+    return Promise.resolve(created);
   }
 
   createSession(): Promise<SessionSummary> {
@@ -178,8 +222,7 @@ class FakeClient implements HeartwoodClient {
     this.commands.push(command);
     return Promise.resolve({
       events:
-        command.kind === "detect" ? syntheticEvents().slice(0, 2)
-        : command.kind === "chat" || command.kind === "run" ?
+        command.kind === "chat" ?
           [
             event(0, "user_message.recorded", {
               actor_id: command.actor_id,
@@ -216,6 +259,51 @@ class FakeClient implements HeartwoodClient {
 
   getModelSettings(): Promise<ModelSettings> {
     return Promise.resolve(this.currentSettings);
+  }
+
+  importLocalModel(
+    request: LocalModelImportRequest,
+  ): Promise<LocalModelImportResult> {
+    this.localImportRequest = request;
+    return Promise.resolve({
+      model: {
+        model_id: "imported-model",
+        label: "Imported model",
+        purpose: "User-imported model",
+        runtime: "llama-cpp",
+        source_repository: request.repository,
+        source_revision: request.revision,
+        source_path: "model.gguf",
+        size_bytes: 1024,
+        minimum_free_bytes: 2048,
+        license_posture: request.license,
+        catalog_source: "user-selected",
+        context_window: 32_768,
+        artifact_sha256: "a".repeat(64),
+        minimum_resource_envelope: "4 GiB RAM",
+        recommended_resource_envelope: "8 GiB RAM",
+        available: true,
+        availability_reason: "Available on this deployment",
+      },
+      path: "/project/.heartwood/models/imported/model.gguf",
+      status: "ready",
+    });
+  }
+
+  forgetCredential(connectionId: string): Promise<CredentialSettings> {
+    const connection = this.currentSettings.connections.find(
+      (candidate) => candidate.connection_id === connectionId,
+    );
+    this.currentSettings = {
+      ...this.currentSettings,
+      credential_bindings: this.currentSettings.credential_bindings.filter(
+        (binding) => binding.binding_id !== connection?.api_key_env,
+      ),
+    };
+    return Promise.resolve({
+      store: this.currentSettings.credential_store,
+      bindings: this.currentSettings.credential_bindings,
+    });
   }
 
   configureModelSource(sourceId: ModelSource): Promise<ModelSettings> {
@@ -352,18 +440,18 @@ class FakeClient implements HeartwoodClient {
       ];
       this.currentSettings = {
         ...this.currentSettings,
-        active_profile: "local",
-        model_source: "local",
+        active_profile: "heartwood",
+        model_source: "heartwood",
         profiles: [
           {
             ...localProfile(),
-            model: "openai/heartwood-local-model",
-            description: "Heartwood-managed local model",
+            model: "openai/heartwood-managed-model",
+            description: "Stories 260K",
           },
         ],
         source_options: this.currentSettings.source_options.map((source) => ({
           ...source,
-          selected: source.source_id === "local",
+          selected: source.source_id === "heartwood",
         })),
       };
     }
@@ -590,6 +678,28 @@ class DeferredCommandClient extends FakeClient {
 }
 
 describe("App", () => {
+  it("waits for explicit project confirmation before creating a session", async () => {
+    const client = new FirstRunClient();
+    render(<App client={client} />);
+
+    expect(
+      await screen.findByRole("button", { name: "Use this project" }),
+    ).toBeInTheDocument();
+    expect(client.currentSessions).toHaveLength(0);
+    expect(
+      screen.queryByRole("heading", { name: "Synthetic analysis" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this project" }));
+
+    await waitFor(() => expect(client.initialized).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(
+      await screen.findByRole("heading", { name: "Main session" }),
+    ).toBeInTheDocument();
+    expect(client.currentSessions).toHaveLength(1);
+  });
+
   it("opens first-run setup and configures a shared research model source", async () => {
     const client = new FakeClient();
     client.currentReadiness = projectReadiness("setup-required");
@@ -598,7 +708,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Set up Heartwood" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("synthetic-analysis")).toBeInTheDocument();
+    expect(screen.getAllByText("synthetic-analysis")).toHaveLength(2);
     const stanford = screen
       .getByText("Stanford AI API Gateway")
       .closest(".connection-row");
@@ -670,15 +780,16 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders session state and sends detection commands", async () => {
+  it("renders the shared project and platform context", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
 
     await screen.findByRole("heading", { name: "Synthetic analysis" });
-    fireEvent.click(screen.getByLabelText("Detect environment"));
-
-    await waitFor(() => expect(client.commands).toHaveLength(1));
-    expect(client.commands[0]?.kind).toBe("detect");
+    expect(screen.getByText("synthetic-analysis")).toBeInTheDocument();
+    expect(screen.getByText("Workstation or container")).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Detect environment"),
+    ).not.toBeInTheDocument();
   });
 
   it("generates and retrieves a scrubbed audit export", async () => {
@@ -696,7 +807,7 @@ describe("App", () => {
     const client = new FakeClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
+      active_profile: "heartwood",
       profiles: [localProfile()],
     };
     render(<App client={client} initialSessionId="session-test" />);
@@ -723,7 +834,7 @@ describe("App", () => {
     const client = new DeferredCommandClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
+      active_profile: "heartwood",
       profiles: [localProfile()],
     };
     render(<App client={client} initialSessionId="session-test" />);
@@ -773,8 +884,8 @@ describe("App", () => {
     const client = new FakeClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
-      model_source: "local",
+      active_profile: "heartwood",
+      model_source: "heartwood",
       profiles: [localProfile()],
     };
     render(<App client={client} initialSessionId="session-test" />);
@@ -795,8 +906,8 @@ describe("App", () => {
     const client = new FakeClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
-      model_source: "local",
+      active_profile: "heartwood",
+      model_source: "heartwood",
       profiles: [localProfile()],
     };
     render(<App client={client} initialSessionId="session-test" />);
@@ -902,7 +1013,7 @@ describe("App", () => {
       }),
     );
     fireEvent.change(screen.getByLabelText("Provider preset"), {
-      target: { value: "local-openai-compatible" },
+      target: { value: "heartwood-managed" },
     });
     fireEvent.change(screen.getByLabelText("Model"), {
       target: { value: "openai/local-model" },
@@ -925,13 +1036,14 @@ describe("App", () => {
       await screen.findByText("Ready for Heartwood launch"),
     ).toBeInTheDocument();
     expect(screen.getByText("Model runtime needed")).toBeInTheDocument();
-    expect(screen.getByText("heartwood launch --web")).toBeInTheDocument();
     expect(screen.getByLabelText("Active model profile")).toHaveTextContent(
-      "Local · heartwood-local-model",
+      "Run with Heartwood · Stories 260K",
     );
     expect(screen.getByLabelText("Task")).toBeDisabled();
     expect(
-      screen.getByText("Start the selected model with heartwood launch --web."),
+      screen.getByText(
+        "Restart with heartwood --interface web to start the selected Heartwood-managed model.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -974,6 +1086,57 @@ describe("App", () => {
     );
   });
 
+  it("remembers and forgets a provider token only after explicit choices", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...client.currentSettings,
+      credential_bindings: [
+        {
+          binding_id: "OPENAI_API_KEY",
+          configured: true,
+          source: "keyring",
+        },
+      ],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    const openAiConnection = (await screen.findByText("OpenAI")).closest(
+      ".connection-row",
+    );
+    expect(openAiConnection).not.toBeNull();
+    fireEvent.click(
+      within(openAiConnection as HTMLElement).getByRole("button", {
+        name: "Connect",
+      }),
+    );
+    fireEvent.change(await screen.findByLabelText("API token"), {
+      target: { value: "remembered-token" },
+    });
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Remember securely for this project",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+
+    await waitFor(() =>
+      expect(client.catalogRequest).toEqual({
+        connection_id: "openai",
+        token: "remembered-token",
+        refresh: true,
+        remember: true,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Forget token" }));
+    await waitFor(() =>
+      expect(client.currentSettings.credential_bindings).toHaveLength(0),
+    );
+    expect(JSON.stringify(client.currentSettings)).not.toContain(
+      "remembered-token",
+    );
+  });
+
   it("plans and downloads another Hugging Face model through the shared gateway", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
@@ -981,6 +1144,10 @@ describe("App", () => {
     fireEvent.click(await screen.findByText("Other model"));
     fireEvent.change(screen.getByLabelText("Model repository"), {
       target: { value: "research/research-model-gguf" },
+    });
+    fireEvent.click(screen.getByText("Version options"));
+    fireEvent.change(screen.getByLabelText("Model revision"), {
+      target: { value: "reviewed-release" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check model" }));
 
@@ -1009,6 +1176,7 @@ describe("App", () => {
     );
     expect(client.inspectedRepository).toEqual({
       repository: "research/research-model-gguf",
+      revision: "reviewed-release",
     });
     expect(
       within(modelPlan as HTMLElement).getByRole("progressbar", {
@@ -1018,6 +1186,39 @@ describe("App", () => {
     expect(
       screen.getByLabelText("Download Research Model Q4_K_M"),
     ).toBeDisabled();
+  });
+
+  it("imports an existing managed model with explicit provenance", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByText("Other model"));
+    fireEvent.click(screen.getByText("Import an existing model"));
+    fireEvent.change(screen.getByLabelText("Server path"), {
+      target: { value: "/models/research-model.gguf" },
+    });
+    fireEvent.change(screen.getByLabelText("Source repository"), {
+      target: { value: "research/research-model" },
+    });
+    fireEvent.change(screen.getByLabelText("Source revision"), {
+      target: { value: "2".repeat(40) },
+    });
+    fireEvent.change(screen.getByLabelText("License"), {
+      target: { value: "Apache-2.0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Import model" }));
+
+    await waitFor(() =>
+      expect(client.localImportRequest).toEqual({
+        path: "/models/research-model.gguf",
+        repository: "research/research-model",
+        revision: "2".repeat(40),
+        license: "Apache-2.0",
+      }),
+    );
+    expect(
+      await screen.findByText("Model imported and selected"),
+    ).toHaveAttribute("role", "status");
   });
 
   it("continues polling a model download after a transient status failure", async () => {
@@ -1072,9 +1273,9 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
-    const customConnection = (await screen.findByText("Custom API")).closest(
-      ".connection-row",
-    );
+    const customConnection = (
+      await screen.findByText("Other compatible service")
+    ).closest(".connection-row");
     expect(customConnection).not.toBeNull();
     fireEvent.click(
       within(customConnection as HTMLElement).getByRole("button", {
@@ -1084,9 +1285,12 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("Server URL"), {
       target: { value: "https://models.example/v1" },
     });
-    fireEvent.change(screen.getByLabelText("Token (optional for local)"), {
-      target: { value: "runtime-only-token" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Token (optional for loopback services)"),
+      {
+        target: { value: "runtime-only-token" },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -1132,7 +1336,7 @@ describe("App", () => {
     const client = new FakeClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
+      active_profile: "heartwood",
       profiles: [{ ...localProfile(), credential_status: "missing" }],
     };
 
@@ -1148,11 +1352,11 @@ describe("App", () => {
     expect(screen.getByText("Setup needed")).toBeInTheDocument();
   });
 
-  it("uses shared compute readiness before a launch materializes the local profile", async () => {
+  it("uses shared compute readiness before a launch materializes the managed profile", async () => {
     const client = new FakeClient();
     client.currentSettings = {
       ...settings(),
-      model_source: "local",
+      model_source: "heartwood",
     };
     client.currentReadiness = projectReadiness("compute-required");
 
@@ -1160,7 +1364,7 @@ describe("App", () => {
 
     expect(
       await screen.findByText(
-        "Start the selected model with heartwood launch --web.",
+        "Restart with heartwood --interface web to start the selected Heartwood-managed model.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Task")).toBeDisabled();
@@ -1170,7 +1374,7 @@ describe("App", () => {
     const client = new FakeClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
+      active_profile: "heartwood",
       profiles: [localProfile()],
     };
     client.validationError = new Error("validation unavailable");
@@ -1190,8 +1394,8 @@ describe("App", () => {
     const client = new PendingClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
-      profiles: [localProfile()],
+      active_profile: "heartwood",
+      profiles: [localProfile(), customProfile()],
     };
     render(<App client={client} initialSessionId="session-test" />);
 
@@ -1213,7 +1417,9 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     fireEvent.click(screen.getByText("More options"));
     fireEvent.click(
-      screen.getByRole("button", { name: /local.*openai\/local-model/u }),
+      screen.getByRole("button", {
+        name: /custom-loopback.*openai\/custom-model/u,
+      }),
     );
     fireEvent.change(screen.getByLabelText("Provider preset"), {
       target: { value: "" },
@@ -1230,9 +1436,10 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("API key file"), {
       target: { value: "/run/secrets/model" },
     });
-    fireEvent.click(screen.getByLabelText("Remove local"));
+    expect(screen.queryByLabelText("Remove heartwood")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Remove custom-loopback"));
     await waitFor(() =>
-      expect(client.currentSettings.profiles).toHaveLength(0),
+      expect(client.currentSettings.profiles).toHaveLength(1),
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(
@@ -1244,7 +1451,7 @@ describe("App", () => {
     const client = new PendingClient();
     client.currentSettings = {
       ...settings(),
-      active_profile: "local",
+      active_profile: "heartwood",
       profiles: [localProfile()],
     };
     render(<App client={client} initialSessionId="session-test" />);
@@ -1300,6 +1507,36 @@ class PendingClient extends FakeClient {
   }
 }
 
+class FirstRunClient extends FakeClient {
+  initialized = false;
+
+  constructor() {
+    super();
+    this.currentSessions = [];
+    this.currentReadiness = projectReadiness("setup-required");
+  }
+
+  override getStartupPlan(): Promise<StartupPlan> {
+    const plan = startupPlan(this.currentReadiness);
+    return Promise.resolve(
+      this.initialized ? plan : (
+        {
+          ...plan,
+          phase: "project-review",
+          summary:
+            "Review this project before Heartwood creates private project state.",
+          next_action: "Confirm the project and choose a model connection.",
+        }
+      ),
+    );
+  }
+
+  override initializeProject(): Promise<StartupPlan> {
+    this.initialized = true;
+    return super.initializeProject();
+  }
+}
+
 class DeferredInitializationClient extends FakeClient {
   private readonly initialization: Promise<SessionList>;
   private resolveInitialization: (sessions: SessionList) => void = () =>
@@ -1342,7 +1579,7 @@ describe("App error handling", () => {
 });
 
 const localProfile = (): ModelProfile => ({
-  profile_id: "local",
+  profile_id: "heartwood",
   model: "openai/local-model",
   policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
   capability_tier: "supervised",
@@ -1353,7 +1590,14 @@ const localProfile = (): ModelProfile => ({
   api_version: null,
   aws_region_name: null,
   aws_profile_name: null,
-  description: "Local model",
+  description: "Model runtime managed by Heartwood",
+});
+
+const customProfile = (): ModelProfile => ({
+  ...localProfile(),
+  profile_id: "custom-loopback",
+  model: "openai/custom-model",
+  description: "User-managed model service",
 });
 
 const modelConnection = (
@@ -1362,41 +1606,55 @@ const modelConnection = (
   source: ModelConnection["source"],
   credentialStatus: ModelConnection["credential_status"],
   acceptsToken: boolean,
-): ModelConnection => ({
-  connection_id: connectionId,
-  label,
-  protocol:
-    connectionId === "anthropic" ? "anthropic"
-    : connectionId === "research-ai" ? "static"
-    : "openai-compatible",
-  model_prefix: connectionId === "research-ai" ? "litellm_proxy/" : "openai/",
-  source,
-  credential_kind:
-    connectionId === "local" ? "none"
-    : connectionId === "research-ai" ? "managed-identity"
-    : "environment",
-  policy_endpoint:
-    connectionId === "custom-api" ? null : (
-      "http://127.0.0.1:8765/v1/chat/completions"
-    ),
-  catalog_endpoint:
-    connectionId === "custom-api" ? null : "http://127.0.0.1:8765/v1/models",
-  base_url: connectionId === "local" ? "http://127.0.0.1:8765/v1" : null,
-  api_key_env:
-    acceptsToken ?
-      connectionId === "custom-api" ?
-        "HEARTWOOD_CUSTOM_MODEL_API_KEY"
-      : "OPENAI_API_KEY"
-    : null,
-  api_key_file: null,
-  api_version: null,
-  aws_region_name: null,
-  aws_profile_name: null,
-  description: `${label} models`,
-  static_models: [],
-  accepts_token: acceptsToken,
-  credential_status: credentialStatus,
-});
+): ModelConnection => {
+  const group =
+    connectionId === "heartwood" ? "heartwood-managed"
+    : source === "platform" ? "research-environment"
+    : source === "user" ? "compatible-service"
+    : "hosted-provider";
+  const groupLabel =
+    group === "heartwood-managed" ? "Run with Heartwood"
+    : group === "research-environment" ? "Research environment"
+    : group === "compatible-service" ? "Other compatible services"
+    : "Hosted providers";
+  return {
+    connection_id: connectionId,
+    label,
+    protocol:
+      connectionId === "anthropic" ? "anthropic"
+      : connectionId === "research-ai" ? "static"
+      : "openai-compatible",
+    model_prefix: connectionId === "research-ai" ? "litellm_proxy/" : "openai/",
+    source,
+    credential_kind:
+      connectionId === "heartwood" ? "none"
+      : connectionId === "research-ai" ? "managed-identity"
+      : "environment",
+    policy_endpoint:
+      connectionId === "custom-api" ? null : (
+        "http://127.0.0.1:8765/v1/chat/completions"
+      ),
+    catalog_endpoint:
+      connectionId === "custom-api" ? null : "http://127.0.0.1:8765/v1/models",
+    base_url: connectionId === "heartwood" ? "http://127.0.0.1:8765/v1" : null,
+    api_key_env:
+      acceptsToken ?
+        connectionId === "custom-api" ?
+          "HEARTWOOD_CUSTOM_MODEL_API_KEY"
+        : "OPENAI_API_KEY"
+      : null,
+    api_key_file: null,
+    api_version: null,
+    aws_region_name: null,
+    aws_profile_name: null,
+    description: `${label} models`,
+    static_models: [],
+    group,
+    group_label: groupLabel,
+    accepts_token: acceptsToken,
+    credential_status: credentialStatus,
+  };
+};
 
 const modelSource = (
   sourceId: ModelSource,
@@ -1428,6 +1686,44 @@ const projectReadiness = (
         : "Setup is incomplete",
     },
   ],
+});
+
+const startupPlan = (readiness: ProjectReadiness): StartupPlan => ({
+  phase:
+    readiness.state === "ready" ? "ready"
+    : readiness.state === "compute-required" ? "compute-required"
+    : readiness.state === "recovery-required" ? "recovery-required"
+    : "connection-required",
+  interface: "web",
+  platform_id: readiness.platform_id,
+  project_root: readiness.project_root,
+  state_root: readiness.state_root,
+  summary:
+    readiness.state === "ready" ?
+      "Heartwood is ready in the web interface."
+    : "Choose where the model runs.",
+  next_action:
+    readiness.state === "ready" ?
+      "Start or resume a session."
+    : "Select a model connection in setup.",
+  access_url: "http://127.0.0.1:8767/",
+  requires_compute: readiness.state === "compute-required",
+  requires_confirmation: false,
+  interface_supported: true,
+  readiness,
+  capabilities: {
+    platform_id: readiness.platform_id,
+    display_name: "Workstation or container",
+    interfaces: ["terminal", "web", "notebook"],
+    browser_route: "direct",
+    managed_runtimes: ["llama-cpp", "vllm"],
+    scheduler: "none",
+    persistent_storage: "The project directory",
+    credential_backends: ["process", "keyring", "mounted-file"],
+    model_sources: ["heartwood", "openai", "anthropic", "custom"],
+    managed_model_connections: [],
+    validation_level: "ci",
+  },
 });
 
 const bundledSkill = (): SkillSummary => ({

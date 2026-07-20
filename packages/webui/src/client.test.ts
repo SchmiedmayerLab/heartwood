@@ -78,14 +78,14 @@ afterEach(() => {
 
 describe("createCommand", () => {
   it("builds the shared session command envelope", () => {
-    const command = createCommand("session-test", "run", 7, {
+    const command = createCommand("session-test", "chat", 7, {
       prompt: "synthetic",
     });
 
     expect(command).toMatchObject({
       actor_id: "human",
-      command_id: "session-test-run-000007",
-      kind: "run",
+      command_id: "session-test-chat-000007",
+      kind: "chat",
       payload: { prompt: "synthetic" },
       schema_version: "heartwood.session-command.v1",
       session_id: "session-test",
@@ -94,6 +94,30 @@ describe("createCommand", () => {
 });
 
 describe("GatewayClient", () => {
+  it("ensures the shared first session through an idempotent operation", async () => {
+    const session = {
+      session_id: "session-main",
+      title: "Main session",
+      status: "empty",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      event_count: 0,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(session)));
+    vi.stubGlobal("fetch", fetch);
+
+    const ensured = await new GatewayClient(
+      "/proxy/8767",
+    ).ensureDefaultSession();
+
+    expect(ensured).toEqual(session);
+    expect(fetch).toHaveBeenCalledWith("/proxy/8767/sessions/default", {
+      method: "POST",
+    });
+  });
+
   it("manages persisted session lifecycle routes", async () => {
     const session = {
       session_id: "session-test",
@@ -168,7 +192,7 @@ describe("GatewayClient", () => {
 
     const client = new GatewayClient("/proxy/8767");
     const response = await client.postCommand(
-      createCommand("session-test", "detect", 0),
+      createCommand("session-test", "pause", 0),
     );
 
     expect(response.events).toHaveLength(1);
@@ -219,7 +243,7 @@ describe("GatewayClient", () => {
   it("manages non-secret model profiles through settings routes", async () => {
     const settings = {
       schema_version: "heartwood.model-settings.v1",
-      active_profile: "local",
+      active_profile: "heartwood",
       profiles: [],
       presets: [],
     };
@@ -238,8 +262,8 @@ describe("GatewayClient", () => {
     vi.stubGlobal("fetch", fetch);
     const client = new GatewayClient("/proxy/8767");
     const profile = {
-      profile_id: "local",
-      model: "openai/local-model",
+      profile_id: "custom-loopback",
+      model: "openai/custom-model",
       policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
       capability_tier: "supervised" as const,
       base_url: "http://127.0.0.1:8765/v1",
@@ -254,9 +278,9 @@ describe("GatewayClient", () => {
 
     await client.getModelSettings();
     await client.saveModelProfile(profile);
-    await client.selectModelProfile("local");
-    await client.removeModelProfile("local");
-    await client.validateModelProfile("local profile");
+    await client.selectModelProfile("custom-loopback");
+    await client.removeModelProfile("custom-loopback");
+    await client.validateModelProfile("custom profile");
 
     expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/models");
     expect(fetch).toHaveBeenNthCalledWith(
@@ -271,12 +295,12 @@ describe("GatewayClient", () => {
     );
     expect(fetch).toHaveBeenNthCalledWith(
       4,
-      "/proxy/8767/settings/models/profiles/local",
+      "/proxy/8767/settings/models/profiles/custom-loopback",
       { method: "DELETE" },
     );
     expect(fetch).toHaveBeenNthCalledWith(
       5,
-      "/proxy/8767/settings/models/validation?profile_id=local%20profile",
+      "/proxy/8767/settings/models/validation?profile_id=custom%20profile",
     );
   });
 
@@ -298,6 +322,8 @@ describe("GatewayClient", () => {
       aws_profile_name: null,
       description: "OpenAI models",
       static_models: [],
+      group: "hosted-provider",
+      group_label: "Hosted providers",
       accepts_token: true,
       credential_status: "missing",
     };
@@ -728,7 +754,7 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances[0]?.url).toBe(
       "/proxy/8767/sessions/session-test/events/stream?after=2",
     );
-    expect(received[0]?.[0]?.kind).toBe("model_call.decision.recorded");
+    expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");
     expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
   });
 
@@ -748,7 +774,7 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances[0]?.url).toBe(
       "/proxy/8767/sessions/session-test/events/stream?after=2",
     );
-    expect(received[0]?.[0]?.kind).toBe("model_call.decision.recorded");
+    expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");
   });
 
   it("opens the fallback only once for repeated WebSocket failures", () => {
@@ -834,7 +860,7 @@ describe("GatewayClient", () => {
     const cleanup = client.streamEvents("session-test", undefined, (events) => {
       received.push(events);
     });
-    FakeWebSocket.instances[0]?.emit(syntheticEvents().slice(4, 5));
+    FakeWebSocket.instances[0]?.emit(syntheticEvents().slice(3, 4));
     cleanup();
 
     expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");

@@ -24,7 +24,7 @@ cleanup() {
   kill "${runtime_pid}" >/dev/null 2>&1 || true
   wait "${runtime_pid}" >/dev/null 2>&1 || true
   if [ "${status}" -ne 0 ]; then
-    printf 'Local inference runtime log:\n' >&2
+    printf 'Heartwood-managed inference runtime log:\n' >&2
     tail -n 200 "${log_file}" >&2 || true
   fi
   rm -f "${log_file}"
@@ -57,7 +57,7 @@ else:
 
 payload = json.dumps(
     {
-        "model": "heartwood-local-runtime",
+        "model": "heartwood-managed-runtime",
         "messages": [{"role": "user", "content": "Once upon a time"}],
         "max_tokens": 4,
         "temperature": 0,
@@ -73,5 +73,5 @@ with urllib.request.urlopen(request, timeout=60) as response:
 choices = result.get("choices")
 if not isinstance(choices, list) or not choices:
     raise SystemExit(f"llama-server returned no completion choices: {result}")
-print("Mounted local inference smoke: ok")
+print("Mounted Heartwood-managed inference smoke: ok")
 PY

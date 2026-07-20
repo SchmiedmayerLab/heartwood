@@ -31,6 +31,11 @@ def assert_platform_adapter_conforms(
     assert detection.adapter_id == adapter.adapter_id
     _assert_confidence(detection.confidence)
     assert detection.evidence
+    capabilities = adapter.capabilities()
+    assert capabilities.platform_id == adapter.adapter_id
+    assert "terminal" in capabilities.interfaces
+    assert capabilities.persistent_storage
+    assert capabilities.model_sources
     assert isinstance(adapter.data_mounts(), tuple)
     assert isinstance(adapter.credential_allowlist(), tuple)
     profile = adapter.default_policy_profile()

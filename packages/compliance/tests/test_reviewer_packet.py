@@ -24,11 +24,10 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
         env={},
         backend_id="deterministic",
     )
-    gateway.handle(_command(session_id, CommandKind.DETECT))
     gateway.handle(
         _command(
             session_id,
-            CommandKind.RUN,
+            CommandKind.CHAT,
             prompt="participant-level prompt must not appear",
         )
     )

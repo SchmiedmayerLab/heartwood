@@ -29,6 +29,7 @@ from heartwood.cli._launch import (
     _format_bytes,
     _gguf_file,
     _interaction_command,
+    _local_model_selection,
     _model_size,
     _persist_effective_context,
     _preflight_vllm,
@@ -52,6 +53,7 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    SessionGateway,
     model_profile_from_preset,
 )
 
@@ -240,7 +242,7 @@ def test_launch_reports_missing_selection_artifact_and_runtime(
 ) -> None:
     env = {"HEARTWOOD_PLATFORM": "generic"}
     assert run_launch(_options(tmp_path, selected=False), env=env) == 64
-    assert "No local model is selected" in capsys.readouterr().out
+    assert "No Heartwood-managed model is selected" in capsys.readouterr().out
     assert run_launch(_options(tmp_path), env=env) == 66
     _snapshot(tmp_path / ".heartwood" / "models" / "model")
     monkeypatch.setattr(
@@ -582,7 +584,7 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         "llama-cpp",
         Path("/opt/llama.cpp/llama-server"),
         model,
-        "heartwood-local-model",
+        "heartwood-managed-model",
         32_768,
     )
     assert command[:3] == (
@@ -767,12 +769,16 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
         )
     )
 
-    assert command[-7:] == (
-        "--web",
+    assert command[-11:] == (
+        "--interface",
+        "web",
         "--host",
         "0.0.0.0",
         "--port",
         "9876",
+        "runtime",
+        "start",
+        "--inside-allocation",
         "--startup-timeout",
         "600",
     )
@@ -780,7 +786,14 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     interaction, label = _interaction_command(
         _options(tmp_path, web=True, web_host="0.0.0.0", web_port=9876)
     )
-    assert interaction[-5:] == ["serve", "--host", "0.0.0.0", "--port", "9876"]
+    assert interaction[-6:] == [
+        "gateway",
+        "serve",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9876",
+    ]
     assert label == "Open the web interface on 0.0.0.0:9876"
 
 
@@ -794,7 +807,14 @@ def test_terra_web_launch_reports_the_authenticated_proxy_route(tmp_path: Path) 
         },
     )
 
-    assert interaction[-5:] == ["serve", "--host", "127.0.0.1", "--port", "8767"]
+    assert interaction[-6:] == [
+        "gateway",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8767",
+    ]
     assert label == (
         "Open the web interface through Terra's authenticated proxy: "
         "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/"
@@ -879,7 +899,9 @@ def test_runtime_readiness_reports_progress_and_rejects_malformed_catalog(
         model_id="test-model",
         timeout=30,
     )
-    assert "Still starting the local model server (16 seconds elapsed)" in capsys.readouterr().out
+    assert (
+        "Still starting the Heartwood-managed model (16 seconds elapsed)" in capsys.readouterr().out
+    )
     assert not _catalog_contains_model([], "test-model")
     assert not _catalog_contains_model({"data": "invalid"}, "test-model")
     assert not _catalog_contains_model({"data": ["invalid"]}, "test-model")
@@ -921,7 +943,7 @@ def test_setup_helper_propagates_setup_failure_and_missing_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert _ensure_setup(_options(tmp_path / "missing", selected=False), {}) == 64
-    assert "No local model is selected for setup" in capsys.readouterr().out
+    assert "No Heartwood-managed model is selected for setup" in capsys.readouterr().out
 
     observed: list[tuple[str, ...]] = []
 
@@ -945,9 +967,9 @@ def test_effective_context_is_persisted_in_the_shared_local_profile(tmp_path: Pa
             policy=adapter.default_policy_profile(),
         ),
     )
-    profile = model_profile_from_preset("local-openai-compatible", "heartwood-local-model")
+    profile = model_profile_from_preset("heartwood-managed", "heartwood-managed-model")
     settings = ModelSettings().with_profile(profile).selecting(profile.profile_id)
-    store.select_model_source("local", settings)
+    store.select_model_source("heartwood", settings)
 
     _persist_effective_context(store, 65_536)
 
@@ -1192,6 +1214,33 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
     assert _stage_model(source_directory, directory_destination) == directory_destination
     assert (directory_destination / "weights.safetensors").read_bytes() == b"synthetic"
     assert _model_size(source_directory) > 0
+
+
+def test_imported_vllm_snapshot_passes_the_launch_integrity_gate(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    snapshot.joinpath("config.json").write_text(
+        json.dumps({"architectures": ["SyntheticForCausalLM"]}),
+        encoding="utf-8",
+    )
+    snapshot.joinpath("model.safetensors").write_bytes(b"synthetic")
+    project = ProjectContext(project_root)
+    gateway = SessionGateway(project=project, env={})
+
+    gateway.import_local_model(
+        snapshot,
+        source_repository="example/research-model",
+        source_revision="1" * 40,
+        license_posture="Apache-2.0",
+        context_window=32_768,
+    )
+    selection = _local_model_selection(project, {})
+
+    assert selection is not None
+    assert selection.runtime == "vllm"
+    _verify_local_model(selection)
 
 
 def test_model_staging_progress_waits_for_a_stable_eta(
