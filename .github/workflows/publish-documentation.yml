@@ -105,8 +105,6 @@ jobs:
           enable-cache: true
       - name: Install the release documentation toolchain
         run: uv sync --locked --only-group docs
-      - name: Stage canonical release documentation
-        run: uv run --no-sync python deploy/stage_documentation.py
       - name: Build release documentation strictly
         run: uv run --no-sync zensical build --clean --strict
       - name: Fetch the existing version store

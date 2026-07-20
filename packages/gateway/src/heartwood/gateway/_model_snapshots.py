@@ -251,7 +251,7 @@ def download_model_snapshot(
                 json.dumps(source_record, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            _write_manifest(staging)
+            write_model_snapshot_manifest(staging)
             verify_model_snapshot(staging)
             _verify_source_record(staging, snapshot)
             staging.replace(destination)
@@ -335,7 +335,8 @@ def verify_model_snapshot(root: Path) -> None:
             raise ValueError(f"SHA-256 mismatch: {relative_name}")
 
 
-def _write_manifest(root: Path) -> None:
+def write_model_snapshot_manifest(root: Path) -> None:
+    """Write an exact SHA-256 coverage manifest for a prepared snapshot."""
     entries: list[str] = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
         relative = path.relative_to(root).as_posix()

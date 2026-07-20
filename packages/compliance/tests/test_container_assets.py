@@ -29,14 +29,14 @@ from heartwood.gateway import verify_model_snapshot
 
 
 def test_generic_image_packages_one_no_weight_runtime() -> None:
-    dockerfile = _read("images/generic/Dockerfile")
+    dockerfile = _read("images/Dockerfile")
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
-    assert "FROM node:24-trixie-slim AS webui-build" in dockerfile
+    assert "FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS webui-build" in dockerfile
     assert "uv sync --locked --no-dev --all-extras" in dockerfile
-    assert "USER heartwood" in dockerfile
+    assert "USER ${HEARTWOOD_RUNTIME_USER}" in dockerfile
     assert 'CMD ["heartwood", "--help"]' in dockerfile
-    assert "WORKDIR /workspace" in dockerfile
+    assert "WORKDIR ${HEARTWOOD_WORKDIR}" in dockerfile
     assert "/workspace" in dockerfile
     assert "LITELLM_LOCAL_MODEL_COST_MAP=True" in dockerfile
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
@@ -44,10 +44,12 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz" in dockerfile
     assert "      jq \\" in dockerfile
     assert "sha256sum --check" in dockerfile
-    assert "chown -R heartwood:heartwood /workspace /home/heartwood" in dockerfile
+    assert "/etc/ld.so.conf.d/heartwood-llama.conf" in dockerfile
+    assert "ldconfig" in dockerfile
+    assert 'chown -R "${HEARTWOOD_RUNTIME_USER}:${HEARTWOOD_RUNTIME_USER}"' in dockerfile
     assert "COPY --chown=heartwood:heartwood" not in dockerfile
     assert dockerfile.index("uv sync --locked --no-dev --all-extras") < dockerfile.index(
-        "USER heartwood"
+        "USER ${HEARTWOOD_RUNTIME_USER}"
     )
     for line in dockerfile.splitlines():
         if "chown" in line:
@@ -82,8 +84,8 @@ def test_docker_context_excludes_local_dependencies_and_generated_output() -> No
 
 
 def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None:
-    generic = _read("images/generic/Dockerfile")
-    platform = _read("images/platform/Dockerfile")
+    dockerfile = _read("images/Dockerfile")
+    bake = _read("docker-bake.hcl")
     manifest = _toml("images/platforms.toml")
     terra = manifest["platforms"]["terra"]
 
@@ -94,37 +96,43 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "skills",
         "evals",
         "images",
-        "README.md ACRONYMS.md",
-        "docs",
-        "design",
+        "README.md NOTICE",
+        "documentation",
     ):
-        assert source in generic
-        assert source in platform
+        assert source in dockerfile
     for runtime_setting in (
         "ARG LLAMA_CPP_VERSION=b9937",
         "LITELLM_LOCAL_MODEL_COST_MAP=True",
         "OPENHANDS_SUPPRESS_BANNER=1",
     ):
-        assert runtime_setting in generic
-        assert runtime_setting in platform
+        assert runtime_setting in dockerfile
 
     assert (
-        "FROM --platform=${HEARTWOOD_PLATFORM_BASE_PLATFORM} ${HEARTWOOD_PLATFORM_BASE_IMAGE}"
-        in platform
-    )
-    assert 'PATH="/opt/llama.cpp:${PATH}"' in platform
-    assert "      jq \\" in platform
-    assert "/opt/heartwood/.venv/bin:${PATH}" not in platform
-    assert "ipykernel install" in platform
-    assert '--env IPYTHONDIR "/tmp/heartwood-ipython"' in platform
-    assert "heartwood-workspace" not in platform
-    assert "heartwood-project" not in platform
-    assert "USER ${HEARTWOOD_PLATFORM_USER}" in platform
-    assert "WORKDIR ${HEARTWOOD_PLATFORM_HOME}" in platform
-    assert "HEARTWOOD_GPU_RUNTIME=${HEARTWOOD_GPU_RUNTIME}" in platform
-    assert "HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR}" in platform
-    assert "HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM}" in platform
-    assert "HEARTWOOD_PLATFORM_HOME=${HEARTWOOD_PLATFORM_HOME}" in platform
+        "FROM --platform=${HEARTWOOD_BASE_PLATFORM} ${HEARTWOOD_BASE_IMAGE} "
+        "AS heartwood-runtime-base"
+    ) in dockerfile
+    assert 'PATH="/opt/llama.cpp:${PATH}"' in dockerfile
+    assert "      jq \\" in dockerfile
+    assert "/opt/heartwood/.venv/bin:${PATH}" not in dockerfile
+    assert "ipykernel install" in dockerfile
+    assert '--env IPYTHONDIR "/tmp/heartwood-ipython"' in dockerfile
+    assert "heartwood-workspace" not in dockerfile
+    assert "heartwood-project" not in dockerfile
+    assert "USER ${HEARTWOOD_RUNTIME_USER}" in dockerfile
+    assert "WORKDIR ${HEARTWOOD_WORKDIR}" in dockerfile
+    assert "HEARTWOOD_GPU_RUNTIME=${HEARTWOOD_GPU_RUNTIME}" in dockerfile
+    assert "HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR}" in dockerfile
+    assert "HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM}" in dockerfile
+    assert "HEARTWOOD_PLATFORM_HOME=${HEARTWOOD_RUNTIME_HOME}" in dockerfile
+    assert 'dockerfile = "images/Dockerfile"' in bake
+    assert 'target = "runtime-image"' in bake
+    assert 'target = "platform-runtime-image"' in bake
+    assert 'HEARTWOOD_BASE_IMAGE = "${TERRA_BASE_IMAGE}"' in bake
+    assert 'HEARTWOOD_BASE_PLATFORM = "linux/amd64"' in bake
+    assert 'HEARTWOOD_CREATE_USER = "false"' in bake
+    assert 'HEARTWOOD_INSTALL_JUPYTER_KERNEL = "true"' in bake
+    assert not (_repo_root() / "images/generic/Dockerfile").exists()
+    assert not (_repo_root() / "images/platform/Dockerfile").exists()
     for legacy_setting in (
         "HEARTWOOD_AGENT_BACKEND=",
         "HEARTWOOD_HOME=",
@@ -135,8 +143,8 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "HEARTWOOD_SKILLS_DIR=",
         "HF_HOME=",
     ):
-        assert legacy_setting not in platform
-    _assert_no_embedded_model_contract(platform)
+        assert legacy_setting not in dockerfile
+    _assert_no_embedded_model_contract(dockerfile)
 
     assert terra["runtime_target"] == "terra-runtime"
     assert terra["gpu_runtime_target"] == "terra-runtime-gpu-nvidia"
@@ -154,6 +162,15 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
     assert terra["config_media_type"] == "application/vnd.docker.container.image.v1+json"
     assert terra["publish_attestations"] is False
+
+
+def test_container_smoke_uses_bake_as_the_heartwood_build_contract() -> None:
+    workflow = _read(".github/workflows/container-smoke.yml")
+
+    assert workflow.count("docker buildx bake --file docker-bake.hcl --call=check") == 2
+    assert "--set runtime.tags=heartwood-capable:local" in workflow
+    assert "--build-arg HEARTWOOD_" not in workflow
+    assert "--file images/Dockerfile" not in workflow
 
 
 def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
@@ -205,6 +222,7 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     }
     assert 'targets = ["runtime"]' in bake
     assert 'platforms = ["linux/amd64", "linux/arm64"]' in bake
+    assert bake.count('dockerfile = "images/Dockerfile"') == 2
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia"' in bake
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia"' in bake
     assert bake.count('HEARTWOOD_GPU_RUNTIME = "vllm"') == 2
@@ -218,8 +236,8 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
 
 
 def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
-    generic = _read("images/generic/Dockerfile")
-    platform = _read("images/platform/Dockerfile")
+    dockerfile = _read("images/Dockerfile")
+    installer = _read("images/gpu/install_runtime.sh")
     launcher = _read("images/gpu/start_vllm.sh")
     verifier = _read("images/gpu/verify_runtime.sh")
     compatibility = _read("images/gpu/heartwood_vllm.py")
@@ -228,28 +246,25 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     lock = _read("images/gpu/vllm-requirements.txt")
     overrides = _read("images/gpu/vllm-overrides.txt")
 
-    for dockerfile in (generic, platform):
-        assert "uv venv /opt/heartwood-vllm --python 3.12" in dockerfile
-        assert "uv pip sync --require-hashes" in dockerfile
-        assert "images/gpu/vllm-requirements.txt" in dockerfile
-        assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
-        assert "AS gpu-ci-validate" in dockerfile
-        assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
-        assert (
-            "images/gpu/heartwood_vllm.py /opt/heartwood-vllm/bin/heartwood_vllm.py" in dockerfile
-        )
-        assert "images/gpu/sitecustomize.py /opt/heartwood-vllm/bin/sitecustomize.py" in dockerfile
-        assert "images/gpu/heartwood-vllm /opt/heartwood-vllm/bin/heartwood-vllm" in dockerfile
-    assert generic.index("uv venv /opt/heartwood-vllm") < generic.index("COPY packages ./packages")
-    assert platform.index("uv venv /opt/heartwood-vllm") < platform.index(
+    assert "images/gpu/install_runtime.sh" in dockerfile
+    assert "--target /opt/heartwood-vllm --python 3.12" in dockerfile
+    assert "HEARTWOOD_GPU_RUNTIME" in dockerfile
+    assert "AS gpu-ci-validate" in dockerfile
+    assert "RUN /opt/heartwood/images/gpu/verify_runtime.sh" in dockerfile
+    assert dockerfile.index("images/gpu/install_runtime.sh") < dockerfile.index(
         "COPY packages ./packages"
     )
-    assert platform.count("UV_CACHE_DIR=/root/.cache/uv") == 2
-    for dockerfile in (generic, platform):
-        for line in dockerfile.splitlines():
-            if "chown" in line:
-                assert "/opt/heartwood" not in line
-                assert "/opt/heartwood-vllm" not in line
+    assert dockerfile.count("UV_CACHE_DIR=/root/.cache/uv") == 2
+    for line in dockerfile.splitlines():
+        if "chown" in line:
+            assert "/opt/heartwood" not in line
+            assert "/opt/heartwood-vllm" not in line
+    assert '"${uv}" venv "${target}"' in installer
+    assert '"${uv}" pip sync' in installer
+    assert '"${runtime_sources}/vllm-requirements.txt"' in installer
+    assert '"${runtime_sources}/heartwood_vllm.py"' in installer
+    assert '"${runtime_sources}/sitecustomize.py"' in installer
+    assert '"${runtime_sources}/heartwood-vllm"' in installer
     assert "vllm-0.10.1.1%2Bcu118" in lock
     assert "certifi-2026.6.17-py3-none-any.whl" in lock
     assert "certifi==2022.12.7" not in lock
@@ -318,6 +333,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "trust_remote_code=False" in compatibility
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
     assert os.access(_repo_root() / "images/gpu/heartwood-vllm", os.X_OK)
+    assert os.access(_repo_root() / "images/gpu/install_runtime.sh", os.X_OK)
 
 
 @pytest.mark.parametrize("filename", ["small.gguf", "small.safetensors"])
@@ -388,7 +404,7 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
         **os.environ,
         "HEARTWOOD_LOCAL_MODEL_PATH": str(model),
         "HEARTWOOD_VLLM_EXECUTABLE": str(executable),
-        "HEARTWOOD_LOCAL_MODEL_ALIAS": "test-model",
+        "HEARTWOOD_MANAGED_MODEL_ALIAS": "test-model",
     }
 
     completed = subprocess.run(["bash", str(script)], env=env, check=False)
@@ -407,24 +423,28 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
 
 def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     bootstrap = _read("deploy/carina/bootstrap.sh")
+    runtime_verifier = _read("images/gpu/verify_runtime.sh")
     launch_runtime = _read("packages/cli/src/heartwood/cli/_launch.py")
     environment = _toml("images/generic/image-flavors.toml")
     bootstrap_environment = _read("deploy/carina/environment.yml")
 
     assert "micromamba create" in bootstrap
-    assert 'images/gpu/heartwood_vllm.py "${root}/vllm/bin/heartwood_vllm.py"' in bootstrap
-    assert 'images/gpu/sitecustomize.py "${root}/vllm/bin/sitecustomize.py"' in bootstrap
-    assert 'images/gpu/heartwood-vllm "${root}/vllm/bin/heartwood-vllm"' in bootstrap
-    assert '"${root}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__' in bootstrap
+    assert "images/gpu/install_runtime.sh" in bootstrap
+    assert 'images/gpu/verify_runtime.sh "${root}/vllm"' in bootstrap
+    assert "from importlib.metadata import version" not in bootstrap
+    assert '--target "${root}/vllm"' in bootstrap
+    assert '--python "${bootstrap_python}"' in bootstrap
+    assert '--uv "${root}/bootstrap/bin/uv"' in bootstrap
+    assert 'HEARTWOOD_VLLM_PYTHON="${root}/vllm/bin/python"' in bootstrap
+    assert 'HEARTWOOD_VLLM_EXECUTABLE="${root}/vllm/bin/heartwood-vllm"' in bootstrap
     assert "micromamba install" in bootstrap
     assert "module load" in bootstrap
     assert "HEARTWOOD_MODULE_INIT" in bootstrap
     assert "/usr/share/lmod/lmod/init/profile" in bootstrap
     assert '"${root}/bootstrap/conda-meta"' in bootstrap
-    assert "images/gpu/vllm-requirements.txt" in bootstrap
+    assert "images/gpu/vllm-requirements.txt" not in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
-    assert "import torch" in bootstrap
-    assert "import vllm" in bootstrap
+    assert "import torch, vllm" in runtime_verifier
     assert "VLLM_USE_FLASHINFER_SAMPLER=0" in bootstrap
     assert "ffmpeg" not in bootstrap_environment
     assert "SLURM_JOB_ID" in launch_runtime
@@ -438,6 +458,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "result = {name: env[name] for name in allowed_names if name in env}" in launch_runtime
     assert '"OPENAI_API_KEY"' not in launch_runtime
     assert '"--model-source"' in launch_runtime
+    assert '"heartwood"' in launch_runtime
     assert "127.0.0.1:8765/v1/models" in launch_runtime
     assert '"sinfo", "--noheader", "--format=%P|%G|%a"' in launch_runtime
     assert "_SLURM_EXPORTED_ENVIRONMENT" in launch_runtime
@@ -535,6 +556,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in workflow
     assert 'target=gpu-ci-validate"' in pull_request_build
+    assert "bash -n images/gpu/install_runtime.sh" in workflow
+    assert "test -x images/gpu/install_runtime.sh" in workflow
     assert 'output=type=cacheonly"' in pull_request_build
     assert "output=type=docker" not in pull_request_build
     assert "docker/setup-buildx-action@v4" in pull_request_build
@@ -609,16 +632,18 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in capable
-    assert "models refresh local" in smoke
-    assert "models connect local heartwood-local-runtime" in smoke
+    assert "models refresh heartwood" in smoke
+    assert "models connect heartwood heartwood-managed-runtime" in smoke
     assert "models add inactive-smoke" in smoke
     assert "HEARTWOOD_UNUSED_MODEL_API_KEY" in smoke
     assert "HEARTWOOD_UNUSED_MODEL_API_KEY" in model_stub
     assert 'self.path != "/v1/models"' in model_stub
-    assert "models validate local" in smoke
-    assert "chat" in smoke
-    assert "call-heartwood-reference-analysis" in smoke
-    assert "call-heartwood-offline-smoke" in smoke
+    assert "models validate heartwood" in smoke
+    assert ' --prompt "' in smoke
+    assert " chat " not in smoke
+    assert " detect " not in smoke
+    assert "call-heartwood-reference-analysis" not in smoke
+    assert "call-heartwood-offline-smoke" not in smoke
     assert "cohort-summary.json" in smoke
     assert " allow " in smoke
     assert " reject " in smoke
@@ -698,6 +723,10 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     jupyter_smoke = _read("images/generic/scripts/terra_jupyter_demo_smoke.py")
     assert '"chat"' in jupyter_smoke
     assert '"approve"' in jupyter_smoke
+    assert (
+        '[\n            "heartwood",\n            "gateway",\n            "serve",' in jupyter_smoke
+    )
+    assert 'RUNTIME_ROOT / "packages" / "webui" / "dist"' in jupyter_smoke
     assert '"confirmation.requested"' in jupyter_smoke
     assert '"tool.execution.recorded"' in jupyter_smoke
     assert "os.chdir(PROJECT_ROOT)" in jupyter_smoke
@@ -705,12 +734,12 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert '"project/readiness"' in jupyter_smoke
 
     terra_launch = _read("images/platform/scripts/terra_jupyter_launch_smoke.sh")
-    assert "heartwood serve --host 0.0.0.0" in terra_launch
+    assert "heartwood --interface web --host 0.0.0.0" in terra_launch
     assert "project/readiness" in terra_launch
     assert "proxy/${gateway_port}/" in terra_launch
 
     terra_managed_launch = _read("images/platform/scripts/terra_managed_launch_smoke.sh")
-    assert "heartwood launch --web" in terra_managed_launch
+    assert "heartwood --interface web" in terra_managed_launch
     assert 'payload.get("platform_id") != "terra"' in terra_managed_launch
     assert 'payload.get("state") != "ready"' in terra_managed_launch
     assert 'payload.get("project_root")' in terra_managed_launch
@@ -718,12 +747,14 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert "Open the web interface through Terra" in terra_managed_launch
     assert "did not report ${expected_proxy}" in terra_managed_launch
     assert "terra-project-storage" in terra_managed_launch
-    assert "terra-gpu-runtime" in terra_managed_launch
+    assert 'checks.get("terra-gpu"' in terra_managed_launch
 
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
     assert terra_persistence.count("terra_image_smoke.sh") == 2
     assert "terra-project-persistence replay" in terra_persistence
+    assert "heartwood doctor --json" in terra_persistence
+    assert " terra-project-persistence detect" not in terra_persistence
     assert "test ! -e /home/jupyter/.heartwood" in terra_persistence
 
 
@@ -786,7 +817,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert publish.index("Run staged Terra current-directory persistence smoke") < publish.index(
         "Run staged Terra OpenHands smoke"
     )
-    assert publish.index("Run staged Terra managed local-model launch smoke") < publish.index(
+    assert publish.index("Run staged Terra Heartwood-managed model launch smoke") < publish.index(
         "Run staged Terra local inference smoke"
     )
     assert publish.index("Run staged Terra local inference smoke") < publish.index(
@@ -806,7 +837,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
     assert "Run Terra current-directory persistence smoke" in smoke
-    assert "Run Terra managed local-model launch smoke" in smoke
+    assert "Run Terra Heartwood-managed model launch smoke" in smoke
     assert "terra_managed_launch_smoke.sh" in smoke
     assert "terra_project_persistence_smoke.sh" in smoke
     assert "images/generic/scripts/offline_stack_smoke.sh" in smoke
@@ -930,7 +961,7 @@ commit_runtime_tag = "sha-<git-sha>-terra"
 
 [platforms.terra.required_env_contains]
 PATH = ["/opt/llama.cpp", "/opt/conda/bin", "/usr/local/bin"]
-LD_LIBRARY_PATH = ["/opt/llama.cpp"]
+LD_LIBRARY_PATH = ["/usr/local/cuda/lib64", "/usr/local/nvidia/lib64"]
 JUPYTER_PATH = ["/opt/conda/share/jupyter"]
 """,
             encoding="utf-8",
@@ -1133,7 +1164,7 @@ class _RegistryHandler(BaseHTTPRequestHandler):
                         "ExposedPorts": {"8000/tcp": {}},
                         "Env": [
                             "PATH=/opt/llama.cpp:/opt/conda/bin:/usr/local/bin:/usr/bin",
-                            "LD_LIBRARY_PATH=/opt/llama.cpp",
+                            ("LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib64"),
                             "JUPYTER_PATH=/opt/conda/share/jupyter",
                             "HEARTWOOD_PLATFORM=terra",
                             "HEARTWOOD_PLATFORM_HOME=/home/jupyter",

@@ -11,8 +11,8 @@ import { requestActivityForCommand } from "./requestActivity";
 
 describe("requestActivityForCommand", () => {
   it("uses model-aware waiting copy for task and continuation commands", () => {
-    expect(requestActivityForCommand("chat")).toEqual(
-      requestActivityForCommand("run"),
+    expect(requestActivityForCommand("chat").guidance).toContain(
+      "selected model",
     );
     expect(requestActivityForCommand("resume").guidance).toContain(
       "selected model",
@@ -23,8 +23,8 @@ describe("requestActivityForCommand", () => {
   });
 
   it("describes utility commands without claiming agent workflow progress", () => {
-    expect(requestActivityForCommand("detect").label).toBe(
-      "Inspecting the project environment",
+    expect(requestActivityForCommand("pause").label).toBe(
+      "Pausing the session",
     );
     expect(requestActivityForCommand("audit.export").guidance).toContain(
       "session histories",

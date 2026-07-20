@@ -35,11 +35,12 @@ from heartwood.cli._interactive import (
     pending_actions,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
-from heartwood.compliance import ReviewerPacketGenerator
 from heartwood.gateway import (
     BUILT_IN_MODEL_CONNECTIONS,
+    DEFAULT_SESSION_ID,
     MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
+    CredentialStoreError,
     DeploymentReadiness,
     GatewayAsgiApp,
     ModelArtifactError,
@@ -51,11 +52,15 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    ProjectStateError,
     SessionGateway,
     SkillSettingsError,
+    StartupPlan,
+    custom_model_connection_requires_token,
     has_authenticated_jupyter_proxy,
     inspect_deployment,
     jupyter_proxy_url,
+    model_source_options,
 )
 from heartwood.session import (
     CommandKind,
@@ -81,22 +86,19 @@ def _bundled_path(relative: Path) -> Path:
     return relative
 
 
-def _bundled_repository_root() -> Path:
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "pyproject.toml").is_file() and (parent / "packages").is_dir():
-            return parent
-    msg = "Heartwood repository assets are unavailable in this installation"
-    raise RuntimeError(msg)
-
-
-_DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
 _DEFAULT_WEB_ROOT = _bundled_path(Path("packages") / "webui" / "dist")
+_DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
 _ACTION_MODE_ARGUMENTS = {
     "ask-every-time": "always-confirm",
     "auto-approve-low-risk": "confirm-risky",
 }
-_MODEL_SOURCE_IDS = tuple(option.source_id for option in MODEL_SOURCE_OPTIONS)
-_MODEL_SOURCE_LABELS = {option.source_id: option.label for option in MODEL_SOURCE_OPTIONS}
+_MODEL_SOURCE_ARGUMENTS = {
+    "heartwood": "heartwood",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "custom": "custom",
+    "stanford-ai-api-gateway": "stanford-ai-api-gateway",
+}
 _MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
     label="Downloading and verifying the model",
     waiting_label="Still downloading and verifying the model",
@@ -107,47 +109,48 @@ _MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=_PROG,
-        description="Auditable agentic coding for sensitive biomedical research data.",
+        description=(
+            "A coding agent for biomedical research projects, with reviewable actions "
+            "and a durable audit history."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"{_PROG} {__version__}")
     parser.add_argument(
         "--session-id",
-        default="session-local",
+        default=DEFAULT_SESSION_ID,
         type=_session_id_argument,
         help="Session identifier.",
     )
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
-
-    chat = subparsers.add_parser(
-        "chat",
-        aliases=["agent"],
-        help="Open the coding-agent conversation or submit one task.",
+    parser.add_argument(
+        "--interface",
+        choices=("terminal", "web"),
+        default="terminal",
+        help="Open the terminal or browser presentation.",
     )
-    chat.add_argument("--prompt", "-p", help="Submit one task instead of opening the prompt loop.")
-    chat.add_argument(
+    parser.add_argument(
         "--plain",
         action="store_true",
-        help="Use the line-oriented interface for basic terminals and automation.",
+        help="Use the line-oriented terminal instead of the full-screen interface.",
     )
-    run = subparsers.add_parser(
-        "run",
-        help="Compatibility alias for one coding-agent task.",
-    )
-    run.add_argument(
-        "prompt",
-        nargs="?",
-        default="build the synthetic target-condition cohort and report aggregate quality checks",
-    )
-    subparsers.add_parser("detect", help="Detect the platform and dataset without running code.")
+    parser.add_argument("--prompt", "-p", help="Submit one task and exit.")
+    parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
+    parser.add_argument("--port", type=int, default=8767, help="Browser interface port.")
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     doctor = subparsers.add_parser("doctor", help="Inspect environment and setup readiness.")
     doctor.add_argument("--json", action="store_true", help="Print machine-readable diagnostics.")
     setup = subparsers.add_parser("setup", help="Configure a model route and conservative policy.")
     setup.add_argument(
         "--model-source",
-        choices=_MODEL_SOURCE_IDS,
+        choices=tuple(option.source_id for option in model_source_options(os.environ)),
         help="Model service to configure.",
     )
     setup.add_argument("--model-id", help="Exact model identifier reported by the service.")
+    setup.add_argument("--base-url", help="Base URL for another compatible model service.")
+    setup.add_argument(
+        "--remember-credential",
+        action="store_true",
+        help="Store the provider token in the system credential store when available.",
+    )
     setup.add_argument(
         "--non-interactive",
         action="store_true",
@@ -155,43 +158,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     setup.add_argument("--yes", action="store_true", help="Confirm the displayed configuration.")
 
-    launch = subparsers.add_parser(
-        "launch", help="Prepare platform compute and open an interactive Heartwood session."
+    runtime = subparsers.add_parser(
+        "runtime", help="Advanced Heartwood-managed inference operations."
     )
-    launch.add_argument(
+    runtime_subparsers = runtime.add_subparsers(dest="runtime_command", metavar="<runtime-command>")
+    runtime_start = runtime_subparsers.add_parser(
+        "start", help="Review and start the selected Heartwood-managed model runtime."
+    )
+    runtime_start.add_argument(
         "--partition",
         help="Slurm GPU partition; by default Heartwood selects the available default.",
     )
-    launch.add_argument("--gpus", type=int, default=1)
-    launch.add_argument("--cpus", type=int, default=8)
-    launch.add_argument("--memory", default="64G")
-    launch.add_argument("--time", dest="time_limit", default="02:00:00")
-    launch.add_argument("--startup-timeout", type=int, default=600)
-    launch.add_argument("--dry-run", action="store_true")
-    launch.add_argument("--no-allocate", action="store_true")
-    launch.add_argument(
+    runtime_start.add_argument("--gpus", type=int, default=1)
+    runtime_start.add_argument("--cpus", type=int, default=8)
+    runtime_start.add_argument("--memory", default="64G")
+    runtime_start.add_argument("--time", dest="time_limit", default="02:00:00")
+    runtime_start.add_argument("--startup-timeout", type=int, default=600)
+    runtime_start.add_argument("--dry-run", action="store_true")
+    runtime_start.add_argument("--no-allocate", action="store_true")
+    runtime_start.add_argument(
         "--yes-request-allocation",
         action="store_true",
         help="Confirm the displayed scheduler request without an interactive prompt.",
     )
-    launch.add_argument("--inside-allocation", action="store_true", help=argparse.SUPPRESS)
-    launch.add_argument("--plain", action="store_true", help="Open the line-oriented chat.")
-    launch.add_argument(
-        "--web",
-        action="store_true",
-        help="Open the web interface while Heartwood supervises the local model.",
-    )
-    launch.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Web bind host when --web is selected.",
-    )
-    launch.add_argument(
-        "--port",
-        type=int,
-        default=8767,
-        help="Web bind port when --web is selected.",
-    )
+    runtime_start.add_argument("--inside-allocation", action="store_true", help=argparse.SUPPRESS)
 
     allow = subparsers.add_parser(
         "allow",
@@ -245,7 +235,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use a Custom API model identifier when its server cannot list models.",
     )
-    model_subparsers.add_parser("local", help="List available local model choices.")
+    model_subparsers.add_parser(
+        "managed", help="List models that Heartwood can manage in this environment."
+    )
     inspect_models = model_subparsers.add_parser(
         "inspect", help="Inspect supported models in a Hugging Face repository."
     )
@@ -261,7 +253,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add.add_argument(
         "--policy-endpoint", required=True, help="Exact endpoint authorized by policy."
     )
-    add.add_argument("--base-url", help="Custom provider or local OpenAI-compatible base URL.")
+    add.add_argument("--base-url", help="Custom provider or loopback OpenAI-compatible base URL.")
     add.add_argument(
         "--credential-kind",
         choices=("environment", "file", "managed-identity", "none"),
@@ -287,6 +279,10 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("profile_id", nargs="?")
     remove = model_subparsers.add_parser("remove", help="Remove a profile.")
     remove.add_argument("profile_id")
+    forget = model_subparsers.add_parser(
+        "forget", help="Remove a saved provider credential from the system credential store."
+    )
+    forget.add_argument("connection_id")
     download = model_subparsers.add_parser(
         "download", help="Download a recommended or inspected Hugging Face model."
     )
@@ -294,6 +290,32 @@ def _build_parser() -> argparse.ArgumentParser:
     download.add_argument(
         "--revision",
         help="Advanced: repository branch, tag, or commit for an owner/model identifier.",
+    )
+    import_model = model_subparsers.add_parser(
+        "import", help="Import an existing GGUF file or vLLM model directory."
+    )
+    import_model.add_argument("path", type=Path, help="Existing model file or directory.")
+    import_model.add_argument(
+        "--source",
+        required=True,
+        help="Upstream Hugging Face owner/model identifier.",
+    )
+    import_model.add_argument(
+        "--revision",
+        required=True,
+        help="Immutable upstream commit hash.",
+    )
+    import_model.add_argument(
+        "--license",
+        required=True,
+        dest="license_posture",
+        help="Upstream license identifier or review note.",
+    )
+    import_model.add_argument(
+        "--context-window",
+        type=int,
+        default=32_768,
+        help="Maximum model context supported by this artifact.",
     )
 
     skills = subparsers.add_parser("skills", help="Inspect bundled Skills and extensions.")
@@ -320,21 +342,15 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_export = audit_subparsers.add_parser("export", help="Export scrubbed audit JSONL.")
     audit_export.add_argument("--output", type=Path, help="Optional copy destination.")
 
-    reviewer = subparsers.add_parser("reviewer", help="Reviewer artifact operations.")
-    reviewer_subparsers = reviewer.add_subparsers(
-        dest="reviewer_command", metavar="<reviewer-command>"
+    gateway = subparsers.add_parser("gateway", help="Advanced gateway operations.")
+    gateway_subparsers = gateway.add_subparsers(dest="gateway_command", metavar="<gateway-command>")
+    gateway_serve = gateway_subparsers.add_parser(
+        "serve", help="Serve the gateway and packaged browser interface."
     )
-    packet = reviewer_subparsers.add_parser(
-        "packet", help="Generate the synthetic reviewer artifact set."
-    )
-    packet.add_argument("--output", type=Path, default=Path("compliance") / "reviewer-packet")
-    packet.add_argument("--fixture-root", type=Path, default=_DEFAULT_FIXTURE_ROOT)
-
-    serve = subparsers.add_parser("serve", help="Serve the gateway and packaged web UI.")
-    serve.add_argument("--host", default="127.0.0.1", help="Gateway bind host.")
-    serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
-    serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
-    serve.add_argument("--base-path", default="/", help="Base path behind a notebook proxy.")
+    gateway_serve.add_argument("--host", default="127.0.0.1", help="Gateway bind host.")
+    gateway_serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
+    gateway_serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
+    gateway_serve.add_argument("--base-path", default="/", help="Base path behind a proxy.")
     return parser
 
 
@@ -343,10 +359,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     project = ProjectContext.current()
-    if args.command is None and not sys.stdin.isatty():
+    if args.port < 1 or args.port > 65_535:
+        parser.error("--port must be between 1 and 65535")
+    if args.plain and args.interface != "terminal":
+        parser.error("--plain can be used only with --interface terminal")
+    if args.prompt is not None and args.interface != "terminal":
+        parser.error("--prompt can be used only with --interface terminal")
+    if (
+        args.command is None
+        and args.interface == "terminal"
+        and not sys.stdin.isatty()
+        and args.prompt is None
+    ):
         parser.print_help()
         return 0
-    if args.command == "serve":
+    if args.command == "gateway" and args.gateway_command == "serve":
         return _handle_serve(
             project=project,
             host=args.host,
@@ -354,61 +381,76 @@ def main(argv: Sequence[str] | None = None) -> int:
             web_root=args.web_root,
             base_path=args.base_path,
         )
-    if args.command == "reviewer" and args.reviewer_command == "packet":
-        return _handle_reviewer_packet(
-            project=project,
-            session_id=args.session_id,
-            fixture_root=args.fixture_root,
-            output=args.output,
-        )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
     if args.command == "setup":
         return _handle_setup(parser, args, project=project)
-    if args.command == "launch":
+    if args.command == "runtime" and args.runtime_command == "start":
         if args.gpus < 1 or args.cpus < 1 or args.startup_timeout < 1 or args.port < 1:
             parser.error("--gpus, --cpus, --startup-timeout, and --port must be positive")
-        return run_launch(
-            LaunchOptions(
-                project=project,
-                session_id=args.session_id,
-                partition=args.partition,
-                gpus=args.gpus,
-                cpus=args.cpus,
-                memory=args.memory,
-                time_limit=args.time_limit,
-                dry_run=args.dry_run,
-                no_allocate=args.no_allocate,
-                yes_request_allocation=args.yes_request_allocation,
-                inside_allocation=args.inside_allocation,
-                plain=args.plain,
-                web=args.web,
-                web_host=args.host,
-                web_port=args.port,
-                startup_timeout=args.startup_timeout,
-            )
-        )
+        return run_launch(_launch_options(project, args))
     configured_gateway: SessionGateway | None = None
-    if args.command is None and sys.stdin.isatty():
-        readiness = inspect_deployment(project)
-        if readiness.state == "setup-required":
-            print("Heartwood needs a model route before the first conversation.\n")
+    if args.command is None:
+        startup_gateway = SessionGateway(project=project)
+        startup = startup_gateway.startup(interface=args.interface, port=args.port)
+        if not startup.interface_supported or startup.phase == "recovery-required":
+            print(_format_startup_plan(startup))
+            startup_gateway.stop()
+            return 1
+        if args.interface == "web" and startup.phase != "ready" and not startup.requires_compute:
+            print(_format_startup_plan(startup))
+            print("\nOpening guided setup in the browser. Keep this terminal running.")
+            startup_gateway.stop()
+            return _handle_serve(
+                project=project,
+                host=args.host,
+                port=args.port,
+                web_root=_DEFAULT_WEB_ROOT,
+                base_path="/",
+            )
+        if startup.phase == "project-review" and not _review_project(project):
+            print("No project files were changed.")
+            startup_gateway.stop()
+            return 0
+        if startup.phase in {
+            "project-review",
+            "connection-required",
+            "credential-required",
+            "model-required",
+        }:
+            print(f"{startup.summary}\n")
+            startup_gateway.stop()
             setup_code, configured_gateway = _configure_setup(parser, args, project=project)
             if setup_code != 0:
                 return setup_code
-            readiness = inspect_deployment(project)
-        if readiness.state == "recovery-required":
-            print(_format_readiness(readiness))
-            print("\nResolve the failed checks, then run `heartwood doctor` again.")
+            print("\nSetup complete. Starting Heartwood.")
+            if configured_gateway is None:  # pragma: no cover - setup success invariant
+                raise RuntimeError("setup completed without a gateway")
+            startup = configured_gateway.startup(interface=args.interface, port=args.port)
+        else:
+            configured_gateway = startup_gateway
+        if startup.phase == "recovery-required":
+            print(_format_startup_plan(startup))
             if configured_gateway is not None:
                 configured_gateway.stop()
             return 1
-        if readiness.state == "compute-required":
-            print(_format_readiness(readiness))
-            print("\nLocal inference is configured. Start it with `heartwood launch`.")
+        if startup.phase == "compute-required":
             if configured_gateway is not None:
                 configured_gateway.stop()
-            return 0
+            print(_format_startup_plan(startup))
+            print()
+            return run_launch(_launch_options(project, args))
+        if args.interface == "web":
+            if configured_gateway is not None:
+                configured_gateway.stop()
+            print(_format_startup_plan(startup))
+            return _handle_serve(
+                project=project,
+                host=args.host,
+                port=args.port,
+                web_root=_DEFAULT_WEB_ROOT,
+                base_path="/",
+            )
 
     gateway = configured_gateway or SessionGateway(project=project)
     gateway.start()
@@ -419,22 +461,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _handle_actions(parser, gateway, args)
         if args.command == "skills":
             return _handle_skills(parser, gateway, args)
-        if args.command == "detect":
-            return _handle_detect(gateway, project=project, session_id=args.session_id)
-        if args.command in {None, "chat", "agent"}:
-            if getattr(args, "prompt", None) is not None:
+        if args.command is None:
+            if args.prompt is not None:
                 return _submit_task(gateway, session_id=args.session_id, prompt=args.prompt)
             return _interactive_chat(
                 gateway,
                 session_id=args.session_id,
-                plain=getattr(args, "plain", False),
-            )
-        if args.command == "run":
-            return _submit_task(
-                gateway,
-                session_id=args.session_id,
-                prompt=args.prompt,
-                kind=CommandKind.RUN,
+                plain=args.plain,
             )
         if args.command in {"allow", "approve", "reject", "deny"}:
             directive = "/allow" if args.command in {"allow", "approve"} else "/reject"
@@ -461,7 +494,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _handle_doctor(*, project: ProjectContext, as_json: bool) -> int:
-    readiness = inspect_deployment(project)
+    gateway = SessionGateway(project=project)
+    readiness = gateway.deployment_readiness()
+    gateway.stop()
     print(json.dumps(readiness.safe_dict(), indent=2) if as_json else _format_readiness(readiness))
     return 1 if readiness.state == "recovery-required" else 0
 
@@ -478,7 +513,82 @@ def _format_readiness(readiness: DeploymentReadiness) -> str:
     markers = {"pass": "OK", "warning": "NOTE", "fail": "FAIL"}
     for check in readiness.checks:
         lines.append(f"[{markers[check.status]}] {check.summary}")
+        if check.status != "pass":
+            diagnostic = check.safe_dict()
+            lines.append(f"       {diagnostic['code']} · {diagnostic['next_action']}")
     return "\n".join(lines)
+
+
+def _format_startup_plan(startup: StartupPlan) -> str:
+    plan = startup.safe_dict()
+    capabilities = plan["capabilities"]
+    if not isinstance(capabilities, dict):  # pragma: no cover - typed serialization invariant
+        raise TypeError("startup capabilities must be an object")
+    return "\n".join(
+        (
+            "Heartwood",
+            f"Project: {plan['project_root']}",
+            f"Environment: {capabilities['display_name']}",
+            f"Interface: {plan['interface']}",
+            "",
+            str(plan["summary"]),
+            f"Next: {plan['next_action']}",
+        )
+    )
+
+
+def _launch_options(project: ProjectContext, args: argparse.Namespace) -> LaunchOptions:
+    return LaunchOptions(
+        project=project,
+        session_id=args.session_id,
+        partition=getattr(args, "partition", None),
+        gpus=getattr(args, "gpus", 1),
+        cpus=getattr(args, "cpus", 8),
+        memory=getattr(args, "memory", "64G"),
+        time_limit=getattr(args, "time_limit", "02:00:00"),
+        dry_run=getattr(args, "dry_run", False),
+        no_allocate=getattr(args, "no_allocate", False),
+        yes_request_allocation=getattr(args, "yes_request_allocation", False),
+        inside_allocation=getattr(args, "inside_allocation", False),
+        plain=args.plain,
+        web=args.interface == "web",
+        web_host=args.host,
+        web_port=args.port,
+        startup_timeout=getattr(args, "startup_timeout", 600),
+    )
+
+
+def _review_project(project: ProjectContext) -> bool:
+    print("Heartwood project")
+    print(f"  {project.root}")
+    print("Heartwood can work with files in this folder and its subfolders.")
+    entries = tuple(path for path in project.root.iterdir() if path.name != ".heartwood")
+    print("\nChoose how to begin:")
+    print("  1. Use this project")
+    if not entries:
+        print("  2. Add the synthetic first example")
+    print("  0. Cancel")
+    try:
+        choice = input("Select: ").strip()
+    except EOFError:
+        return False
+    if choice in {"", "1"}:
+        return True
+    if choice == "2" and not entries:
+        _create_synthetic_example(project)
+        return True
+    return False
+
+
+def _create_synthetic_example(project: ProjectContext) -> None:
+    source = _DEFAULT_FIXTURE_ROOT / "omop-like"
+    destination = project.root / "data"
+    if destination.exists():
+        raise ProjectStateError("synthetic example destination already exists: data")
+    destination.mkdir(mode=0o700)
+    for filename in ("person.csv", "condition_occurrence.csv"):
+        shutil.copy2(source / filename, destination / filename)
+    print("Added synthetic data under data/. No real research data was accessed.")
 
 
 def _handle_setup(
@@ -488,12 +598,30 @@ def _handle_setup(
     project: ProjectContext,
 ) -> int:
     code, gateway = _configure_setup(parser, args, project=project)
+    startup: dict[str, object] | None = None
+    process_only_credentials = False
     if gateway is not None:
+        startup = gateway.startup_plan(interface="terminal")
+        credential_settings = gateway.credential_settings()
+        bindings = credential_settings.get("bindings", [])
+        process_only_credentials = isinstance(bindings, list) and any(
+            isinstance(binding, dict)
+            and binding.get("configured") is True
+            and binding.get("source") == "process"
+            for binding in bindings
+        )
         gateway.stop()
     if code == 0:
-        readiness = inspect_deployment(project)
-        if readiness.state == "compute-required":
-            print("Run `heartwood launch` to start the selected model and conversation.")
+        if process_only_credentials:
+            print("Configuration saved, but the provider token was not stored.")
+            print(
+                "Export the provider credential in this shell or rerun setup with "
+                "--remember-credential before starting a new Heartwood process."
+            )
+            return 2
+        print("Setup complete.")
+        if startup is not None and startup.get("phase") == "compute-required":
+            print("Run `heartwood` to start the selected model and conversation.")
         else:
             print("Run `heartwood` to start the conversation.")
     return code
@@ -510,10 +638,13 @@ def _configure_setup(
         print(_format_readiness(readiness))
         print("\nSetup cannot continue until failed environment checks are resolved.")
         return 1, None
-    source = getattr(args, "model_source", None)
+    source_argument = getattr(args, "model_source", None)
+    source = _MODEL_SOURCE_ARGUMENTS[source_argument] if source_argument is not None else None
+    base_url = getattr(args, "base_url", None)
     non_interactive = bool(getattr(args, "non_interactive", False))
     confirmed = bool(getattr(args, "yes", False))
     model_id = getattr(args, "model_id", None)
+    remember_credential = bool(getattr(args, "remember_credential", False))
     resume_existing = False
     resume_managed_local = False
     if project.config_path.is_file():
@@ -533,10 +664,12 @@ def _configure_setup(
                 pass
             else:
                 source = existing.model_source
-                if source == "local" and existing.local_model is not None:
+                if source == "heartwood" and existing.local_model is not None:
                     model_id = existing.local_model.artifact_id
                     resume_managed_local = True
                 else:
+                    if source == "custom" and base_url is None:
+                        base_url = existing_profile.base_url
                     source_option = next(
                         (item for item in MODEL_SOURCE_OPTIONS if item.source_id == source),
                         None,
@@ -564,23 +697,29 @@ def _configure_setup(
         if non_interactive:
             parser.error("--model-source is required with --non-interactive")
         print(_format_readiness(readiness))
-        print("\nModel access:")
-        for index, source_id in enumerate(_MODEL_SOURCE_IDS, start=1):
-            print(f"  {index}. {_MODEL_SOURCE_LABELS[source_id]}")
+        options = model_source_options(os.environ)
+        print("\nWhere should the model run?")
+        for index, option in enumerate(options, start=1):
+            print(f"  {index}. {option.label}")
+            print(f"     {option.description}")
         try:
-            choice = input(f"Select [1-{len(_MODEL_SOURCE_IDS)}]: ").strip()
+            choice = input(f"Select [1-{len(options)}]: ").strip()
         except EOFError:
             print("\nSetup cancelled because input closed.")
             return 1, None
-        if not choice.isdigit() or not 1 <= int(choice) <= len(_MODEL_SOURCE_IDS):
+        if not choice.isdigit() or not 1 <= int(choice) <= len(options):
             print("Setup cancelled because no valid model source was selected.")
             return 1, None
-        source = _MODEL_SOURCE_IDS[int(choice) - 1]
+        source = options[int(choice) - 1].source_id
     if non_interactive and model_id is None:
         parser.error("--model-id is required with --non-interactive")
     print("\nConfiguration")
     print(f"  Platform: {readiness.platform_id}")
-    print(f"  Model source: {_MODEL_SOURCE_LABELS.get(source, source)}")
+    source_option = next(
+        (option for option in MODEL_SOURCE_OPTIONS if option.source_id == source),
+        None,
+    )
+    print(f"  Model source: {source_option.label if source_option else source}")
     print(
         "  Action confirmation: Existing project setting"
         if resume_existing
@@ -606,22 +745,63 @@ def _configure_setup(
         gateway.start()
         if not resume_existing:
             gateway.select_action_confirmation_mode("always-confirm")
-        if source == "local":
+        if source == "heartwood":
             if not resume_managed_local:
                 _configure_local_model(
                     gateway,
                     model_id=model_id,
                     non_interactive=non_interactive,
                 )
-            print("Setup complete.")
             return 0, gateway
-        connection_id = "local" if source == "local" else source
-        token = _prompt_for_provider_token(
-            gateway,
-            connection_id=connection_id,
-            non_interactive=non_interactive,
+        source_option = next(
+            option for option in MODEL_SOURCE_OPTIONS if option.source_id == source
         )
-        catalog = gateway.discover_models(connection_id, token=token, refresh=True)
+        connection_id = source_option.connection_id
+        if source == "custom" and base_url is None and not non_interactive:
+            try:
+                base_url = input("Compatible service URL: ").strip()
+            except EOFError as error:
+                raise ModelCatalogError("service URL entry was cancelled") from error
+        if source == "custom" and not base_url:
+            raise ModelCatalogError("other compatible services require --base-url")
+        requires_token = True
+        if source == "custom":
+            assert isinstance(base_url, str)
+            requires_token = custom_model_connection_requires_token(base_url)
+        token = (
+            _prompt_for_provider_token(
+                gateway,
+                connection_id=connection_id,
+                non_interactive=non_interactive,
+            )
+            if requires_token
+            else None
+        )
+        if token is not None and not non_interactive:
+            credential_store = gateway.credential_settings().get("store", {})
+            if (
+                isinstance(credential_store, dict)
+                and credential_store.get("persistence_available") is True
+                and source != "custom"
+            ):
+                try:
+                    remember_credential = (
+                        input("Remember this token in the system credential store? [y/N]: ")
+                        .strip()
+                        .lower()
+                        == "y"
+                    )
+                except EOFError as error:
+                    raise ModelCatalogError("credential storage choice was cancelled") from error
+            elif source != "custom":
+                print("The token will be kept only until this Heartwood command exits.")
+        catalog = gateway.discover_models(
+            connection_id,
+            token=token,
+            base_url=base_url,
+            refresh=True,
+            remember=remember_credential,
+        )
         models = catalog.get("models", [])
         if not isinstance(models, list):
             raise ModelCatalogError("the selected model service returned an invalid catalog")
@@ -646,11 +826,12 @@ def _configure_setup(
                 model_id = str(available[int(selected) - 1])
             else:
                 model_id = selected
-        gateway.connect_model(connection_id, model_id)
+        gateway.connect_model(connection_id, model_id, base_url=base_url)
     except (
         ActionSettingsError,
         ModelArtifactError,
         ModelCatalogError,
+        CredentialStoreError,
         ModelRepositoryError,
         ModelSettingsError,
         ModelSnapshotError,
@@ -658,14 +839,14 @@ def _configure_setup(
         if gateway is not None:
             gateway.stop()
         _restore_setup_file(project, snapshot)
-        if source == "local":
-            print("Setup did not prepare a usable local model.")
+        if source == "heartwood":
+            print("Setup did not prepare a usable Heartwood-managed model.")
             print(f"Details: {error}")
             print(
                 "Run `heartwood setup` to choose a recommended model or Other Hugging Face "
                 "model, or start an existing OpenAI-compatible service."
             )
-            print("Then run `heartwood launch`.")
+            print("Then run `heartwood`.")
         else:
             print(f"Setup could not validate the model route: {error}")
         return 1, None
@@ -674,7 +855,6 @@ def _configure_setup(
             gateway.stop()
         _restore_setup_file(project, snapshot)
         raise
-    print("Setup complete.")
     return 0, gateway
 
 
@@ -697,7 +877,7 @@ def _configure_local_model(
     )
     service_models: list[str] = []
     try:
-        service_catalog = gateway.discover_models("local", refresh=True)
+        service_catalog = gateway.discover_models("heartwood", refresh=True)
     except ModelCatalogError:
         pass
     else:
@@ -712,7 +892,7 @@ def _configure_local_model(
             ]
 
     if model_id is None:
-        print("\nLocal models:")
+        print("\nModels Heartwood can run:")
         choices: list[tuple[str, str]] = []
         for item in recommendations:
             recommendation_id = str(item.get("model_id"))
@@ -732,7 +912,7 @@ def _configure_local_model(
             selected = input("Select a model by number or enter owner/model: ").strip()
         except EOFError as error:
             raise ModelRepositoryError(
-                "local model selection was cancelled because input closed"
+                "Heartwood-managed model selection was cancelled because input closed"
             ) from error
         if selected.isdigit() and 1 <= int(selected) <= len(choices):
             model_id = choices[int(selected) - 1][0]
@@ -743,17 +923,17 @@ def _configure_local_model(
                 model_id = input("Hugging Face model (owner/model): ").strip()
             except EOFError as error:
                 raise ModelRepositoryError(
-                    "local model selection was cancelled because input closed"
+                    "Heartwood-managed model selection was cancelled because input closed"
                 ) from error
     if not model_id.strip():
-        raise ModelRepositoryError("a local model must be selected")
+        raise ModelRepositoryError("a Heartwood-managed model must be selected")
 
     known_local_ids = {
         str(item.get("model_id")): item for item in recommendations if item.get("model_id")
     }
     if model_id in known_local_ids:
         item = known_local_ids[model_id]
-        print("\nSelected local model")
+        print("\nSelected Heartwood-managed model")
         print(f"  {item.get('label')}")
         if resources := item.get("recommended_resource_envelope"):
             print(f"  {resources}")
@@ -763,7 +943,7 @@ def _configure_local_model(
         )
         return
     if model_id in service_models:
-        gateway.connect_model("local", model_id)
+        gateway.connect_model("heartwood", model_id)
         return
     if "/" in model_id:
         plan = gateway.inspect_model_repository(model_id)
@@ -777,8 +957,8 @@ def _configure_local_model(
         return
     qualifier = " in non-interactive setup" if non_interactive else ""
     raise ModelRepositoryError(
-        f"unknown local model{qualifier}: {model_id}; choose a recommended id, "
-        "an owner/model identifier, or a model reported by the local service"
+        f"unknown Heartwood-managed model{qualifier}: {model_id}; choose a recommended id, "
+        "an owner/model identifier, or a model reported by the Heartwood runtime"
     )
 
 
@@ -842,7 +1022,7 @@ def _handle_models(
         if command == "list":
             print(_format_model_settings(gateway.model_settings()))
             return 0
-        if command == "local":
+        if command == "managed":
             print(_format_model_artifacts(gateway.model_artifacts()))
             return 0
         if command == "inspect":
@@ -880,6 +1060,24 @@ def _handle_models(
             print()
             print(_format_model_validation(gateway.validate_model_profile()))
             return 0
+        if command == "import":
+            imported = gateway.import_local_model(
+                args.path,
+                source_repository=args.source,
+                source_revision=args.revision,
+                license_posture=args.license_posture,
+                context_window=args.context_window,
+            )
+            model = imported.get("model", {})
+            label = (
+                model.get("label", "Imported model")
+                if isinstance(model, dict)
+                else "Imported model"
+            )
+            print(f"{label} is ready in this project.")
+            print(f"Location: {imported.get('path')}")
+            print("Run `heartwood` to use it.")
+            return 0
         if command == "add":
             profile = ModelProfile(
                 profile_id=args.profile_id,
@@ -909,6 +1107,10 @@ def _handle_models(
         if command == "remove":
             print(_format_model_settings(gateway.remove_model_profile(args.profile_id)))
             return 0
+        if command == "forget":
+            gateway.forget_credential(args.connection_id)
+            print(f"Forgot the saved credential for {args.connection_id}.")
+            return 0
         if command == "download":
             if "/" not in args.model:
                 if args.revision is not None:
@@ -925,12 +1127,13 @@ def _handle_models(
                     ),
                     activity=_MODEL_DOWNLOAD_ACTIVITY,
                 )
-            print(f"Local model: {path}")
-            print("Run `heartwood launch` to start the model and open Heartwood.")
+            print(f"Heartwood-managed model: {path}")
+            print("Run `heartwood` to start the model and open Heartwood.")
             return 0
     except (
         ModelArtifactError,
         ModelCatalogError,
+        CredentialStoreError,
         ModelRepositoryError,
         ModelSettingsError,
         ModelSnapshotError,
@@ -991,9 +1194,10 @@ def _format_model_settings(settings: dict[str, object]) -> str:
         for item in profiles:
             if not isinstance(item, dict):
                 continue
-            marker = "*" if item.get("profile_id") == active else " "
+            profile_id = item.get("profile_id")
+            marker = "*" if profile_id == active else " "
             lines.append(
-                f"{marker} {item.get('profile_id')}  {item.get('model')}  "
+                f"{marker} {profile_id}  {item.get('model')}  "
                 f"credentials={item.get('credential_status', 'unknown')}"
             )
             lines.append(f"    policy endpoint: {item.get('policy_endpoint')}")
@@ -1040,7 +1244,7 @@ def _format_model_validation(validation: dict[str, object]) -> str:
 
 
 def _format_model_artifacts(catalog: dict[str, object]) -> str:
-    lines = ["Heartwood local models", ""]
+    lines = ["Models Heartwood can run", ""]
     models = catalog.get("models", [])
     if isinstance(models, list):
         for item in models:
@@ -1372,10 +1576,6 @@ def _format_event(event: SessionEvent) -> str:
     prefix = f"[{event.sequence:03d}]"
     if kind == EventKind.COMMAND_RECEIVED.value:
         return ""
-    if kind == EventKind.DETECTION_PROPOSED.value:
-        dataset = _mapping_payload(event.payload["dataset"], "dataset")
-        platform = _mapping_payload(event.payload["platform"], "platform")
-        return f"{prefix} Detected {platform['adapter_id']} / {dataset['dataset_type']}"
     if kind == EventKind.USER_MESSAGE_RECORDED.value:
         return f"{prefix} You: {event.payload.get('content', '')}"
     if kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
@@ -1414,35 +1614,6 @@ def _format_event(event: SessionEvent) -> str:
     return ""
 
 
-def _handle_detect(
-    gateway: SessionGateway,
-    *,
-    project: ProjectContext,
-    session_id: str,
-) -> int:
-    result = gateway.handle(_command(gateway, session_id=session_id, kind=CommandKind.DETECT))
-    detection = next(
-        (
-            event
-            for event in result.events
-            if _event_kind(event) == EventKind.DETECTION_PROPOSED.value
-        ),
-        None,
-    )
-    if detection is None:
-        print("No detection event recorded.")
-        return 1
-    platform = _mapping_payload(detection.payload["platform"], "platform")
-    dataset = _mapping_payload(detection.payload["dataset"], "dataset")
-    print("Heartwood environment detection")
-    print(f"Session: {session_id}")
-    print(f"Project: {project.root}")
-    print(f"State: {project.state_root}")
-    print(f"Platform: {platform['adapter_id']} ({_float_payload(platform['confidence']):.2f})")
-    print(f"Dataset: {dataset['dataset_type']} ({_float_payload(dataset['confidence']):.2f})")
-    return 0
-
-
 def _handle_replay(gateway: SessionGateway, *, session_id: str) -> int:
     events = gateway.replay_events(session_id=session_id)
     print(_format_transcript(events) if events else "No session events recorded.")
@@ -1466,26 +1637,6 @@ def _handle_audit_export(
     return 0
 
 
-def _handle_reviewer_packet(
-    *,
-    project: ProjectContext,
-    session_id: str,
-    fixture_root: Path,
-    output: Path,
-) -> int:
-    packet = ReviewerPacketGenerator(
-        repository_root=_bundled_repository_root(),
-        session_workspace=project.sessions_dir,
-        session_id=session_id,
-        fixture_root=fixture_root,
-        output_dir=output,
-    ).generate()
-    print(f"Reviewer artifacts: {packet.index_path}")
-    for path in packet.files:
-        print(f"  - {path}")
-    return 0
-
-
 def _handle_serve(
     *,
     project: ProjectContext,
@@ -1505,7 +1656,11 @@ def _handle_serve(
     if select_platform_adapter(os.environ).adapter_id == "terra":
         print("Heartwood web interface")
         if has_authenticated_jupyter_proxy():
-            print(f"Terra browser path: {jupyter_proxy_url(port=port)}")
+            proxy_url = jupyter_proxy_url(port=port)
+            if proxy_url is None:  # pragma: no cover - shared evidence invariant
+                raise RuntimeError("Terra proxy evidence did not produce an access path")
+            print(f"Terra authenticated proxy path: {proxy_url}")
+            print("Open this path from the current Terra Jupyter host.")
         else:
             print("Terra browser path unavailable in this terminal.")
             print("Open the tutorial notebook to generate the authenticated browser link.")

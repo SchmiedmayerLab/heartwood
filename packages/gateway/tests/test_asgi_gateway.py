@@ -50,7 +50,7 @@ def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
             app,
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.DETECT),
+            body=_command(CommandKind.PAUSE),
         )
 
     sent = asyncio.run(scenario())
@@ -59,7 +59,7 @@ def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
     body = json.loads(cast(bytes, sent[1]["body"]).decode("utf-8"))
     assert [event["kind"] for event in body["events"]] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.DETECTION_PROPOSED.value,
+        EventKind.SESSION_PAUSED.value,
     ]
 
 
@@ -105,7 +105,7 @@ def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> 
             app,
             method="POST",
             path="/proxy/8767/sessions/session-1/commands",
-            body=_command(CommandKind.DETECT),
+            body=_command(CommandKind.PAUSE),
         )
 
     sent = asyncio.run(scenario())
@@ -114,7 +114,7 @@ def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> 
     body = json.loads(cast(bytes, sent[1]["body"]).decode("utf-8"))
     assert [event["kind"] for event in body["events"]] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.DETECTION_PROPOSED.value,
+        EventKind.SESSION_PAUSED.value,
     ]
 
 

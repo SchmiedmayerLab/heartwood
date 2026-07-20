@@ -16,6 +16,7 @@ from typing import Any, cast
 
 import pytest
 
+from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
     __version__,
     _float_payload,
@@ -33,6 +34,7 @@ from heartwood.cli import (
 )
 from heartwood.cli._interactive import InteractionResult, InteractiveSession
 from heartwood.gateway import (
+    CredentialStore,
     LocalModelChoice,
     LocalModelDownloadPlan,
     ModelArtifact,
@@ -89,7 +91,7 @@ def _local_catalog(*, fail: bool = False) -> ModelCatalogService:
     ) -> tuple[ProviderModel, ...]:
         if fail:
             raise ConnectionError("synthetic catalog outage")
-        return (ProviderModel(model_id="local-model", display_name="Local Model"),)
+        return (ProviderModel(model_id="local-model", display_name="Heartwood Model"),)
 
     return ModelCatalogService(
         openai_lister=models,
@@ -106,7 +108,7 @@ def test_no_command_prints_help_when_stdin_is_not_interactive(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main([]) == 0
-    assert "Auditable agentic coding" in capsys.readouterr().out
+    assert "A coding agent for biomedical research projects" in capsys.readouterr().out
 
 
 def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
@@ -136,7 +138,7 @@ def test_line_mode_reports_elapsed_progress_for_a_slow_turn(
     assert "Working on your task" in output
     assert "Still working on your task" in output
     assert "Response time depends on the selected model and task" in output
-    assert "local models may take several minutes" not in output
+    assert "managed models may take several minutes" not in output
 
 
 def test_doctor_is_read_only_and_reports_current_project(
@@ -176,8 +178,8 @@ def test_legacy_path_arguments_and_environment_do_not_change_project(
 
     assert error.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
-    assert _run(project, monkeypatch, ["detect"]) == 0
-    assert (project / ".heartwood" / "sessions").is_dir()
+    assert _run(project, monkeypatch, ["doctor"]) == 0
+    assert not (project / ".heartwood").exists()
     assert not legacy.exists()
 
 
@@ -190,11 +192,11 @@ def test_nested_invocation_directory_is_the_exact_project_root(
     child = repository / "analysis"
     (repository / ".git").mkdir(parents=True)
 
-    assert _run(child, monkeypatch, ["detect"]) == 0
+    assert _run(child, monkeypatch, ["doctor"]) == 0
 
     output = capsys.readouterr().out
     assert f"Project: {child}" in output
-    assert (child / ".heartwood").is_dir()
+    assert not (child / ".heartwood").exists()
     assert not (repository / ".heartwood").exists()
 
 
@@ -215,7 +217,7 @@ def test_non_interactive_setup_persists_one_configuration_and_model(
         [
             "setup",
             "--model-source",
-            "local",
+            "heartwood",
             "--model-id",
             "local-model",
             "--non-interactive",
@@ -236,8 +238,8 @@ def test_non_interactive_setup_persists_one_configuration_and_model(
             .policy,
         ),
     ).load()
-    assert config.model_source == "local"
-    assert config.model_settings.active_profile == "local"
+    assert config.model_source == "heartwood"
+    assert config.model_settings.active_profile == "heartwood"
     assert not any(
         (project / ".heartwood" / name).exists()
         for name in ("setup.json", "policy.json", "models.json", "actions.json")
@@ -292,7 +294,7 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
             [
                 "setup",
                 "--model-source",
-                "local",
+                "heartwood",
                 "--model-id",
                 "example/research-model-gguf",
                 "--non-interactive",
@@ -312,21 +314,25 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
             return True
 
     monkeypatch.setattr("sys.stdin", InteractiveInput())
+    launches: list[object] = []
+
+    def launch(options: object) -> int:
+        launches.append(options)
+        return 0
+
     monkeypatch.setattr(
-        "heartwood.cli._interactive_chat",
-        lambda *_args, **_kwargs: pytest.fail(
-            "bare heartwood must not open a conversation before local inference starts"
-        ),
+        "heartwood.cli.run_launch",
+        launch,
     )
     capsys.readouterr()
     assert _run(project, monkeypatch, []) == 0
     output = capsys.readouterr().out
-    assert "Readiness: compute-required" in output
-    assert "Start it with `heartwood launch`" in output
+    assert "The selected Heartwood-managed model is ready to start" in output
+    assert launches
 
     assert _run(project, monkeypatch, ["setup"]) == 0
     output = capsys.readouterr().out
-    assert "Run `heartwood launch`" in output
+    assert "Setup complete" in output
 
 
 def test_bare_command_configures_session_token_and_opens_conversation(
@@ -354,7 +360,7 @@ def test_bare_command_configures_session_token_and_opens_conversation(
         def isatty(self) -> bool:
             return True
 
-    inputs = iter(["2", "y", "1"])
+    inputs = iter(["1", "2", "y", "1"])
     monkeypatch.setattr("sys.stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
     monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
@@ -367,7 +373,7 @@ def test_bare_command_configures_session_token_and_opens_conversation(
         plain: bool,
     ) -> int:
         opened.append(gateway.validate_model_profile())
-        assert session_id == "session-local"
+        assert session_id == "session-main"
         assert plain is False
         return 0
 
@@ -388,6 +394,172 @@ def test_bare_command_configures_session_token_and_opens_conversation(
     assert "session-secret" not in output
 
 
+def test_setup_does_not_claim_a_process_only_credential_is_durable(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    service = ModelCatalogService(
+        openai_lister=lambda _connection, _api_key: (ProviderModel("gpt-synthetic"),)
+    )
+    _install_deterministic_gateway(monkeypatch, model_catalog_service=service)
+    monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
+
+    code = _run(
+        project,
+        monkeypatch,
+        [
+            "setup",
+            "--model-source",
+            "openai",
+            "--model-id",
+            "gpt-synthetic",
+            "--yes",
+        ],
+    )
+
+    assert code == 2
+    output = capsys.readouterr().out
+    assert "Configuration saved" in output
+    assert "provider token was not stored" in output
+    assert "Setup complete" not in output
+    assert "session-secret" not in output
+    assert 'model_source = "openai"' in project.joinpath(".heartwood/config.toml").read_text()
+
+
+def test_cli_startup_and_doctor_resolve_a_remembered_keyring_credential(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeKeyring:
+        priority = 1.0
+
+        def __init__(self) -> None:
+            self.values: dict[tuple[str, str], str] = {}
+
+        def get_password(self, service: str, username: str) -> str | None:
+            return self.values.get((service, username))
+
+        def set_password(self, service: str, username: str, password: str) -> None:
+            self.values[(service, username)] = password
+
+        def delete_password(self, service: str, username: str) -> None:
+            self.values.pop((service, username), None)
+
+    project_root = tmp_path / "remembered"
+    project_root.mkdir()
+    project = ProjectContext(project_root)
+    keyring = FakeKeyring()
+    catalog = ModelCatalogService(
+        openai_lister=lambda _connection, _token: (ProviderModel("gpt-synthetic"),),
+        compatibility=lambda _connection, _model: (
+            "available",
+            "verified",
+            32_768,
+            True,
+        ),
+    )
+
+    def credential_store() -> CredentialStore:
+        return CredentialStore(
+            project_root=project.root,
+            capabilities=GenericPlatformAdapter().capabilities(),
+            env={},
+            keyring_backend=keyring,
+        )
+
+    configured = RealSessionGateway(
+        project=project,
+        env={},
+        backend_id="deterministic",
+        credential_store=credential_store(),
+        model_catalog_service=catalog,
+    )
+    configured.configure_model_source("openai")
+    configured.select_action_confirmation_mode("always-confirm")
+    configured.discover_models(
+        "openai",
+        token="remembered-secret",
+        refresh=True,
+        remember=True,
+    )
+    configured.connect_model("openai", "gpt-synthetic")
+    configured.stop()
+
+    def factory(**kwargs: object) -> RealSessionGateway:
+        gateway_project = kwargs.get("project")
+        assert isinstance(gateway_project, ProjectContext)
+        return RealSessionGateway(
+            project=gateway_project,
+            env={},
+            backend_id="deterministic",
+            credential_store=credential_store(),
+            model_catalog_service=catalog,
+        )
+
+    monkeypatch.setattr("heartwood.cli.SessionGateway", factory)
+
+    assert _run(project_root, monkeypatch, ["doctor"]) == 0
+    assert "Readiness: ready" in capsys.readouterr().out
+    assert _run(project_root, monkeypatch, ["--prompt", "inspect this project"]) == 0
+    output = capsys.readouterr().out
+    assert "Setup complete" not in output
+    assert "Review 1 action as one OpenHands action set" in output
+
+
+def test_tokenless_loopback_custom_setup_survives_restart_and_reconfiguration(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    observed_tokens: list[str | None] = []
+
+    def models(
+        _connection: ModelConnection,
+        api_key: str | None,
+    ) -> tuple[ProviderModel, ...]:
+        observed_tokens.append(api_key)
+        return (ProviderModel("local-coder"),)
+
+    _install_deterministic_gateway(
+        monkeypatch,
+        model_catalog_service=ModelCatalogService(openai_lister=models),
+    )
+    monkeypatch.setattr(
+        "heartwood.cli.getpass.getpass",
+        lambda _prompt: pytest.fail("loopback setup must not request a token"),
+    )
+    setup = [
+        "setup",
+        "--model-source",
+        "custom",
+        "--model-id",
+        "local-coder",
+        "--base-url",
+        "http://127.0.0.1:9000/v1",
+        "--yes",
+    ]
+
+    assert _run(project, monkeypatch, setup) == 0
+    assert _run(project, monkeypatch, ["setup", "--yes"]) == 0
+
+    restarted = RealSessionGateway(project=ProjectContext(project), env={})
+    settings = restarted.model_settings()
+    source_options = settings["source_options"]
+    assert isinstance(source_options, list)
+    selected = next(
+        option
+        for option in source_options
+        if isinstance(option, dict) and option.get("selected") is True
+    )
+    assert selected["source_id"] == "custom"
+    assert observed_tokens == [None, None]
+    assert "Setup complete" in capsys.readouterr().out
+
+
 def test_failed_reconfiguration_restores_previous_toml(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -398,7 +570,7 @@ def test_failed_reconfiguration_restores_previous_toml(
     setup = [
         "setup",
         "--model-source",
-        "local",
+        "heartwood",
         "--model-id",
         "local-model",
         "--non-interactive",
@@ -415,7 +587,7 @@ def test_failed_reconfiguration_restores_previous_toml(
     assert _run(project, monkeypatch, setup) == 1
 
     assert config_path.read_bytes() == previous
-    assert "did not prepare a usable local model" in capsys.readouterr().out
+    assert "did not prepare a usable Heartwood-managed model" in capsys.readouterr().out
 
 
 def test_unavailable_local_service_points_to_shared_model_setup(
@@ -436,7 +608,7 @@ def test_unavailable_local_service_points_to_shared_model_setup(
             [
                 "setup",
                 "--model-source",
-                "local",
+                "heartwood",
                 "--model-id",
                 "local-model",
                 "--non-interactive",
@@ -447,9 +619,9 @@ def test_unavailable_local_service_points_to_shared_model_setup(
     )
 
     output = capsys.readouterr().out
-    assert "did not prepare a usable local model" in output
+    assert "did not prepare a usable Heartwood-managed model" in output
     assert "recommended model or Other Hugging Face model" in output
-    assert "heartwood launch" in output
+    assert "Then run `heartwood`" in output
     assert not (project / ".heartwood" / "config.toml").exists()
 
 
@@ -481,7 +653,7 @@ def test_local_setup_keeps_slash_model_ids_on_an_existing_service(
             [
                 "setup",
                 "--model-source",
-                "local",
+                "heartwood",
                 "--model-id",
                 service_model,
                 "--non-interactive",
@@ -493,7 +665,7 @@ def test_local_setup_keeps_slash_model_ids_on_an_existing_service(
     config = RealSessionGateway(
         project=ProjectContext(project), env={}, backend_id="deterministic"
     ).config_store.load()
-    assert config.model_source == "local"
+    assert config.model_source == "heartwood"
     assert config.model_settings.profile().model == f"openai/{service_model}"
     assert _run(project, monkeypatch, ["setup"]) == 0
 
@@ -510,9 +682,17 @@ def test_non_interactive_setup_requires_explicit_inputs(
         _run(
             tmp_path,
             monkeypatch,
-            ["setup", "--model-source", "local", "--non-interactive", "--yes"],
+            ["setup", "--model-source", "heartwood", "--non-interactive", "--yes"],
         )
     assert missing_model.value.code == 2
+
+    with pytest.raises(SystemExit) as superseded_source:
+        _run(
+            tmp_path,
+            monkeypatch,
+            ["setup", "--model-source", "local", "--model-id", "example"],
+        )
+    assert superseded_source.value.code == 2
 
 
 @pytest.mark.parametrize(
@@ -584,7 +764,7 @@ def test_setup_rolls_back_when_model_or_credential_input_closes(
         _run(
             model_project,
             monkeypatch,
-            ["setup", "--model-source", "local", "--yes"],
+            ["setup", "--model-source", "heartwood", "--yes"],
         )
         == 1
     )
@@ -635,7 +815,7 @@ def test_carina_local_setup_rejects_an_unknown_model_without_saving_configuratio
             [
                 "setup",
                 "--model-source",
-                "local",
+                "heartwood",
                 "--model-id",
                 "local-model",
                 "--non-interactive",
@@ -645,7 +825,7 @@ def test_carina_local_setup_rejects_an_unknown_model_without_saving_configuratio
         == 1
     )
     output = capsys.readouterr().out
-    assert "unknown local model in non-interactive setup" in output
+    assert "unknown Heartwood-managed model in non-interactive setup" in output
     assert "recommended model or Other Hugging Face model" in output
     assert not (project / ".heartwood" / "config.toml").exists()
 
@@ -656,17 +836,75 @@ def test_invalid_session_and_launch_resources_are_argument_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with pytest.raises(SystemExit) as invalid_session:
-        _run(tmp_path / "session", monkeypatch, ["--session-id", "../escape", "detect"])
+        _run(tmp_path / "session", monkeypatch, ["--session-id", "../escape", "replay"])
     assert invalid_session.value.code == 2
     assert "session id must start" in capsys.readouterr().err
 
     with pytest.raises(SystemExit) as invalid_resources:
-        _run(tmp_path / "launch", monkeypatch, ["launch", "--gpus", "0"])
+        _run(tmp_path / "launch", monkeypatch, ["runtime", "start", "--gpus", "0"])
     assert invalid_resources.value.code == 2
     assert "must be positive" in capsys.readouterr().err
 
 
-def test_detect_chat_grouped_approval_and_replay_share_project_state(
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--port", "0"],
+        ["--interface", "web", "--plain"],
+        ["--interface", "web", "--prompt", "inspect this project"],
+    ],
+)
+def test_unified_entry_point_rejects_incompatible_global_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        _run(tmp_path, monkeypatch, args)
+
+    assert error.value.code == 2
+
+
+def test_first_browser_launch_opens_guided_setup_without_terminal_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: list[tuple[Path, str, int]] = []
+
+    def serve(
+        *,
+        project: ProjectContext,
+        host: str,
+        port: int,
+        web_root: Path,
+        base_path: str,
+    ) -> int:
+        assert web_root.name == "dist"
+        assert base_path == "/"
+        observed.append((project.root, host, port))
+        return 0
+
+    monkeypatch.setattr("heartwood.cli._handle_serve", serve)
+
+    assert _run(tmp_path, monkeypatch, ["--interface", "web"]) == 0
+    assert observed == [(tmp_path, "127.0.0.1", 8767)]
+    assert "Opening guided setup in the browser" in capsys.readouterr().out
+
+
+def test_unsupported_browser_interface_reports_the_platform_constraint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "carina")
+
+    assert _run(tmp_path, monkeypatch, ["--interface", "web"]) == 1
+    output = capsys.readouterr().out
+    assert "Use the terminal interface in this environment" in output
+
+
+def test_chat_grouped_approval_and_replay_share_project_state(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -674,14 +912,27 @@ def test_detect_chat_grouped_approval_and_replay_share_project_state(
     _install_deterministic_gateway(monkeypatch)
     project = tmp_path / "analysis"
     base = ["--session-id", "synthetic"]
+    model_args = [
+        "models",
+        "add",
+        "local-test",
+        "--model",
+        "openai/local-model",
+        "--base-url",
+        "http://127.0.0.1:8765/v1",
+        "--policy-endpoint",
+        "http://127.0.0.1:8765/v1/chat/completions",
+        "--credential-kind",
+        "none",
+        "--select",
+    ]
 
-    assert _run(project, monkeypatch, [*base, "detect"]) == 0
-    assert _run(project, monkeypatch, [*base, "chat", "--prompt", "create a summary"]) == 0
+    assert _run(project, monkeypatch, model_args) == 0
+    assert _run(project, monkeypatch, [*base, "--prompt", "create a summary"]) == 0
     assert _run(project, monkeypatch, [*base, "allow"]) == 0
     assert _run(project, monkeypatch, [*base, "replay"]) == 0
 
     output = capsys.readouterr().out
-    assert "Detected generic / omop-cdm" in output
     assert "Review 1 action as one OpenHands action set" in output
     assert "Action set approved (1 action)" in output
     assert (project / ".heartwood" / "sessions" / "synthetic" / "events.jsonl").is_file()
@@ -695,7 +946,28 @@ def test_one_shot_aliases_and_unknown_action_return_meaningful_status(
     _install_deterministic_gateway(monkeypatch)
     project = tmp_path / "analysis"
 
-    assert _run(project, monkeypatch, ["run", "inspect the project"]) == 0
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "models",
+                "add",
+                "local-test",
+                "--model",
+                "openai/local-model",
+                "--base-url",
+                "http://127.0.0.1:8765/v1",
+                "--policy-endpoint",
+                "http://127.0.0.1:8765/v1/chat/completions",
+                "--credential-kind",
+                "none",
+                "--select",
+            ],
+        )
+        == 0
+    )
+    assert _run(project, monkeypatch, ["--prompt", "inspect the project"]) == 0
     assert _run(project, monkeypatch, ["allow", "missing-action"]) == 1
     assert _run(project, monkeypatch, ["reject"]) == 0
     assert _run(project, monkeypatch, ["pause"]) == 0
@@ -739,10 +1011,37 @@ def test_interactive_chat_does_not_repeat_live_user_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_deterministic_gateway(monkeypatch)
+    assert (
+        _run(
+            tmp_path,
+            monkeypatch,
+            [
+                "models",
+                "add",
+                "local-test",
+                "--model",
+                "openai/local-model",
+                "--base-url",
+                "http://127.0.0.1:8765/v1",
+                "--policy-endpoint",
+                "http://127.0.0.1:8765/v1/chat/completions",
+                "--credential-kind",
+                "none",
+                "--select",
+            ],
+        )
+        == 0
+    )
     lines = iter(["summarize", "/reject", "/exit"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(lines))
 
-    assert _run(tmp_path, monkeypatch, ["--session-id", "interactive", "chat", "--plain"]) == 0
+    class InteractiveInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdin", InteractiveInput())
+
+    assert _run(tmp_path, monkeypatch, ["--session-id", "interactive", "--plain"]) == 0
 
     output = capsys.readouterr().out
     assert "Heartwood agent." in output
@@ -819,7 +1118,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
             RestRequest(
                 method="POST",
                 path="/settings/models/catalog",
-                body=json.dumps({"connection_id": "local", "refresh": True}),
+                body=json.dumps({"connection_id": "heartwood", "refresh": True}),
             )
         ).status_code
         == 200
@@ -829,7 +1128,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
             RestRequest(
                 method="POST",
                 path="/settings/models/connect",
-                body=json.dumps({"connection_id": "local", "model_id": "local-model"}),
+                body=json.dumps({"connection_id": "heartwood", "model_id": "local-model"}),
             )
         ).status_code
         == 200
@@ -840,7 +1139,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     assert _run(project, monkeypatch, ["models", "list"]) == 0
     output = capsys.readouterr().out
     assert "* Ask Every Time" in output
-    assert "* local  openai/local-model" in output
+    assert "* heartwood  openai/local-model" in output
 
 
 def test_models_list_select_remove_and_artifacts_use_one_configuration(
@@ -880,13 +1179,49 @@ def test_models_list_select_remove_and_artifacts_use_one_configuration(
     assert _run(project, monkeypatch, second) == 0
     assert _run(project, monkeypatch, ["models", "select", "second"]) == 0
     assert _run(project, monkeypatch, ["models", "list"]) == 0
-    assert _run(project, monkeypatch, ["models", "local"]) == 0
+    assert _run(project, monkeypatch, ["models", "managed"]) == 0
     assert _run(project, monkeypatch, ["models", "remove", "second"]) == 0
 
     output = capsys.readouterr().out
     assert "* second" in output
-    assert "Heartwood local models" in output
+    assert "Models Heartwood can run" in output
     assert "No model profiles configured" not in output
+
+
+def test_cli_imports_a_local_model_and_forgets_provider_credentials(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    source = tmp_path / "model.gguf"
+    source.write_bytes(b"GGUFsynthetic-model")
+    _install_deterministic_gateway(monkeypatch)
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "models",
+                "import",
+                str(source),
+                "--source",
+                "example/research-model",
+                "--revision",
+                "1" * 40,
+                "--license",
+                "Apache-2.0",
+            ],
+        )
+        == 0
+    )
+    assert _run(project, monkeypatch, ["models", "forget", "openai"]) == 0
+
+    output = capsys.readouterr().out
+    assert "research-model is ready in this project" in output
+    assert "Forgot the saved credential for openai" in output
+    assert (project / ".heartwood" / "models").is_dir()
 
 
 def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
@@ -954,13 +1289,28 @@ def test_model_catalog_refresh_and_connect_use_shared_gateway_service(
 ) -> None:
     _install_deterministic_gateway(monkeypatch, model_catalog_service=_local_catalog())
 
-    assert _run(tmp_path, monkeypatch, ["models", "refresh", "local"]) == 0
-    assert _run(tmp_path, monkeypatch, ["models", "connect", "local", "local-model"]) == 0
+    assert _run(tmp_path, monkeypatch, ["models", "refresh", "heartwood"]) == 0
+    assert _run(tmp_path, monkeypatch, ["models", "connect", "heartwood", "local-model"]) == 0
 
     output = capsys.readouterr().out
-    assert "Local Model (local-model)" in output
+    assert "Heartwood Model (local-model)" in output
     assert "Active and saved profiles" in output
-    assert "Profile: local" in output
+    assert "Profile: heartwood" in output
+    assert "selected Heartwood-managed model" in output
+    assert "model profile local" not in output
+
+
+def test_model_catalog_rejects_superseded_connection_name(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_deterministic_gateway(monkeypatch, model_catalog_service=_local_catalog())
+
+    with pytest.raises(SystemExit):
+        _run(tmp_path, monkeypatch, ["models", "refresh", "local"])
+
+    assert "unknown model connection: local" in capsys.readouterr().err
 
 
 def test_skills_inspect_install_and_remove_use_project_local_extensions(
@@ -987,18 +1337,16 @@ def test_skills_inspect_install_and_remove_use_project_local_extensions(
     assert "installation approval is required" in captured.err
 
 
-def test_audit_export_and_reviewer_packet_use_project_sessions(
+def test_audit_export_uses_project_sessions(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "analysis"
     audit = tmp_path / "audit.jsonl"
-    reviewer = tmp_path / "reviewer"
-    repository = Path(__file__).resolve().parents[3]
     _install_deterministic_gateway(monkeypatch)
 
-    assert _run(project, monkeypatch, ["--session-id", "review", "detect"]) == 0
+    assert _run(project, monkeypatch, ["--session-id", "review", "pause"]) == 0
     assert (
         _run(
             project,
@@ -1007,35 +1355,17 @@ def test_audit_export_and_reviewer_packet_use_project_sessions(
         )
         == 0
     )
-    assert (
-        _run(
-            project,
-            monkeypatch,
-            [
-                "--session-id",
-                "review",
-                "reviewer",
-                "packet",
-                "--fixture-root",
-                str(repository / "fixtures" / "synthetic"),
-                "--output",
-                str(reviewer),
-            ],
-        )
-        == 0
-    )
-
     assert "audit.export.recorded" in audit.read_text(encoding="utf-8")
-    assert (reviewer / "reviewer-packet.md").is_file()
-    assert "`heartwood-cli`" in (reviewer / "dependency-license-summary.md").read_text(
-        encoding="utf-8"
-    )
-    assert "Reviewer artifacts:" in capsys.readouterr().out
+    assert "Audit export" in capsys.readouterr().out
 
 
 def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit, match="web UI assets not found"):
-        _run(tmp_path, monkeypatch, ["serve", "--web-root", str(tmp_path / "missing")])
+        _run(
+            tmp_path,
+            monkeypatch,
+            ["gateway", "serve", "--web-root", str(tmp_path / "missing")],
+        )
 
 
 def test_serve_starts_gateway_for_current_project(
@@ -1061,6 +1391,7 @@ def test_serve_starts_gateway_for_current_project(
             project,
             monkeypatch,
             [
+                "gateway",
                 "serve",
                 "--host",
                 "0.0.0.0",
@@ -1075,10 +1406,10 @@ def test_serve_starts_gateway_for_current_project(
         == 0
     )
     assert observed == [("0.0.0.0", 9876)]
-    assert (project / ".heartwood" / "sessions").is_dir()
+    assert not (project / ".heartwood").exists()
     assert (
-        "Terra browser path: /proxy/terra-project/saturn-runtime/jupyter/proxy/9876/"
-        in capsys.readouterr().out
+        "Terra authenticated proxy path: "
+        "/proxy/terra-project/saturn-runtime/jupyter/proxy/9876/" in capsys.readouterr().out
     )
 
 
@@ -1096,7 +1427,14 @@ def test_serve_does_not_present_an_incomplete_terra_proxy_route(
     monkeypatch.delenv("CLUSTER_NAME", raising=False)
     monkeypatch.delenv("JUPYTERHUB_SERVICE_PREFIX", raising=False)
 
-    assert _run(tmp_path / "analysis", monkeypatch, ["serve", "--web-root", str(web_root)]) == 0
+    assert (
+        _run(
+            tmp_path / "analysis",
+            monkeypatch,
+            ["gateway", "serve", "--web-root", str(web_root)],
+        )
+        == 0
+    )
     output = capsys.readouterr().out
     assert "Terra browser path unavailable" in output
     assert "Open the tutorial notebook" in output
@@ -1111,7 +1449,7 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
     )
     assert _format_model_catalog({"connection": []}).startswith("Model catalog returned")
     assert "No models available" in _format_model_catalog(
-        {"connection": {"label": "Local"}, "models": []}
+        {"connection": {"label": "Run with Heartwood"}, "models": []}
     )
     assert _format_model_validation({"profile": [], "policy_decision": {}}).startswith(
         "Model profile validation returned"

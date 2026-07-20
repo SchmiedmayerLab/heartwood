@@ -233,6 +233,12 @@ const ConversationItem = ({ message }: { message: ConversationMessage }) => {
           {message.detail ?
             <span>{message.detail}</span>
           : null}
+          {message.technicalDetail ?
+            <details className="trace-details">
+              <summary>Exact action details</summary>
+              <pre tabIndex={0}>{message.technicalDetail}</pre>
+            </details>
+          : null}
         </div>
       </div>
     );
@@ -290,12 +296,15 @@ const ApprovalRequest = ({
                 {control.risk ? ` · ${control.risk} risk` : ""}
               </small>
               {Object.keys(control.arguments).length > 0 ?
-                <pre
-                  tabIndex={0}
-                  aria-label={`Arguments for ${control.toolName || "tool"}`}
-                >
-                  {JSON.stringify(control.arguments, null, 2)}
-                </pre>
+                <details className="approval-details">
+                  <summary>Exact arguments</summary>
+                  <pre
+                    tabIndex={0}
+                    aria-label={`Arguments for ${control.toolName || "tool"}`}
+                  >
+                    {JSON.stringify(control.arguments, null, 2)}
+                  </pre>
+                </details>
               : null}
             </li>
           ))}

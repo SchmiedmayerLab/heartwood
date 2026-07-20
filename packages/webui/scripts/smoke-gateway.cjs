@@ -43,6 +43,7 @@ async function main() {
   const server = spawn(
     heartwoodExecutable,
     [
+      "gateway",
       "serve",
       "--host",
       "127.0.0.1",
@@ -129,9 +130,9 @@ async function main() {
       {
         body: JSON.stringify({
           actor_id: "synthetic-user",
-          command_id: "web-smoke-detect",
+          command_id: "web-smoke-pause",
           created_at: "2026-01-01T00:00:00Z",
-          kind: "detect",
+          kind: "pause",
           payload: {},
           schema_version: "heartwood.session-command.v1",
           session_id: sessionId,
@@ -143,9 +144,9 @@ async function main() {
     const commandEvents =
       Array.isArray(commandResponse.events) ? commandResponse.events : [];
     const commandKinds = commandEvents.map((event) => event.kind);
-    if (!commandKinds.includes("detection.proposed")) {
+    if (!commandKinds.includes("session.paused")) {
       throw new Error(
-        "proxied gateway command route did not return detection events",
+        "proxied gateway command route did not return session state",
       );
     }
 

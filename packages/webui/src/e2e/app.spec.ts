@@ -8,7 +8,11 @@
 
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { event, syntheticEvents } from "../test/fixtures";
-import type { SessionSummary } from "../types";
+import type {
+  PlatformCapabilities,
+  SessionSummary,
+  StartupPlan,
+} from "../types";
 
 test.beforeEach(async ({ page }) => installGatewayRoutes(page));
 
@@ -45,8 +49,10 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(
     page.getByText("I will run the repository-verified cohort Skill."),
   ).toBeVisible();
-  await expect(page.getByText("generic", { exact: true })).toBeVisible();
-  await expect(page.getByText("omop-cdm", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Workstation or container", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
 
   const approval = page.getByRole("region", {
     name: "Approval required for OpenHands action set",
@@ -85,26 +91,27 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByRole("heading", { name: "Set up Heartwood" }),
   ).toBeVisible();
   const localConnection = page.locator(".connection-row").filter({
-    has: page.getByText("Local", { exact: true }),
+    has: page.getByText("Run with Heartwood", { exact: true }),
   });
   await localConnection.getByRole("button", { name: "Choose" }).click();
-  await expect(
-    page.locator(".connection-row.selected + .connection-form"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Load models" }).click();
-  const modelPicker = page.getByLabel("Models available from Local");
-  await expect(modelPicker).toContainText("Local Model");
+  const loadModels = page.getByRole("button", { name: "Load models" });
+  await expect(loadModels).toBeVisible();
+  await loadModels.click();
+  const modelPicker = page.getByLabel(
+    "Models available from Run with Heartwood",
+  );
+  await expect(modelPicker).toContainText("Heartwood Model");
   await modelPicker.click();
-  await page.getByPlaceholder("Search models").fill("Local");
+  await page.getByPlaceholder("Search models").fill("Heartwood");
   await expect(
-    page.getByRole("option", { name: "Local Model - local-model" }),
+    page.getByRole("option", { name: "Heartwood Model - local-model" }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Use model" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(
     page.getByLabel("Active model profile", { exact: true }),
-  ).toContainText("Local · local-model");
+  ).toContainText("Run with Heartwood · Heartwood Model");
   await expect(page.getByText("Authorized", { exact: true })).toBeVisible();
   const approvalsTab = page.getByRole("tab", { name: "Approvals" });
   const modelsTab = page.getByRole("tab", { name: "Models" });
@@ -120,6 +127,8 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(page.getByText("No recommended models available")).toBeVisible();
   await page.getByText("Other model", { exact: true }).click();
   await page.getByLabel("Model repository").fill("example/research-model-gguf");
+  await page.getByText("Version options", { exact: true }).click();
+  await page.getByLabel("Model revision").fill("reviewed-release");
   await page.getByRole("button", { name: "Check model" }).click();
   await expect(page.getByText("Research Model Q4_K_M")).toBeVisible();
   await expect(page.getByText(/balanced single-file GGUF/u)).toBeVisible();
@@ -178,7 +187,33 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
 });
 
+test("confirms a new project before creating private state", async ({
+  page,
+}) => {
+  await page.goto("/?new-project=1");
+
+  await expect(
+    page.getByRole("heading", { name: "Set up Heartwood" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Review this project before Heartwood creates private project state.",
+    ),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Use this project" }).click();
+
+  await expect(
+    page.getByRole("button", { name: "Use this project" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("heading", { name: "Main session" }),
+  ).toBeVisible();
+});
+
 const installGatewayRoutes = async (page: Page): Promise<void> => {
+  let projectInitialized: boolean | null = null;
   let sessionEvents = syntheticEvents();
   let sessions: SessionSummary[] = [
     summary("session-test", "Synthetic cohort analysis", 7),
@@ -186,12 +221,19 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   let modelSettings = {
     schema_version: "heartwood.model-settings.v1",
     active_profile: null as string | null,
-    model_source: "local",
+    model_source: "heartwood",
     profiles: [] as Array<Record<string, unknown>>,
+    credential_store: {
+      backends: ["process"],
+      default_backend: "process",
+      persistence_available: false,
+      persistence_description: "Credentials remain in this server process.",
+    },
+    credential_bindings: [] as Array<Record<string, unknown>>,
     connections: [
       {
-        connection_id: "local",
-        label: "Local",
+        connection_id: "heartwood",
+        label: "Run with Heartwood",
         protocol: "openai-compatible",
         model_prefix: "openai/",
         source: "built-in",
@@ -204,29 +246,32 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         api_version: null,
         aws_region_name: null,
         aws_profile_name: null,
-        description: "Models installed on this device",
+        description:
+          "Models served by the runtime Heartwood manages for this project",
         static_models: [],
+        group: "heartwood-managed",
+        group_label: "Run with Heartwood",
         accepts_token: false,
         credential_status: "configured",
       },
     ],
     presets: [
       {
-        preset_id: "local-openai-compatible",
-        label: "Local OpenAI-Compatible",
+        preset_id: "heartwood-managed",
+        label: "Heartwood-managed model",
         model_prefix: "openai/",
         credential_kind: "none",
         api_key_env: null,
         base_url: "http://127.0.0.1:8765/v1",
         policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
-        description: "Local runtime",
+        description: "Heartwood-managed model",
       },
     ],
     source_options: [
       {
-        source_id: "local",
-        connection_id: "local",
-        label: "Local",
+        source_id: "heartwood",
+        connection_id: "heartwood",
+        label: "Run with Heartwood",
         description: "Use a model service running with this project.",
         selected: true,
       },
@@ -255,29 +300,89 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     ],
   };
 
-  await page.route("**/project/readiness", (route) =>
-    json(route, {
-      state: modelSettings.active_profile ? "ready" : "setup-required",
+  const capabilities: PlatformCapabilities = {
+    platform_id: "generic",
+    display_name: "Workstation or container",
+    interfaces: ["terminal", "web", "notebook"],
+    browser_route: "direct",
+    managed_runtimes: ["llama-cpp", "vllm"],
+    scheduler: "none",
+    persistent_storage: "Current project directory",
+    credential_backends: ["process", "keyring"],
+    model_sources: ["heartwood", "openai", "anthropic", "custom"],
+    managed_model_connections: [],
+    validation_level: "ci",
+  };
+  const isProjectInitialized = (): boolean => {
+    projectInitialized ??= !new URL(page.url()).searchParams.has("new-project");
+    return projectInitialized;
+  };
+  const startupPlan = (): StartupPlan => {
+    const initialized = isProjectInitialized();
+    const ready = modelSettings.active_profile !== null;
+    const phase =
+      !initialized ? "project-review"
+      : ready ? "ready"
+      : "connection-required";
+    return {
+      phase,
+      interface: "web",
       platform_id: "generic",
       project_root: "/workspace/synthetic-analysis",
       state_root: "/workspace/synthetic-analysis/.heartwood",
-      evidence: [],
-      checks: [
-        {
-          check_id: "project-storage",
-          status: "pass",
-          summary: "Project storage is writable",
-        },
-        {
-          check_id: "model",
-          status: modelSettings.active_profile ? "pass" : "warning",
-          summary:
-            modelSettings.active_profile ?
-              "Active model: local"
-            : "No active model selected",
-        },
-      ],
-    }),
+      summary:
+        phase === "project-review" ?
+          "Review this project before Heartwood creates private project state."
+        : phase === "ready" ? "Heartwood is ready in the web interface."
+        : "Choose where the model runs.",
+      next_action:
+        phase === "project-review" ?
+          "Confirm the project and choose a model connection."
+        : phase === "ready" ? "Start or resume a session."
+        : "Select a model connection in setup.",
+      access_url: "http://127.0.0.1:4173/",
+      requires_compute: false,
+      requires_confirmation: false,
+      interface_supported: true,
+      readiness: {
+        state: ready ? "ready" : "setup-required",
+        platform_id: "generic",
+        project_root: "/workspace/synthetic-analysis",
+        state_root: "/workspace/synthetic-analysis/.heartwood",
+        evidence: [],
+        checks: [
+          {
+            check_id: "project-state",
+            status: initialized ? "pass" : "warning",
+            summary:
+              initialized ?
+                "Project state is ready"
+              : "Confirm this project before Heartwood creates private state",
+          },
+          {
+            check_id: "model",
+            status: ready ? "pass" : "warning",
+            summary: ready ? "Active model: local" : "No active model selected",
+          },
+        ],
+      },
+      capabilities,
+    };
+  };
+
+  await page.route("**/project/capabilities", (route) =>
+    json(route, capabilities),
+  );
+  await page.route("**/project/startup**", (route) =>
+    json(route, startupPlan()),
+  );
+  await page.route("**/project/initialize", async (route) => {
+    projectInitialized = true;
+    await json(route, startupPlan());
+  });
+
+  await page.route("**/project/readiness", (route) =>
+    json(route, startupPlan().readiness),
   );
 
   await page.route("**/sessions", async (route) => {
@@ -296,6 +401,17 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     const sessionsIndex = parts.lastIndexOf("sessions");
     const sessionId = decodeURIComponent(parts[sessionsIndex + 1] ?? "");
     const resource = parts[sessionsIndex + 2];
+    if (sessionId === "default" && request.method() === "POST") {
+      const current =
+        sessions.find((session) => session.session_id === "session-main") ??
+        summary("session-main", "Main session", 0);
+      sessions = [
+        current,
+        ...sessions.filter((session) => session !== current),
+      ];
+      await json(route, current);
+      return;
+    }
     if (resource === "events") {
       await json(route, {
         events: sessionId === "session-test" ? sessionEvents : [],
@@ -400,7 +516,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       models: [
         {
           model_id: "local-model",
-          display_name: "Local Model",
+          display_name: "Heartwood Model",
           execution_model: "openai/local-model",
           availability: "available",
           reason: "Verified by the pinned OpenHands SDK",
@@ -428,7 +544,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       api_version: null,
       aws_region_name: null,
       aws_profile_name: null,
-      description: "Local runtime",
+      description: "Run with Heartwood: Heartwood Model",
       credential_status: "configured",
     };
     modelSettings = {

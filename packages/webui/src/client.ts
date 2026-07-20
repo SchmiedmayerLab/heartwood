@@ -12,7 +12,10 @@ import type {
   AuditExport,
   CommandKind,
   CustomLocalModelDownloadRequest,
+  CredentialSettings,
   JsonValue,
+  LocalModelImportRequest,
+  LocalModelImportResult,
   ModelCatalog,
   ModelCatalogRequest,
   ModelConnectRequest,
@@ -25,6 +28,7 @@ import type {
   ModelSettings,
   ModelValidation,
   ProjectReadiness,
+  StartupPlan,
   SessionCommand,
   SessionEvent,
   SessionList,
@@ -41,7 +45,10 @@ export interface SessionEventResponse {
 
 export interface HeartwoodClient {
   getProjectReadiness(): Promise<ProjectReadiness>;
+  getStartupPlan(): Promise<StartupPlan>;
+  initializeProject(): Promise<StartupPlan>;
   listSessions(): Promise<SessionList>;
+  ensureDefaultSession(): Promise<SessionSummary>;
   createSession(title?: string): Promise<SessionSummary>;
   getSession(sessionId: string): Promise<SessionSummary>;
   renameSession(sessionId: string, title: string): Promise<SessionSummary>;
@@ -61,6 +68,7 @@ export interface HeartwoodClient {
     mode: ActionConfirmationMode,
   ): Promise<ActionSettings>;
   getModelSettings(): Promise<ModelSettings>;
+  forgetCredential(connectionId: string): Promise<CredentialSettings>;
   configureModelSource(sourceId: ModelSource): Promise<ModelSettings>;
   discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog>;
   connectModel(request: ModelConnectRequest): Promise<ModelSettings>;
@@ -76,6 +84,9 @@ export interface HeartwoodClient {
   downloadCustomLocalModel(
     request: CustomLocalModelDownloadRequest,
   ): Promise<ModelDownload>;
+  importLocalModel(
+    request: LocalModelImportRequest,
+  ): Promise<LocalModelImportResult>;
   getSkillSettings(): Promise<SkillSettings>;
   inspectSkill(source: string): Promise<SkillSummary>;
   installSkill(source: string): Promise<SkillSettings>;
@@ -106,8 +117,26 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
+  async getStartupPlan(): Promise<StartupPlan> {
+    return parseJsonResponse<StartupPlan>(
+      await fetch(this.url("/project/startup?interface=web")),
+    );
+  }
+
+  async initializeProject(): Promise<StartupPlan> {
+    return parseJsonResponse<StartupPlan>(
+      await fetch(this.url("/project/initialize"), { method: "POST" }),
+    );
+  }
+
   async listSessions(): Promise<SessionList> {
     return parseJsonResponse<SessionList>(await fetch(this.url("/sessions")));
+  }
+
+  async ensureDefaultSession(): Promise<SessionSummary> {
+    return parseJsonResponse<SessionSummary>(
+      await fetch(this.url("/sessions/default"), { method: "POST" }),
+    );
   }
 
   async createSession(title?: string): Promise<SessionSummary> {
@@ -191,6 +220,15 @@ export class GatewayClient implements HeartwoodClient {
   async getModelSettings(): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models")),
+    );
+  }
+
+  async forgetCredential(connectionId: string): Promise<CredentialSettings> {
+    return parseJsonResponse<CredentialSettings>(
+      await fetch(
+        this.url(`/settings/credentials/${encodeURIComponent(connectionId)}`),
+        { method: "DELETE" },
+      ),
     );
   }
 
@@ -296,6 +334,18 @@ export class GatewayClient implements HeartwoodClient {
   ): Promise<ModelDownload> {
     return parseJsonResponse<ModelDownload>(
       await fetch(this.url("/settings/models/downloads/custom"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async importLocalModel(
+    request: LocalModelImportRequest,
+  ): Promise<LocalModelImportResult> {
+    return parseJsonResponse<LocalModelImportResult>(
+      await fetch(this.url("/settings/models/imports"), {
         body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",

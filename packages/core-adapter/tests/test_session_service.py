@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from heartwood.audit import AuditIntegrityError
 from heartwood.core_adapter import (
     BackendEvent,
     BackendEventKind,
@@ -26,16 +27,53 @@ from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
-def test_detection_persists_replayable_events(tmp_path: Path) -> None:
+def test_pause_persists_replayable_events(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
-    result = service.handle(_command(CommandKind.DETECT))
+    result = service.handle(_command(CommandKind.PAUSE))
 
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.DETECTION_PROPOSED.value,
+        EventKind.SESSION_PAUSED.value,
     ]
     assert service.replay_events() == result.events
+
+
+def test_replay_rejects_tampered_session_event_payload(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.PAUSE))
+    lines = service.store.events_path.read_text(encoding="utf-8").splitlines()
+    changed = json.loads(lines[1])
+    changed["payload"]["command_id"] = "tampered-command"
+    lines[1] = json.dumps(changed)
+    service.store.events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(AuditIntegrityError, match="session event hash mismatch"):
+        service.replay_events()
+
+
+def test_replay_rejects_truncated_session_event_stream(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.PAUSE))
+    first = service.store.events_path.read_text(encoding="utf-8").splitlines()[0]
+    service.store.events_path.write_text(first + "\n", encoding="utf-8")
+
+    with pytest.raises(AuditIntegrityError, match="different lengths"):
+        service.replay_events()
+
+
+def test_replay_rejects_interrupted_audit_first_append(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.PAUSE))
+    service.audit_log.append(
+        session_id=service.store.session_id,
+        event_type=EventKind.SESSION_RESUMED.value,
+        occurred_at="2026-01-01T00:00:00Z",
+        payload={"session_event_hash": "sha256:" + "0" * 64},
+    )
+
+    with pytest.raises(AuditIntegrityError, match="different lengths"):
+        service.replay_events()
 
 
 def test_file_store_rejects_session_ids_outside_the_workspace(tmp_path: Path) -> None:
@@ -85,19 +123,10 @@ def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path:
     assert '"content":"[scrubbed]"' in audit_text
     assert stat.S_IMODE(service.store.session_dir.stat().st_mode) == 0o700
     for path in (
-        service.store.commands_path,
         service.store.events_path,
         service.store.audit_path,
     ):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
-
-
-def test_run_is_a_compatibility_alias_for_task_submission(tmp_path: Path) -> None:
-    service = SessionService.synthetic_default(tmp_path)
-
-    result = service.handle(_command(CommandKind.RUN, prompt="run the workflow"))
-
-    assert any(event.kind == EventKind.CONFIRMATION_REQUESTED.value for event in result.events)
 
 
 def test_risk_based_mode_auto_executes_low_risk_action_and_records_mode(
@@ -228,7 +257,7 @@ def test_denied_route_never_calls_backend(tmp_path: Path) -> None:
 
     result = service.handle(
         _command(CommandKind.CHAT, prompt="do not send").model_copy(
-            update={"session_id": "session-local"}
+            update={"session_id": "session-main"}
         )
     )
 
@@ -241,7 +270,7 @@ def test_denied_route_never_calls_backend(tmp_path: Path) -> None:
 
 def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:
     pending = ProposedToolCall(
-        tool_call_id="session-local-action",
+        tool_call_id="session-main-action",
         tool_name="terminal",
         risk="low",
         summary="run a bounded command",
@@ -266,7 +295,7 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
         clock=lambda: "2026-01-01T00:00:00Z",
     )
     command = _command(CommandKind.CHAT, prompt="propose action").model_copy(
-        update={"session_id": "session-local"}
+        update={"session_id": "session-main"}
     )
     service.handle(command)
     backend.endpoint = "https://public.example.invalid/v1/chat/completions"
@@ -276,7 +305,7 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
             CommandKind.APPROVE,
             target_type="tool-call",
             target_id=pending.tool_call_id,
-        ).model_copy(update={"session_id": "session-local"})
+        ).model_copy(update={"session_id": "session-main"})
     )
 
     assert backend.resolutions == []
@@ -292,14 +321,14 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
 
 def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: Path) -> None:
     first = ProposedToolCall(
-        tool_call_id="session-local-action-1",
+        tool_call_id="session-main-action-1",
         tool_name="terminal",
         risk="medium",
         summary="run the first bounded command",
         arguments={"command": "python first.py"},
     )
     second = ProposedToolCall(
-        tool_call_id="session-local-action-2",
+        tool_call_id="session-main-action-2",
         tool_name="terminal",
         risk="unknown",
         summary="run the second bounded command",
@@ -320,7 +349,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
     )
     initial_service.handle(
         _command(CommandKind.CHAT, prompt="propose two actions").model_copy(
-            update={"session_id": "session-local"}
+            update={"session_id": "session-main"}
         )
     )
 
@@ -337,7 +366,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
             CommandKind.APPROVE,
             target_type="tool-call",
             target_id=first.tool_call_id,
-        ).model_copy(update={"session_id": "session-local"})
+        ).model_copy(update={"session_id": "session-main"})
     )
 
     assert restored_ids == [first.tool_call_id, second.tool_call_id]
@@ -364,7 +393,7 @@ def test_resume_rechecks_route_before_backend_continuation(tmp_path: Path) -> No
     )
 
     result = service.handle(
-        _command(CommandKind.RESUME).model_copy(update={"session_id": "session-local"})
+        _command(CommandKind.RESUME).model_copy(update={"session_id": "session-main"})
     )
 
     assert backend.resume_calls == 0
@@ -388,7 +417,7 @@ def test_backend_configuration_fails_before_route_decision(tmp_path: Path) -> No
 
     result = service.handle(
         _command(CommandKind.CHAT, prompt="do not send").model_copy(
-            update={"session_id": "session-local"}
+            update={"session_id": "session-main"}
         )
     )
 
@@ -417,7 +446,7 @@ def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
     )
 
     result = service.handle(
-        _command(CommandKind.CHAT, prompt="run").model_copy(update={"session_id": "session-local"})
+        _command(CommandKind.CHAT, prompt="run").model_copy(update={"session_id": "session-main"})
     )
 
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
@@ -461,7 +490,7 @@ def test_service_rejects_command_for_another_session(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
     with pytest.raises(ValueError, match="does not match"):
-        service.handle(_command(CommandKind.DETECT).model_copy(update={"session_id": "other"}))
+        service.handle(_command(CommandKind.PAUSE).model_copy(update={"session_id": "other"}))
 
 
 def test_local_workspace_backend_writes_only_after_allow_once(tmp_path: Path) -> None:

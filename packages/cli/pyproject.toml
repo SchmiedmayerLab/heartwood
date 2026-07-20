@@ -13,7 +13,6 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
-    "heartwood-compliance",
     "heartwood-gateway",
     "heartwood-session",
     "packaging==26.2",
@@ -32,6 +31,5 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
-heartwood-compliance = { workspace = true }
 heartwood-gateway = { workspace = true }
 heartwood-session = { workspace = true }

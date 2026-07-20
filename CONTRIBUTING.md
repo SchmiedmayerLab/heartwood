@@ -25,12 +25,12 @@ Read [AGENTS.md](AGENTS.md) for repository rules and the [documentation home](do
 
 ## Make a Change
 
-- Keep the change within the existing component and adapter boundaries described in [System Architecture](design/03-architecture.md).
+- Keep the change within the existing component and adapter boundaries described in [System Architecture](documentation/architecture/system.md).
 - Reuse OpenHands and the existing platform, provider, policy, session, and UI abstractions instead of creating a parallel execution path.
 - Add or update tests for changed behavior, including failure and recovery paths.
-- Update current instructions in `docs/` and durable rationale in `design/` when their contracts change.
+- Update the relevant user guidance or durable rationale in `documentation/` when its contract changes.
 - Track planned implementation and acceptance criteria in GitHub Issues rather than release documentation.
-- Add new acronyms to [ACRONYMS.md](ACRONYMS.md).
+- Add new acronyms and specialized terms to the [Glossary](documentation/reference/glossary.md).
 
 ## Validate the Change
 
@@ -43,7 +43,6 @@ uv run ruff check .
 uv run mypy packages
 npm --prefix packages/webui test
 npm --prefix packages/webui run build
-uv run --no-sync python deploy/stage_documentation.py
 uv run --no-sync zensical build --clean --strict
 ```
 

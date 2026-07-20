@@ -22,6 +22,7 @@ dependencies = [
     "heartwood-session",
     "heartwood-skills",
     "huggingface-hub==1.23.0",
+    "keyring==25.7.0",
     "openai==2.45.0",
     "tomli-w==1.2.0",
 ]

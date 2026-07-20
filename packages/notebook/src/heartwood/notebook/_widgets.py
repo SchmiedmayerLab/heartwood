@@ -45,13 +45,6 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
             ),
         ),
         WidgetSpec(
-            "Datasets",
-            tuple(
-                f"{proposal.dataset_type} ({proposal.confidence:.2f})"
-                for proposal in view_model.dataset_proposals
-            ),
-        ),
-        WidgetSpec(
             "Skills",
             tuple(
                 f"{proposal.target_id}: {proposal.status}"

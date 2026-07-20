@@ -16,8 +16,20 @@ from heartwood.gateway._action_settings import (
     action_settings_from_mapping,
 )
 from heartwood.gateway._asgi import GatewayAsgiApp
+from heartwood.gateway._credentials import (
+    CredentialBindingStatus,
+    CredentialStore,
+    CredentialStoreAvailability,
+    CredentialStoreError,
+)
+from heartwood.gateway._diagnostics import (
+    DiagnosticDefinition,
+    diagnostic_catalog,
+    diagnostic_for,
+)
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._jupyter import has_authenticated_jupyter_proxy, jupyter_proxy_url
+from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
     LocalContextPlan,
     estimate_local_runtime_memory,
@@ -51,6 +63,7 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     ProviderModel,
     custom_model_connection,
+    custom_model_connection_requires_token,
     load_model_connections,
     model_connections_from_mapping,
 )
@@ -86,10 +99,12 @@ from heartwood.gateway._readiness import (
     ModelSourceOption,
     ReadinessCheck,
     inspect_deployment,
+    model_source_options,
     persist_deployment_profile,
 )
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
 from heartwood.gateway._session_catalog import (
+    DEFAULT_SESSION_ID,
     SessionCatalog,
     SessionCatalogError,
     SessionNotFoundError,
@@ -100,24 +115,33 @@ from heartwood.gateway._skill_settings import (
     SkillSettingsError,
     SkillSummary,
 )
+from heartwood.gateway._startup import InterfaceKind, SetupPhase, StartupPlan, plan_startup
 from heartwood.gateway._stream import GatewayEventStream
 
 __all__ = [
     "ACTION_MODE_OPTIONS",
     "BUILT_IN_MODEL_CONNECTIONS",
+    "DEFAULT_SESSION_ID",
     "MODEL_PRESETS",
     "MODEL_SOURCE_OPTIONS",
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",
+    "CredentialBindingStatus",
+    "CredentialStore",
+    "CredentialStoreAvailability",
+    "CredentialStoreError",
     "DeploymentReadiness",
+    "DiagnosticDefinition",
     "GatewayAsgiApp",
     "GatewayEventStream",
     "HuggingFaceModelRepository",
+    "InterfaceKind",
     "LocalContextPlan",
     "LocalModelChoice",
     "LocalModelDownloadManager",
     "LocalModelDownloadPlan",
+    "LocalModelImport",
     "LocalModelRuntime",
     "LocalModelSelection",
     "ModelArtifact",
@@ -156,15 +180,21 @@ __all__ = [
     "SessionGateway",
     "SessionNotFoundError",
     "SessionSummary",
+    "SetupPhase",
     "SkillManager",
     "SkillSettingsError",
     "SkillSummary",
+    "StartupPlan",
     "action_settings_from_mapping",
     "custom_model_connection",
+    "custom_model_connection_requires_token",
+    "diagnostic_catalog",
+    "diagnostic_for",
     "download_model_artifact",
     "download_model_snapshot",
     "estimate_local_runtime_memory",
     "has_authenticated_jupyter_proxy",
+    "import_local_model",
     "inspect_deployment",
     "jupyter_proxy_url",
     "load_model_artifact_catalog",
@@ -174,8 +204,10 @@ __all__ = [
     "model_profile_from_mapping",
     "model_profile_from_preset",
     "model_settings_from_mapping",
+    "model_source_options",
     "persist_deployment_profile",
     "plan_local_context_window",
+    "plan_startup",
     "recommended_model_choices",
     "verify_model_artifact",
     "verify_model_snapshot",

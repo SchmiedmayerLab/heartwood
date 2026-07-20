@@ -91,9 +91,9 @@ class LocalModelChoice:
     def validate(self) -> None:
         """Validate source provenance and runtime-specific integrity metadata."""
         if not self.model_id or "/" in self.model_id or ".." in self.model_id:
-            raise ModelRepositoryError("local model id must be a safe directory name")
+            raise ModelRepositoryError("managed model id must be a safe directory name")
         if not self.label.strip() or not self.purpose.strip():
-            raise ModelRepositoryError("local model label and purpose must not be empty")
+            raise ModelRepositoryError("managed model label and purpose must not be empty")
         if not is_hugging_face_model_id(self.source_repository):
             raise ModelRepositoryError("repository must be a Hugging Face owner/model id")
         revision_is_valid = (
@@ -104,14 +104,15 @@ class LocalModelChoice:
         if not revision_is_valid:
             raise ModelRepositoryError("model revision must resolve to an immutable commit")
         if self.size_bytes <= 0 or self.minimum_free_bytes < self.size_bytes:
-            raise ModelRepositoryError("local model storage metadata is invalid")
+            raise ModelRepositoryError("managed model storage metadata is invalid")
         if not self.license_posture.strip():
-            raise ModelRepositoryError("local model license posture must not be empty")
+            raise ModelRepositoryError("managed model license posture must not be empty")
         if self.context_window < 2048:
-            raise ModelRepositoryError("local model context window must be at least 2048 tokens")
+            raise ModelRepositoryError("managed model context window must be at least 2048 tokens")
         if self.context_window > MAXIMUM_LOCAL_CONTEXT_WINDOW:
             raise ModelRepositoryError(
-                f"local model context window must be at most {MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
+                "managed model context window must be at most "
+                f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
             )
         if self.runtime == "llama-cpp":
             if self.source_path is None or not self.source_path.casefold().endswith(".gguf"):

@@ -22,7 +22,7 @@ recommended = true
 
 [snapshots.qwen25-7b-instruct-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "GPU-accelerated local model for synthetic tool-use demonstrations; not reviewed for biomedical use."
+purpose = "GPU-accelerated Heartwood-managed model for synthetic tool-use demonstrations; not reviewed for biomedical use."
 source_repository = "Qwen/Qwen2.5-7B-Instruct"
 source_revision = "a09a35458c702b33eeacc393d103063234e8bc28"
 expected_size_bytes = 15200000000

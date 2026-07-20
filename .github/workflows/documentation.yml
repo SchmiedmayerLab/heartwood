@@ -29,8 +29,6 @@ jobs:
           enable-cache: true
       - name: Install the pinned documentation toolchain
         run: uv sync --locked --only-group docs
-      - name: Stage canonical documentation
-        run: uv run --no-sync python deploy/stage_documentation.py
       - name: Build documentation strictly
         run: uv run --no-sync zensical build --clean --strict
       - name: Verify the static site

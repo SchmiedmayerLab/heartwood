@@ -532,6 +532,30 @@ summary:focus-visible {
   font-size: 0.76rem;
 }
 
+.trace-details,
+.approval-details {
+  margin-top: 3px;
+  color: #526159;
+}
+
+.trace-details summary,
+.approval-details summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.trace-details pre,
+.approval-details pre {
+  max-height: 12rem;
+  margin: 6px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.72rem;
+}
+
 .request-activity {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
@@ -639,15 +663,6 @@ summary:focus-visible {
 
 .approval-batch-list li small {
   color: var(--muted-foreground);
-}
-
-.approval-batch-list pre {
-  max-height: 12rem;
-  margin: 6px 0 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.72rem;
 }
 
 .approval-copy p {

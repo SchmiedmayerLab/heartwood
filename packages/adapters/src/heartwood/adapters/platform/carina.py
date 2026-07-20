@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-from heartwood.adapters import AdapterDetection
+from heartwood.adapters import AdapterDetection, PlatformCapabilities
 from heartwood.detector import Platform, detect_platform
 from heartwood.schemas import PolicyProfile
 
@@ -37,6 +37,22 @@ class CarinaPlatformAdapter:
             adapter_id=self.adapter_id,
             confidence=0.0,
             evidence=("Carina platform evidence not found", *detection.evidence),
+        )
+
+    def capabilities(self) -> PlatformCapabilities:
+        """Return capabilities for Stanford Carina."""
+        return PlatformCapabilities(
+            platform_id=self.adapter_id,
+            display_name="Stanford Carina",
+            interfaces=("terminal",),
+            browser_route="unavailable",
+            managed_runtimes=("vllm",),
+            scheduler="slurm",
+            persistent_storage="A dedicated directory in approved project storage",
+            credential_backends=("process", "mounted-file"),
+            model_sources=("heartwood", "stanford-ai-api-gateway"),
+            managed_model_connections=("Stanford AI API Gateway",),
+            validation_level="ci-and-live-synthetic",
         )
 
     def data_mounts(self) -> tuple[Path, ...]:

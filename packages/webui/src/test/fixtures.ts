@@ -24,26 +24,13 @@ export const event = (
 });
 
 export const syntheticEvents = (): SessionEvent[] => [
-  event(0, "command.received", { command_id: "session-test-detect-000000" }),
-  event(1, "detection.proposed", {
-    dataset: {
-      confidence: 0.95,
-      dataset_type: "omop-cdm",
-      evidence: ["found synthetic person table"],
-      source_id: "synthetic-omop",
-    },
-    platform: {
-      adapter_id: "generic",
-      confidence: 1,
-      evidence: ["generic fallback"],
-    },
-  }),
-  event(2, "user_message.recorded", {
+  event(0, "command.received", { command_id: "session-test-chat-000000" }),
+  event(1, "user_message.recorded", {
     actor_id: "human",
     command_id: "session-test-chat-000002",
     content: "Build the synthetic target-condition cohort",
   }),
-  event(3, "model_call.decision.recorded", {
+  event(2, "model_call.decision.recorded", {
     decision: {
       capability_tier: "supervised",
       decision: "allow",
@@ -59,16 +46,16 @@ export const syntheticEvents = (): SessionEvent[] => [
       action_confirmation_mode: "always-confirm",
     },
   }),
-  event(4, "agent_message.emitted", {
+  event(3, "agent_message.emitted", {
     content: "I will run the repository-verified cohort Skill.",
   }),
-  event(5, "tool_call.proposed", {
+  event(4, "tool_call.proposed", {
     risk: "low",
     summary: "build the aggregate synthetic target-condition cohort",
     tool_call_id: "session-test-toolcall-0",
     tool_name: "terminal",
   }),
-  event(6, "confirmation.requested", {
+  event(5, "confirmation.requested", {
     request: {
       request_id: "session-test-toolcall-0-confirm",
       risk: "low",

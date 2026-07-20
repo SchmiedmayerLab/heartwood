@@ -162,16 +162,16 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
         encoding="utf-8",
     )
     documentation = {
-        "container-images.md": f"heartwood:{version}",
-        "carina-cli.md": f"releases/download/{version}/heartwood-installer",
-        "platform-support.md": f"Release `{version}`",
-        "releases.md": f"-f version={version}",
-        "terra-jupyter-demo.md": f"heartwood:{version}-terra",
+        "platforms/containers.md": f"heartwood:{version}",
+        "platforms/carina.md": f"releases/download/{version}/heartwood-installer",
+        "platforms/terra.md": f"heartwood:{version}-terra",
+        "models/offline.md": f"heartwood:{version}",
     }
-    docs = tmp_path / "docs"
-    docs.mkdir()
+    docs = tmp_path / "documentation"
     for name, content in documentation.items():
-        (docs / name).write_text(content, encoding="utf-8")
+        path = docs / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
 

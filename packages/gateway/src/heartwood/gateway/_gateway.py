@@ -34,6 +34,8 @@ from heartwood.gateway._action_settings import (
     ActionSettings,
     ActionSettingsError,
 )
+from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
+from heartwood.gateway._local_import import import_local_model
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
     LocalModelChoice,
@@ -86,17 +88,26 @@ from heartwood.gateway._project_config import (
     ProjectModelSettingsStore,
 )
 from heartwood.gateway._readiness import (
-    MODEL_SOURCE_OPTIONS,
+    DeploymentReadiness,
     gpu_visible,
     inspect_deployment,
+    model_source_for_connection,
+    model_source_options,
     persist_deployment_profile,
 )
-from heartwood.gateway._session_catalog import SessionCatalog, SessionCatalogError
+from heartwood.gateway._session_catalog import (
+    DEFAULT_SESSION_ID,
+    SessionCatalog,
+    SessionCatalogError,
+)
 from heartwood.gateway._skill_settings import SkillManager
+from heartwood.gateway._startup import InterfaceKind, StartupPlan, plan_startup
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
 from heartwood.session import SessionCommand, SessionEvent
+
+_RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
 
 SessionServiceFactory = Callable[[Path, str], SessionService]
 
@@ -236,10 +247,10 @@ class SessionGateway:
         model_connections: Sequence[ModelConnection] | None = None,
         model_catalog_service: ModelCatalogService | None = None,
         model_repository: HuggingFaceModelRepository | None = None,
+        credential_store: CredentialStore | None = None,
         backend_id: str = "auto",
     ) -> None:
         self.project = ProjectContext.current() if project is None else project
-        self.project.initialize()
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
@@ -264,7 +275,12 @@ class SessionGateway:
         self.model_catalog_service = model_catalog_service or ModelCatalogService()
         self._model_connections: dict[str, ModelConnection] = {}
         self._reload_model_connections()
-        self._runtime_credentials: dict[str, str] = {}
+        self.credential_store = credential_store or CredentialStore(
+            project_root=self.project.root,
+            capabilities=adapter.capabilities(),
+            env=self.env,
+            use_system_keyring=env is None,
+        )
         self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
         repository_root = _repository_root()
         catalog_path = (
@@ -325,14 +341,25 @@ class SessionGateway:
         """Start gateway dependencies lazily with the first conversation."""
 
     @_serialized_state
+    def initialize_project(self, *, interface: InterfaceKind = "web") -> dict[str, object]:
+        """Confirm the current directory as the project and create private state."""
+        self.project.initialize()
+        return self.startup_plan(interface=interface)
+
+    @_serialized_state
     def stop(self) -> None:
         """Close active OpenHands conversations."""
         self._reset_services()
-        self._runtime_credentials.clear()
+        self.credential_store.clear_process_values()
 
     @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
+        self.project.initialize()
+        if command.session_id == DEFAULT_SESSION_ID:
+            self.session_catalog.default()
+        else:
+            self.session_catalog.ensure(command.session_id)
         service = self._service(command.session_id)
         result = service.handle(command)
         self._streams.publish(session_id=command.session_id, events=result.events)
@@ -344,7 +371,13 @@ class SessionGateway:
 
     def create_session(self, title: str | None = None) -> dict[str, object]:
         """Create and return one empty session."""
+        self.project.initialize()
         return self.session_catalog.create(title).safe_dict()
+
+    def default_session(self) -> dict[str, object]:
+        """Return the shared first session, creating it when needed."""
+        self.project.initialize()
+        return self.session_catalog.default().safe_dict()
 
     def session(self, session_id: str) -> dict[str, object]:
         """Return one persisted session summary."""
@@ -400,27 +433,85 @@ class SessionGateway:
         """Return API-safe settings, connections, and advanced presets."""
         settings = self.settings_store.load()
         config = self.config_store.load()
-        credential_env = self._credential_environment()
+        credential_env = self._credential_environment(strict=False)
+        credential_bindings = sorted(self._credential_binding_ids())
         return {
             **settings.safe_dict(credential_env),
             "model_source": config.model_source,
             "source_options": [
                 option.safe_dict(selected=option.source_id == config.model_source)
-                for option in MODEL_SOURCE_OPTIONS
+                for option in model_source_options(self.env)
             ],
             "connections": [
                 connection.safe_dict(credential_env)
-                for connection in self._model_connections.values()
+                for connection in sorted(
+                    self._model_connections.values(),
+                    key=lambda connection: connection.presentation_order,
+                )
             ],
             "presets": [preset.safe_dict() for preset in MODEL_PRESETS],
+            "credential_store": self.credential_store.availability().safe_dict(),
+            "credential_bindings": [
+                self.credential_store.status(binding).safe_dict() for binding in credential_bindings
+            ],
         }
 
-    def project_readiness(self) -> dict[str, object]:
-        """Return the same content-free project diagnostics used by the CLI."""
+    def credential_settings(self) -> dict[str, object]:
+        """Return non-secret credential storage and binding state."""
+        bindings = sorted(self._credential_binding_ids())
+        return {
+            "store": self.credential_store.availability().safe_dict(),
+            "bindings": [self.credential_store.status(binding).safe_dict() for binding in bindings],
+        }
+
+    @_serialized_state
+    def forget_credential(self, connection_id: str) -> dict[str, object]:
+        """Forget the process and persisted token for one model connection."""
+        connection = self._model_connections.get(connection_id)
+        if connection is None:
+            raise ModelCatalogError(f"unknown model connection: {connection_id}")
+        if connection.credential_kind != "environment" or connection.api_key_env is None:
+            raise ModelCatalogError("this model connection has no forgettable credential")
+        self.credential_store.forget(connection.api_key_env)
+        return self.credential_settings()
+
+    def deployment_readiness(self) -> DeploymentReadiness:
+        """Inspect the project with every resolvable credential binding."""
         return inspect_deployment(
             self.project,
-            self._credential_environment(),
-        ).safe_dict()
+            self._credential_environment(strict=False),
+        )
+
+    def project_readiness(self) -> dict[str, object]:
+        """Return content-free project diagnostics for presentation adapters."""
+        return self.deployment_readiness().safe_dict()
+
+    def platform_capabilities(self) -> dict[str, object]:
+        """Return capabilities owned by the detected platform adapter."""
+        return select_platform_adapter(self.env).capabilities().safe_dict()
+
+    def startup(
+        self,
+        *,
+        interface: InterfaceKind,
+        port: int = 8767,
+    ) -> StartupPlan:
+        """Plan the next action with every resolvable credential binding."""
+        return plan_startup(
+            self.project,
+            interface=interface,
+            port=port,
+            env=self._credential_environment(strict=False),
+        )
+
+    def startup_plan(
+        self,
+        *,
+        interface: InterfaceKind,
+        port: int = 8767,
+    ) -> dict[str, object]:
+        """Return the shared startup plan for presentation adapters."""
+        return self.startup(interface=interface, port=port).safe_dict()
 
     @_serialized_state
     def configure_model_source(self, model_source: str) -> dict[str, object]:
@@ -428,7 +519,7 @@ class SessionGateway:
         option = next(
             (
                 candidate
-                for candidate in MODEL_SOURCE_OPTIONS
+                for candidate in model_source_options(self.env)
                 if candidate.source_id == model_source
             ),
             None,
@@ -451,6 +542,7 @@ class SessionGateway:
         token: str | None = None,
         base_url: str | None = None,
         refresh: bool = False,
+        remember: bool = False,
     ) -> dict[str, object]:
         """Authorize and discover every model exposed by one connection."""
         connection = self._resolve_model_connection(
@@ -461,8 +553,15 @@ class SessionGateway:
         if connection.protocol != "static":
             self._authorize_model_catalog(connection)
         if token is not None:
-            self._remember_runtime_credential(connection, token)
+            self._remember_runtime_credential(connection, token, remember=remember)
             refresh = True
+        elif remember:
+            if connection.credential_kind != "environment" or connection.api_key_env is None:
+                raise ModelCatalogError("this model connection has no credential to remember")
+            resolved = self.credential_store.resolve(connection.api_key_env)
+            if resolved is None:
+                raise ModelCatalogError("the provider credential is unavailable")
+            self._remember_runtime_credential(connection, resolved, remember=True)
         credential_env = self._credential_environment()
         api_key = connection.resolve_api_key(credential_env)
         catalog = self.model_catalog_service.discover(
@@ -480,6 +579,7 @@ class SessionGateway:
         token: str | None = None,
         base_url: str | None = None,
         manual: bool = False,
+        remember: bool = False,
     ) -> dict[str, object]:
         """Select a discovered model and materialize its OpenHands profile."""
         connection = self._resolve_model_connection(
@@ -491,10 +591,10 @@ class SessionGateway:
             catalog: ModelCatalog | None = self.model_catalog_service.manual(connection, model_id)
             if token is not None:
                 self._authorize_model_catalog(connection)
-                self._remember_runtime_credential(connection, token)
+                self._remember_runtime_credential(connection, token, remember=remember)
         elif token is not None:
             self._authorize_model_catalog(connection)
-            self._remember_runtime_credential(connection, token)
+            self._remember_runtime_credential(connection, token, remember=remember)
             catalog = self.model_catalog_service.discover(
                 connection,
                 api_key=connection.resolve_api_key(self._credential_environment()),
@@ -506,6 +606,7 @@ class SessionGateway:
             discovered = self.discover_models(
                 connection_id,
                 base_url=base_url,
+                remember=remember,
             )
             catalog = self.model_catalog_service.cached(connection.connection_id)
             if catalog is None:  # pragma: no cover - defensive invariant
@@ -537,7 +638,7 @@ class SessionGateway:
             settings = (
                 self.settings_store.load().with_profile(profile).selecting(profile.profile_id)
             )
-            self._save_model_selection(connection.connection_id, settings)
+            self._save_model_selection(self._model_source_for_connection(connection), settings)
             self._reset_services()
             return self.model_settings()
 
@@ -569,6 +670,10 @@ class SessionGateway:
     @_serialized_state
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or replace a non-secret profile and reset active services."""
+        if profile.profile_id in _RESERVED_MODEL_PROFILE_IDS:
+            raise ModelSettingsError(
+                f"model profile id is reserved by Heartwood: {profile.profile_id}"
+            )
         settings = self.settings_store.load().with_profile(profile)
         self.settings_store.save(settings)
         self._reset_services()
@@ -578,13 +683,15 @@ class SessionGateway:
     def select_model_profile(self, profile_id: str) -> dict[str, object]:
         """Select a profile and reset active services."""
         settings = self.settings_store.load().selecting(profile_id)
-        self._save_model_selection(profile_id, settings)
+        self._save_model_selection(self._model_source_for_profile(settings.profile()), settings)
         self._reset_services()
         return self.model_settings()
 
     @_serialized_state
     def remove_model_profile(self, profile_id: str) -> dict[str, object]:
         """Remove a profile and reset active services."""
+        if profile_id in _RESERVED_MODEL_PROFILE_IDS:
+            raise ModelSettingsError(f"model profile is managed by Heartwood: {profile_id}")
         settings = self.settings_store.load().without_profile(profile_id)
         source = self.config_store.load().model_source
         self._save_model_selection(None if source == profile_id else source, settings)
@@ -596,13 +703,18 @@ class SessionGateway:
         profile = self.settings_store.load().profile(profile_id)
         action_settings = self.action_settings_store.load()
         policy_profile = self._policy_profile()
+        purpose = (
+            "selected Heartwood-managed model"
+            if profile.profile_id == "heartwood"
+            else f"model profile {profile.profile_id}"
+        )
         decision = ModelPolicyEngine(policy_profile).evaluate(
             endpoint=profile.policy_endpoint,
             capability_tier=profile.capability_tier,
             action_confirmation_mode=action_settings.confirmation_mode,
             credential_reference=profile.credential_reference,
             decision_id=f"model-profile-{profile.profile_id}",
-            purpose=f"model profile {profile.profile_id}",
+            purpose=purpose,
         )
         return {
             "profile": profile.safe_dict(),
@@ -748,6 +860,7 @@ class SessionGateway:
 
     def download_local_model(self, model_id: str) -> dict[str, object]:
         """Start a known local-model download into project storage."""
+        self.project.initialize()
         choice = self._require_local_model_runtime(model_id)
         return self.local_model_manager.start_model(choice.download_model()).safe_dict()
 
@@ -758,6 +871,7 @@ class SessionGateway:
         revision: str | None = None,
     ) -> dict[str, object]:
         """Resolve and start one user-selected Hugging Face model download."""
+        self.project.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
@@ -768,7 +882,8 @@ class SessionGateway:
         self,
         model_id: str,
     ) -> Path:
-        """Download, verify, and select a known local model."""
+        """Download, verify, and select a known Heartwood-managed model."""
+        self.project.initialize()
         model = self._require_local_model_runtime(model_id).download_model()
         if isinstance(model, ModelArtifact):
             path = download_artifact(model, cache_dir=self.model_cache_dir)
@@ -785,6 +900,7 @@ class SessionGateway:
         revision: str | None = None,
     ) -> Path:
         """Resolve, download, verify, and select one user-selected model."""
+        self.project.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
@@ -797,6 +913,41 @@ class SessionGateway:
         self._select_downloaded_local_model(choice.model_id, path, model.runtime_profile)
         return path
 
+    @_serialized_state
+    def import_local_model(
+        self,
+        source: Path,
+        *,
+        source_repository: str,
+        source_revision: str,
+        license_posture: str,
+        context_window: int,
+    ) -> dict[str, object]:
+        """Import and select a reviewed local GGUF file or vLLM snapshot."""
+        self.project.initialize()
+        imported = import_local_model(
+            source,
+            models_dir=self.model_cache_dir,
+            source_repository=source_repository,
+            source_revision=source_revision,
+            license_posture=license_posture,
+            context_window=context_window,
+        )
+        choice = imported.model
+        previous_config = self.config_store.load() if self.config_store.configured else None
+        self._local_model_choices[choice.model_id] = choice
+        self._downloadable_local_model_choices[choice.model_id] = choice
+        runtime_profile = "llama-cpp-cpu" if choice.runtime == "llama-cpp" else "vllm-cuda"
+        try:
+            self._select_downloaded_local_model(choice.model_id, imported.path, runtime_profile)
+        except BaseException:
+            self._local_model_choices.pop(choice.model_id, None)
+            self._downloadable_local_model_choices.pop(choice.model_id, None)
+            self.config_store.restore(previous_config)
+            shutil.rmtree(imported.storage_root, ignore_errors=True)
+            raise
+        return imported.safe_dict()
+
     def skill_settings(self) -> dict[str, object]:
         """Return bundled and explicitly installed Skills."""
         return {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]}
@@ -808,6 +959,7 @@ class SessionGateway:
     @_serialized_state
     def install_skill(self, source: Path, *, approved: bool) -> dict[str, object]:
         """Install one extension after an explicit trust decision."""
+        self.project.initialize()
         self.skill_manager.install(source, approved=approved)
         self._reset_services()
         return self.skill_settings()
@@ -821,7 +973,6 @@ class SessionGateway:
 
     @_serialized_state
     def _service(self, session_id: str) -> SessionService:
-        self.session_catalog.ensure(session_id)
         service = self._services.get(session_id)
         if service is None:
             if self._service_factory is not None:
@@ -906,24 +1057,27 @@ class SessionGateway:
         normalized_base_url = base_url.strip().rstrip("/")
         credential_name = connection.api_key_env or "HEARTWOOD_CUSTOM_MODEL_API_KEY"
         runtime_token = (
-            self._runtime_credentials.get(credential_name)
+            self.credential_store.resolve(credential_name)
             if connection.base_url == normalized_base_url
             else None
         )
         has_token = bool(token) or bool(self.env.get(credential_name)) or bool(runtime_token)
         dynamic = custom_model_connection(base_url, has_token=has_token)
         if connection != dynamic:
-            self._configure_generic_custom_policy(dynamic)
+            self._configure_custom_policy(dynamic)
             if connection.base_url != dynamic.base_url:
-                self._runtime_credentials.pop(credential_name, None)
+                self.credential_store.discard_process_value(credential_name)
             self._model_connections[connection_id] = dynamic
             self.model_catalog_service.invalidate(connection_id)
         return dynamic
 
-    def _configure_generic_custom_policy(self, connection: ModelConnection) -> None:
+    def _configure_custom_policy(self, connection: ModelConnection) -> None:
         if connection.catalog_endpoint is None or connection.policy_endpoint is None:
             raise ModelCatalogError("Custom API requires catalog and completion endpoints")
-        default_policy = select_platform_adapter({}).default_policy_profile()
+        adapter = select_platform_adapter(self.env)
+        if "custom" not in adapter.capabilities().model_sources:
+            raise ModelCatalogError("Custom API is unavailable on this platform")
+        default_policy = adapter.default_policy_profile()
         credential_allowlist = default_policy.credential_allowlist
         if connection.credential_reference is not None:
             credential_allowlist = (
@@ -932,7 +1086,7 @@ class SessionGateway:
             )
         policy = default_policy.model_copy(
             update={
-                "policy_id": "generic-custom-api",
+                "policy_id": f"{adapter.adapter_id}-custom-api",
                 "allowed_model_endpoints": (
                     *default_policy.allowed_model_endpoints,
                     connection.policy_endpoint,
@@ -947,9 +1101,9 @@ class SessionGateway:
         )
 
         def apply(config: ProjectConfig) -> ProjectConfig:
-            if config.platform_id != "generic" or config.policy.policy_id not in {
-                "generic-default",
-                "generic-custom-api",
+            if config.platform_id != adapter.adapter_id or config.policy.policy_id not in {
+                default_policy.policy_id,
+                f"{adapter.adapter_id}-custom-api",
             }:
                 return config
             return replace(config, policy=policy)
@@ -975,15 +1129,48 @@ class SessionGateway:
         if decision.decision != "allow":
             raise ModelCatalogError(f"model catalog discovery denied: {decision.reason}")
 
-    def _remember_runtime_credential(self, connection: ModelConnection, token: str) -> None:
+    def _remember_runtime_credential(
+        self,
+        connection: ModelConnection,
+        token: str,
+        *,
+        remember: bool,
+    ) -> None:
         if connection.credential_kind != "environment" or connection.api_key_env is None:
             raise ModelCatalogError("this model connection does not accept an API token")
         if not token.strip():
             raise ModelCatalogError("API token must not be empty")
-        self._runtime_credentials[connection.api_key_env] = token
+        if remember and connection.connection_id == "custom-api":
+            raise ModelCatalogError(
+                "Custom service tokens are process-only because they are tied to a server URL"
+            )
+        try:
+            self.credential_store.save(connection.api_key_env, token, remember=remember)
+        except CredentialStoreError as error:
+            raise ModelCatalogError(str(error)) from error
 
-    def _credential_environment(self) -> dict[str, str]:
-        return {**self.env, **self._runtime_credentials}
+    def _credential_environment(self, *, strict: bool = True) -> dict[str, str]:
+        return self.credential_store.environment(
+            tuple(self._credential_binding_ids()),
+            tolerate_backend_errors=not strict,
+        )
+
+    def _credential_binding_ids(self) -> set[str]:
+        bindings = {
+            connection.api_key_env
+            for connection in self._model_connections.values()
+            if connection.credential_kind == "environment" and connection.api_key_env is not None
+        }
+        try:
+            settings = self.settings_store.load()
+        except ModelSettingsError:
+            return bindings
+        bindings.update(
+            profile.api_key_env
+            for profile in settings.profiles
+            if profile.credential_kind == "environment" and profile.api_key_env is not None
+        )
+        return bindings
 
     @_serialized_state
     def _reset_services(self) -> None:
@@ -1002,7 +1189,12 @@ class SessionGateway:
     @_serialized_state
     def _reload_model_connections(self) -> None:
         configured = self.config_store.load().additional_connections
-        loaded = (*self._base_model_connections, *configured)
+        allowed_connection_ids = {option.connection_id for option in model_source_options(self.env)}
+        loaded = tuple(
+            connection
+            for connection in (*self._base_model_connections, *configured)
+            if connection.connection_id in allowed_connection_ids or connection.source == "platform"
+        )
         for connection in loaded:
             connection.validate(configurable=connection.connection_id == "custom-api")
         connection_ids = [connection.connection_id for connection in loaded]
@@ -1013,6 +1205,23 @@ class SessionGateway:
         for connection_id in previous_ids | set(self._model_connections):
             self.model_catalog_service.invalidate(connection_id)
 
+    def _model_source_for_connection(self, connection: ModelConnection) -> str:
+        try:
+            return model_source_for_connection(connection.connection_id)
+        except ProjectConfigError:
+            if connection.source == "platform":
+                return connection.connection_id
+            raise
+
+    def _model_source_for_profile(self, profile: ModelProfile) -> str:
+        if profile.is_local:
+            return "heartwood"
+        for connection in self._model_connections.values():
+            if connection.policy_endpoint == profile.policy_endpoint:
+                return self._model_source_for_connection(connection)
+        source = self.config_store.load().model_source
+        return "custom" if source is None else source
+
     @_serialized_state
     def _select_downloaded_local_model(
         self,
@@ -1020,15 +1229,17 @@ class SessionGateway:
         path: Path,
         runtime_profile: str,
     ) -> None:
-        execution_model = "heartwood-local-model"
+        execution_model = "heartwood-managed-model"
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
-            raise ModelRepositoryError(f"local model metadata is unavailable: {model_id}")
+            raise ModelRepositoryError(
+                f"Heartwood-managed model metadata is unavailable: {model_id}"
+            )
         output_budget = min(4096, max(512, choice.context_window // 8))
         profile = replace(
-            model_profile_from_preset("local-openai-compatible", execution_model),
-            profile_id="local",
-            description="Heartwood-managed local model",
+            model_profile_from_preset("heartwood-managed", execution_model),
+            profile_id="heartwood",
+            description=choice.label,
             max_input_tokens=choice.context_window - output_budget,
             max_output_tokens=output_budget,
         )
@@ -1075,7 +1286,7 @@ class SessionGateway:
             ).model
         existing = self._local_model_choices.get(choice.model_id)
         if existing is not None and existing != choice:
-            raise ModelRepositoryError(f"local model id collision: {choice.model_id}")
+            raise ModelRepositoryError(f"Heartwood-managed model id collision: {choice.model_id}")
         self._local_model_choices[choice.model_id] = choice
         self._downloadable_local_model_choices[choice.model_id] = choice
         return choice
@@ -1120,7 +1331,7 @@ class SessionGateway:
     def _require_local_model_runtime(self, model_id: str) -> LocalModelChoice:
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
-            raise ModelRepositoryError(f"unknown local model: {model_id}")
+            raise ModelRepositoryError(f"unknown Heartwood-managed model: {model_id}")
         if not self._local_runtime_available(choice.runtime):
             reason = self._local_model_choice_dict(choice)["availability_reason"]
             raise ModelRepositoryError(f"{choice.label} is unavailable: {reason}")
@@ -1219,4 +1430,4 @@ def _runtime_kind(profile: str) -> str:
         return "llama-cpp"
     if profile.startswith("vllm"):
         return "vllm"
-    raise ModelArtifactError(f"unsupported local runtime profile: {profile}")
+    raise ModelArtifactError(f"unsupported managed runtime profile: {profile}")

@@ -12,14 +12,14 @@ host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"
 port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.jsonl}"
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"
-model_alias="${HEARTWOOD_LOCAL_MODEL_ALIAS:-heartwood-local-runtime}"
+model_alias="${HEARTWOOD_MANAGED_MODEL_ALIAS:-heartwood-managed-runtime}"
 default_threads="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 n_threads="${HEARTWOOD_LOCAL_MODEL_THREADS:-${default_threads}}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
-  echo "local runtime must bind to loopback, got ${host}" >&2
+  echo "managed runtime must bind to loopback, got ${host}" >&2
   exit 64
 fi
 
@@ -36,7 +36,7 @@ case "${profile}" in
       exit 66
     fi
     if ! command -v llama-server >/dev/null 2>&1; then
-      echo "local runtime profile llama-cpp-cpu requires llama-server on PATH" >&2
+      echo "managed runtime profile llama-cpp-cpu requires llama-server on PATH" >&2
       exit 69
     fi
     exec llama-server \
@@ -48,7 +48,7 @@ case "${profile}" in
       --threads "${n_threads}"
     ;;
   *)
-    echo "unknown local runtime profile: ${profile}" >&2
+    echo "unknown managed runtime profile: ${profile}" >&2
     exit 64
     ;;
 esac

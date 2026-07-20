@@ -212,14 +212,22 @@ def _reentry_command(options: LaunchOptions) -> tuple[str, ...]:
         "heartwood.cli",
         "--session-id",
         options.session_id,
-        "launch",
-        "--inside-allocation",
     ]
     if options.plain:
         command.append("--plain")
     if options.web:
-        command.extend(("--web", "--host", options.web_host, "--port", str(options.web_port)))
-    command.extend(("--startup-timeout", str(options.startup_timeout)))
+        command.extend(("--interface", "web", "--host", options.web_host))
+    command.extend(
+        (
+            "--port",
+            str(options.web_port),
+            "runtime",
+            "start",
+            "--inside-allocation",
+            "--startup-timeout",
+            str(options.startup_timeout),
+        )
+    )
     return tuple(command)
 
 
@@ -230,18 +238,18 @@ def _run_command(command: Sequence[str]) -> int:
 def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     started = time.monotonic()
     selection = _local_model_selection(options.project, env)
-    _stage(1, 6, "Verify the selected local model")
+    _stage(1, 6, "Verify the selected Heartwood-managed model")
     if selection is None:
         print(
-            "No local model is selected. Run `heartwood models local`, then "
-            "`heartwood models download <model-id>`."
+            "No Heartwood-managed model is selected. "
+            "Run `heartwood setup` and choose Run with Heartwood."
         )
         return 64
     model_root = selection.model_root
     runtime_kind = selection.runtime
     model_id = selection.model_id
     if not model_root.exists():
-        print(f"Selected local model is unavailable: {model_root}")
+        print(f"Selected Heartwood-managed model is unavailable: {model_root}")
         return 66
     try:
         _verify_local_model(selection)
@@ -257,7 +265,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     selection = replace(selection, context_window=context_plan.effective_window)
     runtime_env["HEARTWOOD_LOCAL_MODEL_CONTEXT"] = str(selection.context_window)
     _print_resource_assessment(selection, runtime_env, context_plan=context_plan)
-    _stage(2, 6, "Validate the local inference runtime")
+    _stage(2, 6, "Validate the Heartwood-managed inference runtime")
     if runtime_kind == "vllm":
         preflight_error = _preflight_vllm(runtime_executable, runtime_env)
         if preflight_error is not None:
@@ -273,13 +281,13 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             return 72
         scratch_parent = Path(scratch_value)
         if not scratch_parent.is_dir() or not os.access(scratch_parent, os.W_OK):
-            print(f"Job-local scratch is unavailable or not writable: {scratch_parent}")
+            print(f"Allocation scratch is unavailable or not writable: {scratch_parent}")
             return 72
         model_size = _model_size(model_root)
         scratch_available = shutil.disk_usage(scratch_parent).free
         if scratch_available < model_size:
             print(
-                f"Job-local scratch requires {_format_bytes(model_size)} for the model; "
+                f"Allocation scratch requires {_format_bytes(model_size)} for the model; "
                 f"{_format_bytes(scratch_available)} is available under {scratch_parent}."
             )
             return 73
@@ -287,9 +295,9 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     runtime: subprocess.Popen[str] | None = None
     try:
         if staged_model is None:
-            _stage(3, 6, "Use the verified project-local model")
+            _stage(3, 6, "Use the verified project model")
         else:
-            _stage(3, 6, f"Stage the model on compute-local storage ({staged_model.parent})")
+            _stage(3, 6, f"Stage the model in allocation scratch ({staged_model.parent})")
             try:
                 staged_source = _stage_model(model_root, staged_model)
             except OSError as error:
@@ -385,10 +393,10 @@ def _interaction_command(
         active_env = {} if env is None else env
         platform_id = select_platform_adapter(active_env).adapter_id
         if platform_id == "terra" and has_authenticated_jupyter_proxy(active_env):
-            location = (
-                "through Terra's authenticated proxy: "
-                f"{jupyter_proxy_url(port=options.web_port, env=active_env)}"
-            )
+            proxy_url = jupyter_proxy_url(port=options.web_port, env=active_env)
+            if proxy_url is None:  # pragma: no cover - shared evidence invariant
+                raise RuntimeError("Terra proxy evidence did not produce an access path")
+            location = f"through Terra's authenticated proxy: {proxy_url}"
         elif platform_id == "terra":
             location = "after opening the tutorial notebook to obtain the Terra proxy link"
         else:
@@ -398,6 +406,7 @@ def _interaction_command(
                 sys.executable,
                 "-m",
                 "heartwood.cli",
+                "gateway",
                 "serve",
                 "--host",
                 options.web_host,
@@ -412,7 +421,6 @@ def _interaction_command(
         "heartwood.cli",
         "--session-id",
         options.session_id,
-        "chat",
     ]
     if options.plain:
         command.append("--plain")
@@ -782,7 +790,7 @@ def _wait_for_runtime(
         now = time.monotonic()
         if now >= next_update:
             elapsed = int(now - started)
-            print(f"Still starting the local model server ({elapsed} seconds elapsed)...")
+            print(f"Still starting the Heartwood-managed model ({elapsed} seconds elapsed)...")
             next_update = now + 15
         time.sleep(1)
     return False
@@ -818,7 +826,7 @@ def _ensure_setup(
     configured = False
     if store.configured:
         config = store.load()
-        if config.model_source == "local":
+        if config.model_source == "heartwood":
             try:
                 profile = config.model_settings.profile()
             except ValueError:
@@ -828,7 +836,7 @@ def _ensure_setup(
     if not configured:
         selection = _local_model_selection(options.project, runtime_env)
         if selection is None:
-            print("No local model is selected for setup.")
+            print("No Heartwood-managed model is selected for setup.")
             return 64
         setup_command = (
             sys.executable,
@@ -836,7 +844,7 @@ def _ensure_setup(
             "heartwood.cli",
             "setup",
             "--model-source",
-            "local",
+            "heartwood",
             "--model-id",
             selection.model_id,
             "--non-interactive",
@@ -867,13 +875,13 @@ def _ensure_setup(
 
 
 def _persist_effective_context(store: ProjectConfigStore, context_window: int) -> None:
-    """Keep the active local OpenHands profile aligned with the launched runtime."""
+    """Keep the active managed OpenHands profile aligned with the launched runtime."""
     output_budget = min(4096, max(512, context_window // 8))
 
     def update(config: ProjectConfig) -> ProjectConfig:
         profile = config.model_settings.profile()
         if not profile.is_local:
-            raise LaunchConfigurationError("the active model profile is not local")
+            raise LaunchConfigurationError("the active model profile is not Heartwood-managed")
         updated = replace(
             profile,
             max_input_tokens=context_window - output_budget,

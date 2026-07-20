@@ -22,8 +22,8 @@ def has_authenticated_jupyter_proxy(env: Mapping[str, str] | None = None) -> boo
     return bool(service_prefix or (google_project and cluster_name))
 
 
-def jupyter_proxy_url(*, port: int, env: Mapping[str, str] | None = None) -> str:
-    """Build the current Jupyter server's authenticated proxy route."""
+def jupyter_proxy_url(*, port: int, env: Mapping[str, str] | None = None) -> str | None:
+    """Build an authenticated proxy route only from verified environment evidence."""
     active_env = os.environ if env is None else env
     service_prefix = active_env.get("JUPYTERHUB_SERVICE_PREFIX", "").strip()
     if service_prefix:
@@ -37,4 +37,4 @@ def jupyter_proxy_url(*, port: int, env: Mapping[str, str] | None = None) -> str
         cluster = quote(cluster_name, safe="")
         return f"/proxy/{project}/{cluster}/jupyter/proxy/{port}/"
 
-    return f"/proxy/{port}/"
+    return None

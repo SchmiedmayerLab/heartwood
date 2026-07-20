@@ -22,7 +22,6 @@ const taskActivity: RequestActivity = {
 
 const activities: Record<CommandKind, RequestActivity> = {
   chat: taskActivity,
-  run: taskActivity,
   approve: {
     label: "Continuing the approved action set",
     waitingLabel: "Still continuing the approved action set",
@@ -47,11 +46,6 @@ const activities: Record<CommandKind, RequestActivity> = {
     label: "Loading the conversation",
     waitingLabel: "Still loading the conversation",
     guidance: "A long session can take additional time to restore.",
-  },
-  detect: {
-    label: "Inspecting the project environment",
-    waitingLabel: "Still inspecting the project environment",
-    guidance: "Platform services can take additional time to respond.",
   },
   "audit.export": {
     label: "Preparing the audit export",

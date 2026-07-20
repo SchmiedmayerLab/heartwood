@@ -20,6 +20,19 @@ export const modelProfileLabel = (
       profile.model.startsWith(connection.model_prefix) ?
         profile.model.slice(connection.model_prefix.length)
       : profile.model;
+    if (connection.connection_id === "heartwood") {
+      const description = profile.description?.trim();
+      const descriptionPrefix = `${connection.label}: `;
+      const describedModel =
+        description?.startsWith(descriptionPrefix) ?
+          description.slice(descriptionPrefix.length)
+        : description;
+      const displayName =
+        !describedModel || describedModel === modelName ?
+          "Managed model"
+        : describedModel;
+      return `${connection.label} · ${displayName}`;
+    }
     return `${connection.label} · ${modelName}`;
   }
   const preset = settings.presets.find(

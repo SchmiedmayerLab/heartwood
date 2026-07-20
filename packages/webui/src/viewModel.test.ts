@@ -28,7 +28,7 @@ describe("buildViewModel", () => {
           role: "agent",
         }),
         expect.objectContaining({
-          content: "Proposed tool: terminal",
+          content: "Proposed terminal command",
           label: "Trace",
           role: "trace",
         }),
@@ -48,8 +48,6 @@ describe("buildViewModel", () => {
       }),
     ]);
     expect(viewModel.context).toEqual({
-      platform: "generic",
-      dataset: "omop-cdm",
       modelEndpoint: "http://127.0.0.1:8765/v1/chat/completions",
       modelDecision: "allow",
       modelReason: "model route policy allows the configured profile",
@@ -82,7 +80,7 @@ describe("buildViewModel", () => {
     expect(viewModel.paused).toBe(false);
     expect(viewModel.activity[1]?.detail).toBe("exit=0");
     expect(viewModel.conversation[0]).toMatchObject({
-      content: "Ran terminal",
+      content: "Ran terminal command",
       detail: "Wrote summary",
     });
     expect(viewModel.activity[2]?.detail).toBe("3 events, scrubbed JSONL");
@@ -175,12 +173,16 @@ describe("buildViewModel", () => {
     ]);
 
     expect(viewModel.approvalControls[0]?.decision).toBe("denied");
-    expect(viewModel.conversation[0]?.detail).toContain("Arguments:");
-    expect(viewModel.conversation[0]?.detail).toContain('"command": "create"');
-    expect(viewModel.conversation[0]?.detail).toContain(
+    expect(viewModel.conversation[0]?.detail).toBe(
+      "Write the reviewed aggregate",
+    );
+    expect(viewModel.conversation[0]?.technicalDetail).toContain(
+      '"command": "create"',
+    );
+    expect(viewModel.conversation[0]?.technicalDetail).toContain(
       '"path": "/project/cohort-summary.txt"',
     );
-    expect(viewModel.conversation[0]?.detail).toContain(
+    expect(viewModel.conversation[0]?.technicalDetail).toContain(
       '"file_text": "heartwood-corrected-review-ok\\n"',
     );
   });
@@ -212,7 +214,7 @@ describe("buildViewModel", () => {
         tool_call_id: "toolcall-default",
       }),
       event(4, "model_call.decision.recorded", { decision: {} }),
-      event(5, "detection.proposed", { dataset: null, platform: [] }),
+      event(5, "session.paused", {}),
       event(6, "audit.export.recorded", { event_count: "unknown" }),
       event(7, "error.recorded", {}),
     ]);
@@ -220,11 +222,11 @@ describe("buildViewModel", () => {
     expect(viewModel.conversation).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          content: "Proposed tool: terminal",
+          content: "Proposed terminal command",
           detail: null,
         }),
         expect.objectContaining({
-          content: "Ran tool",
+          content: "Ran tool action",
           detail: "Exit unknown",
         }),
         expect.objectContaining({
@@ -246,11 +248,9 @@ describe("buildViewModel", () => {
       },
     ]);
     expect(viewModel.context).toEqual({
-      dataset: null,
       modelDecision: null,
       modelEndpoint: null,
       modelReason: null,
-      platform: null,
     });
     expect(viewModel.activity[6]?.detail).toBe("Scrubbed JSONL ready");
   });

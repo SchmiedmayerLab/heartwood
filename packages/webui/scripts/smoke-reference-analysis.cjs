@@ -29,7 +29,7 @@ const screenshotDirectory =
   screenshotOption === null ? null : (
     path.resolve(process.cwd(), screenshotOption)
   );
-const desktopViewport = { height: 960, width: 1440 };
+const desktopViewport = { height: 1024, width: 1440 };
 const cohortPrompt =
   "Build the synthetic target-condition cohort for concept 201826 with the " +
   "repository-verified cohort Skill. Use the localized OMOP reference tables, " +
@@ -95,17 +95,16 @@ async function main() {
       runtimeEnvironment.HEARTWOOD_MODEL_REQUEST_LOG,
     ]);
     await waitForUrl("http://127.0.0.1:8765/v1/models");
-    runCli("models", "refresh", "local");
-    runCli("models", "connect", "local", "heartwood-local-runtime");
+    runCli("models", "refresh", "heartwood");
+    runCli("models", "connect", "heartwood", "heartwood-managed-runtime");
 
     startProcess(heartwoodExecutable, [
-      "serve",
+      "--interface",
+      "web",
       "--host",
       "127.0.0.1",
       "--port",
       gatewayPort,
-      "--web-root",
-      webRoot,
     ]);
     await waitForUrl(origin);
 
@@ -132,11 +131,6 @@ async function main() {
     await expect(
       page.getByRole("heading", { name: "Synthetic Cohort Analysis" }),
     ).toBeVisible();
-    await page
-      .getByRole("button", { name: "Detect environment", exact: true })
-      .click();
-    await expect(page.getByText("omop-cdm", { exact: true })).toBeVisible();
-
     await page.getByRole("button", { name: "Skills", exact: true }).click();
     await expect(
       page.getByText("omop-cohort-summary", { exact: true }),
@@ -156,6 +150,7 @@ async function main() {
       prompt: cohortPrompt,
       summary: "build the aggregate synthetic target-condition cohort",
     });
+    await captureReferenceScreenshots(page);
     await runApprovedTask(page, task, {
       finalMessage: "The training-only age baseline is ready for review.",
       prompt: baselinePrompt,
@@ -167,7 +162,6 @@ async function main() {
       prompt: exportPrompt,
       summary: "apply the aggregate count floor and prepare the export",
     });
-    await captureReferenceScreenshots(page);
     await runApprovedTask(page, task, {
       finalMessage:
         "The requested tool action failed; review the terminal outcome before retrying.",
@@ -308,7 +302,7 @@ async function runApprovedTask(page, task, taskSpec) {
   if (taskSpec.captureApproval === true) {
     await captureDesktopScreenshot(
       page,
-      "web-action-review.png",
+      "browser-action-review.png",
       "action review",
     );
   }
@@ -322,9 +316,14 @@ async function runApprovedTask(page, task, taskSpec) {
 
 async function captureReferenceScreenshots(page) {
   if (screenshotDirectory === null) return;
+  await page
+    .getByRole("log", { name: "Conversation transcript" })
+    .evaluate((element) => {
+      element.scrollTop = 0;
+    });
   await captureDesktopScreenshot(
     page,
-    "web-reference-analysis.png",
+    "browser-conversation.png",
     "conversation",
   );
 }

@@ -75,7 +75,7 @@ class LocalModelSelection:
     artifact_id: str
     path: str
     runtime: str = "auto"
-    model_id: str = "heartwood-local-model"
+    model_id: str = "heartwood-managed-model"
     display_name: str | None = None
     source_repository: str | None = None
     source_revision: str | None = None
@@ -92,40 +92,46 @@ class LocalModelSelection:
     def validate(self, project: ProjectContext) -> None:
         """Validate identifiers and keep the selected artifact under the model root."""
         if not self.artifact_id.strip() or not self.model_id.strip():
-            raise ProjectConfigError("local model identifiers must not be empty")
+            raise ProjectConfigError("Heartwood-managed model identifiers must not be empty")
         if self.runtime not in {"auto", "llama-cpp", "vllm"}:
-            raise ProjectConfigError(f"unsupported local model runtime: {self.runtime}")
+            raise ProjectConfigError(f"unsupported Heartwood-managed model runtime: {self.runtime}")
         if self.catalog_source not in {"recommended", "user-selected"}:
-            raise ProjectConfigError("unsupported local model catalog source")
+            raise ProjectConfigError("unsupported Heartwood-managed model catalog source")
         if self.display_name is not None and not self.display_name.strip():
-            raise ProjectConfigError("local model display_name must not be empty")
+            raise ProjectConfigError("Heartwood-managed model display_name must not be empty")
         if self.source_repository is not None and not is_hugging_face_model_id(
             self.source_repository
         ):
-            raise ProjectConfigError("local model source_repository must use owner/model format")
+            raise ProjectConfigError(
+                "Heartwood-managed model source_repository must use owner/model format"
+            )
         if self.source_revision is not None and not is_immutable_revision(self.source_revision):
-            raise ProjectConfigError("local model source_revision must be immutable")
+            raise ProjectConfigError("Heartwood-managed model source_revision must be immutable")
         if (
             self.catalog_source == "user-selected"
             and self.source_revision is not None
             and not is_resolved_revision(self.source_revision)
         ):
             raise ProjectConfigError(
-                "user-selected local model source_revision must be a resolved commit"
+                "user-selected Heartwood-managed model source_revision must be a resolved commit"
             )
         if self.source_path is not None:
             source_path = Path(self.source_path)
             if source_path.is_absolute() or ".." in source_path.parts:
-                raise ProjectConfigError("local model source_path must be repository-relative")
+                raise ProjectConfigError(
+                    "Heartwood-managed model source_path must be repository-relative"
+                )
         if self.size_bytes is not None and self.size_bytes <= 0:
-            raise ProjectConfigError("local model size_bytes must be positive")
+            raise ProjectConfigError("Heartwood-managed model size_bytes must be positive")
         if self.minimum_free_bytes is not None and (
             self.size_bytes is None or self.minimum_free_bytes < self.size_bytes
         ):
-            raise ProjectConfigError("local model minimum_free_bytes must cover its size")
+            raise ProjectConfigError(
+                "Heartwood-managed model minimum_free_bytes must cover its size"
+            )
         if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
             raise ProjectConfigError(
-                f"local model context_window must be between 2048 and "
+                f"Heartwood-managed model context_window must be between 2048 and "
                 f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
             )
         for field_name, value in (
@@ -134,12 +140,14 @@ class LocalModelSelection:
             ("recommended_resource_envelope", self.recommended_resource_envelope),
         ):
             if value is not None and not value.strip():
-                raise ProjectConfigError(f"local model {field_name} must not be empty")
+                raise ProjectConfigError(f"Heartwood-managed model {field_name} must not be empty")
         if (
             self.artifact_sha256 is not None
             and re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256) is None
         ):
-            raise ProjectConfigError("local model artifact_sha256 must be a SHA-256 digest")
+            raise ProjectConfigError(
+                "Heartwood-managed model artifact_sha256 must be a SHA-256 digest"
+            )
         if self.catalog_source == "user-selected" and any(
             value is None
             for value in (
@@ -153,7 +161,9 @@ class LocalModelSelection:
                 self.recommended_resource_envelope,
             )
         ):
-            raise ProjectConfigError("user-selected local model provenance is incomplete")
+            raise ProjectConfigError(
+                "user-selected Heartwood-managed model provenance is incomplete"
+            )
         if (
             self.catalog_source == "user-selected"
             and self.source_path is not None
@@ -162,10 +172,12 @@ class LocalModelSelection:
             raise ProjectConfigError("user-selected GGUF model integrity metadata is incomplete")
         configured = Path(self.path)
         if configured.is_absolute():
-            raise ProjectConfigError("local model path must be relative to the project")
+            raise ProjectConfigError("Heartwood-managed model path must be relative to the project")
         resolved = (project.root / configured).resolve()
         if project.models_dir not in resolved.parents:
-            raise ProjectConfigError("local model path must remain under .heartwood/models")
+            raise ProjectConfigError(
+                "Heartwood-managed model path must remain under .heartwood/models"
+            )
 
     def resolved_path(self, project: ProjectContext) -> Path:
         """Return the validated absolute artifact path."""
@@ -281,6 +293,15 @@ class ProjectConfigStore:
             self._save_unlocked(updated)
             return updated
 
+    def restore(self, config: ProjectConfig | None) -> None:
+        """Restore a configuration snapshot after a larger transaction fails."""
+        self.project.initialize()
+        with FileLock(self.project.config_lock_path, mode=0o600):
+            if config is None:
+                self.project.config_path.unlink(missing_ok=True)
+            else:
+                self._save_unlocked(config)
+
     def _save_unlocked(self, config: ProjectConfig) -> None:
         config.validate(self.project)
         payload = _config_mapping(config)
@@ -307,7 +328,7 @@ class ProjectConfigStore:
         artifact_id: str,
         path: Path,
         runtime: str = "auto",
-        model_id: str = "heartwood-local-model",
+        model_id: str = "heartwood-managed-model",
         display_name: str | None = None,
         source_repository: str | None = None,
         source_revision: str | None = None,
@@ -322,7 +343,7 @@ class ProjectConfigStore:
         catalog_source: str = "recommended",
         settings: ModelSettings | None = None,
     ) -> ProjectConfig:
-        """Persist one verified project-local model and optional active profile."""
+        """Persist one verified Heartwood-managed model and optional active profile."""
         resolved = path.resolve()
         if self.project.models_dir not in resolved.parents:
             raise ProjectConfigError("downloaded model must be stored under .heartwood/models")
@@ -346,7 +367,7 @@ class ProjectConfigStore:
         )
 
         def apply(current: ProjectConfig) -> ProjectConfig:
-            updated = replace(current, model_source="local", local_model=selection)
+            updated = replace(current, model_source="heartwood", local_model=selection)
             return updated if settings is None else updated.with_model_settings(settings)
 
         return self.update(apply)

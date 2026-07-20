@@ -197,7 +197,7 @@ class ModelDownload:
 
 
 class LocalModelDownloadManager:
-    """Download, verify, and select local models in the background."""
+    """Download, verify, and select Heartwood-managed models in the background."""
 
     def __init__(
         self,
@@ -308,7 +308,9 @@ class LocalModelDownloadManager:
             try:
                 snapshot = self.snapshot_catalog.snapshot(model_id)
             except ModelSnapshotError as error:
-                raise ModelArtifactError(f"unknown recommended local model: {model_id}") from error
+                raise ModelArtifactError(
+                    f"unknown recommended Heartwood-managed model: {model_id}"
+                ) from error
             return snapshot, snapshot.expected_size_bytes
         return artifact, artifact.artifact_size_bytes
 

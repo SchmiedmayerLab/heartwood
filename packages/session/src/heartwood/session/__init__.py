@@ -11,7 +11,7 @@ the same session by issuing commands and consuming a single
 structured event stream. This package defines that contract so no interface
 owns separate execution semantics.
 
-See ``design/03-architecture.md`` for the contract's role.
+See ``documentation/architecture/system.md`` for the contract's role.
 """
 
 from __future__ import annotations

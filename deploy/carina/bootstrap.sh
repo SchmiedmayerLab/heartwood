@@ -118,24 +118,17 @@ export UV_PROJECT_ENVIRONMENT="${root}/heartwood"
 "${root}/bootstrap/bin/uv" sync \
   --locked --no-dev --all-extras --python "${bootstrap_python}"
 printf 'Installing the locked vLLM environment.\n'
-"${root}/bootstrap/bin/uv" venv \
-  "${root}/vllm" --python "${bootstrap_python}" --allow-existing
-"${root}/bootstrap/bin/uv" pip sync \
-  --require-hashes --python "${root}/vllm/bin/python" images/gpu/vllm-requirements.txt
-install -m 0444 images/gpu/heartwood_vllm.py "${root}/vllm/bin/heartwood_vllm.py"
-install -m 0444 images/gpu/sitecustomize.py "${root}/vllm/bin/sitecustomize.py"
-install -m 0555 images/gpu/heartwood-vllm "${root}/vllm/bin/heartwood-vllm"
+images/gpu/install_runtime.sh \
+  --target "${root}/vllm" \
+  --python "${bootstrap_python}" \
+  --uv "${root}/bootstrap/bin/uv"
 
 export PATH="${root}/bootstrap/bin:${PATH}"
 export LD_LIBRARY_PATH="${root}/bootstrap/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export VLLM_USE_FLASHINFER_SAMPLER=0
 
 printf 'Heartwood: %s\n' "$("${root}/heartwood/bin/heartwood" --version)"
-"${root}/vllm/bin/python" -c '
-import torch
-import vllm
-from importlib.metadata import version
-print(f"vLLM: {version('"'"'vllm'"'"')}")
-print(f"PyTorch: {torch.__version__} (CUDA {torch.version.cuda})")
-'
-"${root}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__
+HEARTWOOD_VLLM_ROOT="${root}/vllm" \
+HEARTWOOD_VLLM_PYTHON="${root}/vllm/bin/python" \
+HEARTWOOD_VLLM_EXECUTABLE="${root}/vllm/bin/heartwood-vllm" \
+  images/gpu/verify_runtime.sh "${root}/vllm"

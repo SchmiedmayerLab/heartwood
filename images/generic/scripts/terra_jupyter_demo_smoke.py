@@ -57,8 +57,10 @@ SESSION_ID = os.environ.get("HEARTWOOD_TERRA_DEMO_SESSION_ID", "terra-demo-smoke
 PROJECT_ROOT = Path(
     os.environ.get("HEARTWOOD_TERRA_DEMO_PROJECT_ROOT", "/tmp/heartwood-terra-demo")
 )
-WEB_ROOT = Path(os.environ.get("HEARTWOOD_WEB_ROOT", "/opt/heartwood/packages/webui/dist"))
 RUNTIME_ROOT = Path(os.environ.get("HEARTWOOD_RUNTIME_ROOT", "/opt/heartwood"))
+WEB_ROOT = Path(
+    os.environ.get("HEARTWOOD_WEB_ROOT", str(RUNTIME_ROOT / "packages" / "webui" / "dist"))
+)
 VERBOSE = os.environ.get("HEARTWOOD_TERRA_DEMO_VERBOSE") == "1"
 REQUEST_TIMEOUT = float(os.environ.get("HEARTWOOD_TERRA_DEMO_REQUEST_TIMEOUT", "30"))
 STARTUP_TIMEOUT = float(os.environ.get("HEARTWOOD_TERRA_DEMO_STARTUP_TIMEOUT", "60"))
@@ -82,9 +84,9 @@ def main() -> int:
             "heartwood",
             "setup",
             "--model-source",
-            "local",
+            "heartwood",
             "--model-id",
-            "heartwood-local-runtime",
+            "heartwood-managed-runtime",
             "--non-interactive",
             "--yes",
         ),
@@ -128,6 +130,7 @@ def _start_gateway() -> subprocess.Popen[str]:
     return subprocess.Popen(
         [
             "heartwood",
+            "gateway",
             "serve",
             "--host",
             GATEWAY_HOST,
@@ -261,14 +264,14 @@ def _verify_gateway_session(external_base: str) -> None:
     if selected_actions.get("confirmation_mode") != "always-confirm":
         raise AssertionError("gateway did not persist action confirmation through the proxy")
 
-    _trace("submitting detection command")
+    _trace("submitting session pause command")
     response = _request_json(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
-        data=_gateway_command("detect", "terra-demo-smoke-detect"),
+        data=_gateway_command("pause", "terra-demo-smoke-pause"),
     )
     event_kinds = {event["kind"] for event in response["events"]}
-    if "detection.proposed" not in event_kinds:
-        raise AssertionError("gateway command route did not return detection events")
+    if "session.paused" not in event_kinds:
+        raise AssertionError("gateway command route did not return session state")
 
     _trace("replaying session events")
     replay = _request_json(
@@ -281,8 +284,13 @@ def _verify_gateway_session(external_base: str) -> None:
     stream = _request_sse(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/events/stream?after=0")
     )
-    if "event: heartwood-session-events" not in stream or "detection.proposed" not in stream:
+    if "event: heartwood-session-events" not in stream or "session.paused" not in stream:
         raise AssertionError("gateway SSE route did not stream persisted events")
+
+    _request_json(
+        urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
+        data=_gateway_command("resume", "terra-demo-smoke-resume"),
+    )
 
     _trace("submitting OpenHands chat command")
     task = _request_json(
@@ -347,9 +355,9 @@ def _verify_notebook_api() -> None:
     session = NotebookSession(session_id=f"{SESSION_ID}-notebook")
     if session.project.root != PROJECT_ROOT.resolve():
         raise AssertionError("notebook API did not preserve the current-directory project")
-    view_model = session.detect()
-    if not any(item.kind == "detection.proposed" for item in view_model.activity):
-        raise AssertionError("notebook API did not project detection events")
+    view_model = session.pause()
+    if not view_model.paused:
+        raise AssertionError("notebook API did not project the shared session state")
 
 
 def _wait_for_url(url: str, *, process: subprocess.Popen[str] | None = None) -> None:

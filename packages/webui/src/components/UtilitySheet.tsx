@@ -54,6 +54,7 @@ import type {
   CredentialStatus,
   CustomLocalModelDownloadRequest,
   LocalModelChoice,
+  LocalModelImportRequest,
   ModelArtifacts,
   ModelCatalog,
   ModelCatalogRequest,
@@ -69,6 +70,7 @@ import type {
   SessionEvent,
   SkillSettings,
   SkillSummary,
+  StartupPlan,
 } from "../types";
 import { buildViewModel } from "../viewModel";
 import type { UtilityPanel } from "./SessionRail";
@@ -80,6 +82,7 @@ interface UtilitySheetProps {
   panel: UtilityPanel;
   profileDraft: ModelProfile;
   projectReadiness: ProjectReadiness | null;
+  startupPlan: StartupPlan | null;
   skillApproved: boolean;
   skillCandidate: SkillSummary | null;
   skillSettings: SkillSettings | null;
@@ -90,6 +93,7 @@ interface UtilitySheetProps {
   onConnectModel: (request: ModelConnectRequest) => Promise<void>;
   onConfigureModelSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscoverModels: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
+  onForgetCredential: (connectionId: string) => Promise<void>;
   onDownload: (modelId: string) => void;
   onDownloadCustom: (request: CustomLocalModelDownloadRequest) => Promise<void>;
   onExportAudit: () => void;
@@ -97,6 +101,8 @@ interface UtilitySheetProps {
   onInspectModelRepository: (
     request: ModelRepositoryRequest,
   ) => Promise<ModelRepositoryPlan>;
+  onImportLocalModel: (request: LocalModelImportRequest) => Promise<void>;
+  onInitializeProject: () => Promise<void>;
   onInstallSkill: () => void;
   onProfileDraft: (profile: ModelProfile) => void;
   onRefreshActivity: () => void;
@@ -291,7 +297,10 @@ const SettingsContent = (props: UtilitySheetProps) => {
     onDownload,
     onDownloadCustom,
     onDiscoverModels,
+    onForgetCredential,
     onInspectModelRepository,
+    onImportLocalModel,
+    onInitializeProject,
     onProfileDraft,
     onRefreshSettings,
     onRemoveProfile,
@@ -352,7 +361,11 @@ const SettingsContent = (props: UtilitySheetProps) => {
               Refresh
             </Button>
           </div>
-          <ProjectReadinessSummary readiness={projectReadiness} />
+          <ProjectReadinessSummary
+            readiness={projectReadiness}
+            startup={props.startupPlan}
+            onInitialize={onInitializeProject}
+          />
           {settings?.profiles.length ?
             <section className="panel-section">
               <h3>Active model</h3>
@@ -418,7 +431,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
           : null}
 
           <section className="panel-section artifact-list">
-            <h3>Local models</h3>
+            <h3>Models Heartwood can run</h3>
             {artifacts && localModels.length ?
               localModels.map((model) => {
                 const download = artifacts.downloads.find(
@@ -481,6 +494,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
           <CustomLocalModelSetup
             downloads={artifacts?.downloads ?? []}
             onDownload={onDownloadCustom}
+            onImport={onImportLocalModel}
             onInspect={onInspectModelRepository}
           />
 
@@ -489,33 +503,36 @@ const SettingsContent = (props: UtilitySheetProps) => {
             onConnect={onConnectModel}
             onConfigureSource={onConfigureModelSource}
             onDiscover={onDiscoverModels}
+            onForgetCredential={onForgetCredential}
           />
 
           <details className="advanced-section">
             <summary>More options</summary>
             <div className="advanced-section-content">
               <div className="profile-list">
-                {settings?.profiles.map((profile) => (
-                  <div className="profile-row" key={profile.profile_id}>
-                    <button
-                      type="button"
-                      onClick={() => onProfileDraft(profile)}
-                    >
-                      <strong>{profile.profile_id}</strong>
-                      <span>{profile.model}</span>
-                    </button>
-                    <Tooltip tooltip={`Remove ${profile.profile_id}`}>
-                      <Button
-                        aria-label={`Remove ${profile.profile_id}`}
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onRemoveProfile(profile.profile_id)}
+                {settings?.profiles
+                  .filter((profile) => profile.profile_id !== "heartwood")
+                  .map((profile) => (
+                    <div className="profile-row" key={profile.profile_id}>
+                      <button
+                        type="button"
+                        onClick={() => onProfileDraft(profile)}
                       >
-                        <Trash2 size={15} />
-                      </Button>
-                    </Tooltip>
-                  </div>
-                ))}
+                        <strong>{profile.profile_id}</strong>
+                        <span>{profile.model}</span>
+                      </button>
+                      <Tooltip tooltip={`Remove ${profile.profile_id}`}>
+                        <Button
+                          aria-label={`Remove ${profile.profile_id}`}
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onRemoveProfile(profile.profile_id)}
+                        >
+                          <Trash2 size={15} />
+                        </Button>
+                      </Tooltip>
+                    </div>
+                  ))}
               </div>
               <ProfileEditor
                 draft={profileDraft}
@@ -561,8 +578,12 @@ const SettingsContent = (props: UtilitySheetProps) => {
 
 const ProjectReadinessSummary = ({
   readiness,
+  startup,
+  onInitialize,
 }: {
   readiness: ProjectReadiness | null;
+  startup: StartupPlan | null;
+  onInitialize: () => Promise<void>;
 }) => {
   if (!readiness) {
     return (
@@ -583,17 +604,26 @@ const ProjectReadinessSummary = ({
         </div>
         <Badge variant={status.variant}>{status.label}</Badge>
       </div>
+      {startup ?
+        <span>{startup.summary}</span>
+      : null}
       {attention.slice(0, 2).map((check) => (
-        <span key={check.check_id}>{check.summary}</span>
+        <div className="readiness-attention" key={check.check_id}>
+          <strong>{check.title ?? "Setup needs attention"}</strong>
+          <span>{check.summary}</span>
+          {check.code ?
+            <small>{check.code}</small>
+          : null}
+        </div>
       ))}
-      {readiness.state === "compute-required" ?
+      {startup && startup.phase !== "ready" ?
         <div className="project-next-step">
           <strong>Next step</strong>
-          <span>
-            Start the selected model and browser together with{" "}
-            <code>heartwood launch --web</code> from this project.
-          </span>
+          <span>{startup.next_action}</span>
         </div>
+      : null}
+      {startup?.phase === "project-review" ?
+        <Button onClick={() => void onInitialize()}>Use this project</Button>
       : null}
       <details>
         <summary>Project details</summary>
@@ -603,7 +633,12 @@ const ProjectReadinessSummary = ({
           <ul className="readiness-checks">
             {readiness.checks.map((check) => (
               <li data-status={check.status} key={check.check_id}>
-                {check.summary}
+                <span>{check.summary}</span>
+                {check.status === "pass" ? null : (
+                  <small>
+                    {check.next_action ?? "Review this check and try again."}
+                  </small>
+                )}
               </li>
             ))}
           </ul>
@@ -638,18 +673,26 @@ const localComputeLabel = (runtime: LocalModelChoice["runtime"]): string =>
 const CustomLocalModelSetup = ({
   downloads,
   onDownload,
+  onImport,
   onInspect,
 }: {
   downloads: ModelArtifacts["downloads"];
   onDownload: (request: CustomLocalModelDownloadRequest) => Promise<void>;
+  onImport: (request: LocalModelImportRequest) => Promise<void>;
   onInspect: (request: ModelRepositoryRequest) => Promise<ModelRepositoryPlan>;
 }) => {
   const modelIssueUrl =
     "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose";
   const [repository, setRepository] = useState("");
+  const [revision, setRevision] = useState("");
   const [plan, setPlan] = useState<ModelRepositoryPlan | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importPath, setImportPath] = useState("");
+  const [importRepository, setImportRepository] = useState("");
+  const [importRevision, setImportRevision] = useState("");
+  const [importLicense, setImportLicense] = useState("");
+  const [importComplete, setImportComplete] = useState(false);
   const modelDownload =
     plan === null ? undefined : (
       downloads.find((item) => item.model_id === plan.model.model_id)
@@ -661,7 +704,12 @@ const CustomLocalModelSetup = ({
     setError(null);
     setPlan(null);
     try {
-      setPlan(await onInspect({ repository: repository.trim() }));
+      setPlan(
+        await onInspect({
+          repository: repository.trim(),
+          ...(revision.trim() ? { revision: revision.trim() } : {}),
+        }),
+      );
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -678,6 +726,32 @@ const CustomLocalModelSetup = ({
         repository: plan.model.source_repository,
         revision: plan.model.source_revision,
       });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const importModel = async () => {
+    if (
+      !importPath.trim() ||
+      !importRepository.trim() ||
+      !importRevision.trim() ||
+      !importLicense.trim()
+    )
+      return;
+    setPending(true);
+    setError(null);
+    setImportComplete(false);
+    try {
+      await onImport({
+        path: importPath.trim(),
+        repository: importRepository.trim(),
+        revision: importRevision.trim(),
+        license: importLicense.trim(),
+      });
+      setImportComplete(true);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -706,6 +780,22 @@ const CustomLocalModelSetup = ({
             }}
           />
         </label>
+        <details className="model-plan-source">
+          <summary>Version options</summary>
+          <label>
+            Model revision
+            <Input
+              autoComplete="off"
+              placeholder="Optional tag, branch, or commit"
+              value={revision}
+              onChange={(event) => {
+                setRevision(event.target.value);
+                setPlan(null);
+                setError(null);
+              }}
+            />
+          </label>
+        </details>
         <Button
           disabled={pending || !repository.trim()}
           isPending={pending && plan === null}
@@ -765,6 +855,63 @@ const CustomLocalModelSetup = ({
             </Button>
           </div>
         : null}
+        <details className="model-plan-source">
+          <summary>Import an existing model</summary>
+          <div className="local-model-form">
+            <p className="panel-empty">
+              Use a GGUF file or vLLM model directory already visible to this
+              Heartwood server. The files are copied into this project.
+            </p>
+            <label>
+              Server path
+              <Input
+                value={importPath}
+                onChange={(event) => setImportPath(event.target.value)}
+              />
+            </label>
+            <label>
+              Source repository
+              <Input
+                placeholder="owner/model"
+                value={importRepository}
+                onChange={(event) => setImportRepository(event.target.value)}
+              />
+            </label>
+            <label>
+              Source revision
+              <Input
+                placeholder="Immutable commit hash"
+                value={importRevision}
+                onChange={(event) => setImportRevision(event.target.value)}
+              />
+            </label>
+            <label>
+              License
+              <Input
+                placeholder="For example, Apache-2.0"
+                value={importLicense}
+                onChange={(event) => setImportLicense(event.target.value)}
+              />
+            </label>
+            <Button
+              disabled={
+                pending ||
+                !importPath.trim() ||
+                !importRepository.trim() ||
+                !importRevision.trim() ||
+                !importLicense.trim()
+              }
+              isPending={pending}
+              variant="outline"
+              onClick={() => void importModel()}
+            >
+              Import model
+            </Button>
+            {importComplete ?
+              <span role="status">Model imported and selected</span>
+            : null}
+          </div>
+        </details>
         {error ?
           <div className="connection-error" role="alert">
             <span>{error}</span>
@@ -785,11 +932,13 @@ const ModelConnectionSetup = ({
   onConnect,
   onConfigureSource,
   onDiscover,
+  onForgetCredential,
 }: {
   settings: ModelSettings | null;
   onConnect: (request: ModelConnectRequest) => Promise<void>;
   onConfigureSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscover: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
+  onForgetCredential: (connectionId: string) => Promise<void>;
 }) => {
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -797,6 +946,7 @@ const ModelConnectionSetup = ({
   const [token, setToken] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [manualModel, setManualModel] = useState("");
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -820,6 +970,7 @@ const ModelConnectionSetup = ({
     setToken("");
     setBaseUrl(next.base_url ?? "");
     setManualModel("");
+    setRemember(false);
     setError(null);
     setSourceError(null);
   };
@@ -862,6 +1013,7 @@ const ModelConnectionSetup = ({
           { base_url: baseUrl.trim() }
         : {}),
         refresh: true,
+        ...(remember ? { remember: true } : {}),
       });
       setCatalog(discovered);
       const first = discovered.models.find(
@@ -902,7 +1054,7 @@ const ModelConnectionSetup = ({
     <section className="panel-section model-connections">
       {unconfiguredSources.length ?
         <div className="connection-group">
-          <h3>Research environment</h3>
+          <h3>Available connections</h3>
           <div className="connection-list">
             {unconfiguredSources.map((source) => (
               <div className="connection-row" key={source.source_id}>
@@ -972,22 +1124,49 @@ const ModelConnectionSetup = ({
                     </Button>
                   </div>
                   {item.connection_id === connectionId && connection ?
-                    <ModelConnectionForm
-                      baseUrl={baseUrl}
-                      catalog={catalog}
-                      connection={connection}
-                      error={error}
-                      manualModel={manualModel}
-                      pending={pending}
-                      selectedModel={selectedModel}
-                      token={token}
-                      onActivate={activateModel}
-                      onBaseUrl={setBaseUrl}
-                      onDiscover={discover}
-                      onManualModel={setManualModel}
-                      onSelectedModel={setSelectedModel}
-                      onToken={setToken}
-                    />
+                    <>
+                      <ModelConnectionForm
+                        baseUrl={baseUrl}
+                        catalog={catalog}
+                        connection={connection}
+                        error={error}
+                        manualModel={manualModel}
+                        pending={pending}
+                        selectedModel={selectedModel}
+                        token={token}
+                        remember={remember}
+                        rememberAvailable={
+                          settings?.credential_store.persistence_available ===
+                            true && connection.connection_id !== "custom-api"
+                        }
+                        onActivate={activateModel}
+                        onBaseUrl={setBaseUrl}
+                        onDiscover={discover}
+                        onManualModel={setManualModel}
+                        onRemember={setRemember}
+                        onSelectedModel={setSelectedModel}
+                        onToken={setToken}
+                      />
+                      {(
+                        settings?.credential_bindings.some(
+                          (binding) =>
+                            binding.binding_id === item.api_key_env &&
+                            ["keyring", "process"].includes(
+                              binding.source ?? "",
+                            ),
+                        )
+                      ) ?
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            void onForgetCredential(item.connection_id)
+                          }
+                        >
+                          Forget token
+                        </Button>
+                      : null}
+                    </>
                   : null}
                 </Fragment>
               ))}
@@ -1008,12 +1187,15 @@ interface ModelConnectionFormProps {
   pending: boolean;
   selectedModel: string;
   token: string;
+  remember: boolean;
+  rememberAvailable: boolean;
   onActivate: (manual: boolean) => Promise<void>;
   onBaseUrl: (value: string) => void;
   onDiscover: () => Promise<void>;
   onManualModel: (value: string) => void;
   onSelectedModel: (value: string) => void;
   onToken: (value: string) => void;
+  onRemember: (value: boolean) => void;
 }
 
 const ModelConnectionForm = ({
@@ -1025,12 +1207,15 @@ const ModelConnectionForm = ({
   pending,
   selectedModel,
   token,
+  remember,
+  rememberAvailable,
   onActivate,
   onBaseUrl,
   onDiscover,
   onManualModel,
   onSelectedModel,
   onToken,
+  onRemember,
 }: ModelConnectionFormProps) => (
   <div className="connection-form">
     <div>
@@ -1048,6 +1233,15 @@ const ModelConnectionForm = ({
         />
       </label>
     : null}
+    {rememberAvailable && token.trim() ?
+      <label className="checkbox-row">
+        <Checkbox
+          checked={remember}
+          onCheckedChange={(checked) => onRemember(checked === true)}
+        />
+        Remember securely for this project
+      </label>
+    : null}
     {(
       connection.accepts_token &&
       (connection.credential_status === "missing" ||
@@ -1055,7 +1249,7 @@ const ModelConnectionForm = ({
     ) ?
       <label>
         {connection.connection_id === "custom-api" ?
-          "Token (optional for local)"
+          "Token (optional for loopback services)"
         : "API token"}
         <Input
           autoComplete="off"
@@ -1190,31 +1384,27 @@ const ModelChoiceStatus = ({
   );
 };
 
-const connectionGroups = (connections: ModelConnection[]) => [
-  {
-    label: "Research environment",
-    connections: connections.filter(
-      (connection) => connection.source === "platform",
-    ),
-  },
-  {
-    label: "Cloud",
-    connections: connections.filter(
-      (connection) =>
-        connection.source !== "platform" &&
-        !["custom-api", "local"].includes(connection.connection_id),
-    ),
-  },
-  {
-    label: "Other model services",
-    connections: connections.filter((connection) =>
-      ["custom-api", "local"].includes(connection.connection_id),
-    ),
-  },
-];
+const connectionGroups = (connections: ModelConnection[]) => {
+  const groups = new Map<
+    ModelConnection["group"],
+    { label: string; connections: ModelConnection[] }
+  >();
+  connections.forEach((connection) => {
+    const existing = groups.get(connection.group);
+    if (existing) {
+      existing.connections.push(connection);
+      return;
+    }
+    groups.set(connection.group, {
+      label: connection.group_label,
+      connections: [connection],
+    });
+  });
+  return [...groups.values()];
+};
 
 const ConnectionIcon = ({ connection }: { connection: ModelConnection }) => {
-  if (connection.connection_id === "local") return <HardDrive size={16} />;
+  if (connection.connection_id === "heartwood") return <HardDrive size={16} />;
   if (connection.source === "platform") return <Building2 size={16} />;
   if (connection.connection_id === "custom-api") return <Server size={16} />;
   return <Cloud size={16} />;
@@ -1226,7 +1416,7 @@ const connectionStatus = (connection: ModelConnection): string => {
         "Setup required"
       : "Provided here";
   }
-  if (connection.connection_id === "local") return "Already running locally";
+  if (connection.connection_id === "heartwood") return "Managed by Heartwood";
   return connection.credential_status === "missing" ?
       "Not connected"
     : "Connected";

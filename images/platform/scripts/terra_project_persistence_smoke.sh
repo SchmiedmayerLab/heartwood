@@ -30,8 +30,10 @@ docker run --rm --platform "${docker_platform}" --network none \
     mkdir -p "${HEARTWOOD_TEST_PROJECT}"
     cd "${HEARTWOOD_TEST_PROJECT}"
     /opt/heartwood/images/platform/scripts/terra_image_smoke.sh
-    heartwood --session-id terra-project-persistence detect >/tmp/heartwood-detect.txt
-    grep --fixed-strings "Project: ${HEARTWOOD_TEST_PROJECT}" /tmp/heartwood-detect.txt
+    heartwood doctor --json >/tmp/heartwood-readiness.json
+    grep --fixed-strings "${HEARTWOOD_TEST_PROJECT}" /tmp/heartwood-readiness.json
+    heartwood --session-id terra-project-persistence pause \
+      | grep --fixed-strings "Session paused"
     printf "%s\n" persisted > .heartwood/cache/terra-project-persistence
     test ! -e /home/jupyter/.heartwood
   '
@@ -48,7 +50,7 @@ docker run --rm --platform "${docker_platform}" --network none \
     test "$(cat .heartwood/cache/terra-project-persistence)" = persisted
     /opt/heartwood/images/platform/scripts/terra_image_smoke.sh
     heartwood --session-id terra-project-persistence replay \
-      | grep --fixed-strings "Detected terra /"
+      | grep --fixed-strings "Session paused"
     test ! -e /home/jupyter/.heartwood
   '
 

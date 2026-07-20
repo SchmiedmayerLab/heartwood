@@ -11,10 +11,9 @@ services:
     image: heartwood-runtime-smoke:local
     build:
       context: ../..
-      dockerfile: images/generic/Dockerfile
+      dockerfile: images/Dockerfile
+      target: runtime-image
       pull: true
-      args:
-        HEARTWOOD_IMAGE_FLAVOR: runtime
     init: true
     user: "10001:10001"
     network_mode: none

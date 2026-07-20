@@ -4,10 +4,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Deterministic environment and dataset detection for Heartwood.
+"""Content-safe environment and dataset detection for Heartwood.
 
-Detection proposes; a human confirms. Nothing here loads a skill or runs code.
-See ``design/04-skills.md``.
+Platform evidence selects an adapter but does not grant data or model authorization.
+Nothing here loads a skill or runs code.
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@ events_path="${workspace}/${session_id}/events.jsonl"
 export HEARTWOOD_SESSION_ID="${session_id}"
 export HEARTWOOD_LOCAL_RUNTIME_PROFILE="llama-cpp-cpu"
 export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
-export HEARTWOOD_LOCAL_MODEL_ALIAS="heartwood-local-runtime"
+export HEARTWOOD_MANAGED_MODEL_ALIAS="heartwood-managed-runtime"
 export HEARTWOOD_LOCAL_MODEL_CONTEXT="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 export HEARTWOOD_LOCAL_MODEL_THREADS="${HEARTWOOD_LOCAL_MODEL_THREADS:-8}"
 export HEARTWOOD_LOCAL_RUNTIME_PORT="${runtime_port}"
@@ -87,12 +87,12 @@ run_heartwood() {
   timeout "${command_timeout}" heartwood "$@"
 }
 
-run_heartwood models refresh local | tee -a "${transcript}"
-run_heartwood models connect local heartwood-local-runtime \
+run_heartwood models refresh heartwood | tee -a "${transcript}"
+run_heartwood models connect heartwood heartwood-managed-runtime \
   | tee -a "${transcript}"
-run_heartwood models validate local | tee -a "${transcript}"
+run_heartwood models validate heartwood | tee -a "${transcript}"
 run_heartwood actions set auto-approve-low-risk | tee -a "${transcript}"
-run_heartwood --session-id "${session_id}" chat \
+run_heartwood --session-id "${session_id}" \
   --prompt "Call the terminal tool to execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
   | tee -a "${transcript}"
 
@@ -121,7 +121,7 @@ PY
   if [[ -z "${pending_id}" ]]; then
     break
   fi
-  run_heartwood --session-id "${session_id}" allow "${pending_id}" \
+  run_heartwood --session-id "${session_id}" allow \
     | tee -a "${transcript}"
 done
 

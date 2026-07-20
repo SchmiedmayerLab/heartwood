@@ -40,11 +40,9 @@ def validate_session_id(value: str) -> str:
 class CommandKind(StrEnum):
     """Commands accepted by a Heartwood session."""
 
-    DETECT = "detect"
     APPROVE = "approve"
     DENY = "deny"
     CHAT = "chat"
-    RUN = "run"
     PAUSE = "pause"
     RESUME = "resume"
     REPLAY = "replay"
@@ -61,7 +59,6 @@ class EventKind(StrEnum):
     """
 
     COMMAND_RECEIVED = "command.received"
-    DETECTION_PROPOSED = "detection.proposed"
     APPROVAL_RECORDED = "approval.recorded"
     POLICY_DECISION_RECORDED = "policy.decision.recorded"
     MODEL_CALL_DECISION_RECORDED = "model_call.decision.recorded"

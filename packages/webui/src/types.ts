@@ -11,19 +11,10 @@ export type JsonValue =
   JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export type CommandKind =
-  | "detect"
-  | "approve"
-  | "deny"
-  | "chat"
-  | "run"
-  | "pause"
-  | "resume"
-  | "replay"
-  | "audit.export";
+  "approve" | "deny" | "chat" | "pause" | "resume" | "replay" | "audit.export";
 
 export type EventKind =
   | "command.received"
-  | "detection.proposed"
   | "approval.recorded"
   | "policy.decision.recorded"
   | "model_call.decision.recorded"
@@ -93,6 +84,7 @@ export interface ConversationMessage {
   label: string;
   content: string;
   detail: string | null;
+  technicalDetail?: string | null;
 }
 
 export interface ApprovalControl {
@@ -107,8 +99,6 @@ export interface ApprovalControl {
 }
 
 export interface SessionContext {
-  platform: string | null;
-  dataset: string | null;
   modelEndpoint: string | null;
   modelDecision: string | null;
   modelReason: string | null;
@@ -148,6 +138,10 @@ export interface ReadinessCheck {
   check_id: string;
   status: "pass" | "warning" | "fail";
   summary: string;
+  code?: string;
+  title?: string;
+  next_action?: string;
+  documentation_path?: string;
 }
 
 export interface ProjectReadiness {
@@ -157,6 +151,51 @@ export interface ProjectReadiness {
   state_root: string;
   evidence: string[];
   checks: ReadinessCheck[];
+}
+
+export type InterfaceKind = "terminal" | "web" | "notebook";
+
+export interface PlatformCapabilities {
+  platform_id: string;
+  display_name: string;
+  interfaces: InterfaceKind[];
+  browser_route: "direct" | "jupyter-proxy" | "unavailable";
+  managed_runtimes: Array<"llama-cpp" | "vllm">;
+  scheduler: "none" | "provisioned" | "slurm";
+  persistent_storage: string;
+  credential_backends: Array<
+    "process" | "keyring" | "mounted-file" | "managed-identity"
+  >;
+  model_sources: Array<
+    "anthropic" | "custom" | "heartwood" | "openai" | "stanford-ai-api-gateway"
+  >;
+  managed_model_connections: string[];
+  validation_level: "ci" | "ci-and-live-synthetic";
+}
+
+export type SetupPhase =
+  | "project-review"
+  | "connection-required"
+  | "credential-required"
+  | "model-required"
+  | "compute-required"
+  | "ready"
+  | "recovery-required";
+
+export interface StartupPlan {
+  phase: SetupPhase;
+  interface: InterfaceKind;
+  platform_id: string;
+  project_root: string;
+  state_root: string;
+  summary: string;
+  next_action: string;
+  access_url: string | null;
+  requires_compute: boolean;
+  requires_confirmation: boolean;
+  interface_supported: boolean;
+  readiness: ProjectReadiness;
+  capabilities: PlatformCapabilities;
 }
 
 export interface ModelProfile {
@@ -181,6 +220,11 @@ export type ModelConnectionProtocol =
   "anthropic" | "openai" | "openai-compatible" | "static";
 
 export type ModelConnectionSource = "built-in" | "platform" | "user";
+export type ModelConnectionGroup =
+  | "compatible-service"
+  | "heartwood-managed"
+  | "hosted-provider"
+  | "research-environment";
 
 export interface ModelConnection {
   connection_id: string;
@@ -199,6 +243,8 @@ export interface ModelConnection {
   aws_profile_name: string | null;
   description: string;
   static_models: string[];
+  group: ModelConnectionGroup;
+  group_label: string;
   accepts_token: boolean;
   credential_status: CredentialStatus;
 }
@@ -225,6 +271,7 @@ export interface ModelCatalogRequest {
   token?: string;
   base_url?: string;
   refresh?: boolean;
+  remember?: boolean;
 }
 
 export interface ModelConnectRequest {
@@ -233,6 +280,26 @@ export interface ModelConnectRequest {
   token?: string;
   base_url?: string;
   manual?: boolean;
+  remember?: boolean;
+}
+
+export interface CredentialStoreAvailability {
+  backends: Array<"process" | "keyring">;
+  default_backend: "process" | "keyring";
+  persistence_available: boolean;
+  persistence_description: string;
+}
+
+export interface CredentialBindingStatus {
+  binding_id: string;
+  configured: boolean;
+  source: "environment" | "keyring" | "process" | "unavailable" | null;
+  error?: string | null;
+}
+
+export interface CredentialSettings {
+  store: CredentialStoreAvailability;
+  bindings: CredentialBindingStatus[];
 }
 
 export interface ModelPreset {
@@ -247,7 +314,7 @@ export interface ModelPreset {
 }
 
 export type ModelSource =
-  "anthropic" | "local" | "openai" | "stanford-ai-api-gateway";
+  "anthropic" | "custom" | "heartwood" | "openai" | "stanford-ai-api-gateway";
 
 export interface ModelSourceOption {
   source_id: ModelSource;
@@ -265,6 +332,8 @@ export interface ModelSettings {
   connections: ModelConnection[];
   presets: ModelPreset[];
   source_options: ModelSourceOption[];
+  credential_store: CredentialStoreAvailability;
+  credential_bindings: CredentialBindingStatus[];
 }
 
 export interface ModelValidation {
@@ -340,6 +409,20 @@ export interface ModelRepositoryRequest {
 export interface CustomLocalModelDownloadRequest {
   repository: string;
   revision?: string;
+}
+
+export interface LocalModelImportRequest {
+  path: string;
+  repository: string;
+  revision: string;
+  license: string;
+  context_window?: number;
+}
+
+export interface LocalModelImportResult {
+  model: LocalModelChoice;
+  path: string;
+  status: "ready";
 }
 
 export interface ModelSnapshot {

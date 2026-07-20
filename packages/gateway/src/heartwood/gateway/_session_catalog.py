@@ -23,6 +23,7 @@ from heartwood.session import EventKind, SessionEvent
 
 _SCHEMA_VERSION = "heartwood.session-metadata.v1"
 _MAX_TITLE_LENGTH = 120
+DEFAULT_SESSION_ID = "session-main"
 
 
 class SessionCatalogError(ValueError):
@@ -79,6 +80,10 @@ class SessionCatalog:
                 return self.ensure(session_id, title=title or "Untitled session")
         msg = "unable to allocate a unique session id"
         raise SessionCatalogError(msg)
+
+    def default(self) -> SessionSummary:
+        """Return the shared first session used by every interaction surface."""
+        return self.ensure(DEFAULT_SESSION_ID, title="Main session")
 
     def ensure(self, session_id: str, *, title: str | None = None) -> SessionSummary:
         """Register a session used by any command surface if it is not known yet."""

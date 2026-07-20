@@ -10,6 +10,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway import (
     ModelCatalogService,
@@ -17,11 +19,13 @@ from heartwood.gateway import (
     ModelProfile,
     ModelSettings,
     ProjectConfig,
+    ProjectConfigError,
     ProjectConfigStore,
     ProjectContext,
     ProviderModel,
     SessionGateway,
     inspect_deployment,
+    model_source_options,
     persist_deployment_profile,
 )
 
@@ -50,10 +54,10 @@ def _configure_model(
     persist_deployment_profile(project, model_source=source, env=env)  # type: ignore[arg-type]
     store = _store(project, env)
     config = store.load()
-    if source == "local":
+    if source == "heartwood":
         profile = ModelProfile(
-            profile_id="local",
-            model="openai/heartwood-local-model",
+            profile_id="heartwood",
+            model="openai/heartwood-managed-model",
             policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
             base_url="http://127.0.0.1:8765/v1",
             credential_kind="none",
@@ -84,6 +88,14 @@ def _configure_model(
             ),
         )
     )
+
+
+def test_generic_model_sources_use_platform_neutral_public_language() -> None:
+    options = {option.source_id: option for option in model_source_options({})}
+
+    assert options["heartwood"].label == "Run with Heartwood"
+    assert "this environment" in options["heartwood"].description
+    assert "computer" not in options["heartwood"].label.lower()
 
 
 def test_readiness_is_read_only_before_setup(tmp_path: Path) -> None:
@@ -131,7 +143,7 @@ def test_malformed_project_state_and_configuration_require_recovery(tmp_path: Pa
 
 def test_ready_local_project_reports_selected_artifact(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    _configure_model(project, source="local", env={})
+    _configure_model(project, source="heartwood", env={})
 
     stopped = inspect_deployment(project, env={})
     readiness = inspect_deployment(project, env={"HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1"})
@@ -163,12 +175,13 @@ def test_terra_requires_a_dedicated_project_on_persistent_storage(tmp_path: Path
     storage = next(
         check for check in ready_boundary.checks if check.check_id == "terra-project-storage"
     )
-    runtime = next(
-        check for check in ready_boundary.checks if check.check_id == "terra-gpu-runtime"
-    )
+    runtime = next(check for check in ready_boundary.checks if check.check_id == "terra-gpu")
     assert ready_boundary.state == "setup-required"
     assert storage.status == "pass"
-    assert runtime.summary == "Portable Terra runtime selected; local models use CPU inference"
+    assert (
+        runtime.summary
+        == "Portable Terra runtime selected; Heartwood-managed models use CPU inference"
+    )
     assert broad_boundary.state == "recovery-required"
     assert ephemeral_boundary.state == "recovery-required"
 
@@ -208,10 +221,34 @@ def test_terra_gpu_image_reports_attachment_readiness(tmp_path: Path) -> None:
         env={**base_env, "CUDA_VISIBLE_DEVICES": "0"},
     )
 
-    missing_gpu = next(check for check in missing.checks if check.check_id == "terra-gpu-runtime")
-    attached_gpu = next(check for check in attached.checks if check.check_id == "terra-gpu-runtime")
+    missing_gpu = next(check for check in missing.checks if check.check_id == "terra-gpu")
+    attached_gpu = next(check for check in attached.checks if check.check_id == "terra-gpu")
     assert missing_gpu.status == "warning"
     assert attached_gpu.status == "pass"
+
+
+@pytest.mark.parametrize(
+    ("env", "model_source"),
+    [
+        ({"HEARTWOOD_PLATFORM": "carina"}, "openai"),
+        ({}, "stanford-ai-api-gateway"),
+    ],
+)
+def test_persist_deployment_profile_rejects_platform_unsupported_model_sources(
+    tmp_path: Path,
+    env: dict[str, str],
+    model_source: str,
+) -> None:
+    project = ProjectContext(tmp_path)
+
+    with pytest.raises(ProjectConfigError, match="does not provide"):
+        persist_deployment_profile(
+            project,
+            model_source=model_source,  # type: ignore[arg-type]
+            env=env,
+        )
+
+    assert not project.config_path.exists()
 
 
 def test_terra_baseline_persists_builtin_hosted_provider_routes(tmp_path: Path) -> None:
@@ -255,7 +292,7 @@ def test_terra_baseline_persists_builtin_hosted_provider_routes(tmp_path: Path) 
 
 def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    persist_deployment_profile(project, model_source="local", env={})
+    persist_deployment_profile(project, model_source="heartwood", env={})
     store = _store(project, {})
     model_path = project.models_dir / "synthetic-model"
     model_path.mkdir()
@@ -278,7 +315,7 @@ def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: 
 def test_carina_local_project_requires_and_validates_compute(tmp_path: Path) -> None:
     project = _project(tmp_path)
     carina = {"HEARTWOOD_PLATFORM": "carina"}
-    _configure_model(project, source="local", env=carina)
+    _configure_model(project, source="heartwood", env=carina)
 
     login_readiness = inspect_deployment(project, env=carina)
     missing_runtime = inspect_deployment(
@@ -328,9 +365,10 @@ def test_missing_external_credential_requires_session_setup_without_naming_secre
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
-    _configure_model(project, source="stanford-ai-api-gateway", env={})
+    env = {"HEARTWOOD_PLATFORM": "carina"}
+    _configure_model(project, source="stanford-ai-api-gateway", env=env)
 
-    readiness = inspect_deployment(project, env={})
+    readiness = inspect_deployment(project, env=env)
 
     assert readiness.state == "setup-required"
     credential = next(check for check in readiness.checks if check.check_id == "model-credential")
@@ -340,7 +378,7 @@ def test_missing_external_credential_requires_session_setup_without_naming_secre
 
 def test_configuration_for_another_detected_platform_requires_recovery(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    _configure_model(project, source="local", env={})
+    _configure_model(project, source="heartwood", env={})
 
     readiness = inspect_deployment(project, env={"HEARTWOOD_PLATFORM": "carina"})
 
@@ -354,7 +392,7 @@ def test_local_setup_uses_one_private_project_configuration(tmp_path: Path) -> N
 
     path = persist_deployment_profile(
         project,
-        model_source="local",
+        model_source="heartwood",
         env={"HEARTWOOD_PLATFORM": "carina"},
     )
     gateway = SessionGateway(
@@ -381,11 +419,16 @@ def test_local_setup_uses_one_private_project_configuration(tmp_path: Path) -> N
 
 def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    persist_deployment_profile(project, model_source="stanford-ai-api-gateway", env={})
+    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
+    persist_deployment_profile(
+        project,
+        model_source="stanford-ai-api-gateway",
+        env=platform_env,
+    )
 
     settings = SessionGateway(
         project=project,
-        env={"STANFORD_AI_API_KEY": "external-secret"},
+        env={**platform_env, "STANFORD_AI_API_KEY": "external-secret"},
     ).model_settings()
     connections = settings["connections"]
     assert isinstance(connections, list)
@@ -404,7 +447,12 @@ def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> No
 
 def test_stanford_catalog_uses_external_key_and_exact_connection(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    persist_deployment_profile(project, model_source="stanford-ai-api-gateway", env={})
+    platform_env = {"HEARTWOOD_PLATFORM": "carina"}
+    persist_deployment_profile(
+        project,
+        model_source="stanford-ai-api-gateway",
+        env=platform_env,
+    )
     observed: list[tuple[str, str | None]] = []
 
     def list_models(connection: ModelConnection, api_key: str | None) -> tuple[ProviderModel, ...]:
@@ -413,7 +461,7 @@ def test_stanford_catalog_uses_external_key_and_exact_connection(tmp_path: Path)
 
     gateway = SessionGateway(
         project=project,
-        env={"STANFORD_AI_API_KEY": "external-secret"},
+        env={**platform_env, "STANFORD_AI_API_KEY": "external-secret"},
         model_catalog_service=ModelCatalogService(
             openai_lister=list_models,
             compatibility=lambda _connection, _model: (

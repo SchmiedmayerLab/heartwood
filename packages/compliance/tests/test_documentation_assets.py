@@ -4,19 +4,18 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Structural and implementation-grounding tests for public documentation."""
+"""Implementation-grounding tests for the public documentation."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 import struct
 import tomllib
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from types import ModuleType
 
-import pytest
+from heartwood.gateway import diagnostic_catalog
 
 
 def test_documentation_navigation_uses_progressive_disclosure() -> None:
@@ -27,31 +26,28 @@ def test_documentation_navigation_uses_progressive_disclosure() -> None:
     assert top_level == [
         "Home",
         "Get Started",
-        "Using Heartwood",
+        "Work With Heartwood",
         "Models",
-        "Environments",
-        "For Operators",
-        "Architecture",
+        "Platforms",
+        "Operate Heartwood",
+        "How Heartwood Works",
         "Reference",
-        "Project",
+        "Contribute",
     ]
-    serialized = json.dumps(navigation)
-    for path in (
-        "docs/getting-started.md",
-        "docs/installation.md",
-        "docs/using-heartwood.md",
-        "docs/model-connections.md",
-        "docs/terra-jupyter-demo.md",
-        "docs/carina-cli.md",
-        "docs/cli-reference.md",
-        "ACRONYMS.md",
-    ):
-        assert path in serialized
-    assert "docs/README.md" not in serialized
+    assert site["project"]["docs_dir"] == "documentation"
     assert site["project"]["extra"]["version"] == {
         "provider": "mike",
         "alias": True,
     }
+    for relative_path in _nav_paths(navigation):
+        assert (_repo_root() / "documentation" / relative_path).is_file(), relative_path
+
+
+def test_documentation_has_one_canonical_source_tree() -> None:
+    assert not (_repo_root() / "docs").exists()
+    assert not (_repo_root() / "design").exists()
+    assert not (_repo_root() / "deploy" / "stage_documentation.py").exists()
+    assert (_repo_root() / "documentation" / "index.md").is_file()
 
 
 def test_home_and_readme_present_a_clear_first_use_path() -> None:
@@ -59,15 +55,14 @@ def test_home_and_readme_present_a_clear_first_use_path() -> None:
     readme = _read("README.md")
 
     for heading in (
-        "## Start with Your Environment",
-        "## Learn the Core Workflow",
-        "## Choose How You Interact",
+        "## What You Can Do",
+        "## Start With Your Environment",
         "## Choose Where the Model Runs",
         "## Understand the Boundary",
         "## Find an Answer",
     ):
         assert heading in home
-    assert home.index("## Start with Your Environment") < home.index(
+    assert home.index("## Start With Your Environment") < home.index(
         "## Choose Where the Model Runs"
     )
     for heading in (
@@ -75,14 +70,13 @@ def test_home_and_readme_present_a_clear_first_use_path() -> None:
         "## Quick Start",
         "## Choose a Setup",
         "## Responsible Use",
-        "## Contribute",
+        "## Contributing",
         "## License",
     ):
         assert heading in readme
-    assert "```bash" in readme
     assert "Schmiedmayer Lab at Stanford University" in readme
     assert "model weights or credentials" in readme
-    assert "https://schmiedmayerlab.github.io/heartwood/preview/" in readme
+    assert "heartwood --interface web" in readme
 
 
 def test_public_documentation_contains_no_planning_or_process_artifacts() -> None:
@@ -107,274 +101,167 @@ def test_public_documentation_contains_no_planning_or_process_artifacts() -> Non
         assert "TODO" not in content
         assert "TBD" not in content
         assert re.search(r"github\.com/[^\s)]+/issues/\d+", content) is None
-        assert re.search(r"completed in \d+(?:\.\d+)? seconds", lowered) is None
 
 
 def test_documentation_describes_current_product_boundaries() -> None:
-    overview = _read("design/01-overview.md")
-    architecture = _read("design/03-architecture.md")
-    support = _read("docs/platform-support.md")
-    interfaces = _read("docs/web-interface.md")
+    product = _read("documentation/architecture/index.md")
+    architecture = _read("documentation/architecture/system.md")
+    sessions = _read("documentation/architecture/sessions-audit.md")
+    security = _read("documentation/operate/security.md")
 
-    assert "does not discover, authorize, or validate a real biomedical dataset" in overview
-    assert "one allow or reject decision" in overview
-    assert "does not fork the OpenHands agent loop" in architecture
-    assert "Browser storage is never the source of truth" in architecture
-    assert "does not enforce an interprocess lock" in architecture
-    assert "One process may write a session at a time" in support
-    assert "Bundled data detection and biomedical workflows use synthetic fixtures" in support
-    assert "Stanford Carina has no documented authenticated Heartwood browser route" in support
-    assert "| Skill inspection and management | Yes | Yes | No |" in interfaces
-    assert "The notebook does not start a downloaded model" in interfaces
-    assert "not included in the published generic native archive" in interfaces
+    assert "does not fork the OpenHands agent loop" in product
+    assert "process current directory" in architecture
+    assert "one decision" in sessions
+    assert "One Heartwood process should write a given session at a time" in architecture
+    assert "does not confer institutional approval" in security
 
 
-def test_model_guides_match_supported_connections_and_runtimes() -> None:
-    guide = _read("docs/model-connections.md")
-    local = _read("docs/getting-started-offline.md")
+def test_first_use_and_interface_guides_share_one_project_contract() -> None:
+    guides = "\n".join(
+        _read(path)
+        for path in (
+            "documentation/start/index.md",
+            "documentation/start/project.md",
+            "documentation/use/index.md",
+            "documentation/use/terminal.md",
+            "documentation/use/browser.md",
+            "documentation/use/notebooks.md",
+        )
+    )
+    assert "current directory" in guides
+    assert ".heartwood/" in guides
+    assert "heartwood --interface web" in guides
+    assert "NotebookSession" in guides
+    assert "--workspace" not in guides
+    assert "HEARTWOOD_WORKSPACE" not in guides
+    assert "heartwood launch" not in guides
+    assert "heartwood serve" not in guides
 
-    for source in (
-        "**On this device**",
-        "**OpenAI**",
-        "**Anthropic**",
-        "**Stanford AI API Gateway**",
+
+def test_model_guides_cover_simple_and_advanced_routes() -> None:
+    overview = _read("documentation/models/index.md")
+    connections = _read("documentation/models/connections.md")
+    choices = _read("documentation/models/choose-managed.md")
+    runtime = _read("documentation/models/run-with-heartwood.md")
+    offline = _read("documentation/models/offline.md")
+    combined = "\n".join((overview, connections, choices, runtime, offline))
+
+    for phrase in (
+        "Research environment",
+        "OpenAI",
+        "Anthropic",
+        "Other compatible service",
+        "Run with Heartwood",
+        "Heartwood-managed model",
+        "Other Hugging Face model",
+        "heartwood models inspect",
+        "heartwood models import",
+        "license",
+        "download size",
+        "context window",
     ):
-        assert source in guide
-    assert "Heartwood discovers available models from the selected service" in guide
-    assert "Other Hugging Face model" in guide
-    assert "user-supplied URL does not widen Terra or Carina policy" in guide
-    assert "does not accept provider tokens as command-line arguments" in guide
-    assert "HEARTWOOD_CUSTOM_MODEL_API_KEY" in guide
-    assert "HEARTWOOD_MODEL_CONNECTIONS" not in guide
-
-    assert "images contain inference software but no model weights" in local
-    assert "Generic native installation | External local service" in local
-    assert "public Hugging Face repository" in local
-    assert "private or gated snapshots" in local
-    assert "Downloading prepares the files; it does not leave a server running" in local
-    assert "--network none" in local
-    assert '-v "$PWD:/workspace"' in local
-    assert "has no general command for importing externally transferred model files" in local
-    assert "direct download command starts the transfer immediately" in local
+        assert phrase.lower() in combined.lower()
+    assert "no model weights" in combined.lower()
+    assert "on this computer" not in combined.lower()
+    assert "local model" not in combined.lower()
+    assert "not yet supported" in choices.lower()
+    assert "github.com/SchmiedmayerLab/heartwood/issues" in choices
 
 
-def test_platform_guides_are_task_oriented_and_versioned() -> None:
-    terra = _read("docs/terra-jupyter-demo.md")
-    carina = _read("docs/carina-cli.md")
+def test_platform_guides_use_current_release_artifacts_and_commands() -> None:
     version = _declared_version()
+    containers = _read("documentation/platforms/containers.md")
+    terra = _read("documentation/platforms/terra.md")
+    carina = _read("documentation/platforms/carina.md")
+    combined = "\n".join((containers, terra, carina))
 
-    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}-terra" in terra
-    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}-terra-gpu-nvidia" in terra
-    for command in (
-        "heartwood detect",
-        "heartwood doctor",
-        "heartwood serve",
-        "heartwood launch --web",
-    ):
-        assert command in terra
-    assert "/home/jupyter/heartwood-demo" in terra
-    assert "complete authenticated Jupyter proxy URL" in terra
-    assert "does not reuse a token held by a terminal or browser process" in terra
-    assert "real Terra workspace validation" not in terra
-    assert "manifest media type" not in terra
-
+    assert f"heartwood:{version}" in containers
+    assert f"heartwood:{version}-terra" in terra
+    assert f"heartwood:{version}-terra-gpu-nvidia" in terra
     assert f"releases/download/{version}/heartwood-installer" in carina
-    assert "module load micromamba/2.3.3" in carina
-    assert "heartwood-installation heartwood-demo" in carina
-    assert "heartwood launch --dry-run" in carina
-    assert "`dev`, `normal`, and `long`" in carina
-    assert "login nodes are for setup and job submission" in carina
-    assert "The Carina interface is currently the terminal" in carina
-    for obsolete in ("HEARTWOOD_ROOT", "--model-root", "PROJECT_STORAGE="):
-        assert obsolete not in carina
+    assert "heartwood --interface web" in terra
+    assert "heartwood runtime start --partition dev" in carina
+    assert "heartwood launch" not in combined
+    assert "heartwood serve" not in combined
+    assert "--workspace" not in combined
 
 
-def test_terra_notebook_uses_the_shared_project_contract() -> None:
-    notebook = json.loads(_read("docs/terra-jupyter-demo.ipynb"))
+def test_terra_notebook_is_output_free_and_uses_the_shared_project() -> None:
+    notebook = json.loads(_read("documentation/assets/examples/terra-heartwood.ipynb"))
     cells = notebook["cells"]
-    sources = ["".join(cell["source"]) for cell in cells]
-    combined = "\n".join(sources)
+    combined = "".join("".join(cell["source"]) for cell in cells)
 
     assert notebook["nbformat"] == 4
-    assert "Analyze Synthetic Data with Heartwood on Terra" in sources[0]
-    assert f"{_declared_version()}-terra`" in combined
-    assert "contains no model weights" in combined
-    assert "NotebookSession" in combined
-    assert "from getpass import getpass" in combined
-    assert "allowed_credentials" in combined
-    assert "os.environ[credential_name] = getpass" in combined
-    assert "has_authenticated_jupyter_proxy" in combined
-    assert "jupyter_proxy_url(port=8767)" in combined
-    assert "project_root = Path.cwd().resolve()" in combined
-    assert "readiness = session.project_readiness()" in combined
-    assert 'session.discover_models("local", refresh=True)' in combined
-    assert "session.run(prompt)" in combined
-    assert "session.approve" in combined
-    assert "session.audit_export()" in combined
-    assert "Review every member of the pending OpenHands action set" in combined
-    assert "pull-request integration" not in combined
+    assert "Path.cwd()" in combined
+    assert "NotebookSession(session_id=" in combined
+    assert "startup_plan" in combined
+    assert "project_readiness" in combined
+    assert "platform_capabilities" in combined
+    assert "approval_controls" in combined
     assert "--workspace" not in combined
-    assert "HEARTWOOD_WORKSPACE" not in combined
     for cell in cells:
         if cell["cell_type"] == "code":
             assert cell["execution_count"] is None
             assert cell["outputs"] == []
 
 
-def test_web_documentation_uses_current_desktop_system_screenshots() -> None:
-    web_interface = _read("docs/web-interface.md")
-    workflow = _read("docs/using-heartwood.md")
+def test_web_documentation_uses_generated_desktop_screenshots() -> None:
+    browser_guide = _read("documentation/use/browser.md")
     package = json.loads(_read("packages/webui/package.json"))
     screenshot_script = _read("packages/webui/scripts/smoke-reference-analysis.cjs")
-    model_stub = _read("images/generic/scripts/local_model_stub.py")
-    assets = _repo_root() / "docs" / "assets"
+    assets = _repo_root() / "documentation" / "assets" / "screenshots"
 
-    assert "assets/web-reference-analysis.png" in web_interface
-    assert "assets/web-action-review.png" in workflow
-    assert package["scripts"]["screenshots:docs"].endswith("../../docs/assets")
-    assert '"web-action-review.png"' in screenshot_script
+    assert "assets/screenshots/browser-conversation.png" in _read("README.md")
+    assert "../assets/screenshots/browser-conversation.png" in browser_guide
+    assert "../assets/screenshots/browser-action-review.png" in browser_guide
+    assert package["scripts"]["screenshots:docs"].endswith("../../documentation/assets/screenshots")
+    assert '"browser-conversation.png"' in screenshot_script
+    assert '"browser-action-review.png"' in screenshot_script
     assert "captureApproval: true" in screenshot_script
-    assert 'HEARTWOOD_TOOL_PYTHON: "python"' in screenshot_script
-    assert '"$HEARTWOOD_RUNTIME_ROOT"/skills/verified' in model_stub
-    assert "call-heartwood-reference-analysis-read" in model_stub
-    for filename in ("web-action-review.png", "web-reference-analysis.png"):
+    for filename in ("browser-conversation.png", "browser-action-review.png"):
         screenshot = assets / filename
         assert screenshot.stat().st_size > 1_000
         width, height = _png_dimensions(screenshot)
         assert width >= 1280
         assert height >= 800
         assert (assets / f"{filename}.license").is_file()
-    assert not (assets / "web-notebook-viewport.png").exists()
 
 
-def test_documentation_site_stages_only_canonical_public_sources(tmp_path: Path) -> None:
-    stager = _documentation_stager()
-    destination = tmp_path / "documentation"
-
-    stager.stage_documentation(_repo_root(), destination)
-
-    marker = destination.parent / ".documentation.heartwood-documentation-stage"
-    marker_content = marker.read_text(encoding="utf-8")
-    assert marker_content == stager._stage_marker_content(destination)
-    assert marker_content.startswith("heartwood.documentation-stage.v2\ntree-sha256=")
-    assert not (destination / ".heartwood-documentation-stage").exists()
-    expected_home = _read("documentation/index.md").replace("](../", "](")
-    assert (destination / "index.md").read_text(encoding="utf-8") == expected_home
-    assert not (destination / "README.md").exists()
-    assert not (destination / "docs" / "README.md").exists()
-    for filename in (
-        "getting-started.md",
-        "installation.md",
-        "using-heartwood.md",
-        "model-connections.md",
-        "terra-jupyter-demo.md",
-        "carina-cli.md",
-        "cli-reference.md",
-    ):
-        assert (destination / "docs" / filename).is_file()
-    for filename in (
-        "ACRONYMS.md",
-        "CONTRIBUTING.md",
-        "CONTRIBUTORS.md",
-        "LICENSE",
-        "NOTICE",
-    ):
-        assert (destination / filename).is_file()
-    assert (destination / "stylesheets" / "extra.css").is_file()
-    staged_documentation = {
-        path.relative_to(destination / "docs").as_posix()
-        for path in (destination / "docs").rglob("*")
-        if path.is_file()
-    }
-    expected_documentation = set(stager._DOCUMENTATION_FILES)
-    expected_documentation.update(f"assets/{name}" for name in stager._DOCUMENTATION_ASSETS)
-    assert staged_documentation == expected_documentation
-    for index in range(1, 9):
-        assert tuple((destination / "design").glob(f"{index:02d}-*.md"))
-    assert not tuple((destination / "design").glob("09-*.md"))
-
-    contributing = (destination / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    version = stager.declared_version(_repo_root())
-    assert f"https://github.com/SchmiedmayerLab/heartwood/tree/{version}/AGENTS.md" in contributing
-    assert "](../" not in (destination / "index.md").read_text(encoding="utf-8")
-
-    stager.stage_documentation(_repo_root(), destination)
-    assert marker.is_file()
-
-    staged_index = destination / "index.md"
-    staged_index.write_text("repurposed output\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="without a valid Heartwood staging marker"):
-        stager.stage_documentation(_repo_root(), destination)
-    assert staged_index.read_text(encoding="utf-8") == "repurposed output\n"
-
-    extra_destination = tmp_path / "documentation-extra"
-    stager.stage_documentation(_repo_root(), extra_destination)
-    transient = extra_destination / "transient.txt"
-    transient.write_text("preserve me\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="without a valid Heartwood staging marker"):
-        stager.stage_documentation(_repo_root(), extra_destination)
-    assert transient.read_text(encoding="utf-8") == "preserve me\n"
+def test_diagnostic_routes_resolve_into_public_documentation() -> None:
+    for diagnostic in diagnostic_catalog():
+        route, _, anchor = diagnostic.documentation_path.partition("#")
+        source = _source_for_route(route)
+        assert source.is_file(), diagnostic.documentation_path
+        if anchor:
+            anchors = {
+                _heading_slug(match.group(1))
+                for match in re.finditer(
+                    r"^#{1,6}\s+(.+?)\s*$",
+                    source.read_text(encoding="utf-8"),
+                    flags=re.MULTILINE,
+                )
+            }
+            assert anchor in anchors, diagnostic.documentation_path
 
 
-@pytest.mark.parametrize(
-    "relative_path",
-    [
-        ".",
-        "docs",
-        "docs/generated-site",
-        "design",
-        "documentation/stylesheets",
-        "README.md",
-    ],
-)
-def test_documentation_stager_rejects_destructive_output_paths(relative_path: str) -> None:
-    stager = _documentation_stager()
-    output = (_repo_root() / relative_path).resolve()
+def test_documentation_builds_directly_from_canonical_sources() -> None:
+    validation = _read(".github/workflows/documentation.yml")
+    publication = _read(".github/workflows/publish-documentation.yml")
+    smoke = _read("deploy/tests/versioned_documentation_smoke.sh")
+    combined = "\n".join((validation, publication, smoke))
 
-    with pytest.raises(ValueError, match="must not replace"):
-        stager.stage_documentation(_repo_root(), output)
+    assert "stage_documentation" not in combined
+    assert "zensical build --clean --strict" in validation
+    assert "zensical build --clean --strict" in publication
+    assert 'source_path="${repository_root}/documentation/index.md"' in smoke
 
 
-def test_documentation_stager_rejects_repository_ancestor() -> None:
-    stager = _documentation_stager()
+def test_readme_links_to_published_documentation_channels() -> None:
+    readme = _read("README.md")
 
-    with pytest.raises(ValueError, match="must not replace"):
-        stager.stage_documentation(_repo_root(), _repo_root().parent)
-
-
-def test_documentation_stager_preserves_unmarked_existing_output(tmp_path: Path) -> None:
-    stager = _documentation_stager()
-    destination = tmp_path / "unrelated"
-    destination.mkdir()
-    sentinel = destination / "keep.txt"
-    sentinel.write_text("research data\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="without a valid Heartwood staging marker"):
-        stager.stage_documentation(_repo_root(), destination)
-
-    assert sentinel.read_text(encoding="utf-8") == "research data\n"
-
-
-def test_documentation_stager_recognizes_only_the_exact_legacy_shape(tmp_path: Path) -> None:
-    stager = _documentation_stager()
-    destination = tmp_path / "legacy"
-    destination.mkdir()
-    for directory in ("design", "docs", "stylesheets"):
-        (destination / directory).mkdir()
-    for filename in (
-        "ACRONYMS.md",
-        "CONTRIBUTING.md",
-        "CONTRIBUTORS.md",
-        "LICENSE",
-        "NOTICE",
-        "README.md",
-    ):
-        (destination / filename).write_text("synthetic\n", encoding="utf-8")
-    (destination / "index.md").write_text('--8<-- "README.md"\n', encoding="utf-8")
-
-    assert stager._looks_like_legacy_stage(destination)
-    (destination / "research-data.csv").write_text("synthetic\n", encoding="utf-8")
-    assert not stager._looks_like_legacy_stage(destination)
+    assert "https://schmiedmayerlab.github.io/heartwood/" in readme
+    assert "https://schmiedmayerlab.github.io/heartwood/preview/" in readme
+    assert re.search(r"\]\(documentation/[^)]+\.md\)", readme) is None
 
 
 def test_native_installer_defaults_to_current_directory_and_confines_state() -> None:
@@ -394,19 +281,45 @@ def test_native_installer_defaults_to_current_directory_and_confines_state() -> 
 
 
 def test_platform_extension_guide_uses_the_shared_application_contract() -> None:
-    guide = _read("docs/platform-images.md")
+    guide = _read("documentation/operate/platform-integration.md")
 
     for path in (
         "images/platforms.toml",
-        "images/platform/Dockerfile",
-        "images/platform/scripts/verify_registry_manifest.py",
+        "images/Dockerfile",
         "docker-bake.hcl",
+        "PlatformCapabilities",
+        "SessionGateway",
     ):
         assert path in guide
-    assert "shared Heartwood payload" in guide
     assert "Do not add a platform-specific agent loop" in guide
-    assert "model weights and credentials out of image layers" in guide
-    assert "synthetic data" in guide.lower()
+    assert "model weights and credentials" in guide
+    assert "synthetic" in guide.lower()
+
+
+def _nav_paths(value: object) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for nested in value.values():
+            yield from _nav_paths(nested)
+    elif isinstance(value, Sequence):
+        for nested in value:
+            yield from _nav_paths(nested)
+
+
+def _source_for_route(route: str) -> Path:
+    relative = route.strip("/")
+    documentation = _repo_root() / "documentation"
+    if not relative:
+        return documentation / "index.md"
+    index = documentation / relative / "index.md"
+    return index if index.is_file() else documentation / f"{relative}.md"
+
+
+def _heading_slug(heading: str) -> str:
+    plain = re.sub(r"[`*_]", "", heading).lower()
+    plain = re.sub(r"[^a-z0-9\s-]", "", plain)
+    return re.sub(r"[\s-]+", "-", plain).strip("-")
 
 
 def _png_dimensions(path: Path) -> tuple[int, int]:
@@ -426,22 +339,10 @@ def _declared_version() -> str:
     return version
 
 
-def _documentation_stager() -> ModuleType:
-    path = _repo_root() / "deploy" / "stage_documentation.py"
-    spec = importlib.util.spec_from_file_location("stage_documentation", path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _canonical_documentation_paths() -> tuple[Path, ...]:
     return (
         _repo_root() / "README.md",
-        *tuple((_repo_root() / "documentation").glob("*.md")),
-        *tuple((_repo_root() / "docs").glob("*.md")),
-        *tuple((_repo_root() / "design").glob("*.md")),
+        *tuple((_repo_root() / "documentation").rglob("*.md")),
     )
 
 

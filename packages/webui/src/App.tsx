@@ -36,6 +36,7 @@ import type {
   ApprovalControl,
   ConversationMessage,
   JsonValue,
+  LocalModelImportRequest,
   ModelArtifacts,
   ModelCatalogRequest,
   ModelConnectRequest,
@@ -48,6 +49,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  StartupPlan,
 } from "./types";
 import { buildViewModel } from "./viewModel";
 
@@ -61,12 +63,12 @@ interface LocalConversationMessage extends ConversationMessage {
 }
 
 interface InitialState {
-  selectedSessionId: string;
+  selectedSessionId: string | null;
   sessions: SessionSummary[];
 }
 
 const emptyProfile = (): ModelProfile => ({
-  profile_id: "local",
+  profile_id: "custom-profile",
   model: "openai/",
   policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
   capability_tier: "supervised",
@@ -109,6 +111,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   );
   const [projectReadiness, setProjectReadiness] =
     useState<ProjectReadiness | null>(null);
+  const [startupPlan, setStartupPlan] = useState<StartupPlan | null>(null);
   const [profileDraft, setProfileDraft] = useState<ModelProfile>(emptyProfile);
   const [validation, setValidation] = useState<ModelValidation | null>(null);
   const [validationFailureKey, setValidationFailureKey] = useState<
@@ -136,31 +139,33 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   }, [resolvedClient]);
 
   const loadProjectState = useCallback(async () => {
-    const [actions, models, artifacts, skills, readiness] = await Promise.all([
+    const [actions, models, artifacts, skills, startup] = await Promise.all([
       resolvedClient.getActionSettings(),
       resolvedClient.getModelSettings(),
       resolvedClient.getModelArtifacts(),
       resolvedClient.getSkillSettings(),
-      resolvedClient.getProjectReadiness(),
+      resolvedClient.getStartupPlan(),
     ]);
-    return { actions, models, artifacts, skills, readiness };
+    return { actions, models, artifacts, skills, startup };
   }, [resolvedClient]);
 
   const refreshProjectState = useCallback(async () => {
     const state = await loadProjectState();
-    const { actions, models, artifacts, skills, readiness } = state;
+    const { actions, models, artifacts, skills, startup } = state;
     setActionSettings(actions);
     setModelSettings(models);
     setModelArtifacts(artifacts);
     setSkillSettings(skills);
-    setProjectReadiness(readiness);
-    return { models, readiness };
+    setStartupPlan(startup);
+    setProjectReadiness(startup.readiness);
+    return { models, readiness: startup.readiness };
   }, [loadProjectState]);
 
   const refreshReadiness = useCallback(async () => {
-    const readiness = await resolvedClient.getProjectReadiness();
-    setProjectReadiness(readiness);
-    return readiness;
+    const startup = await resolvedClient.getStartupPlan();
+    setStartupPlan(startup);
+    setProjectReadiness(startup.readiness);
+    return startup.readiness;
   }, [resolvedClient]);
 
   useEffect(() => {
@@ -228,16 +233,17 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   useEffect(() => {
     let active = true;
     void loadProjectState()
-      .then(({ actions, models, artifacts, skills, readiness }) => {
+      .then(({ actions, models, artifacts, skills, startup }) => {
         if (!active) return;
         setActionSettings(actions);
         setModelSettings(models);
         setModelArtifacts(artifacts);
         setSkillSettings(skills);
-        setProjectReadiness(readiness);
+        setStartupPlan(startup);
+        setProjectReadiness(startup.readiness);
         if (
           !setupOpened.current &&
-          readiness.state === "setup-required" &&
+          startup.readiness.state === "setup-required" &&
           models.active_profile === null
         ) {
           setupOpened.current = true;
@@ -359,7 +365,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     if (projectReadiness.state === "compute-required") {
       return {
         kind: "setup" as const,
-        message: "Start the selected model with heartwood launch --web.",
+        message:
+          "Restart with heartwood --interface web to start the selected Heartwood-managed model.",
       };
     }
     if (activeProfile === null) {
@@ -473,7 +480,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     try {
       const command = createCommand(sessionId, kind, events.length, payload);
       const submittedPrompt = promptContent(payload);
-      if ((kind === "chat" || kind === "run") && submittedPrompt) {
+      if (kind === "chat" && submittedPrompt) {
         setLocalConversation((current) => [
           ...current,
           {
@@ -626,6 +633,16 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     }
   };
 
+  const forgetCredential = async (connectionId: string) => {
+    try {
+      await resolvedClient.forgetCredential(connectionId);
+      await refreshProjectState();
+    } catch (caught) {
+      setError(errorMessage(caught));
+      throw caught;
+    }
+  };
+
   const selectProfile = async (profileId: string) => {
     try {
       setModelSettings(await resolvedClient.selectModelProfile(profileId));
@@ -682,14 +699,16 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         <section className="workbench">
           <WorkspaceHeader
             actionSettings={actionSettings}
-            context={viewModel.context}
             modelDetail={activeProfile?.model ?? null}
             modelLabel={activeModelLabel}
             modelStatus={modelStatus.kind}
+            platformLabel={
+              startupPlan?.capabilities.display_name ?? "Checking environment"
+            }
+            projectLabel={projectLabel(startupPlan?.project_root)}
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
-            onDetect={() => void send("detect")}
             onOpenMenu={() => setMobileSessionsOpen(true)}
             onRename={(title) => void renameSession(title)}
           />
@@ -749,6 +768,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           panel={panel}
           profileDraft={profileDraft}
           projectReadiness={projectReadiness}
+          startupPlan={startupPlan}
           settings={modelSettings}
           skillApproved={skillApproved}
           skillCandidate={skillCandidate}
@@ -759,6 +779,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           onConnectModel={connectModel}
           onConfigureModelSource={configureModelSource}
           onDiscoverModels={discoverModels}
+          onForgetCredential={forgetCredential}
           onDownload={(modelId) =>
             void resolvedClient
               .downloadLocalModel(modelId)
@@ -787,6 +808,28 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           onInspectModelRepository={(request) =>
             resolvedClient.inspectModelRepository(request)
           }
+          onImportLocalModel={async (request: LocalModelImportRequest) => {
+            await resolvedClient.importLocalModel(request);
+            const [models, artifacts, startup] = await Promise.all([
+              resolvedClient.getModelSettings(),
+              resolvedClient.getModelArtifacts(),
+              resolvedClient.getStartupPlan(),
+            ]);
+            setModelSettings(models);
+            setModelArtifacts(artifacts);
+            setStartupPlan(startup);
+            setProjectReadiness(startup.readiness);
+          }}
+          onInitializeProject={async () => {
+            const startup = await resolvedClient.initializeProject();
+            setStartupPlan(startup);
+            setProjectReadiness(startup.readiness);
+            if (sessions.length === 0) {
+              const created = await resolvedClient.ensureDefaultSession();
+              setSessions([created]);
+              setSessionId(created.session_id);
+            }
+          }}
           onInspectSkill={() =>
             void resolvedClient
               .inspectSkill(skillSource.trim())
@@ -853,6 +896,10 @@ const initializeSessions = async (
   client: HeartwoodClient,
   initialSessionId: string | undefined,
 ): Promise<InitialState> => {
+  const startup = await client.getStartupPlan();
+  if (startup.phase === "project-review") {
+    return { selectedSessionId: null, sessions: [] };
+  }
   const listed = (await client.listSessions()).sessions;
   if (initialSessionId !== undefined) {
     const existing = listed.find(
@@ -867,7 +914,7 @@ const initializeSessions = async (
   if (listed[0]) {
     return { selectedSessionId: listed[0].session_id, sessions: listed };
   }
-  const created = await client.createSession();
+  const created = await client.ensureDefaultSession();
   return { selectedSessionId: created.session_id, sessions: [created] };
 };
 
@@ -935,6 +982,12 @@ const modelValidationKey = (
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const projectLabel = (root: string | undefined): string => {
+  if (root === undefined) return "Checking project";
+  const parts = root.split(/[\\/]/u).filter(Boolean);
+  return parts.at(-1) ?? root;
+};
 
 const downloadTextFile = (filename: string, content: string): void => {
   if (typeof URL.createObjectURL !== "function") return;

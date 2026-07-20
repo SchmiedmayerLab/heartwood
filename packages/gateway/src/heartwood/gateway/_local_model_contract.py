@@ -34,7 +34,7 @@ type LocalRuntimeKind = Literal["llama-cpp", "vllm"]
 
 @dataclass(frozen=True, slots=True)
 class LocalContextPlan:
-    """One deterministic effective context choice for a local runtime launch."""
+    """One deterministic effective context choice for a managed runtime launch."""
 
     model_limit: int
     effective_window: int

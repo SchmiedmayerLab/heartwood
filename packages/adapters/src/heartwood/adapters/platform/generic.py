@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-from heartwood.adapters import AdapterDetection
+from heartwood.adapters import AdapterDetection, PlatformCapabilities
 from heartwood.detector import Platform, detect_platform
 from heartwood.schemas import PolicyProfile
 
@@ -40,6 +40,22 @@ class GenericPlatformAdapter:
                 f"detected managed platform candidate {detection.platform.value}",
                 *detection.evidence,
             ),
+        )
+
+    def capabilities(self) -> PlatformCapabilities:
+        """Return capabilities for native workstations and generic containers."""
+        return PlatformCapabilities(
+            platform_id=self.adapter_id,
+            display_name="Workstation or container",
+            interfaces=("terminal", "web", "notebook"),
+            browser_route="direct",
+            managed_runtimes=("llama-cpp", "vllm"),
+            scheduler="none",
+            persistent_storage="The project directory",
+            credential_backends=("process", "keyring", "mounted-file"),
+            model_sources=("heartwood", "openai", "anthropic", "custom"),
+            managed_model_connections=(),
+            validation_level="ci",
         )
 
     def data_mounts(self) -> tuple[Path, ...]:

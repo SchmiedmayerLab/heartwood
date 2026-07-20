@@ -80,8 +80,10 @@ jobs:
           grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt
           bash -n images/gpu/start_vllm.sh
           bash -n images/gpu/heartwood-vllm
+          bash -n images/gpu/install_runtime.sh
           test -x images/gpu/start_vllm.sh
           test -x images/gpu/heartwood-vllm
+          test -x images/gpu/install_runtime.sh
 
   pull-request-build:
     name: Build GPU candidate ${{ matrix.target }}

@@ -78,6 +78,7 @@ function startGateway() {
   const server = spawn(
     heartwoodExecutable,
     [
+      "gateway",
       "serve",
       "--host",
       "127.0.0.1",
@@ -205,9 +206,9 @@ async function verifySessionRoutes(baseUrl) {
     {
       body: JSON.stringify({
         actor_id: "synthetic-user",
-        command_id: "jupyter-proxy-smoke-detect",
+        command_id: "jupyter-proxy-smoke-pause",
         created_at: "2026-01-01T00:00:00Z",
-        kind: "detect",
+        kind: "pause",
         payload: {},
         schema_version: "heartwood.session-command.v1",
         session_id: sessionId,
@@ -219,10 +220,8 @@ async function verifySessionRoutes(baseUrl) {
   const commandEvents =
     Array.isArray(commandResponse.events) ? commandResponse.events : [];
   const commandKinds = commandEvents.map((event) => event.kind);
-  if (!commandKinds.includes("detection.proposed")) {
-    throw new Error(
-      "Jupyter proxy command route did not return detection events",
-    );
+  if (!commandKinds.includes("session.paused")) {
+    throw new Error("Jupyter proxy command route did not return session state");
   }
 
   const replayResponse = await fetchJson(
@@ -267,7 +266,7 @@ async function verifySessionRoutes(baseUrl) {
   );
   if (
     !stream.includes("event: heartwood-session-events") ||
-    !stream.includes("detection.proposed")
+    !stream.includes("session.paused")
   ) {
     throw new Error("Jupyter proxy SSE route did not stream persisted events");
   }

@@ -18,7 +18,7 @@ remote_root="$(mktemp -d)"
 remote_repository="${remote_root}/pages.git"
 failure_log=""
 source_backup=""
-source_path="${repository_root}/build/documentation/index.md"
+source_path="${repository_root}/documentation/index.md"
 
 cleanup() {
   if [[ -n "${failure_log}" ]]; then
