@@ -713,8 +713,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             value.get("validated_platforms"), "validated_platforms"
         ),
         qualification_test=_optional_string(value.get("qualification_test"), "qualification_test"),
-        catalog_source=_optional_string(value.get("catalog_source"), "catalog_source")
-        or "recommended",
+        catalog_source=_optional_string(value.get("catalog_source"), "catalog_source") or "catalog",
     )
 
 

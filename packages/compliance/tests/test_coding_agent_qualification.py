@@ -159,6 +159,58 @@ def test_coding_agent_qualification_rejects_incomplete_replay(tmp_path: Path) ->
         )
 
 
+def test_coding_agent_qualification_requires_explicit_tool_exit_code(
+    tmp_path: Path,
+) -> None:
+    module = _module(
+        "verify_coding_agent_e2e_exit_code",
+        _root() / "images/generic/scripts/verify_coding_agent_e2e.py",
+    )
+    verify = cast(Callable[..., dict[str, object]], module.verify_run)
+    events, audit, artifact, replay, inference = _acceptance_files(tmp_path)
+    payloads = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+    execution = next(
+        payload for payload in payloads if payload["kind"] == "tool.execution.recorded"
+    )
+    execution["payload"].pop("exit_code")
+    events.write_text(
+        "".join(json.dumps(payload) + "\n" for payload in payloads),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no valid exit code"):
+        verify(
+            events_path=events,
+            audit_path=audit,
+            artifact_path=artifact,
+            replay_path=replay,
+            inference_path=inference,
+        )
+
+
+def test_coding_agent_qualification_accepts_relative_artifact_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module(
+        "verify_coding_agent_e2e_relative_artifact",
+        _root() / "images/generic/scripts/verify_coding_agent_e2e.py",
+    )
+    verify = cast(Callable[..., dict[str, object]], module.verify_run)
+    events, audit, artifact, replay, inference = _acceptance_files(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    summary = verify(
+        events_path=events,
+        audit_path=audit,
+        artifact_path=Path(artifact.name),
+        replay_path=replay,
+        inference_path=inference,
+    )
+
+    assert summary["tool_execution_count"] == 1
+
+
 def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
     module = _module(
         "gpu_qualification_config",

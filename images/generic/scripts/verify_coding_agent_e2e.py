@@ -90,7 +90,9 @@ def verify_run(
         raise ValueError("coding-agent session must have one to three tool executions")
     if not 1 <= len(terminal_executions) <= 3:
         raise ValueError("coding-agent session must execute the terminal tool")
-    if any(event.payload.get("exit_code") != 0 for event in tool_executions):
+    if any(not isinstance(event.payload.get("exit_code"), int) for event in tool_executions):
+        raise ValueError("coding-agent tool execution has no valid exit code")
+    if any(event.payload["exit_code"] != 0 for event in tool_executions):
         raise ValueError("coding-agent tool execution failed")
 
     routes = [
@@ -145,7 +147,7 @@ def verify_run(
         raise ValueError("audit export and replay event kinds disagree")
     audit_text = audit_path.read_text(encoding="utf-8")
     for sensitive_value in (
-        str(artifact_path.parent),
+        str(artifact_path.resolve().parent),
         "target-condition-concept-id",
         "Call the terminal tool",
     ):

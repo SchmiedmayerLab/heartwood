@@ -432,7 +432,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         if args.cpus is not None and args.cpus < 1:
             parser.error("--cpus must be positive")
         if args.startup_timeout < 1 or args.port < 1:
-            parser.error("--cpus, --startup-timeout, and --port must be positive")
+            parser.error("--startup-timeout and --port must be positive")
         return run_launch(_launch_options(project, args))
     configured_gateway: SessionGateway | None = None
     if args.command is None:

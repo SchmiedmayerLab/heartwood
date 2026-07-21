@@ -657,6 +657,7 @@ def test_project_config_parser_defaults_optional_local_model_collections(tmp_pat
         "allow_patterns",
         "ignore_patterns",
         "validated_platforms",
+        "catalog_source",
     ):
         local_model.pop(field, None)
 
@@ -665,6 +666,7 @@ def test_project_config_parser_defaults_optional_local_model_collections(tmp_pat
     assert parsed.local_model is not None
     assert parsed.local_model.minimum_gpu_count == 0
     assert parsed.local_model.allow_patterns == ()
+    assert parsed.local_model.catalog_source == "catalog"
 
 
 def test_project_config_parser_rejects_non_platform_connection(tmp_path: Path) -> None:

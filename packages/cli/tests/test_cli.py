@@ -866,6 +866,15 @@ def test_invalid_session_and_launch_resources_are_argument_errors(
     assert invalid_resources.value.code == 2
     assert "--gpus must be positive" in capsys.readouterr().err
 
+    with pytest.raises(SystemExit) as invalid_timeout:
+        _run(
+            tmp_path / "timeout",
+            monkeypatch,
+            ["runtime", "start", "--startup-timeout", "0"],
+        )
+    assert invalid_timeout.value.code == 2
+    assert "--startup-timeout and --port must be positive" in capsys.readouterr().err
+
 
 @pytest.mark.parametrize(
     "args",
