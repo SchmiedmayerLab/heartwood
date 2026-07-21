@@ -261,3 +261,7 @@ def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
     }
     with pytest.raises(verifier.CompatibilityError, match="within model capacity"):
         verifier._verify_configuration(invalid, snapshot, resolved["runtime"])
+
+    invalid_eager = {**resolved["configuration"], "enforce_eager": "true"}
+    with pytest.raises(verifier.CompatibilityError, match="must be a boolean"):
+        verifier._verify_configuration(invalid_eager, snapshot, resolved["runtime"])

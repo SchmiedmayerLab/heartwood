@@ -189,6 +189,9 @@ def _verify_configuration(
             raise CompatibilityError(f"GPU matrix field {field} must be positive")
     if configuration["startup_seconds_min"] > configuration["startup_seconds_max"]:
         raise CompatibilityError("GPU startup estimate is invalid")
+    enforce_eager = configuration.get("enforce_eager", False)
+    if not isinstance(enforce_eager, bool):
+        raise CompatibilityError("GPU matrix field enforce_eager must be a boolean")
     context_window = configuration["context_window"]
     maximum_context_window = snapshot.get("maximum_context_window")
     if (
