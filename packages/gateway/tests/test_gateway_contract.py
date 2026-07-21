@@ -859,14 +859,10 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     )
     terra_models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     terra_standard = next(
-        model
-        for model in terra_models
-        if model["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
+        model for model in terra_models if model["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
     )
     assert terra_standard["qualification"] == "qualified"
-    assert str(terra_standard["availability_reason"]).startswith(
-        "Recommended for this deployment"
-    )
+    assert str(terra_standard["availability_reason"]).startswith("Recommended for this deployment")
     assert "Compatible with 1 visible NVIDIA T4 GPU(s)" in str(
         terra_standard["availability_reason"]
     )
