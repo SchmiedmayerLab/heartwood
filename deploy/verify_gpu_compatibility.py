@@ -17,6 +17,7 @@ from typing import Any
 _SCHEMA = "heartwood.gpu-compatibility.v1"
 _CATALOG_SCHEMA = "heartwood.model-snapshot-catalog.v2"
 _QUALIFICATION_TEST = "heartwood.coding-agent-e2e.v1"
+_MINIMUM_AGENT_CONTEXT_WINDOW = 18_432
 _CONFIGURATION_FIELDS = {
     "configuration_id",
     "status",
@@ -153,7 +154,6 @@ def _verify_configuration(
         "model_repository": "source_repository",
         "model_revision": "source_revision",
         "precision": "precision",
-        "context_window": "context_window",
         "tensor_parallel_size": "tensor_parallel_size",
         "tool_call_parser": "tool_call_parser",
         "startup_seconds_min": "startup_seconds_min",
@@ -189,6 +189,16 @@ def _verify_configuration(
             raise CompatibilityError(f"GPU matrix field {field} must be positive")
     if configuration["startup_seconds_min"] > configuration["startup_seconds_max"]:
         raise CompatibilityError("GPU startup estimate is invalid")
+    context_window = configuration["context_window"]
+    maximum_context_window = snapshot.get("maximum_context_window")
+    if (
+        not isinstance(maximum_context_window, int)
+        or isinstance(maximum_context_window, bool)
+        or not _MINIMUM_AGENT_CONTEXT_WINDOW <= context_window <= maximum_context_window
+    ):
+        raise CompatibilityError(
+            "GPU matrix context must be agent-capable and within model capacity"
+        )
     if configuration["gpu_count"] < snapshot.get("minimum_gpu_count", 0):
         raise CompatibilityError("GPU matrix does not satisfy the model GPU count")
     if configuration["minimum_gpu_memory_bytes"] < snapshot.get("minimum_gpu_memory_bytes", 0):

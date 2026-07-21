@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -230,3 +231,33 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
     assert resolved["configuration"]["model_revision"] == (
         "8e8ed243bbe6f9a5aff549a0924562fc719b2b8a"
     )
+
+
+def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
+    verifier = _module(
+        "gpu_compatibility_verifier",
+        _root() / "deploy/verify_gpu_compatibility.py",
+    )
+    loader = _module(
+        "gpu_qualification_config_bounded_context",
+        _root() / "images/gpu/qualification_config.py",
+    )
+    resolved = loader.load_configuration(
+        _root() / "images/gpu/compatibility.toml",
+        "terra-t4-qwen25-coder-7b-awq",
+    )
+    with (_root() / "images/generic/local-runtime/snapshots.toml").open("rb") as file:
+        snapshot = tomllib.load(file)["snapshots"][resolved["configuration"]["model_snapshot"]]
+
+    verifier._verify_configuration(
+        resolved["configuration"],
+        snapshot,
+        resolved["runtime"],
+    )
+
+    invalid = {
+        **resolved["configuration"],
+        "context_window": snapshot["maximum_context_window"] + 1,
+    }
+    with pytest.raises(verifier.CompatibilityError, match="within model capacity"):
+        verifier._verify_configuration(invalid, snapshot, resolved["runtime"])
