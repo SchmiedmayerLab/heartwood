@@ -437,6 +437,16 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert values[values.index("--served-model-name") + 1] == "test-model"
     assert values[values.index("--tool-call-parser") + 1] == "hermes"
 
+    env["HEARTWOOD_VLLM_ENFORCE_EAGER"] = "1"
+    eager = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert eager.returncode == 0
+    assert arguments.read_text(encoding="utf-8").splitlines()[-1] == "--enforce-eager"
+
+    env["HEARTWOOD_VLLM_ENFORCE_EAGER"] = "invalid"
+    invalid = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid.returncode == 64
+
+    env.pop("HEARTWOOD_VLLM_ENFORCE_EAGER")
     env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
     denied = subprocess.run(["bash", str(script)], env=env, check=False)
     assert denied.returncode == 64
@@ -622,6 +632,9 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     pull_request_build = workflow.split("  pull-request-build:\n", maxsplit=1)[1].split(
         "\n  build:\n", maxsplit=1
     )[0]
+    qualification = workflow.split("  gpu-qualification:\n", maxsplit=1)[1].split(
+        "\n  pull-request-build:\n", maxsplit=1
+    )[0]
     main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
 
     assert "runtime-gpu-nvidia" in workflow
@@ -638,6 +651,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "Promote GPU Channel Tags" in workflow
     assert "publish_commit_candidate:" in workflow
     assert "Publish validated immutable GPU tags for this commit" in workflow
+    assert "qualification_configuration:" in workflow
+    assert "used only when GPU qualification is enabled" in workflow
+    assert "inputs.qualification_configuration" in qualification
+    assert "inputs.qualification_configuration" not in pull_request_build
+    assert "inputs.qualification_configuration" not in main_build
     assert "github.event_name == 'workflow_dispatch' && inputs.publish_commit_candidate" in (
         main_build
     )

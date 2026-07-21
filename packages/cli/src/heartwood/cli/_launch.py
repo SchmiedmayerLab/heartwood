@@ -44,6 +44,7 @@ from heartwood.gateway import (
 InputFunction = Callable[[str], str]
 RunFunction = Callable[[Sequence[str]], int]
 
+_VLLM_EAGER_MEMORY_PER_GPU = 20 * 1024**3
 _SLURM_EXPORTED_ENVIRONMENT = (
     "PATH",
     "HOME",
@@ -614,6 +615,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
                     runtime_executable,
                     staged_source,
                     selection,
+                    enforce_eager=_use_eager_vllm(selection, runtime_env),
                 ),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
@@ -739,6 +741,8 @@ def _runtime_command(
     executable: Path,
     model: Path,
     selection: LocalRuntimeSelection,
+    *,
+    enforce_eager: bool = False,
 ) -> tuple[str, ...]:
     if selection.runtime == "llama-cpp":
         model_file = _gguf_file(model)
@@ -758,7 +762,7 @@ def _runtime_command(
         )
     if selection.tool_call_parser is None:  # pragma: no cover - persisted invariant
         raise LaunchConfigurationError("the selected vLLM model has no tool-call parser")
-    return (
+    command = (
         str(executable),
         "serve",
         str(model),
@@ -776,6 +780,21 @@ def _runtime_command(
         "--tool-call-parser",
         selection.tool_call_parser,
     )
+    return (*command, "--enforce-eager") if enforce_eager else command
+
+
+def _use_eager_vllm(
+    selection: LocalRuntimeSelection,
+    env: Mapping[str, str],
+) -> bool:
+    """Avoid CUDA graph capture overhead on constrained NVIDIA GPUs."""
+    if selection.runtime != "vllm":
+        return False
+    available = _available_gpu_memory_bytes(env, count=selection.tensor_parallel_size)
+    if available is None:
+        return False
+    per_device_available = available // selection.tensor_parallel_size
+    return per_device_available <= _VLLM_EAGER_MEMORY_PER_GPU
 
 
 def _local_model_selection(
@@ -876,6 +895,11 @@ def _print_resource_assessment(
             count=selection.tensor_parallel_size,
         )
         _print_memory_result("GPU memory", gpu_required, gpu_available)
+        if _use_eager_vllm(selection, env):
+            print(
+                "Runtime mode: eager execution selected to avoid CUDA graph capture "
+                "overhead on the available GPU memory."
+            )
 
 
 def _context_plan(

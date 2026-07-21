@@ -33,19 +33,24 @@ Enter one image:
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
 | Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 52 GB RAM, 75 GB persistent disk |
-| Heartwood-managed NVIDIA GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 8 CPUs, 32 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
+| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
+| Heartwood-managed NVIDIA GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
 CPU inference is portable but can be too slow for an interactive coding workflow.
 
 These are starting points rather than universal requirements.
+Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
+The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
 The GPU path is designed around a T4 and the release-pinned Qwen2.5 Coder 7B AWQ configuration.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
 It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
+For the first model download and startup, set auto-pause to at least 120 minutes; image creation, model verification, and inference startup can each take several minutes without terminal output from the model itself.
+After setup is complete, shorten auto-pause to match the normal research workflow.
 
 Heartwood inspects model size and available memory before launch, chooses a context capacity with response headroom, and warns when the selected compute is below its conservative estimate.
+On a 16 GB T4, Heartwood uses eager vLLM execution to avoid the additional GPU-memory peak from CUDA graph capture.
 Larger GPU memory can enable context capacities above 32K when the model supports them, but increasing context also increases GPU-memory use and response latency.
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for download and resource estimates and [GPU Compatibility](../reference/gpu-compatibility.md) for exact runtime combinations.
 
@@ -105,6 +110,7 @@ Heartwood inspects its metadata and reports a clear unsupported-model error when
 
 The pinned AWQ snapshot downloads about 5.2 GiB; allow at least 16 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
+Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
 The first inference startup is planned for approximately 2-8 minutes while vLLM loads the model and prepares GPU memory.
 Heartwood reports the active stage, elapsed time, selected context capacity, and memory assessment while you wait.
 

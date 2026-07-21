@@ -43,6 +43,7 @@ from heartwood.cli._launch import (
     _runtime_command,
     _runtime_environment,
     _stage_model,
+    _use_eager_vllm,
     _verify_local_model,
     _wait_for_runtime,
     build_launch_plan,
@@ -774,6 +775,59 @@ def test_resource_assessment_reports_context_and_memory_status(
     assert "model capacity: 32,768" in output
     assert "Warning: RAM may be insufficient" in output
     assert "GPU memory available; estimated minimum" in output
+    assert "Runtime mode: eager execution selected" not in output
+
+
+def test_constrained_vllm_gpu_uses_eager_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    selection = LocalRuntimeSelection(
+        artifact_id="test-model",
+        model_root=tmp_path / "model",
+        runtime="vllm",
+        model_id="test-model",
+        size_bytes=5 * 1024**3,
+        artifact_sha256=None,
+        context_window=18_432,
+        maximum_context_window=32_768,
+        tier="standard",
+        precision="AWQ int4",
+        qualification="candidate",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=15_000_000_000,
+        recommended_ram_bytes=32 * 1024**3,
+        recommended_disk_bytes=16 * 1024**3,
+        tool_call_parser="hermes",
+        tensor_parallel_size=1,
+        startup_seconds_min=120,
+        startup_seconds_max=480,
+        catalog_source="catalog",
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env, **_kwargs: 16 * 1024**3,
+    )
+
+    assert _use_eager_vllm(selection, {})
+    _print_resource_assessment(selection, {})
+    assert "Runtime mode: eager execution selected" in capsys.readouterr().out
+    assert (
+        _runtime_command(
+            Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
+            selection.model_root,
+            selection,
+            enforce_eager=True,
+        )[-1]
+        == "--enforce-eager"
+    )
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env, **_kwargs: 48 * 1024**3,
+    )
+    assert not _use_eager_vllm(selection, {})
 
 
 def test_available_system_memory_honors_cgroup_v1_limit(

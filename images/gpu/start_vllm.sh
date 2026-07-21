@@ -15,6 +15,7 @@ tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"
 context="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 tensor_parallel_size="${HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE:-1}"
 gpu_memory_utilization="${HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+enforce_eager="${HEARTWOOD_VLLM_ENFORCE_EAGER:-0}"
 vllm="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
@@ -30,12 +31,22 @@ if [[ ! -x "${vllm}" ]]; then
   exit 69
 fi
 
-exec "${vllm}" serve "${model_path}" \
-  --host "${host}" \
-  --port "${port}" \
-  --served-model-name "${alias}" \
-  --max-model-len "${context}" \
-  --tensor-parallel-size "${tensor_parallel_size}" \
-  --gpu-memory-utilization "${gpu_memory_utilization}" \
-  --enable-auto-tool-choice \
+arguments=(
+  serve "${model_path}"
+  --host "${host}"
+  --port "${port}"
+  --served-model-name "${alias}"
+  --max-model-len "${context}"
+  --tensor-parallel-size "${tensor_parallel_size}"
+  --gpu-memory-utilization "${gpu_memory_utilization}"
+  --enable-auto-tool-choice
   --tool-call-parser "${tool_parser}"
+)
+if [[ "${enforce_eager}" == "1" ]]; then
+  arguments+=(--enforce-eager)
+elif [[ "${enforce_eager}" != "0" ]]; then
+  echo "HEARTWOOD_VLLM_ENFORCE_EAGER must be 0 or 1" >&2
+  exit 64
+fi
+
+exec "${vllm}" "${arguments[@]}"

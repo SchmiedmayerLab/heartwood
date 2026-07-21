@@ -20,9 +20,9 @@ on:
         required: true
         default: false
         type: boolean
-      configuration_id:
-        description: Reviewed compatibility-matrix configuration
-        required: true
+      qualification_configuration:
+        description: Optional compatibility-matrix row used only when GPU qualification is enabled
+        required: false
         default: terra-t4-qwen25-coder-7b-awq
         type: choice
         options:
@@ -135,7 +135,7 @@ jobs:
       - name: Resolve qualification model
         id: model
         env:
-          CONFIGURATION_ID: ${{ inputs.configuration_id }}
+          CONFIGURATION_ID: ${{ inputs.qualification_configuration }}
         run: |
           payload="$(python3 images/gpu/qualification_config.py "${CONFIGURATION_ID}")"
           echo "snapshot=$(jq -r '.configuration.model_snapshot' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
@@ -150,7 +150,7 @@ jobs:
           heartwood models download "${SNAPSHOT}"
       - name: Run GPU coding-agent qualification without network
         env:
-          CONFIGURATION_ID: ${{ inputs.configuration_id }}
+          CONFIGURATION_ID: ${{ inputs.qualification_configuration }}
           PLATFORM_ID: ${{ steps.model.outputs.platform }}
           SNAPSHOT: ${{ steps.model.outputs.snapshot }}
         run: >-
@@ -176,7 +176,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gpu-qualification-${{ inputs.configuration_id }}-${{ github.sha }}
+          name: gpu-qualification-${{ inputs.qualification_configuration }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/heartwood-gpu-project/heartwood-qualification.json
             ${{ runner.temp }}/heartwood-gpu-project/heartwood-replay.txt

@@ -31,14 +31,14 @@ The exact driver used in a live qualification is recorded with its machine-reada
 
 ## Model Configurations
 
-| Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Tensor Parallelism | Tool Parser | Status |
-|---|---|---|---|---|---:|---:|---|---|
-| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 32,768 | 1 | `hermes` | Candidate |
-| Carina | Standard fallback | 1 x L40S, 48 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 32,768 | 1 | `hermes` | Candidate |
-| Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | 1 | `qwen3_coder` | Candidate |
-| Carina | Powerful | 2 x L40S, 48 GB each | [Qwen3-Coder-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/tree/b2cff646eb4bb1d68355c01b18ae02e7cf42d120) | BF16 | 65,536 | 2 | `qwen3_coder` | Candidate |
-| Carina | Maximum capability | 4 x L40S, 48 GB each | [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8/tree/da6e2ed27304dd39abadd9c82ef50e8de67bdd4c) | FP8 | 65,536 | 4 | `qwen3_coder` | Candidate |
-| Carina | Maximum capability alternative | 2 x L40S, 48 GB each | [GPT-OSS 120B](https://huggingface.co/openai/gpt-oss-120b/tree/b5c939de8f754692c1647ca79fbf85e8c1e70f8a) | MXFP4 | 65,536 | 2 | `openai` | Candidate |
+| Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Tool Parser | Status |
+|---|---|---|---|---|---:|---|---:|---|---|
+| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | Candidate |
+| Carina | Standard fallback | 1 x L40S, 48 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 32,768 | CUDA graphs | 1 | `hermes` | Candidate |
+| Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | Candidate |
+| Carina | Powerful | 2 x L40S, 48 GB each | [Qwen3-Coder-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/tree/b2cff646eb4bb1d68355c01b18ae02e7cf42d120) | BF16 | 65,536 | CUDA graphs | 2 | `qwen3_coder` | Candidate |
+| Carina | Maximum capability | 4 x L40S, 48 GB each | [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8/tree/da6e2ed27304dd39abadd9c82ef50e8de67bdd4c) | FP8 | 65,536 | CUDA graphs | 4 | `qwen3_coder` | Candidate |
+| Carina | Maximum capability alternative | 2 x L40S, 48 GB each | [GPT-OSS 120B](https://huggingface.co/openai/gpt-oss-120b/tree/b5c939de8f754692c1647ca79fbf85e8c1e70f8a) | MXFP4 | 65,536 | CUDA graphs | 2 | `openai` | Candidate |
 
 All listed model repositories declare the Apache-2.0 license at the pinned revision.
 Confirm that a model's license and intended use remain suitable for the project before downloading it.
