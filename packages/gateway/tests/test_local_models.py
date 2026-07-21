@@ -463,7 +463,7 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
 
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
-        "qwen3-8b-awq-vllm",
+        "qwen25-7b-instruct-awq-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
     assert all(choice.context_window == 32_768 for choice in choices)

@@ -96,6 +96,7 @@ from heartwood.gateway._readiness import (
     DeploymentReadiness,
     gpu_visible,
     inspect_deployment,
+    managed_local_runtime_active,
     model_source_for_connection,
     model_source_options,
     persist_deployment_profile,
@@ -312,13 +313,15 @@ class SessionGateway:
         }
         self._local_model_choices = {choice.model_id: choice for choice in choices}
         selected_local_model = self.config_store.load().local_model
-        if (
-            selected_local_model is not None
-            and selected_local_model.catalog_source == "user-selected"
-        ):
-            selected_choice = _selected_local_model_choice(selected_local_model)
-            self._downloadable_local_model_choices[selected_choice.model_id] = selected_choice
-            self._local_model_choices[selected_choice.model_id] = selected_choice
+        if selected_local_model is not None:
+            selected_choice = self._downloadable_local_model_choices.get(
+                selected_local_model.artifact_id
+            )
+            if selected_choice is None and selected_local_model.catalog_source == "user-selected":
+                selected_choice = _selected_local_model_choice(selected_local_model)
+                self._downloadable_local_model_choices[selected_choice.model_id] = selected_choice
+            if selected_choice is not None:
+                self._local_model_choices[selected_choice.model_id] = selected_choice
         self._repository_plans: dict[tuple[str, str], LocalModelChoice] = {}
         self.model_repository = model_repository or HuggingFaceModelRepository(
             token=self.env.get("HF_TOKEN")
@@ -733,6 +736,11 @@ class SessionGateway:
         snapshot_catalog = self.snapshot_catalog.safe_dict()
         statuses = {status.model_id: status for status in self.local_model_manager.statuses()}
         selected = self.config_store.load().local_model
+        active_model_id = (
+            selected.artifact_id
+            if selected is not None and managed_local_runtime_active(selected, self.env)
+            else None
+        )
         if selected is not None and selected.artifact_id not in statuses:
             path = selected.resolved_path(self.project)
             if path.exists():
@@ -776,6 +784,8 @@ class SessionGateway:
         choices = [
             self._local_model_choice_dict(
                 choice,
+                active=choice.model_id == active_model_id,
+                selected=selected is not None and choice.model_id == selected.artifact_id,
                 recommendation=(
                     "Selected for this project"
                     if selected is not None and choice.model_id == selected.artifact_id
@@ -788,26 +798,6 @@ class SessionGateway:
             )
             for choice in local_choices
         ]
-        if (
-            selected is not None
-            and selected.catalog_source == "user-selected"
-            and selected.artifact_id not in self._local_model_choices
-        ):
-            persisted = _selected_local_model_dict(selected)
-            runtime = str(persisted["runtime"])
-            available = self._local_runtime_available(runtime)
-            choices.insert(
-                0,
-                {
-                    **persisted,
-                    "available": available,
-                    "availability_reason": self._local_model_availability_reason(
-                        runtime,
-                        available=available,
-                        recommendation="Selected for this project",
-                    ),
-                },
-            )
         return {
             **self.artifact_catalog.safe_dict(),
             "snapshot_schema_version": snapshot_catalog["schema_version"],
@@ -1307,6 +1297,8 @@ class SessionGateway:
         self,
         choice: LocalModelChoice,
         *,
+        active: bool = False,
+        selected: bool = False,
         recommendation: str | None = None,
     ) -> dict[str, object]:
         available = self._local_runtime_available(choice.runtime)
@@ -1315,7 +1307,13 @@ class SessionGateway:
             available=available,
             recommendation=recommendation,
         )
-        return {**choice.safe_dict(), "available": available, "availability_reason": reason}
+        return {
+            **choice.safe_dict(),
+            "active": active,
+            "available": available,
+            "selected": selected,
+            "availability_reason": reason,
+        }
 
     @staticmethod
     def _local_model_availability_reason(
@@ -1432,11 +1430,6 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
     )
     choice.validate()
     return choice
-
-
-def _selected_local_model_dict(selection: LocalModelSelection) -> dict[str, object]:
-    """Restore display metadata for a persisted user-selected model."""
-    return _selected_local_model_choice(selection).safe_dict()
 
 
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:

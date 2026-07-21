@@ -128,6 +128,7 @@ class LaunchPlan:
 class LocalRuntimeSelection:
     """Persisted local-model selection normalized for runtime launch."""
 
+    artifact_id: str
     model_root: Path
     runtime: Literal["llama-cpp", "vllm"]
     model_id: str
@@ -409,6 +410,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             f"{int(time.monotonic() - started)} seconds."
         )
         runtime_env["HEARTWOOD_LOCAL_RUNTIME_ACTIVE"] = "1"
+        runtime_env["HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID"] = selection.artifact_id
         _stage(5, 6, "Validate the shared Heartwood setup")
         setup_code = _ensure_setup(
             options,
@@ -565,6 +567,7 @@ def _local_model_selection(
     else:
         runtime = "vllm"
     return LocalRuntimeSelection(
+        artifact_id=selection.artifact_id,
         model_root=model,
         runtime=runtime,
         model_id=selection.model_id,
@@ -795,6 +798,7 @@ def _runtime_environment(
         "HEARTWOOD_PLATFORM_HOME",
         "HEARTWOOD_LOCAL_MODEL_CONTEXT",
         "HEARTWOOD_LOCAL_RUNTIME_ACTIVE",
+        "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID",
         "LOCAL_SCRATCH_JOB",
         "SLURM_JOB_ID",
         "SLURM_JOB_PARTITION",

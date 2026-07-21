@@ -22,8 +22,8 @@ Terra supports custom images derived from a Terra base image; see Terra's [custo
 
 ## Choose the Image and Compute
 
-If the workspace already has a Jupyter Cloud Environment and you want to add a GPU or change its GPU configuration, delete that Cloud Environment before continuing.
-Terra does not enable GPU changes in place; create a new environment with the required GPU and Heartwood image.
+If the workspace already has a Jupyter Cloud Environment and you want to change its Heartwood image tag or GPU configuration, delete that Cloud Environment before continuing.
+Terra does not apply those changes to an existing environment; create a new environment with the required Heartwood image and compute.
 Deleting the compute environment and deleting its persistent disk are separate choices, so retain the disk when it contains project files you still need.
 See Terra's [GPU Cloud Environment guide](https://support.terra.bio/hc/en-us/articles/4403006001947-Getting-started-with-GPUs-in-a-Cloud-Environment).
 
@@ -32,9 +32,9 @@ Enter one image:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-terra` | 8 CPUs, 32 GB RAM, 75 GB persistent disk |
-| Heartwood-managed NVIDIA GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-terra-gpu-nvidia` | 8 CPUs, 48 GB RAM, one T4-class GPU or better, 100 GB persistent disk |
+| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 52 GB RAM, 75 GB persistent disk |
+| Heartwood-managed NVIDIA GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 8 CPUs, 52 GB RAM, one T4-class GPU or better, 100 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
@@ -44,7 +44,6 @@ These are starting points rather than universal requirements.
 Heartwood inspects model size and available memory before launch, chooses a context capacity with response headroom, and warns when the selected compute is below its conservative estimate.
 Larger GPU memory can enable context capacities above 32K when the model supports them.
 
-Changing an existing GPU configuration also requires deleting and recreating the Cloud Environment.
 Retain the persistent disk when replacing compute and copy valuable results to workspace storage.
 See [Starting and Customizing Your Jupyter App](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app).
 
@@ -58,6 +57,9 @@ Verify the installed release:
 ```bash
 heartwood --version
 ```
+
+The reported version must match the image tag in this guide.
+If it reports an older release, Terra is still running the previous immutable image: delete and recreate only the Cloud Environment with the intended tag, retain the persistent disk, and verify the version again before setup.
 
 Do not install another Heartwood copy into the environment.
 The custom image already contains the tested command, notebook kernel, Skills, and inference runtime while preserving Terra's base-image behavior.
@@ -91,7 +93,7 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
-For managed GPU inference, start with the recommended Qwen3 AWQ model shown by Heartwood.
+For managed GPU inference, start with the recommended Qwen2.5 7B AWQ model shown by Heartwood.
 You can instead enter another public Hugging Face repository; Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
@@ -151,4 +153,5 @@ Deleting the persistent disk removes `.heartwood/` and project files stored only
 - If a model download stops, rerun Heartwood from the same project; verified files in `.heartwood/models/` are reused.
 - If model startup is slow or fails, compare the printed model plan with attached RAM, GPU memory, and persistent-disk space, then inspect `.heartwood/logs/local-model.log` from the same project.
 - If Terra rejects the image during auto-detection, confirm that the tag ends in `-terra` or `-terra-gpu-nvidia`; these tags use the single-platform manifest format required by Terra's Leonardo service.
+- If `heartwood --version` does not match the requested image tag, replace the Cloud Environment while retaining the persistent disk; resuming an existing environment does not update its image.
 - Run `heartwood doctor` for stable `HW-TERRA-*` recovery guidance.

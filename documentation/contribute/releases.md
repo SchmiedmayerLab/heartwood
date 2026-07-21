@@ -23,7 +23,7 @@ The workflow verifies immutable container candidates, builds and tests native as
 ## Stable and Preview Documentation
 
 A stable version updates the `stable` alias and the documentation root.
-A prerelease such as `0.2.0-beta.4` updates the `preview` alias without replacing the stable root.
+A prerelease such as `0.2.0-beta.5` updates the `preview` alias without replacing the stable root.
 
 The version store is deployed to GitHub Pages and retains immutable version paths.
 Publishing the same version with different content is rejected.

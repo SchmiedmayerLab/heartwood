@@ -55,7 +55,17 @@ mkdir -m 700 "${project}"
   "${installation}/bin/heartwood" --interface web --host 127.0.0.1 --port 18767 \
     >"${workspace}/web.log" 2>&1 &
   web_pid="$!"
-  trap 'kill "${web_pid}" >/dev/null 2>&1 || true; wait "${web_pid}" >/dev/null 2>&1 || true' EXIT
+  jupyter_pid=""
+  # shellcheck disable=SC2329  # Invoked by the EXIT trap below.
+  cleanup_services() {
+    if [[ -n "${jupyter_pid}" ]]; then
+      kill "${jupyter_pid}" >/dev/null 2>&1 || true
+      wait "${jupyter_pid}" >/dev/null 2>&1 || true
+    fi
+    kill "${web_pid}" >/dev/null 2>&1 || true
+    wait "${web_pid}" >/dev/null 2>&1 || true
+  }
+  trap cleanup_services EXIT
   "${runtime}/heartwood/bin/python" - <<'PY'
 import json
 import time
@@ -79,6 +89,71 @@ while time.time() < deadline:
         time.sleep(0.2)
 else:
     raise SystemExit(f"native browser interface did not become ready: {last_error}")
+PY
+
+  "${installation}/bin/heartwood-jupyter" \
+    --allow-root \
+    --no-browser \
+    --ServerApp.ip=127.0.0.1 \
+    --ServerApp.port=18768 \
+    --ServerApp.port_retries=0 \
+    --ServerApp.token=heartwood-native-smoke \
+    >"${workspace}/jupyter.log" 2>&1 &
+  jupyter_pid="$!"
+  "${runtime}/heartwood/bin/python" - <<'PY'
+import json
+import time
+import urllib.error
+import urllib.request
+
+from heartwood.notebook import NotebookSession
+
+deadline = time.time() + 60
+last_error = None
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:18768/api/status?token=heartwood-native-smoke",
+            timeout=2,
+        ) as response:
+            status = json.load(response)
+        if isinstance(status, dict):
+            break
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        last_error = error
+        time.sleep(0.2)
+else:
+    raise SystemExit(f"native Jupyter launcher did not become ready: {last_error}")
+
+with urllib.request.urlopen(
+    "http://127.0.0.1:18768/api/kernelspecs?token=heartwood-native-smoke",
+    timeout=5,
+) as response:
+    kernels = json.load(response).get("kernelspecs", {})
+if "python3" not in kernels:
+    raise SystemExit("native Jupyter launcher did not expose the packaged Python kernel")
+
+start_request = urllib.request.Request(
+    "http://127.0.0.1:18768/api/kernels?token=heartwood-native-smoke",
+    data=json.dumps({"name": "python3"}).encode(),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+with urllib.request.urlopen(start_request, timeout=15) as response:
+    kernel_id = json.load(response).get("id")
+if not isinstance(kernel_id, str) or not kernel_id:
+    raise SystemExit("native Jupyter launcher did not start the packaged Python kernel")
+stop_request = urllib.request.Request(
+    f"http://127.0.0.1:18768/api/kernels/{kernel_id}?token=heartwood-native-smoke",
+    method="DELETE",
+)
+with urllib.request.urlopen(stop_request, timeout=15) as response:
+    if response.status != 204:
+        raise SystemExit("native Jupyter launcher did not stop the packaged Python kernel")
+
+with NotebookSession(session_id="native-jupyter-smoke") as session:
+    if session.startup_plan()["interface"] != "notebook":
+        raise SystemExit("native notebook bridge did not return the notebook startup plan")
 PY
 )
 

@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -21,6 +24,7 @@ from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._openhands_sdk import prepare_openhands_sdk
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
+    LocalModelSelection,
     ProjectConfig,
     ProjectConfigError,
     ProjectConfigStore,
@@ -38,6 +42,7 @@ ModelSource = Literal[
 ]
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
+_MANAGED_MODEL_CATALOG_URL = "http://127.0.0.1:8765/v1/models"
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,10 +289,15 @@ def inspect_deployment(
         )
         checks.append(ReadinessCheck("model-credential", credential_status, credential_summary))
     managed_local_available = False
+    managed_local_active = False
     if config is not None and config.model_source == "heartwood":
         selection = config.local_model
         managed_local_available = (
             selection is not None and selection.resolved_path(project).exists()
+        )
+        managed_local_active = selection is not None and managed_local_runtime_active(
+            selection,
+            active_env,
         )
         checks.append(
             ReadinessCheck(
@@ -346,7 +356,7 @@ def inspect_deployment(
 
     if any(check.status == "fail" for check in checks):
         state: ReadinessState = "recovery-required"
-    elif managed_local_available and active_env.get("HEARTWOOD_LOCAL_RUNTIME_ACTIVE") != "1":
+    elif managed_local_available and not managed_local_active:
         state = "compute-required"
     elif config is None or active_model is None or not credential_ready:
         state = "setup-required"
@@ -361,6 +371,28 @@ def inspect_deployment(
         state_root=str(project.state_root),
         evidence=detection.evidence,
         checks=tuple(checks),
+    )
+
+
+def managed_local_runtime_active(
+    selection: LocalModelSelection,
+    env: Mapping[str, str],
+) -> bool:
+    """Confirm the selected model through inherited launch state or the loopback catalog."""
+    if (
+        env.get("HEARTWOOD_LOCAL_RUNTIME_ACTIVE") == "1"
+        and env.get("HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID") == selection.artifact_id
+    ):
+        return True
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(_MANAGED_MODEL_CATALOG_URL, timeout=0.5) as response:
+            payload = json.load(response)
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
+    models = payload.get("data", []) if isinstance(payload, dict) else []
+    return isinstance(models, list) and any(
+        isinstance(model, dict) and model.get("id") == selection.model_id for model in models
     )
 
 

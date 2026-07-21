@@ -92,6 +92,74 @@ describe("buildViewModel", () => {
     });
   });
 
+  it("surfaces one researcher decision for each grouped action set", () => {
+    const viewModel = buildViewModel([
+      event(0, "confirmation.requested", {
+        request: { tool_call_id: "toolcall-1" },
+      }),
+      event(1, "confirmation.requested", {
+        request: { tool_call_id: "toolcall-2" },
+      }),
+      event(2, "command.received", {
+        command_id: "session-test-approve-000000",
+        command_kind: "approve",
+      }),
+      event(3, "confirmation.resolved", {
+        decision: "approved",
+        tool_call_id: "toolcall-1",
+      }),
+      event(4, "confirmation.resolved", {
+        decision: "approved",
+        tool_call_id: "toolcall-2",
+      }),
+      event(5, "confirmation.requested", {
+        request: { tool_call_id: "toolcall-3" },
+      }),
+      event(6, "command.received", {
+        command_id: "session-test-deny-000003",
+        command_kind: "deny",
+      }),
+      event(7, "confirmation.resolved", {
+        decision: "denied",
+        tool_call_id: "toolcall-3",
+      }),
+    ]);
+
+    expect(viewModel.conversation).toMatchObject([
+      {
+        content: "Action set approved",
+        detail: "The decision applied to every action in the set.",
+        label: "Approval",
+      },
+      {
+        content: "Action set rejected",
+        detail: "The decision applied to every action in the set.",
+        label: "Approval",
+      },
+    ]);
+    expect(viewModel.activity[3]?.detail).toBe("approved");
+    expect(viewModel.activity[7]?.detail).toBe("denied");
+  });
+
+  it("does not claim an action decision before confirmation succeeds", () => {
+    const viewModel = buildViewModel([
+      event(0, "command.received", {
+        command_id: "session-test-approve-000000",
+        command_kind: "approve",
+      }),
+      event(1, "error.recorded", {
+        command: "approve",
+        reason: "no matching pending action",
+      }),
+    ]);
+
+    expect(viewModel.conversation).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: "Action set approved" }),
+      ]),
+    );
+  });
+
   it("keeps provider implementation errors out of the researcher conversation", () => {
     const viewModel = buildViewModel([
       event(0, "error.recorded", {

@@ -150,11 +150,12 @@ def test_line_mode_reports_elapsed_progress_for_a_slow_turn(
     )
 
     assert result.message == "complete"
-    output = capsys.readouterr().out
-    assert "Working on your task" in output
-    assert "Still working on your task" in output
-    assert "Response time depends on the selected model and task" in output
-    assert "managed models may take several minutes" not in output
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Working on your task" in captured.err
+    assert "Still working on your task" in captured.err
+    assert "Response time depends on the selected model and task" in captured.err
+    assert "managed models may take several minutes" not in captured.err
 
 
 def test_doctor_is_read_only_and_reports_current_project(
@@ -1308,11 +1309,12 @@ def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
     assert _run(project, monkeypatch, ["models", "inspect", "example/research-model-gguf"]) == 0
     assert _run(project, monkeypatch, ["models", "download", "example/research-model-gguf"]) == 0
 
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.out
     assert "Heartwood model plan" in output
     assert "Runtime: CPU" in output
     assert "Recommended: 8 CPU cores" in output
-    assert "Downloading and verifying the model" in output
+    assert "Downloading and verifying the model" in captured.err
     assert "Model files are ready:" in output
     assert "Run `heartwood` to continue setup or open Heartwood." in output
     assert calls == [

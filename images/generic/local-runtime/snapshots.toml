@@ -18,7 +18,7 @@ model_alias = "Qwen2.5-7B-Instruct-AWQ for vLLM"
 context_window = 32768
 minimum_resource_envelope = "One NVIDIA GPU with at least 16 GB VRAM, 8 CPU cores, 32 GB RAM, and 10 GB free project storage."
 recommended_resource_envelope = "One NVIDIA GPU with at least 16 GB VRAM, 8 or more CPU cores, 48 GB RAM, and 16 GB free project storage."
-recommended = false
+recommended = true
 
 [snapshots.qwen25-7b-instruct-vllm]
 runtime_profile = "vllm-cuda"
@@ -36,7 +36,7 @@ recommended = false
 
 [snapshots.qwen3-8b-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "GPU-accelerated tool-capable instruction model selected for synthetic OpenHands demonstrations on 16 GB GPUs; not reviewed for biomedical use."
+purpose = "GPU-accelerated instruction model available for user-selected evaluation on 16 GB GPUs; structured tool-use reliability is not part of the release recommendation."
 source_repository = "Qwen/Qwen3-8B-AWQ"
 source_revision = "4da05a8edb55c6046cce958586c33b61da07bb79"
 expected_size_bytes = 6114568235
@@ -46,4 +46,4 @@ model_alias = "Qwen3-8B-AWQ for vLLM"
 context_window = 32768
 minimum_resource_envelope = "One NVIDIA GPU with at least 16 GB VRAM, 8 CPU cores, 32 GB RAM, and 12 GB free project storage."
 recommended_resource_envelope = "One NVIDIA GPU with at least 16 GB VRAM, 8 or more CPU cores, 48 GB RAM, and 16 GB free project storage."
-recommended = true
+recommended = false
