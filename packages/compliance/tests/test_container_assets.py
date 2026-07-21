@@ -636,6 +636,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "attest=type=sbom,disabled=true" in pull_request_build
     assert "attest=type=provenance,disabled=true" in pull_request_build
     assert "Promote GPU Channel Tags" in workflow
+    assert "publish_commit_candidate:" in workflow
+    assert "Publish validated immutable GPU tags for this commit" in workflow
+    assert "github.event_name == 'workflow_dispatch' && inputs.publish_commit_candidate" in (
+        main_build
+    )
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
@@ -650,6 +655,9 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "terra_image_smoke.sh" in main_build
     assert "offline_stack_smoke.sh" in main_build
     assert "immutable GPU commit tag does not match" in workflow
+    assert "sha-${GIT_SHA}-${COMMIT_SUFFIX}" in main_build
+    assert "edge-gpu-nvidia" not in main_build
+    assert "edge-terra-gpu-nvidia" not in main_build
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
     assert "promoted ${channel} digest does not match" in workflow
     assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v, GHSA-rrmf-rvhw-rf47" in dependency_review

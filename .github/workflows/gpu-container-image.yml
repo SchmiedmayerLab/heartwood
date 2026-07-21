@@ -10,6 +10,11 @@ on:
   workflow_call:
   workflow_dispatch:
     inputs:
+      publish_commit_candidate:
+        description: Publish validated immutable GPU tags for this commit without moving channel tags
+        required: true
+        default: false
+        type: boolean
       run_gpu_qualification:
         description: Run the coding-agent acceptance suite on a protected self-hosted GPU runner
         required: true
@@ -220,7 +225,9 @@ jobs:
 
   build:
     name: Build And Validate ${{ matrix.target }}
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main'
+      || (github.event_name == 'workflow_dispatch' && inputs.publish_commit_candidate)
     needs: contract
     runs-on: ubuntu-24.04
     permissions:
