@@ -45,6 +45,23 @@ def _store(project: ProjectContext, env: dict[str, str]) -> ProjectConfigStore:
     )
 
 
+def test_readiness_reports_agent_dependency_failure_without_raising(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(_env: object) -> object:
+        raise RuntimeError("synthetic import failure")
+
+    monkeypatch.setattr("heartwood.gateway._readiness.prepare_openhands_sdk", fail)
+
+    readiness = inspect_deployment(ProjectContext(tmp_path), env={})
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert readiness.state == "recovery-required"
+    assert check.status == "fail"
+    assert check.safe_dict()["code"] == "HW-AGENT-001"
+
+
 def _configure_model(
     project: ProjectContext,
     *,

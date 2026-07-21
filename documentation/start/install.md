@@ -43,7 +43,7 @@ It requires Git, [uv](https://docs.astral.sh/uv/), and Node.js for browser-inter
 ```bash
 git clone https://github.com/SchmiedmayerLab/heartwood.git
 cd heartwood
-uv sync --locked --all-groups
+uv sync --locked --all-groups --all-extras
 uv run heartwood --version
 ```
 

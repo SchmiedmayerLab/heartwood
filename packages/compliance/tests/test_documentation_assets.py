@@ -179,7 +179,8 @@ def test_platform_guides_use_current_release_artifacts_and_commands() -> None:
     assert f"heartwood:{version}-terra" in terra
     assert f"heartwood:{version}-terra-gpu-nvidia" in terra
     assert f"releases/download/{version}/heartwood-installer" in carina
-    assert "heartwood --interface web" in terra
+    assert "heartwood --interface web" not in terra
+    assert "Python 3 (Heartwood)" in terra
     assert "heartwood runtime start --partition dev" in carina
     assert "heartwood launch" not in combined
     assert "heartwood serve" not in combined
@@ -198,6 +199,7 @@ def test_terra_notebook_is_output_free_and_uses_the_shared_project() -> None:
     assert "project_readiness" in combined
     assert "platform_capabilities" in combined
     assert "approval_controls" in combined
+    assert "heartwood --interface web" not in combined
     assert "--workspace" not in combined
     for cell in cells:
         if cell["cell_type"] == "code":
@@ -268,7 +270,9 @@ def test_native_installer_defaults_to_current_directory_and_confines_state() -> 
     installer = _read("deploy/install.sh")
 
     assert 'root="${PWD}"' in installer
-    assert 'installer_state="${root}/.installer"' in installer
+    assert 'installer_base="${root}/.installer"' in installer
+    assert 'installer_state="$(mktemp -d "${installer_base}/run.XXXXXX")"' in installer
+    assert 'installer_lock="${root}/.installer.lock"' in installer
     assert 'export HOME="${installer_state}/home"' in installer
     assert 'export TMPDIR="${installer_state}/tmp"' in installer
     assert 'export UV_CACHE_DIR="${installer_state}/cache/uv"' in installer
@@ -276,6 +280,9 @@ def test_native_installer_defaults_to_current_directory_and_confines_state() -> 
     assert "export HEARTWOOD_PLATFORM=carina" in installer
     assert 'installer_release="__HEARTWOOD_RELEASE_VERSION__"' in installer
     assert "--minimum-free-gib N" in installer
+    assert 'dry_run_state="$(mktemp -d' in installer
+    assert 'installations_root="${root}/installations"' in installer
+    assert 'replace_symlink "${current_target}" "${root}/current"' in installer
     assert "--version VERSION" not in installer
     assert "releases/latest/download" not in installer
 

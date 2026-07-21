@@ -13,8 +13,6 @@ if ! command -v jq >/dev/null; then
 fi
 
 project="${HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project}"
-state_root="${project}/.heartwood"
-workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-offline-stack}"
 rejected_session_id="${session_id}-rejected"
 automatic_session_id="${session_id}-automatic"
@@ -168,9 +166,9 @@ if summary["source_condition_occurrence_count"] != 39:
     raise SystemExit(f"unexpected source condition count: {summary}")
 if summary["condition_occurrence_count"] != 35:
     raise SystemExit(f"unexpected reference condition count: {summary}")
-if not all(value for key, value in checks.items() if key != "row_values_exported"):
+if not all(checks.values()):
     raise SystemExit(f"reference analysis failed quality checks: {checks}")
-if checks["row_values_exported"] is not False or not payload["export_guard"]["exportable"]:
+if checks["aggregate_only_output"] is not True or not payload["export_guard"]["exportable"]:
     raise SystemExit("reference analysis violated aggregate output expectations")
 PY
 test -s "${audit_copy}"

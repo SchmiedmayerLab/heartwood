@@ -19,10 +19,11 @@ No single layer establishes every property of a deployment.
 | Container smoke tests | Entrypoint, filesystem, architecture, no-secret image layers, and deterministic OpenHands integration |
 | No-network smoke tests | Gateway, OpenHands, grouped action, tool, replay, and audit operation without outbound network |
 | Capable-model evaluation | Real Heartwood-managed inference, native tool proposal, bounded execution, and exact synthetic output |
-| Platform-derived CI | Terra Jupyter inheritance, proxy routing, persistence, image media type, and Heartwood-managed runtime contracts |
+| Platform-derived CI | Terra Jupyter inheritance, prefixed internal gateway routing, persistence, image media type, CI-only model rejection as an agent profile, and separate real inference |
 | Live synthetic validation | Exact published artifact in Terra or Carina without protected data |
 
-GPU image CI verifies the locked CUDA-enabled runtime, compatibility guards, launcher, and absence of bundled model weights on standard runners. It does not establish successful GPU initialization or model inference without GPU hardware. Native packaging CI uses deterministic dependency-tool substitutes to verify installer boundaries, resumability, layout, and shared runtime wiring. Actual GPU model load, inference, and Carina dependency resolution require live synthetic validation in the target environment.
+GPU image CI verifies the locked CUDA-enabled runtime, compatibility guards, launcher, and absence of bundled model weights on standard runners. It does not establish successful GPU initialization or model inference without GPU hardware. Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths. Actual GPU model load, inference, and Carina dependency resolution require live synthetic validation in the target environment.
+Live platform validation supplements the automated release evidence and should be recorded before a deployment is promoted for operational use; it is not an automated release gate because CI cannot provision institutional workspaces.
 
 ## Synthetic Data Rule
 

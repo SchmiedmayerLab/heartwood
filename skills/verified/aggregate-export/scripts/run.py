@@ -85,6 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     export = build_export(summary, aggregate_count_floor=args.aggregate_count_floor)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(export, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Wrote aggregate export decision to {args.output.name}.")
     return 0
 
 

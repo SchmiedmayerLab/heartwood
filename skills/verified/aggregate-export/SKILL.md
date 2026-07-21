@@ -14,7 +14,7 @@ metadata:
   heartwood.phi-risk: "none"
   heartwood.trust-tier: "verified"
   heartwood.requires-network: "false"
-  heartwood.version: "0.2.0-beta.3"
+  heartwood.version: "0.2.0-beta.4"
   heartwood.sig: "sigstore:synthetic-fixture"
 ---
 
@@ -22,10 +22,13 @@ metadata:
 
 Use this Skill only on a reviewed cohort-summary artifact. It applies the configured participant-count floor and writes either aggregate counts or a suppression decision. A successful script result is not permission to move the file out of the workspace; platform and institutional export authorization remain separate.
 
+Use the exact Skill directory reported by `invoke_skill` to run the entrypoint; do not resolve `scripts/run.py` from the project directory.
+
 Example:
 
 ```bash
-python scripts/run.py \
+SKILL_DIR=/exact/directory/reported/by/invoke_skill
+python "$SKILL_DIR/scripts/run.py" \
   --summary cohort-summary.json \
   --aggregate-count-floor 20 \
   --output aggregate-export.json

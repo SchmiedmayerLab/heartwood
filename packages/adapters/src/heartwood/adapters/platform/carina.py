@@ -52,7 +52,7 @@ class CarinaPlatformAdapter:
             credential_backends=("process", "mounted-file"),
             model_sources=("heartwood", "stanford-ai-api-gateway"),
             managed_model_connections=("Stanford AI API Gateway",),
-            validation_level="ci-and-live-synthetic",
+            validation_level="ci",
         )
 
     def data_mounts(self) -> tuple[Path, ...]:

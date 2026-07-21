@@ -34,6 +34,7 @@ def test_repository_model_sources_are_immutable_and_use_revision_routes() -> Non
     assert {source.model_id for source in sources} == {
         "qwen25-7b-instruct-awq-vllm",
         "qwen25-7b-instruct-vllm",
+        "qwen3-8b-awq-vllm",
     }
     assert all(len(source.revision) == 40 for source in sources)
     assert all(f"/revision/{source.revision}" in source.api_url for source in sources)

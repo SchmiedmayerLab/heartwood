@@ -23,6 +23,15 @@ stage() {
   printf '\n[%d/%d] %s\n' "${stage_number}" "${stage_count}" "$1"
 }
 
+require_command() {
+  local command="$1"
+  local purpose="$2"
+  if ! command -v "${command}" >/dev/null 2>&1; then
+    printf '%s is required %s\n' "${command}" "${purpose}" >&2
+    exit 69
+  fi
+}
+
 usage() {
   cat <<'EOF'
 Usage: heartwood-installer [options]
@@ -60,15 +69,111 @@ if [[ "${platform}" != "carina" && "${platform}" != "generic" ]]; then
   echo "unsupported native platform: ${platform}" >&2
   exit 64
 fi
+if [[ ! "${minimum_free_gib}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "--minimum-free-gib must be a positive integer" >&2
+  exit 64
+fi
 
 root_preexisting="true"
 if [[ ! -e "${root}" ]]; then
   root_preexisting="false"
+elif [[ ! -d "${root}" ]]; then
+  echo "installation root is not a directory: ${root}" >&2
+  exit 64
 fi
 umask 077
-mkdir -p "${root}"
-root="$(cd "${root}" && pwd -P)"
-installer_state="${root}/.installer"
+dry_run_state=""
+installer_base=""
+installer_state=""
+installer_lock=""
+lock_acquired="false"
+workspace=""
+generation_root=""
+installation_succeeded="false"
+publication_started="false"
+previous_current_present="false"
+previous_current_target=""
+publication_backup=""
+managed_commands=(heartwood heartwood-jupyter hf)
+cleanup() {
+  set +e
+  if [[ "${publication_started}" == "true" && "${installation_succeeded}" != "true" ]]; then
+    for command_name in "${managed_commands[@]}"; do
+      command_path="${root}/bin/${command_name}"
+      backup_path="${publication_backup}/${command_name}"
+      rm -f "${command_path}"
+      if [[ -e "${backup_path}" || -L "${backup_path}" ]]; then
+        mv "${backup_path}" "${command_path}"
+      fi
+    done
+    if [[ "${previous_current_present}" == "true" ]]; then
+      replace_symlink "${previous_current_target}" "${root}/current"
+    else
+      rm -f "${root}/current"
+    fi
+  fi
+  if [[ -n "${generation_root}" && "${installation_succeeded}" != "true" && -d "${generation_root}" ]]; then
+    rm -rf "${generation_root}"
+  fi
+  if [[ -n "${workspace}" ]]; then
+    rm -rf "${workspace}"
+  fi
+  if [[ -n "${installer_state}" ]]; then
+    rm -rf "${installer_state}"
+  fi
+  if [[ -n "${installer_base}" ]]; then
+    rmdir "${installer_base}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${lock_acquired}" == "true" ]]; then
+    rm -f "${installer_lock}/pid"
+    rmdir "${installer_lock}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${dry_run_state}" ]]; then
+    rm -rf "${dry_run_state}"
+  elif [[ "${installation_succeeded}" != "true" && "${root_preexisting}" == "false" ]]; then
+    rmdir "${root}/bin" "${root}/installations" "${root}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+if [[ "${dry_run}" == "true" ]]; then
+  dry_run_state="$(mktemp -d "${TMPDIR:-/tmp}/heartwood-installer-state.XXXXXX")"
+  installer_state="${dry_run_state}/.installer"
+else
+  mkdir -p "${root}"
+  root="$(cd "${root}" && pwd -P)"
+  chmod 700 "${root}"
+  for owned_directory in "${root}/.installer" "${root}/installations"; do
+    if [[ -L "${owned_directory}" || ( -e "${owned_directory}" && ! -d "${owned_directory}" ) ]]; then
+      echo "installer-owned path must be a directory, not a redirect: ${owned_directory}" >&2
+      exit 73
+    fi
+  done
+  if [[ -e "${root}/current" && ! -L "${root}/current" ]]; then
+    echo "installation current path must be a symbolic link: ${root}/current" >&2
+    exit 73
+  fi
+  if [[ -L "${root}/bin" || ( -e "${root}/bin" && ! -d "${root}/bin" ) ]]; then
+    echo "installation command path must be a directory: ${root}/bin" >&2
+    exit 73
+  fi
+  installer_lock="${root}/.installer.lock"
+  if ! mkdir -m 700 "${installer_lock}" 2>/dev/null; then
+    echo "another installation is using this root: ${root}" >&2
+    echo "If no installer is running, remove ${installer_lock} and retry." >&2
+    exit 75
+  fi
+  lock_acquired="true"
+  printf '%s\n' "$$" >"${installer_lock}/pid"
+  installer_base="${root}/.installer"
+  mkdir -p "${installer_base}"
+  chmod 700 "${installer_base}"
+  if [[ "$(cd "${installer_base}" && pwd -P)" != "${installer_base}" ]]; then
+    echo "installer state escaped the installation root" >&2
+    exit 73
+  fi
+  installer_state="$(mktemp -d "${installer_base}/run.XXXXXX")"
+fi
 installer_directories=(
   "${installer_state}"
   "${installer_state}/home"
@@ -87,7 +192,7 @@ installer_directories=(
   "${installer_state}/state"
 )
 mkdir -p "${installer_directories[@]}"
-chmod 700 "${root}" "${installer_directories[@]}"
+chmod 700 "${installer_directories[@]}"
 export HOME="${installer_state}/home"
 export TMPDIR="${installer_state}/tmp"
 export TMP="${TMPDIR}"
@@ -106,29 +211,10 @@ export NUMBA_CACHE_DIR="${installer_state}/cache/numba"
 export TRITON_CACHE_DIR="${installer_state}/cache/triton"
 
 workspace="$(mktemp -d "${TMPDIR}/heartwood-installer.XXXXXX")"
-installation_staging=""
-installation_attempted="false"
-installation_succeeded="false"
-cleanup() {
-  rm -rf "${workspace}"
-  if [[ -n "${installation_staging}" && -d "${installation_staging}" ]]; then
-    rm -rf "${installation_staging}"
-  fi
-  if [[ "${installation_succeeded}" == "true" || "${installation_attempted}" == "false" ]]; then
-    rm -rf "${installer_state}"
-    if [[ "${root_preexisting}" == "false" ]]; then
-      rmdir "${root}" >/dev/null 2>&1 || true
-    fi
-  fi
-}
-trap cleanup EXIT
-
-if [[ ! "${minimum_free_gib}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "--minimum-free-gib must be a positive integer" >&2
-  exit 64
-fi
 
 stage "Resolve and verify the release assets"
+require_command tar "to inspect the Heartwood release"
+require_command sha256sum "to verify the Heartwood release"
 if [[ -z "${bundle}" ]]; then
   if [[ "${installer_release}" == __HEARTWOOD_* ]]; then
     echo "the source installer is not release-stamped; use --bundle for local testing" >&2
@@ -203,66 +289,178 @@ fi
 printf 'Available: %d GiB; installation minimum: %d GiB\n' \
   "$((available_kib / 1024 / 1024))" "${minimum_free_gib}"
 
-versions_root="${root}/versions"
-source_root="${versions_root}/${release_version}"
-runtime_root="${root}/runtimes/${release_version}"
+installations_root="${root}/installations"
 stage "Create the Heartwood installation layout"
+if [[ -L "${installations_root}" || ( -e "${installations_root}" && ! -d "${installations_root}" ) ]]; then
+  echo "installer-owned path must be a directory, not a redirect: ${installations_root}" >&2
+  exit 73
+fi
+if [[ -e "${root}/current" && ! -L "${root}/current" ]]; then
+  echo "installation current path must be a symbolic link: ${root}/current" >&2
+  exit 73
+fi
+if [[ -L "${root}/bin" || ( -e "${root}/bin" && ! -d "${root}/bin" ) ]]; then
+  echo "installation command path must be a directory: ${root}/bin" >&2
+  exit 73
+fi
 mkdir -p \
-  "${versions_root}" \
-  "${root}/runtimes" \
+  "${installations_root}" \
   "${root}/bin"
+if [[ "$(cd "${installations_root}" && pwd -P)" != "${installations_root}" ]]; then
+  echo "installation generations escaped the installation root" >&2
+  exit 73
+fi
 chmod 700 \
   "${root}" \
   "${root}/bin" \
-  "${versions_root}" \
-  "${root}/runtimes"
+  "${installations_root}"
+for command_name in "${managed_commands[@]}"; do
+  command_path="${root}/bin/${command_name}"
+  if [[ -e "${command_path}" && ! -f "${command_path}" && ! -L "${command_path}" ]]; then
+    echo "installation command path is not replaceable: ${command_path}" >&2
+    exit 73
+  fi
+done
 
-stage "Install the immutable Heartwood source"
-if [[ ! -d "${source_root}" ]]; then
-  installation_staging="$(mktemp -d "${versions_root}/.heartwood-${release_version}.XXXXXX")"
-  tar -xzf "${workspace}/heartwood-native.tar.gz" -C "${installation_staging}" --strip-components=1
-  mv "${installation_staging}" "${source_root}"
-  installation_staging=""
-fi
+stage "Assemble a private installation generation"
+generation_root="$(mktemp -d "${installations_root}/${release_version}.XXXXXX")"
+source_root="${generation_root}/source"
+runtime_root="${generation_root}/runtime"
+generation_bin="${generation_root}/bin"
+mkdir -p "${source_root}" "${runtime_root}" "${generation_bin}"
+chmod 700 "${generation_root}" "${source_root}" "${runtime_root}" "${generation_bin}"
+tar -xzf "${workspace}/heartwood-native.tar.gz" -C "${source_root}" --strip-components=1
 
 stage "Install the locked application and inference runtimes; this can take several minutes"
-installation_attempted="true"
 if [[ "${platform}" == "carina" ]]; then
   (
     cd "${source_root}"
-    deploy/carina/bootstrap.sh --environment-root "${runtime_root}"
+    deploy/carina/bootstrap.sh \
+      --environment-root "${runtime_root}" \
+      --installer-state "${installer_state}"
   )
 else
-  if ! command -v uv >/dev/null 2>&1; then
-    echo "uv is required for a generic native installation" >&2
-    exit 69
-  fi
+  require_command curl "to install the managed inference runtime"
+  require_command git "for OpenHands coding tools"
+  require_command tmux "for OpenHands terminal sessions"
+  require_command uv "for a generic native installation"
   (
     cd "${source_root}"
-    UV_PROJECT_ENVIRONMENT="${runtime_root}/heartwood" uv sync --locked --no-dev --all-extras
+    deploy/install-llama-cpp.sh "${runtime_root}/llama.cpp"
+    UV_PROJECT_ENVIRONMENT="${runtime_root}/heartwood" \
+    UV_PYTHON_INSTALL_DIR="${runtime_root}/python" \
+      uv sync --locked --no-dev --all-extras
   )
 fi
 
-stage "Publish and verify the Heartwood commands"
-ln -sfn "${source_root}" "${root}/current"
+stage "Verify and publish the Heartwood installation"
 command_path="${runtime_root}/heartwood/bin/heartwood"
 if [[ ! -x "${command_path}" ]]; then
   echo "installed heartwood command is unavailable" >&2
   exit 70
 fi
-if [[ "${platform}" == "carina" ]]; then
-  printf '#!/usr/bin/env bash\nexport HEARTWOOD_PLATFORM=carina\nexec %q "$@"\n' \
-    "${command_path}" >"${root}/bin/heartwood"
-else
-  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${command_path}" >"${root}/bin/heartwood"
+if ! "${command_path}" --version >/dev/null; then
+  echo "installed heartwood command cannot start" >&2
+  exit 70
 fi
-chmod +x "${root}/bin/heartwood"
+write_command_wrapper() {
+  local output="$1"
+  local executable="$2"
+  local support_runtime
+  if [[ "${platform}" == "carina" ]]; then
+    support_runtime="${runtime_root}/bootstrap"
+  else
+    support_runtime="${runtime_root}/llama.cpp"
+  fi
+  {
+    printf '#!/usr/bin/env bash\n'
+    if [[ "${platform}" == "carina" ]]; then
+      printf 'export HEARTWOOD_PLATFORM=carina\n'
+    fi
+    printf 'runtime=%q\n' "${support_runtime}"
+    cat <<'EOF'
+export PATH="${runtime}/bin:${runtime}:${PATH}"
+export LD_LIBRARY_PATH="${runtime}/lib:${runtime}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+EOF
+    printf 'exec %q "$@"\n' "${executable}"
+  } >"${output}"
+  chmod +x "${output}"
+}
+
+write_command_wrapper "${generation_bin}/heartwood" "${command_path}"
+if ! "${generation_bin}/heartwood" --version >/dev/null; then
+  echo "installed Heartwood wrapper cannot start" >&2
+  exit 70
+fi
+if [[ "${platform}" == "generic" ]]; then
+  jupyter_path="${runtime_root}/heartwood/bin/jupyter-lab"
+  if [[ ! -x "${jupyter_path}" ]]; then
+    echo "installed Jupyter command is unavailable" >&2
+    exit 70
+  fi
+  write_command_wrapper "${generation_bin}/heartwood-jupyter" "${jupyter_path}"
+  if ! "${generation_bin}/heartwood-jupyter" --version >/dev/null; then
+    echo "installed Jupyter wrapper cannot start" >&2
+    exit 70
+  fi
+fi
 if [[ -x "${runtime_root}/vllm/bin/hf" ]]; then
-  ln -sfn "${runtime_root}/vllm/bin/hf" "${root}/bin/hf"
+  ln -s "${runtime_root}/vllm/bin/hf" "${generation_bin}/hf"
 fi
 
-stage "Installation complete"
+replace_symlink() {
+  local target="$1"
+  local destination="$2"
+  local temporary="${destination}.next.$$"
+  rm -f "${temporary}"
+  ln -s "${target}" "${temporary}"
+  if mv -fT "${temporary}" "${destination}" 2>/dev/null; then
+    return 0
+  fi
+  if mv -fh "${temporary}" "${destination}"; then
+    return 0
+  fi
+  rm -f "${temporary}"
+  return 1
+}
+
+current_target="installations/$(basename "${generation_root}")"
+if [[ -L "${root}/current" ]]; then
+  previous_current_present="true"
+  previous_current_target="$(readlink "${root}/current")"
+fi
+publication_backup="${workspace}/publication-backup"
+mkdir -m 700 "${publication_backup}"
+for command_name in "${managed_commands[@]}"; do
+  command_path="${root}/bin/${command_name}"
+  backup_path="${publication_backup}/${command_name}"
+  if [[ -L "${command_path}" ]]; then
+    ln -s "$(readlink "${command_path}")" "${backup_path}"
+  elif [[ -f "${command_path}" ]]; then
+    cp -p "${command_path}" "${backup_path}"
+  fi
+done
+publication_started="true"
+replace_symlink "../${current_target}/bin/heartwood" "${root}/bin/heartwood"
+if [[ "${platform}" == "generic" ]]; then
+  replace_symlink "../${current_target}/bin/heartwood-jupyter" "${root}/bin/heartwood-jupyter"
+  rm -f "${root}/bin/hf"
+else
+  rm -f "${root}/bin/heartwood-jupyter"
+  if [[ -x "${generation_bin}/hf" ]]; then
+    replace_symlink "../${current_target}/bin/hf" "${root}/bin/hf"
+  else
+    rm -f "${root}/bin/hf"
+  fi
+fi
+if ! "${root}/bin/heartwood" --version >/dev/null; then
+  echo "published Heartwood command cannot start" >&2
+  exit 70
+fi
+replace_symlink "${current_target}" "${root}/current"
 installation_succeeded="true"
+
+stage "Installation complete"
 rm -rf "${installer_state}"
 printf 'Installed %s in %d seconds.\n' "${release_version}" "${SECONDS}"
 printf 'Add %s to PATH, then run: heartwood doctor\n' "${root}/bin"

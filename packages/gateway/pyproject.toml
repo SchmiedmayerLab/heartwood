@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-gateway"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 description = "Session gateway for Heartwood command and event streams."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,14 +23,10 @@ dependencies = [
     "heartwood-skills",
     "huggingface-hub==1.23.0",
     "keyring==25.7.0",
+    "openhands-sdk==1.36.1",
+    "openhands-tools==1.36.1",
     "openai==2.45.0",
     "tomli-w==1.2.0",
-]
-
-[project.optional-dependencies]
-agent = [
-    "openhands-sdk==1.36.0",
-    "openhands-tools==1.36.0",
 ]
 
 [build-system]

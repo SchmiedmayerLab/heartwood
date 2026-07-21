@@ -80,6 +80,7 @@ class LocalModelSelection:
     source_repository: str | None = None
     source_revision: str | None = None
     source_path: str | None = None
+    model_type: str | None = None
     size_bytes: int | None = None
     minimum_free_bytes: int | None = None
     license_posture: str | None = None
@@ -121,6 +122,8 @@ class LocalModelSelection:
                 raise ProjectConfigError(
                     "Heartwood-managed model source_path must be repository-relative"
                 )
+        if self.model_type is not None and _SAFE_SOURCE.fullmatch(self.model_type) is None:
+            raise ProjectConfigError("Heartwood-managed model_type must be normalized")
         if self.size_bytes is not None and self.size_bytes <= 0:
             raise ProjectConfigError("Heartwood-managed model size_bytes must be positive")
         if self.minimum_free_bytes is not None and (
@@ -333,6 +336,7 @@ class ProjectConfigStore:
         source_repository: str | None = None,
         source_revision: str | None = None,
         source_path: str | None = None,
+        model_type: str | None = None,
         size_bytes: int | None = None,
         minimum_free_bytes: int | None = None,
         license_posture: str | None = None,
@@ -356,6 +360,7 @@ class ProjectConfigStore:
             source_repository=source_repository,
             source_revision=source_revision,
             source_path=source_path,
+            model_type=model_type,
             size_bytes=size_bytes,
             minimum_free_bytes=minimum_free_bytes,
             license_posture=license_posture,
@@ -513,6 +518,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "minimum_free_bytes",
             "minimum_resource_envelope",
             "model_id",
+            "model_type",
             "path",
             "recommended_resource_envelope",
             "catalog_source",
@@ -535,6 +541,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
         source_repository=_optional_string(value.get("source_repository"), "source_repository"),
         source_revision=_optional_string(value.get("source_revision"), "source_revision"),
         source_path=_optional_string(value.get("source_path"), "source_path"),
+        model_type=_optional_string(value.get("model_type"), "model_type"),
         size_bytes=_optional_positive_int(value.get("size_bytes"), "size_bytes"),
         minimum_free_bytes=_optional_positive_int(
             value.get("minimum_free_bytes"), "minimum_free_bytes"

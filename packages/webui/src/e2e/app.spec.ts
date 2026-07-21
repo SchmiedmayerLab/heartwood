@@ -90,28 +90,27 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(
     page.getByRole("heading", { name: "Set up Heartwood" }),
   ).toBeVisible();
-  const localConnection = page.locator(".connection-row").filter({
-    has: page.getByText("Run with Heartwood", { exact: true }),
+  const hostedConnection = page.locator(".connection-row").filter({
+    has: page.getByText("OpenAI", { exact: true }),
   });
-  await localConnection.getByRole("button", { name: "Choose" }).click();
+  await hostedConnection.getByRole("button", { name: "Connect" }).click();
+  await page.getByLabel("API token").fill("synthetic-runtime-token");
   const loadModels = page.getByRole("button", { name: "Load models" });
   await expect(loadModels).toBeVisible();
   await loadModels.click();
-  const modelPicker = page.getByLabel(
-    "Models available from Run with Heartwood",
-  );
-  await expect(modelPicker).toContainText("Heartwood Model");
+  const modelPicker = page.getByLabel("Models available from OpenAI");
+  await expect(modelPicker).toContainText("Research Coder");
   await modelPicker.click();
-  await page.getByPlaceholder("Search models").fill("Heartwood");
+  await page.getByPlaceholder("Search models").fill("Research");
   await expect(
-    page.getByRole("option", { name: "Heartwood Model - local-model" }),
+    page.getByRole("option", { name: "Research Coder - research-coder" }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Use model" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(
     page.getByLabel("Active model profile", { exact: true }),
-  ).toContainText("Run with Heartwood · Heartwood Model");
+  ).toContainText("OpenAI · research-coder");
   await expect(page.getByText("Authorized", { exact: true })).toBeVisible();
   const approvalsTab = page.getByRole("tab", { name: "Approvals" });
   const modelsTab = page.getByRole("tab", { name: "Models" });
@@ -253,6 +252,28 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         group_label: "Run with Heartwood",
         accepts_token: false,
         credential_status: "configured",
+      },
+      {
+        connection_id: "openai",
+        label: "OpenAI",
+        protocol: "openai",
+        model_prefix: "openai/",
+        source: "built-in",
+        credential_kind: "environment",
+        policy_endpoint: "https://api.openai.com/v1/chat/completions",
+        catalog_endpoint: "https://api.openai.com/v1/models",
+        base_url: null,
+        api_key_env: "OPENAI_API_KEY",
+        api_key_file: null,
+        api_version: null,
+        aws_region_name: null,
+        aws_profile_name: null,
+        description: "Models available to the supplied OpenAI credential",
+        static_models: [],
+        group: "hosted-provider",
+        group_label: "Hosted providers",
+        accepts_token: true,
+        credential_status: "missing",
       },
     ],
     presets: [
@@ -509,15 +530,21 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         "Selected a balanced single-file GGUF variant for the CPU runtime.",
     }),
   );
-  await page.route("**/settings/models/catalog", (route) =>
-    json(route, {
+  await page.route("**/settings/models/catalog", (route) => {
+    const payload = route.request().postDataJSON() as {
+      connection_id: string;
+    };
+    const connection = modelSettings.connections.find(
+      (candidate) => candidate.connection_id === payload.connection_id,
+    );
+    return json(route, {
       schema_version: "heartwood.model-catalog.v1",
-      connection: modelSettings.connections[0],
+      connection,
       models: [
         {
-          model_id: "local-model",
-          display_name: "Heartwood Model",
-          execution_model: "openai/local-model",
+          model_id: "research-coder",
+          display_name: "Research Coder",
+          execution_model: "openai/research-coder",
           availability: "available",
           reason: "Verified by the pinned OpenHands SDK",
           context_window: 32_768,
@@ -525,26 +552,31 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         },
       ],
       refreshed_at: 1_783_683_200,
-    }),
-  );
+    });
+  });
   await page.route("**/settings/models/connect", async (route) => {
     const payload = route.request().postDataJSON() as {
       connection_id: string;
       model_id: string;
     };
+    const connection = modelSettings.connections.find(
+      (candidate) => candidate.connection_id === payload.connection_id,
+    );
+    if (!connection)
+      throw new Error("synthetic model connection is unavailable");
     const profile = {
       profile_id: payload.connection_id,
       model: `openai/${payload.model_id}`,
-      policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+      policy_endpoint: connection.policy_endpoint,
       capability_tier: "supervised",
-      base_url: "http://127.0.0.1:8765/v1",
-      credential_kind: "none",
-      api_key_env: null,
+      base_url: connection.base_url,
+      credential_kind: connection.credential_kind,
+      api_key_env: connection.api_key_env,
       api_key_file: null,
       api_version: null,
       aws_region_name: null,
       aws_profile_name: null,
-      description: "Run with Heartwood: Heartwood Model",
+      description: `${connection.label}: Research Coder`,
       credential_status: "configured",
     };
     modelSettings = {
@@ -562,8 +594,8 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       action_confirmation_mode: "always-confirm",
       policy_decision: {
         decision: "allow",
-        endpoint: "http://127.0.0.1:8765/v1/chat/completions",
-        reason: "Local route allowed",
+        endpoint: "https://api.openai.com/v1/chat/completions",
+        reason: "Configured route allowed",
       },
     }),
   );

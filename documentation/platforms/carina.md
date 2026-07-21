@@ -23,15 +23,17 @@ The guide below uses two sibling directories:
 
 ## Enter Approved Project Storage
 
-Carina project directories are normally below `/projects/<PI>/<projectID>/main`.
-Enter a writable project location and create private directories:
+Ask the project owner for the approved writable directory below `/projects`; its structure varies by allocation.
+Enter that directory, confirm that it is writable, and create private installation and project directories:
 
 ```bash
-cd /projects/PI/PROJECT/main
+cd /projects/APPROVED_PATH
+test -w "$PWD" && echo "Project storage is writable"
+df -h .
 mkdir -m 700 heartwood-installation heartwood-project
 ```
 
-Replace `PI` and `PROJECT` with the path assigned to your group.
+Replace `APPROVED_PATH` with the path assigned to your group.
 Do not use a shared project root itself as the Heartwood project.
 
 ## Install the Release
@@ -39,13 +41,13 @@ Do not use a shared project root itself as the Heartwood project.
 ```bash
 cd heartwood-installation
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.3/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.4/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"
 ```
 
-The version-stamped installer downloads the matching native archive and checksum, verifies them, checks storage, loads the configured micromamba module when needed, and creates immutable source and runtime directories.
+The version-stamped installer downloads the matching native archive and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, loads the configured micromamba module when needed, and assembles a private source-and-runtime generation before making it current.
 Dependency resolution and the vLLM environment can take several minutes; the installer reports seven named stages and elapsed time.
 
 To keep the command available in a later shell, add the printed `bin` path through your normal shell configuration or export it again.
@@ -91,7 +93,7 @@ If no default GPU partition can be selected, inspect the plan and specify one th
 heartwood runtime start --partition dev --time 01:00:00
 ```
 
-Heartwood disables the FlashInfer sampler path that requires CUDA compilation inside the allocation, carries the installed bootstrap libraries into the allocation, scopes model caches to the project, waits up to ten minutes by default, and reports elapsed startup time every 15 seconds.
+Heartwood prepares the compatible runtime libraries, scopes model caches to the project, waits up to ten minutes by default, and reports the current stage and elapsed startup time every 15 seconds.
 
 ## Review, Exit, and Return
 

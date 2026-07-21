@@ -40,15 +40,15 @@ class TerraPlatformAdapter:
         return PlatformCapabilities(
             platform_id=self.adapter_id,
             display_name="Terra",
-            interfaces=("terminal", "web", "notebook"),
-            browser_route="jupyter-proxy",
+            interfaces=("terminal", "notebook"),
+            browser_route="unavailable",
             managed_runtimes=("llama-cpp", "vllm"),
             scheduler="provisioned",
             persistent_storage="A dedicated project under /home/jupyter",
             credential_backends=("process", "mounted-file", "managed-identity"),
             model_sources=("heartwood", "openai", "anthropic", "custom"),
             managed_model_connections=(),
-            validation_level="ci-and-live-synthetic",
+            validation_level="ci",
         )
 
     def data_mounts(self) -> tuple[Path, ...]:

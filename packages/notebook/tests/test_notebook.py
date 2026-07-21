@@ -30,7 +30,6 @@ from heartwood.notebook import (
     NotebookSession,
     build_view_model,
     build_widget_spec,
-    jupyter_proxy_url,
     render_widgets,
 )
 from heartwood.notebook._widgets import WidgetSpec
@@ -408,7 +407,7 @@ def test_notebook_and_browser_transport_share_gateway_setup_projections(tmp_path
         assert json.loads(json.dumps(gateway_value)) == response.body
 
 
-def test_notebook_initialization_and_web_route_use_injected_terra_environment(
+def test_notebook_initialization_does_not_advertise_a_terra_web_route(
     tmp_path: Path,
 ) -> None:
     gateway = SessionGateway(
@@ -425,40 +424,7 @@ def test_notebook_initialization_and_web_route_use_injected_terra_environment(
 
     assert initialized["interface"] == "notebook"
     assert initialized["access_url"] is None
-    assert notebook.web_proxy_url(port=9000) == "/user/synthetic/proxy/9000/"
-
-
-def test_jupyter_proxy_url_uses_service_prefix() -> None:
-    assert (
-        jupyter_proxy_url(
-            port=8767,
-            env={"JUPYTERHUB_SERVICE_PREFIX": "/user/synthetic/"},
-        )
-        == "/user/synthetic/proxy/8767/"
-    )
-
-
-def test_jupyter_proxy_url_uses_terra_leonardo_route() -> None:
-    assert (
-        jupyter_proxy_url(
-            port=8767,
-            env={
-                "GOOGLE_PROJECT": "terra-project",
-                "CLUSTER_NAME": "saturn-runtime",
-            },
-        )
-        == "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/"
-    )
-
-
-def test_jupyter_proxy_url_requires_complete_terra_route() -> None:
-    assert (
-        jupyter_proxy_url(
-            port=8767,
-            env={"GOOGLE_PROJECT": "terra-project"},
-        )
-        is None
-    )
+    assert notebook.browser_url(port=9000) is None
 
 
 def test_notebook_session_tracks_command_sequence_without_duplicate_replay(

@@ -13,7 +13,7 @@ Heartwood is a Python workspace with a TypeScript researcher web interface, cont
 ```bash
 git clone https://github.com/SchmiedmayerLab/heartwood.git
 cd heartwood
-uv sync --locked --all-groups
+uv sync --locked --all-groups --all-extras
 npm ci --prefix packages/webui
 ```
 
@@ -48,7 +48,7 @@ Add a parameter, platform adapter, or validation target for a real platform diff
 
 ```bash
 uv run ruff check .
-uv run mypy
+uv run mypy packages
 uv run pytest
 npm run --prefix packages/webui lint
 npm run --prefix packages/webui typecheck

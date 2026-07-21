@@ -185,6 +185,17 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     web_metadata = json.loads(web_path.read_text(encoding="utf-8"))
     if isinstance(web_metadata, dict) and isinstance(web_metadata.get("version"), str):
         semantic_versions[str(web_path.relative_to(root))] = web_metadata["version"]
+    bake_path = root / "docker-bake.hcl"
+    bake = bake_path.read_text(encoding="utf-8")
+    bake_version = re.search(
+        r'variable\s+"HEARTWOOD_VERSION"\s*\{\s*default\s*=\s*"([^"]+)"\s*\}',
+        bake,
+        flags=re.DOTALL,
+    )
+    if bake_version is None:
+        errors.append("docker-bake.hcl: HEARTWOOD_VERSION default is missing")
+    else:
+        semantic_versions["docker-bake.hcl"] = bake_version.group(1)
     for skill_root in (
         root / "skills" / "verified",
         root / "fixtures" / "synthetic" / "skills",
@@ -241,12 +252,25 @@ def source_version_errors(root: Path, version: str) -> list[str]:
         if found != expected_python_version
     )
     expected_references = {
-        "documentation/platforms/containers.md": [f"heartwood:{version}"],
+        "README.md": [f"heartwood:{version}"],
+        "documentation/platforms/containers.md": [
+            f"heartwood:{version}",
+            f"heartwood:{version}-gpu-nvidia",
+            f"heartwood:{version}-terra",
+            f"heartwood:{version}-terra-gpu-nvidia",
+        ],
         "documentation/platforms/carina.md": [
             f"releases/download/{version}/heartwood-installer",
         ],
-        "documentation/platforms/terra.md": [f"heartwood:{version}-terra"],
+        "documentation/platforms/native-linux.md": [
+            f"releases/download/{version}/heartwood-installer",
+        ],
+        "documentation/platforms/terra.md": [
+            f"heartwood:{version}-terra",
+            f"heartwood:{version}-terra-gpu-nvidia",
+        ],
         "documentation/models/offline.md": [f"heartwood:{version}"],
+        "documentation/contribute/releases.md": [version],
     }
     for relative_path, references in expected_references.items():
         content = (root / relative_path).read_text(encoding="utf-8")

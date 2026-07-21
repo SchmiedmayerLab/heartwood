@@ -82,6 +82,7 @@ class _SdkModule(Protocol):
 
 
 ConversationFactory = Callable[[Callable[[object], None]], _Conversation]
+OpenHandsModules = tuple[Any, Any, Any, Any]
 
 _AGENT_LLM_NUM_RETRIES = 2
 _AGENT_LLM_LOCAL_NUM_RETRIES = 1
@@ -95,6 +96,21 @@ _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN = 4
 _AGENT_CONDENSER_INPUT_FRACTION = 0.75
 _AGENT_CONDENSER_MAX_EVENTS = 240
 _AGENT_CONDENSER_KEEP_FIRST = 2
+
+
+def prepare_openhands_sdk(env: Mapping[str, str] | None = None) -> OpenHandsModules:
+    """Load the pinned OpenHands runtime with Heartwood's upstream defaults."""
+    _configure_upstream_defaults(env)
+    try:
+        return (
+            import_module("openhands.sdk"),
+            import_module("openhands.sdk.skills"),
+            import_module("openhands.tools"),
+            import_module("heartwood.gateway._project_file_editor"),
+        )
+    except ImportError as error:  # pragma: no cover - release artifacts include the pinned extra
+        msg = "OpenHands SDK dependencies are not installed"
+        raise OpenHandsSdkError(msg) from error
 
 
 class OpenHandsSdkBackend:
@@ -112,6 +128,7 @@ class OpenHandsSdkBackend:
         credential_environment_names: Sequence[str] = (),
         action_confirmation_mode: ActionConfirmationMode = "always-confirm",
         env: Mapping[str, str] | None = None,
+        llm_extra_body: Mapping[str, object] | None = None,
         conversation_factory: ConversationFactory | None = None,
     ) -> None:
         profile.validate()
@@ -127,6 +144,7 @@ class OpenHandsSdkBackend:
         self.conversation_key = conversation_key
         self._credential_environment_names = tuple(sorted(set(credential_environment_names)))
         self.env = env
+        self._llm_extra_body = dict(llm_extra_body or {})
         self._captured: list[object] = []
         self._pending: dict[str, ProposedToolCall] = {}
         self._security_analyzer: _SecurityAnalyzer | None = None
@@ -284,15 +302,9 @@ class OpenHandsSdkBackend:
     def _default_conversation_factory(  # pragma: no cover - container integration
         self, callback: Callable[[object], None]
     ) -> _Conversation:
-        _configure_upstream_defaults(self.env)
-        try:
-            sdk = import_module("openhands.sdk")
-            skill_module = import_module("openhands.sdk.skills")
-            tools_module = import_module("openhands.tools")
-            project_file_editor_module = import_module("heartwood.gateway._project_file_editor")
-        except ImportError as error:  # pragma: no cover - image includes the pinned extra
-            msg = "OpenHands SDK dependencies are not installed"
-            raise OpenHandsSdkError(msg) from error
+        sdk, skill_module, tools_module, project_file_editor_module = prepare_openhands_sdk(
+            self.env
+        )
 
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
@@ -303,22 +315,13 @@ class OpenHandsSdkBackend:
             repository, knowledge, agent_skills = skill_module.load_skills_from_dir(skills_dir)
             skills.extend((*repository.values(), *knowledge.values(), *agent_skills.values()))
         api_key = self.profile.resolve_api_key(self.env)
-        llm_options: dict[str, Any] = {
-            "model": self.profile.model,
-            "api_key": "local-model" if self.profile.credential_kind == "none" else api_key,
-            "base_url": self.profile.base_url,
-            "api_version": self.profile.api_version,
-            "aws_region_name": self.profile.aws_region_name,
-            "aws_profile_name": self.profile.aws_profile_name,
-            "max_input_tokens": self.profile.max_input_tokens,
-            "max_output_tokens": self.profile.max_output_tokens,
-            "max_message_chars": _llm_max_message_chars(self.profile),
-            "log_completions": False,
-            **_llm_resilience_options(self.profile),
-        }
-        if self.profile.is_local:
-            llm_options.update(input_cost_per_token=0.0, output_cost_per_token=0.0)
-        llm = sdk.LLM(**{key: value for key, value in llm_options.items() if value is not None})
+        llm = sdk.LLM(
+            **_llm_options(
+                self.profile,
+                api_key=api_key,
+                extra_body=self._llm_extra_body,
+            )
+        )
         context = _agent_context(sdk, skills)
         agent = sdk.Agent(
             llm=llm,
@@ -527,6 +530,32 @@ def _llm_resilience_options(profile: ModelProfile) -> dict[str, int | float]:
     }
 
 
+def _llm_options(
+    profile: ModelProfile,
+    *,
+    api_key: str | None,
+    extra_body: Mapping[str, object],
+) -> dict[str, Any]:
+    """Build the complete OpenHands LLM configuration for one model profile."""
+    options: dict[str, Any] = {
+        "model": profile.model,
+        "api_key": "local-model" if profile.credential_kind == "none" else api_key,
+        "base_url": profile.base_url,
+        "api_version": profile.api_version,
+        "aws_region_name": profile.aws_region_name,
+        "aws_profile_name": profile.aws_profile_name,
+        "max_input_tokens": profile.max_input_tokens,
+        "max_output_tokens": profile.max_output_tokens,
+        "max_message_chars": _llm_max_message_chars(profile),
+        "log_completions": False,
+        "litellm_extra_body": dict(extra_body) or None,
+        **_llm_resilience_options(profile),
+    }
+    if profile.is_local:
+        options.update(input_cost_per_token=0.0, output_cost_per_token=0.0)
+    return {key: value for key, value in options.items() if value is not None}
+
+
 def _llm_max_message_chars(profile: ModelProfile) -> int:
     """Keep individual local events useful at the configured input capacity."""
     if profile.max_input_tokens is None:
@@ -580,7 +609,9 @@ def _agent_context(
             "that location or inspect neighboring .heartwood content. Resolve a Skill-relative "
             "file such as scripts/run.py from the returned Skill location, never from the "
             "project directory. Follow Heartwood data-use, egress, and "
-            "aggregate-export controls."
+            "aggregate-export controls. Treat a tool exit code of zero as success even when "
+            "the tool returns no text. Never install a dependency solely because a successful "
+            "tool action returned no text."
         ),
     )
 
@@ -625,7 +656,7 @@ def _configure_upstream_defaults(env: Mapping[str, str] | None) -> None:
     configured = {} if env is None else env
     for name, default in (
         ("LITELLM_LOCAL_MODEL_COST_MAP", "True"),
-        ("LOG_LEVEL", "WARNING"),
+        ("LOG_LEVEL", "ERROR"),
         ("OPENHANDS_SUPPRESS_BANNER", "1"),
     ):
         os.environ.setdefault(name, configured.get(name, default))

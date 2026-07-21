@@ -67,6 +67,43 @@ def _gateway(workspace: Path, *, env: dict[str, str] | None = None) -> SessionGa
     )
 
 
+def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        "heartwood.gateway._openhands_sdk.prepare_openhands_sdk",
+        lambda env: prepared.append(env),
+    )
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="auto",
+    )
+
+    gateway.start()
+
+    assert prepared == []
+
+
+def test_deterministic_gateway_does_not_load_openhands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.gateway._openhands_sdk.prepare_openhands_sdk",
+        lambda: pytest.fail("deterministic gateway loaded OpenHands"),
+    )
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+
+    gateway.start()
+
+
 @dataclass
 class _BlockingSessionService:
     entered: Event
@@ -129,7 +166,7 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
         backend_id="deterministic",
         service_factory=lambda _root, _session_id: cast(Any, service),
     )
-    model_id = "llama-cpp-stories260k-ci"
+    model_id = "qwen25-7b-instruct-q4_k_m"
     model_path = gateway.project.models_dir / model_id / "model.gguf"
     model_path.parent.mkdir(parents=True)
     model_path.write_bytes(b"synthetic")
@@ -738,8 +775,28 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
     fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] for model in fully_available)
-    assert fully_available[0]["model_id"] == "qwen25-7b-instruct-awq-vllm"
+    assert fully_available[0]["model_id"] == "qwen3-8b-awq-vllm"
     assert fully_available[0]["availability_reason"] == "Recommended for this deployment"
+
+
+def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    real_is_file = Path.is_file
+
+    def inaccessible_runtime(path: Path) -> bool:
+        if path == Path("/opt/llama.cpp/llama-server"):
+            raise PermissionError(path)
+        return real_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", inaccessible_runtime)
+    monkeypatch.setattr("heartwood.gateway._gateway.shutil.which", lambda *_args, **_kwargs: None)
+
+    models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+
+    assert not any(model["available"] for model in models)
 
 
 def test_rest_discovers_and_connects_a_normalized_model_catalog(tmp_path: Path) -> None:
@@ -1105,6 +1162,7 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
 
     artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
+    assert gateway.config_store.load().local_model is None
     snapshot = gateway.download_local_model_now("qwen25-7b-instruct-vllm")
 
     model_cache = tmp_path / ".heartwood" / "models"

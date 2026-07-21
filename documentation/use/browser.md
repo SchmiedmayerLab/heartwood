@@ -7,7 +7,8 @@ SPDX-License-Identifier: MIT
 # Use the Browser
 
 The browser interface presents conversations, action review, model setup, Skills, activity, and audit export without introducing a separate backend or project state.
-It is available on workstations, in the generic container, and through Terra's authenticated Jupyter proxy.
+It is available on workstations and in the generic container.
+Terra and Stanford Carina do not expose a supported Heartwood browser route; use their terminal or notebook interfaces instead.
 
 ## Open the Interface
 
@@ -19,8 +20,6 @@ heartwood --interface web
 
 Keep the terminal process running and open the exact URL Heartwood prints.
 On a workstation the default is `http://127.0.0.1:8767/`.
-On Terra, Heartwood prints the authenticated proxy path for the current runtime; open it on the same Terra Jupyter host, or use the tutorial notebook to render it as a clickable link.
-Do not shorten or reuse a path from an old runtime.
 
 ![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation.png)
 
@@ -31,6 +30,11 @@ The setup panel then presents model sources available in the detected environmen
 
 The project, model selection, and action-confirmation setting are shared with the terminal and notebook bridge.
 Provider tokens are never stored in browser storage.
+
+If you download or import a model for Heartwood to run, wait for **Downloaded. Restart Heartwood to load this model.**
+Stop the launching command with `Ctrl-C`, then run `heartwood --interface web` again from the same project.
+Heartwood starts and supervises the selected model before reopening the page.
+Hosted and research-environment connections do not require this restart.
 
 ## Work With a Session
 

@@ -6,7 +6,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Smoke test the packaged web UI through a Terra-style Jupyter proxy."""
+"""Smoke test Jupyter inheritance and the internal prefixed gateway contract."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 
-from heartwood.notebook import NotebookSession, jupyter_proxy_url
+from heartwood.notebook import NotebookSession
 
 GATEWAY_HOST = "127.0.0.1"
 
@@ -340,18 +340,6 @@ def _verify_gateway_session(external_base: str) -> None:
 
 
 def _verify_notebook_api() -> None:
-    env = {"JUPYTERHUB_SERVICE_PREFIX": SERVICE_PREFIX}
-    expected_proxy_url = f"{_normalize_prefix(SERVICE_PREFIX).rstrip('/')}/proxy/{GATEWAY_PORT}/"
-    if jupyter_proxy_url(port=GATEWAY_PORT, env=env) != expected_proxy_url:
-        raise AssertionError("notebook proxy URL did not match Terra-style service prefix")
-    leonardo_env = {
-        "GOOGLE_PROJECT": "heartwood-ci",
-        "CLUSTER_NAME": "saturn-smoke",
-    }
-    expected_leonardo_url = f"/proxy/heartwood-ci/saturn-smoke/jupyter/proxy/{GATEWAY_PORT}/"
-    if jupyter_proxy_url(port=GATEWAY_PORT, env=leonardo_env) != expected_leonardo_url:
-        raise AssertionError("notebook proxy URL did not match Terra Leonardo route")
-
     session = NotebookSession(session_id=f"{SESSION_ID}-notebook")
     if session.project.root != PROJECT_ROOT.resolve():
         raise AssertionError("notebook API did not preserve the current-directory project")

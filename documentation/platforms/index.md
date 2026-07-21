@@ -16,7 +16,7 @@ The platform determines installation, durable storage, available interfaces, cre
 | Workstation | Standard container | Yes | Yes | Not in the standard image | CPU inference |
 | NVIDIA workstation/server | GPU container | Yes | Yes | Not in the GPU image | NVIDIA GPU inference |
 | Linux without containers | Native release installer | Yes | Yes | Yes, in an existing Jupyter server | Host-dependent |
-| Terra | Terra or Terra GPU image | Yes | Yes, through Jupyter | Yes | CPU or NVIDIA GPU inference |
+| Terra | Terra or Terra GPU image | Yes | No | Yes | CPU or NVIDIA GPU inference |
 | Stanford Carina | Native release installer | Yes | No | No | NVIDIA GPU inference through requested compute |
 
 The generic standard image is a multi-platform Linux image for AMD64 and ARM64.

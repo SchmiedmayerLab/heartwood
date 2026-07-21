@@ -21,7 +21,7 @@ production_use = false
 
 [models.qwen25-coder-7b-instruct-q4_k_m]
 status = "implemented"
-purpose = "Heartwood-managed coding model for synthetic demonstrations; not reviewed for biomedical use."
+purpose = "Advanced coding-output experiment; not validated for structured agent tools or biomedical use."
 runtime_profile = "llama-cpp-cpu"
 artifact_manifest = "images/generic/local-runtime/models/qwen25-coder-7b-q4_k_m.toml"
 quality_claim = false

@@ -136,7 +136,7 @@ def build_model(
         },
         "quality_checks": {
             "synthetic_only": True,
-            "row_values_exported": False,
+            "aggregate_only_output": True,
             "holdout_evaluation_performed": False,
             "requires_network": False,
         },
@@ -176,6 +176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(model, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Wrote baseline model summary to {args.output.name}.")
     return 0
 
 

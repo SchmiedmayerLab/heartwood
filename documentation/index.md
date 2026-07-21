@@ -46,7 +46,7 @@ The terminal, browser, and notebook bridge use the same project configuration, m
 |---|---|---|
 | macOS or Linux workstation | [Heartwood container](platforms/containers.md) | Terminal and browser; Jupyter not included |
 | Existing Python development environment | [Native development install](start/install.md#development-installation) | Terminal, browser, notebook |
-| Terra workspace | [Heartwood for Terra](platforms/terra.md) | Terminal, browser through Jupyter, notebook |
+| Terra workspace | [Heartwood for Terra](platforms/terra.md) | Terminal and notebook |
 | Stanford Carina | [Heartwood for Carina](platforms/carina.md) | Terminal |
 | Managed research platform | [Deployment guidance](operate/index.md) | Defined by the platform deployment |
 

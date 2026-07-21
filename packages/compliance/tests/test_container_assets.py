@@ -30,6 +30,8 @@ from heartwood.gateway import verify_model_snapshot
 
 def test_generic_image_packages_one_no_weight_runtime() -> None:
     dockerfile = _read("images/Dockerfile")
+    llama_installer = _read("deploy/install-llama-cpp.sh")
+    profiles = _toml("images/generic/local-runtime/profiles.toml")
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
     assert "FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS webui-build" in dockerfile
@@ -40,10 +42,21 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "/workspace" in dockerfile
     assert "LITELLM_LOCAL_MODEL_COST_MAP=True" in dockerfile
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
-    assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.tar.gz" in dockerfile
-    assert "llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz" in dockerfile
-    assert "      jq \\" in dockerfile
-    assert "sha256sum --check" in dockerfile
+    assert "COPY deploy/install-llama-cpp.sh" in dockerfile
+    assert "heartwood-install-llama-cpp /opt/llama.cpp" in dockerfile
+    assert "llama-${version}-bin-ubuntu-x64.tar.gz" in llama_installer
+    assert "llama-${version}-bin-ubuntu-arm64.tar.gz" in llama_installer
+    assert "for package in ca-certificates curl git jq libgomp1 tmux; do" in dockerfile
+    assert "sha256sum --check --strict" in llama_installer
+    assert 'chmod 755 "${staging}"' in llama_installer
+    llama_profile = profiles["profiles"]["llama-cpp-cpu"]
+    installer_version = re.search(r'^version="([^"]+)"$', llama_installer, re.MULTILINE)
+    assert installer_version is not None
+    assert installer_version.group(1) in llama_profile["runtime_dependency"]
+    for runtime_artifact in llama_profile["runtime_artifacts"]:
+        asset, digest = runtime_artifact.split(" SHA-256 ", maxsplit=1)
+        assert asset.replace(installer_version.group(1), "${version}") in llama_installer
+        assert digest in llama_installer
     assert "/etc/ld.so.conf.d/heartwood-llama.conf" in dockerfile
     assert "ldconfig" in dockerfile
     assert 'chown -R "${HEARTWOOD_RUNTIME_USER}:${HEARTWOOD_RUNTIME_USER}"' in dockerfile
@@ -101,7 +114,6 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     ):
         assert source in dockerfile
     for runtime_setting in (
-        "ARG LLAMA_CPP_VERSION=b9937",
         "LITELLM_LOCAL_MODEL_COST_MAP=True",
         "OPENHANDS_SUPPRESS_BANNER=1",
     ):
@@ -112,7 +124,9 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "AS heartwood-runtime-base"
     ) in dockerfile
     assert 'PATH="/opt/llama.cpp:${PATH}"' in dockerfile
-    assert "      jq \\" in dockerfile
+    assert "for package in ca-certificates curl git jq libgomp1 tmux; do" in dockerfile
+    assert "dpkg-query --show --showformat='${db:Status-Abbrev}'" in dockerfile
+    assert 'if [ -n "${missing_packages}" ]; then' in dockerfile
     assert "/opt/heartwood/.venv/bin:${PATH}" not in dockerfile
     assert "ipykernel install" in dockerfile
     assert '--env IPYTHONDIR "/tmp/heartwood-ipython"' in dockerfile
@@ -162,6 +176,10 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
     assert terra["config_media_type"] == "application/vnd.docker.container.image.v1+json"
     assert terra["publish_attestations"] is False
+    assert terra["ci_required"] is True
+    assert terra["live_workspace_validation_required"] is False
+    evidence_names = {item["name"] for item in terra["required_evidence"]}
+    assert evidence_names == {"local-ci-smoke", "main-publish-real-terra"}
 
 
 def test_container_smoke_uses_bake_as_the_heartwood_build_contract() -> None:
@@ -175,12 +193,28 @@ def test_container_smoke_uses_bake_as_the_heartwood_build_contract() -> None:
 
 def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
     gateway = _toml("packages/gateway/pyproject.toml")
-    agent_dependencies = gateway["project"]["optional-dependencies"]["agent"]
-    pins = dict(_exact_package_pin(requirement) for requirement in agent_dependencies)
+    dependencies = gateway["project"]["dependencies"]
+    pins = dict(
+        _exact_package_pin(requirement)
+        for requirement in dependencies
+        if Requirement(requirement).name.startswith("openhands-")
+    )
 
-    assert pins == {"openhands-sdk": "1.36.0", "openhands-tools": "1.36.0"}
+    assert pins == {"openhands-sdk": "1.36.1", "openhands-tools": "1.36.1"}
+    assert "optional-dependencies" not in gateway["project"]
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
     assert "openhands-agent-server" not in _read("uv.lock")
+
+
+def test_runtime_image_sets_the_release_version_label() -> None:
+    dockerfile = _read("images/Dockerfile")
+    bake = _read("docker-bake.hcl")
+
+    assert "ARG HEARTWOOD_VERSION=development" in dockerfile
+    assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
+    assert 'variable "HEARTWOOD_VERSION"' in bake
+    assert 'default = "0.2.0-beta.4"' in bake
+    assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
 
 
 def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
@@ -433,6 +467,8 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert 'images/gpu/verify_runtime.sh "${root}/vllm"' in bootstrap
     assert "from importlib.metadata import version" not in bootstrap
     assert '--target "${root}/vllm"' in bootstrap
+    assert '--installer-state "${installer_state}"' in _read("deploy/install.sh")
+    assert ': "${installer_state:?--installer-state is required}"' in bootstrap
     assert '--python "${bootstrap_python}"' in bootstrap
     assert '--uv "${root}/bootstrap/bin/uv"' in bootstrap
     assert 'HEARTWOOD_VLLM_PYTHON="${root}/vllm/bin/python"' in bootstrap
@@ -447,6 +483,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "import torch, vllm" in runtime_verifier
     assert "VLLM_USE_FLASHINFER_SAMPLER=0" in bootstrap
     assert "ffmpeg" not in bootstrap_environment
+    assert "  - tmux" in bootstrap_environment
     assert "SLURM_JOB_ID" in launch_runtime
     assert "LOCAL_SCRATCH_JOB" in launch_runtime
     assert "--inside-allocation" in launch_runtime
@@ -499,6 +536,9 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     release_workflow = _read(".github/workflows/create-release.yml")
     release_images = _read("deploy/promote-release-images.sh")
     smoke = _read("deploy/tests/native_installer_smoke.sh")
+    real_smoke = _read("deploy/tests/native_installer_real_smoke.sh")
+    ubuntu_smoke = _read("deploy/tests/native_installer_ubuntu_smoke.sh")
+    llama_installer = _read("deploy/install-llama-cpp.sh")
 
     assert "sha256sum --check --strict" in installer
     assert "--bundle" in installer
@@ -536,12 +576,56 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "verify_release_candidate.py" in release_workflow
     assert "promote-release-images.sh verify" in release_workflow
     assert "promote-release-images.sh promote" in release_workflow
+    assert "actions/setup-node@v7" in release_workflow
+    assert 'node-version: "24"' in release_workflow
+    assert "native_installer_ubuntu_smoke.sh" in release_workflow
     assert "observed media type:" in release_images
     assert "Linux platforms:" in release_images
     assert "Build And Verify Native Assets" in workflow
     assert "native_installer_smoke.sh" in workflow
+    assert "native_installer_ubuntu_smoke.sh" in workflow
+    assert "native_installer_real_smoke.sh" in ubuntu_smoke
+    assert 'UV_PYTHON_INSTALL_DIR="${runtime_root}/python"' in installer
+    assert 'deploy/install-llama-cpp.sh "${runtime_root}/llama.cpp"' in installer
+    assert 'export PATH="${runtime}/bin:${runtime}:${PATH}"' in installer
+    assert (
+        'export LD_LIBRARY_PATH="${runtime}/lib:${runtime}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"'
+        in installer
+    )
+    assert '"${command_path}" --version' in installer
+    assert "libgomp.so.1" in llama_installer
+    assert 'verify_archive "${runtime}/${archive_name}"' in llama_installer
+    assert "existing llama.cpp runtime has no pinned upstream archive" in llama_installer
+    assert "from its pinned archive" in llama_installer
+    assert "llama.cpp installer trusted a runtime's self-authenticated manifest" in smoke
+    assert 'tar -xzf "${workspace}/heartwood-native.tar.gz"' in installer
+    assert 'generation_root="$(mktemp -d "${installations_root}/' in installer
+    assert 'replace_symlink "${current_target}" "${root}/current"' in installer
+    assert "installer accepted a failed application build" in smoke
+    assert "installer accepted a failed published command" in smoke
+    assert "installer followed redirected ${owned_name} state" in smoke
+    assert "installer ignored an active installation lock" in smoke
+    assert 'installer_state="$(mktemp -d "${installer_base}/run.XXXXXX")"' in installer
+    assert "another installation is using this root" in installer
+    assert 'test ! -e "${dry_run_root}"' in smoke
+    assert "github.com/astral-sh/uv/releases/download/${uv_version}" in ubuntu_smoke
+    assert "04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829" in (ubuntu_smoke)
+    assert "astral.sh/uv/install.sh" not in ubuntu_smoke
+    assert 'cd "${workspace}/heartwood/packages/webui"' in packager
+    assert "npm ci --no-audit --fund=false" in packager
+    assert "npm run build" in packager
+    assert "packages/webui/dist/index.html" in packager
+    assert '"${installation}/bin/heartwood-jupyter" --version' in real_smoke
+    assert '"${installation}/bin/heartwood" --interface web' in real_smoke
     assert "installer accepted a corrupted checksum" in smoke
     assert "installer accepted an unsafe checksum manifest" in smoke
+    assert '"${installation}/bin/heartwood" --version' in real_smoke
+    assert '"${runtime}/llama.cpp/llama-server"' in real_smoke
+    assert "Readiness: setup-required" in real_smoke
+    assert "models download llama-cpp-stories260k-ci" in real_smoke
+    assert "local_inference_smoke.sh" in real_smoke
+    assert "heartwood-runtime-tamper-test" in real_smoke
+    assert "heartwood-source-tamper-test" in real_smoke
 
 
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
@@ -573,6 +657,10 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "Linux platforms:" in workflow
     assert 'docker pull --platform linux/amd64 "${CANDIDATE}"' in main_build
     assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in main_build
+    assert "Verify shared agent and platform interfaces" in main_build
+    assert "terra_jupyter_contract_smoke.sh" in main_build
+    assert "terra_image_smoke.sh" in main_build
+    assert "offline_stack_smoke.sh" in main_build
     assert "immutable GPU commit tag does not match" in workflow
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
     assert "promoted ${channel} digest does not match" in workflow
@@ -615,6 +703,7 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     compose = _read("images/generic/compose.yaml")
+    workflow = _read(".github/workflows/container-smoke.yml")
     smoke = _read("images/generic/scripts/offline_stack_smoke.sh")
     capable = _read("images/generic/scripts/capable_model_e2e.sh")
     model_stub = _read("images/generic/scripts/local_model_stub.py")
@@ -630,8 +719,10 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
     assert "HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project" in smoke
     assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
+    assert "capable-model artifact must be outside the disposable test project" in capable
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in capable
+    assert "/tmp/heartwood-model-cache/.heartwood/models:/models:ro" in workflow
     assert "models refresh heartwood" in smoke
     assert "models connect heartwood heartwood-managed-runtime" in smoke
     assert "models add inactive-smoke" in smoke
@@ -691,7 +782,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         "images/platform/scripts/terra_image_smoke.sh",
         "images/platform/scripts/terra_jupyter_contract_smoke.sh",
         "images/platform/scripts/terra_jupyter_launch_smoke.sh",
-        "images/platform/scripts/terra_managed_launch_smoke.sh",
+        "images/platform/scripts/terra_ci_model_safety_smoke.sh",
         "images/platform/scripts/terra_project_persistence_smoke.sh",
     )
     for script in scripts:
@@ -734,20 +825,19 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert '"project/readiness"' in jupyter_smoke
 
     terra_launch = _read("images/platform/scripts/terra_jupyter_launch_smoke.sh")
-    assert "heartwood --interface web --host 0.0.0.0" in terra_launch
+    assert "heartwood gateway serve --host 0.0.0.0" in terra_launch
     assert "project/readiness" in terra_launch
     assert "proxy/${gateway_port}/" in terra_launch
 
-    terra_managed_launch = _read("images/platform/scripts/terra_managed_launch_smoke.sh")
-    assert "heartwood --interface web" in terra_managed_launch
-    assert 'payload.get("platform_id") != "terra"' in terra_managed_launch
-    assert 'payload.get("state") != "ready"' in terra_managed_launch
-    assert 'payload.get("project_root")' in terra_managed_launch
-    assert 'launch_message=""' in terra_managed_launch
-    assert "Open the web interface through Terra" in terra_managed_launch
-    assert "did not report ${expected_proxy}" in terra_managed_launch
-    assert "terra-project-storage" in terra_managed_launch
-    assert 'checks.get("terra-gpu"' in terra_managed_launch
+    terra_model_safety = _read("images/platform/scripts/terra_ci_model_safety_smoke.sh")
+    assert "heartwood doctor --json" in terra_model_safety
+    assert 'payload.get("platform_id") != "terra"' in terra_model_safety
+    assert 'payload.get("state") != "setup-required"' in terra_model_safety
+    assert 'payload.get("project_root")' in terra_model_safety
+    assert "No active model selected" in terra_model_safety
+    assert "CI-only model must not become an agent profile" in terra_model_safety
+    assert "terra-project-storage" in terra_model_safety
+    assert 'checks.get("terra-gpu"' in terra_model_safety
 
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
@@ -817,7 +907,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert publish.index("Run staged Terra current-directory persistence smoke") < publish.index(
         "Run staged Terra OpenHands smoke"
     )
-    assert publish.index("Run staged Terra Heartwood-managed model launch smoke") < publish.index(
+    assert publish.index("Verify staged Terra CI-only model remains non-agent") < publish.index(
         "Run staged Terra local inference smoke"
     )
     assert publish.index("Run staged Terra local inference smoke") < publish.index(
@@ -837,8 +927,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
     assert "Run Terra current-directory persistence smoke" in smoke
-    assert "Run Terra Heartwood-managed model launch smoke" in smoke
-    assert "terra_managed_launch_smoke.sh" in smoke
+    assert "Verify Terra CI-only model remains non-agent" in smoke
+    assert "terra_ci_model_safety_smoke.sh" in smoke
     assert "terra_project_persistence_smoke.sh" in smoke
     assert "images/generic/scripts/offline_stack_smoke.sh" in smoke
     assert "HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis" in smoke
@@ -846,8 +936,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "container_persistence_smoke.sh" in smoke
     assert "Verify host-user bind-mount persistence" in smoke
     assert "bind_mount_user_smoke.sh" in smoke
-    assert publish.count("--env CLUSTER_NAME=terra-managed-launch-smoke") == 2
-    assert smoke.count("--env CLUSTER_NAME=terra-managed-launch-smoke") == 2
+    assert publish.count("--env CLUSTER_NAME=terra-ci-model-safety-smoke") == 2
+    assert smoke.count("--env CLUSTER_NAME=terra-ci-model-safety-smoke") == 2
     assert "Download and verify CI-only model fixture" in smoke
     assert "heartwood models download llama-cpp-stories260k-ci" in smoke
     assert "--volume heartwood-ci-project:/workspace" in smoke
@@ -871,9 +961,10 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert 'f"http://127.0.0.1:{port}/health"' in capable_model
     assert "llama.cpp runtime log (last 200 lines)" in capable_model
     assert "cohort_path.is_file()" in capable_model
+    assert "--jinja" in _read("images/generic/scripts/start_local_runtime.sh")
     assert 'summary["source_participant_count"] != 24' in capable_model
     assert 'summary["participant_count"] != 20' in capable_model
-    assert 'checks["row_values_exported"] is not False' in capable_model
+    assert 'checks["aggregate_only_output"] is not True' in capable_model
 
 
 def test_buildx_metadata_reader_handles_runtime_target_names(tmp_path: Path) -> None:

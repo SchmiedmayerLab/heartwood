@@ -263,8 +263,8 @@ class NotebookSession:
         """Select a deployment-allowed action-confirmation mode."""
         return self.gateway.select_action_confirmation_mode(mode)
 
-    def web_proxy_url(self, *, port: int = 8767) -> str | None:
-        """Return a verified Jupyter proxy URL, or ``None`` without route evidence."""
+    def browser_url(self, *, port: int = 8767) -> str | None:
+        """Return the supported browser URL, or ``None`` on terminal-only platforms."""
         access_url = self.gateway.startup_plan(interface="web", port=port).get("access_url")
         return access_url if isinstance(access_url, str) else None
 

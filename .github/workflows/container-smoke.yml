@@ -111,14 +111,17 @@ jobs:
           --set runtime.platform=linux/amd64
           --set runtime.tags=heartwood-capable:local
           runtime
-      - name: Prepare persistent project storage
+      - name: Prepare isolated model and project storage
         run: |
+          sudo mkdir -p /tmp/heartwood-model-cache
           sudo mkdir -p /tmp/heartwood-project
+          sudo chown 10001:10001 /tmp/heartwood-model-cache
           sudo chown 10001:10001 /tmp/heartwood-project
       - name: Download and verify reviewed agent model
         run: >-
           docker run --rm --platform linux/amd64
-          --volume /tmp/heartwood-project:/workspace
+          --workdir /model-cache
+          --volume /tmp/heartwood-model-cache:/model-cache
           heartwood-capable:local
           heartwood models download qwen25-7b-instruct-q4_k_m
       - name: Run mounted capable model without network
@@ -131,8 +134,9 @@ jobs:
           --cap-drop ALL
           --security-opt no-new-privileges:true
           --pids-limit 512
+          --volume /tmp/heartwood-model-cache/.heartwood/models:/models:ro
           --env HEARTWOOD_CAPABLE_PROJECT=/workspace
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/workspace/.heartwood/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
           heartwood-capable:local
           bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
 
@@ -200,22 +204,22 @@ jobs:
           --entrypoint bash
           --volume heartwood-terra-ci-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
-          --env CLUSTER_NAME=terra-managed-launch-smoke
-          --env WORKSPACE_ID=terra-managed-launch-smoke
+          --env CLUSTER_NAME=terra-ci-model-safety-smoke
+          --env WORKSPACE_ID=terra-ci-model-safety-smoke
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           -c 'mkdir -p /home/jupyter/model-analysis &&
           cd /home/jupyter/model-analysis &&
           exec heartwood models download llama-cpp-stories260k-ci'
-      - name: Run Terra Heartwood-managed model launch smoke
+      - name: Verify Terra CI-only model remains non-agent
         run: >-
           docker run --rm --platform linux/amd64 --network none
           --workdir /home/jupyter/model-analysis --entrypoint bash
           --volume heartwood-terra-ci-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
-          --env CLUSTER_NAME=terra-managed-launch-smoke
-          --env WORKSPACE_ID=terra-managed-launch-smoke
+          --env CLUSTER_NAME=terra-ci-model-safety-smoke
+          --env WORKSPACE_ID=terra-ci-model-safety-smoke
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
-          /opt/heartwood/images/platform/scripts/terra_managed_launch_smoke.sh
+          /opt/heartwood/images/platform/scripts/terra_ci_model_safety_smoke.sh
       - name: Run Terra mounted local inference without network
         run: >-
           docker run --rm --platform linux/amd64 --network none
@@ -224,11 +228,11 @@ jobs:
           --env HEARTWOOD_LOCAL_MODEL_PATH=/home/jupyter/model-analysis/.heartwood/models/llama-cpp-stories260k-ci/tinyllamas/stories260K.gguf
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
           /opt/heartwood/images/generic/scripts/local_inference_smoke.sh
-      - name: Run Terra Jupyter launch smoke
+      - name: Run Terra Jupyter and internal gateway smoke
         run: >-
           bash images/platform/scripts/terra_jupyter_launch_smoke.sh
           ghcr.io/schmiedmayerlab/heartwood:edge-terra-ci
-      - name: Run Terra Leonardo Jupyter launch smoke
+      - name: Run Terra Leonardo Jupyter and internal gateway smoke
         env:
           HEARTWOOD_TERRA_HOST_PORT: "8001"
           HEARTWOOD_TERRA_JUPYTER_MODE: leonardo

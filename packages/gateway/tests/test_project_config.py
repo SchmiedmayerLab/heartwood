@@ -205,6 +205,7 @@ def test_project_config_persists_user_selected_model_provenance(tmp_path: Path) 
         source_repository="example/research-model-gguf",
         source_revision="1" * 40,
         source_path="model-q4_k_m.gguf",
+        model_type="qwen2",
         size_bytes=9,
         minimum_free_bytes=9,
         license_posture="Source model card reports apache-2.0.",
@@ -217,6 +218,7 @@ def test_project_config_persists_user_selected_model_provenance(tmp_path: Path) 
     assert configured.local_model is not None
     assert configured.local_model.catalog_source == "user-selected"
     assert configured.local_model.source_repository == "example/research-model-gguf"
+    assert configured.local_model.model_type == "qwen2"
     assert configured.local_model.artifact_sha256 == "a" * 64
     assert configured.local_model.recommended_resource_envelope == "Recommended resources"
     assert store.load().local_model == configured.local_model

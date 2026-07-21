@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # Run a Model With Heartwood
 
-Heartwood images include managed inference software but no model weights.
+Heartwood images and the generic Linux package include managed inference software but no model weights.
 After a supported model is selected and downloaded or imported, the normal `heartwood` command verifies the files, plans context against available memory, starts the runtime, waits for readiness, and then opens the requested interface.
 
 ## Download and Start
@@ -20,8 +20,9 @@ heartwood
 Choose **Run with Heartwood**, inspect the plan, and confirm the download.
 The terminal displays transferred bytes and status; the browser shows a progress bar from the same gateway download state.
 
-When the files are ready, run `heartwood` again if the current process asks you to restart.
-For the browser, use `heartwood --interface web`.
+In the terminal, Heartwood continues automatically after the verified download and starts the model runtime.
+In the browser setup flow, stop the process and repeat `heartwood --interface web` when the page reports that the model is ready.
+The restarted browser process verifies the stored model, starts its local server, and keeps that server supervised for the session.
 
 ## Hardware
 
@@ -35,8 +36,11 @@ The estimates reserve space for runtime overhead and context, but no static esti
 
 ## Context Window
 
-Heartwood records the model's declared limit and chooses a power-of-two operating tier from 16,384 tokens upward when memory information permits.
-It uses a 32,768-token safe default when model-size or memory information is unavailable, and can plan larger windows up to the model and Heartwood maximum of 1,048,576 tokens.
+Heartwood records the model's declared limit and chooses from conservative operating tiers when memory information permits.
+The smallest agent-capable runtime tier is 18,432 tokens: 16,384 tokens of OpenHands input capacity plus 2,048 tokens reserved for the model response.
+When model-size or memory information is unavailable, Heartwood uses that minimum tier rather than assuming that 32,768 tokens will fit.
+A 32,768-token plan provides 28,672 input tokens plus 4,096 response tokens when the model and available memory support it.
+Larger supported tiers range from 65,536 to the model and Heartwood maximum of 1,048,576 tokens.
 
 The planner reserves memory for model weights, runtime overhead, and context, and retains headroom instead of always selecting the model maximum.
 The OpenHands SDK backend uses a rolling-history condenser before history exceeds the configured input budget, preserving recent events and a structured summary for long sessions.

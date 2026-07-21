@@ -55,22 +55,52 @@ fi
 case "${1:-}" in
 sync)
   : "${UV_PROJECT_ENVIRONMENT:?UV_PROJECT_ENVIRONMENT is required}"
+  if [[ "${HEARTWOOD_TEST_FAIL_SYNC:-false}" == "true" ]]; then
+    echo "synthetic uv sync failure" >&2
+    exit 70
+  fi
   if [[ -x "${bootstrap_python}" ]]; then
     case " $* " in
       *" --python ${bootstrap_python} "*) ;;
       *) echo "Heartwood environment does not use bootstrap Python" >&2; exit 1 ;;
     esac
+  else
+    case "${UV_PYTHON_INSTALL_DIR:-}" in
+      "${root}"/installations/*/runtime/python) ;;
+      *) echo "generic managed Python is not stored in the installation generation" >&2; exit 1 ;;
+    esac
+    mkdir -p "${UV_PYTHON_INSTALL_DIR}"
+    touch "${UV_PYTHON_INSTALL_DIR}/synthetic-python"
   fi
   mkdir -p "${UV_PROJECT_ENVIRONMENT}/bin"
   cat >"${UV_PROJECT_ENVIRONMENT}/bin/heartwood" <<'COMMAND'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
+  if [[ "${HEARTWOOD_TEST_FAIL_PUBLISHED_COMMAND:-false}" == "true" ]]; then
+    counter="${HEARTWOOD_TEST_PUBLISH_COUNTER:?HEARTWOOD_TEST_PUBLISH_COUNTER is required}"
+    count=0
+    if [[ -f "${counter}" ]]; then
+      count="$(cat "${counter}")"
+    fi
+    count=$((count + 1))
+    printf '%s\n' "${count}" >"${counter}"
+    if [[ "${count}" -ge 4 ]]; then
+      echo "synthetic published command failure" >&2
+      exit 70
+    fi
+  fi
   echo "heartwood synthetic"
   exit 0
 fi
 echo "heartwood synthetic command"
 COMMAND
-  chmod +x "${UV_PROJECT_ENVIRONMENT}/bin/heartwood"
+  cat >"${UV_PROJECT_ENVIRONMENT}/bin/jupyter-lab" <<'COMMAND'
+#!/usr/bin/env bash
+echo "4.0.0"
+COMMAND
+  chmod +x \
+    "${UV_PROJECT_ENVIRONMENT}/bin/heartwood" \
+    "${UV_PROJECT_ENVIRONMENT}/bin/jupyter-lab"
   ;;
 venv)
   runtime="${2:?runtime path is required}"
@@ -110,6 +140,14 @@ pip) ;;
 esac
 EOF
 chmod +x "${workspace}/bin/uv"
+
+for command in git tmux; do
+  cat >"${workspace}/bin/${command}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "${workspace}/bin/${command}"
+done
 
 cat >"${workspace}/bin/micromamba" <<'EOF'
 #!/usr/bin/env bash
@@ -168,18 +206,30 @@ if "${mismatched_installer}" \
   exit 1
 fi
 
-mkdir -p "${workspace}/installation"
+malicious_runtime="${workspace}/self-authenticated-llama"
+mkdir -p "${malicious_runtime}"
+cat >"${malicious_runtime}/llama-server" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "llama.cpp synthetic"
+  exit 0
+fi
+echo "synthetic llama-server"
+EOF
+chmod +x "${malicious_runtime}/llama-server"
+cat >"${malicious_runtime}/.heartwood-runtime" <<'EOF'
+version=b9937
+asset=attacker-controlled.tar.gz
+archive_sha256=attacker-controlled
+EOF
 (
-  cd "${workspace}/installation"
-  HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
-    HEARTWOOD_TEST_INSTALL_ROOT="${workspace}/installation" \
-    PATH="${workspace}/bin:${PATH}" \
-    "${assets}/heartwood-installer" \
-    --bundle "${assets}/heartwood-native.tar.gz" \
-    --checksums "${assets}/SHA256SUMS" \
-    --minimum-free-gib 1 \
-    --platform generic
+  cd "${malicious_runtime}"
+  sha256sum llama-server .heartwood-runtime >.heartwood-SHA256SUMS
 )
+if deploy/install-llama-cpp.sh "${malicious_runtime}"; then
+  echo "llama.cpp installer trusted a runtime's self-authenticated manifest" >&2
+  exit 1
+fi
 
 if "${assets}/heartwood-installer" \
   --bundle "${assets}/heartwood-native.tar.gz" \
@@ -191,46 +241,82 @@ if "${assets}/heartwood-installer" \
   echo "installer accepted an invalid storage requirement" >&2
   exit 1
 fi
+test ! -e "${workspace}/invalid-capacity"
 
-test -x "${workspace}/installation/bin/heartwood"
-test -L "${workspace}/installation/current"
-test ! -e "${workspace}/installation/.installer"
-test "$(find "${workspace}/outside-home" -mindepth 1 | wc -l | tr -d ' ')" = "1"
-test "$(find "${workspace}/outside-tmp" -mindepth 1 | wc -l | tr -d ' ')" = "1"
-for directory in versions runtimes bin; do
-  test -d "${workspace}/installation/${directory}"
-  test "$(file_mode "${workspace}/installation/${directory}")" = "700"
+dry_run_root="${workspace}/dry-run-installation"
+"${assets}/heartwood-installer" \
+  --bundle "${assets}/heartwood-native.tar.gz" \
+  --checksums "${assets}/SHA256SUMS" \
+  --root "${dry_run_root}" \
+  --platform generic \
+  --dry-run
+test ! -e "${dry_run_root}"
+
+mkdir -m 755 "${dry_run_root}"
+touch "${dry_run_root}/sentinel"
+"${assets}/heartwood-installer" \
+  --bundle "${assets}/heartwood-native.tar.gz" \
+  --checksums "${assets}/SHA256SUMS" \
+  --root "${dry_run_root}" \
+  --platform generic \
+  --dry-run
+test "$(file_mode "${dry_run_root}")" = "755"
+test "$(find "${dry_run_root}" -mindepth 1 | wc -l | tr -d ' ')" = "1"
+
+redirect_target="${workspace}/redirect-target"
+mkdir -m 700 "${redirect_target}"
+touch "${redirect_target}/sentinel"
+for owned_name in .installer installations; do
+  redirected_root="${workspace}/redirected-${owned_name#.}"
+  mkdir -m 700 "${redirected_root}"
+  ln -s "${redirect_target}" "${redirected_root}/${owned_name}"
+  if "${assets}/heartwood-installer" \
+    --bundle "${assets}/heartwood-native.tar.gz" \
+    --checksums "${assets}/SHA256SUMS" \
+    --root "${redirected_root}" \
+    --platform generic; then
+    echo "installer followed redirected ${owned_name} state" >&2
+    exit 1
+  fi
+  test -L "${redirected_root}/${owned_name}"
+  test ! -e "${redirected_root}/.installer.lock"
 done
-for directory in state models cache logs; do
-  test ! -e "${workspace}/installation/${directory}"
-done
-test "$("${workspace}/installation/bin/heartwood")" = "heartwood synthetic command"
-if grep --quiet '^export HEARTWOOD_PLATFORM=' "${workspace}/installation/bin/heartwood"; then
-  echo "generic command wrapper unexpectedly binds a managed platform" >&2
+test "$(find "${redirect_target}" -mindepth 1 | wc -l | tr -d ' ')" = "1"
+
+locked_root="${workspace}/locked-installation"
+mkdir -m 700 "${locked_root}" "${locked_root}/.installer.lock"
+touch "${locked_root}/.installer.lock/existing-owner"
+if "${assets}/heartwood-installer" \
+  --bundle "${assets}/heartwood-native.tar.gz" \
+  --checksums "${assets}/SHA256SUMS" \
+  --root "${locked_root}" \
+  --platform generic; then
+  echo "installer ignored an active installation lock" >&2
   exit 1
 fi
-if grep --extended-regexp 'HEARTWOOD_(HOME|WORKSPACE|MODEL_CACHE|INSTALL_ROOT|NATIVE_ROOT|NATIVE_VERSION|VERSION)|HF_HOME' \
-  "${workspace}/installation/bin/heartwood"; then
-  echo "installed command wrapper exports project or release state" >&2
-  exit 1
-fi
+test -f "${locked_root}/.installer.lock/existing-owner"
+test ! -e "${locked_root}/.installer"
 
+carina_installation="${workspace}/carina-installation"
 for _ in 1 2; do
   HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
-    HEARTWOOD_TEST_INSTALL_ROOT="${workspace}/carina-installation" \
+    HEARTWOOD_TEST_INSTALL_ROOT="${carina_installation}" \
     PATH="${workspace}/bin:${PATH}" \
     "${assets}/heartwood-installer" \
     --bundle "${assets}/heartwood-native.tar.gz" \
     --checksums "${assets}/SHA256SUMS" \
-    --root "${workspace}/carina-installation" \
+    --root "${carina_installation}" \
     --minimum-free-gib 1 \
     --platform carina
 done
 
-carina_version="$(basename "$(readlink "${workspace}/carina-installation/current")")"
-carina_runtime="${workspace}/carina-installation/runtimes/${carina_version}"
+carina_generation="$(cd "${carina_installation}/current" && pwd -P)"
+carina_runtime="${carina_generation}/runtime"
+carina_source="${carina_generation}/source"
 test -x "${carina_runtime}/bootstrap/bin/uv"
-test ! -e "${workspace}/carina-installation/.installer"
+test -r "${carina_source}/HEARTWOOD_VERSION"
+test ! -e "${carina_installation}/.installer"
+test ! -e "${carina_installation}/.installer.lock"
 test "$(find "${workspace}/outside-home" -mindepth 1 | wc -l | tr -d ' ')" = "1"
 test "$(find "${workspace}/outside-tmp" -mindepth 1 | wc -l | tr -d ' ')" = "1"
 test -x "${carina_runtime}/heartwood/bin/heartwood"
@@ -245,24 +331,87 @@ test "$(file_mode "${carina_runtime}/vllm/bin/heartwood_vllm.py")" = "444"
 test "$(file_mode "${carina_runtime}/vllm/bin/sitecustomize.py")" = "444"
 "${carina_runtime}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__ | \
   grep --quiet 'GPU security fixes verified'
-test -L "${workspace}/carina-installation/bin/hf"
-test "$(readlink "${workspace}/carina-installation/bin/hf")" = \
-  "${carina_runtime}/vllm/bin/hf"
-for directory in versions runtimes bin; do
-  test -d "${workspace}/carina-installation/${directory}"
-  test "$(file_mode "${workspace}/carina-installation/${directory}")" = "700"
+test -L "${carina_installation}/bin/hf"
+carina_current_target="$(readlink "${carina_installation}/current")"
+test "$(readlink "${carina_installation}/bin/hf")" = \
+  "../${carina_current_target}/bin/hf"
+test -L "${carina_generation}/bin/hf"
+test "$(readlink "${carina_generation}/bin/hf")" = "${carina_runtime}/vllm/bin/hf"
+test -L "${carina_installation}/bin/heartwood"
+test "$(readlink "${carina_installation}/bin/heartwood")" = \
+  "../${carina_current_target}/bin/heartwood"
+test "$(find "${carina_installation}/installations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "2"
+for directory in installations bin; do
+  test -d "${carina_installation}/${directory}"
+  test "$(file_mode "${carina_installation}/${directory}")" = "700"
 done
 for directory in state models cache logs; do
-  test ! -e "${workspace}/carina-installation/${directory}"
+  test ! -e "${carina_installation}/${directory}"
 done
-test "$("${workspace}/carina-installation/bin/heartwood")" = "heartwood synthetic command"
+test "$("${carina_installation}/bin/heartwood")" = "heartwood synthetic command"
 grep --fixed-strings --line-regexp --quiet 'export HEARTWOOD_PLATFORM=carina' \
-  "${workspace}/carina-installation/bin/heartwood"
+  "${carina_generation}/bin/heartwood"
+grep --fixed-strings --quiet \
+  "runtime=${carina_runtime}/bootstrap" \
+  "${carina_generation}/bin/heartwood"
+wrapper_path_export="export PATH=\"\${runtime}/bin:\${runtime}:\${PATH}\""
+grep --fixed-strings --quiet "${wrapper_path_export}" \
+  "${carina_generation}/bin/heartwood"
 if grep --extended-regexp 'HEARTWOOD_(HOME|WORKSPACE|MODEL_CACHE|INSTALL_ROOT|NATIVE_ROOT|NATIVE_VERSION|VERSION)|HF_HOME' \
-  "${workspace}/carina-installation/bin/heartwood"; then
+  "${carina_generation}/bin/heartwood"; then
   echo "Carina command wrapper exports project or release state" >&2
   exit 1
 fi
+
+published_current="$(readlink "${carina_installation}/current")"
+published_command="$(readlink "${carina_installation}/bin/heartwood")"
+published_generation_count="$(find "${carina_installation}/installations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+if HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
+  HEARTWOOD_TEST_INSTALL_ROOT="${carina_installation}" \
+  HEARTWOOD_TEST_FAIL_SYNC=true \
+  PATH="${workspace}/bin:${PATH}" \
+  "${assets}/heartwood-installer" \
+  --bundle "${assets}/heartwood-native.tar.gz" \
+  --checksums "${assets}/SHA256SUMS" \
+  --root "${carina_installation}" \
+  --minimum-free-gib 1 \
+  --platform carina; then
+  echo "installer accepted a failed application build" >&2
+  exit 1
+fi
+test "$(readlink "${carina_installation}/current")" = "${published_current}"
+test "$(readlink "${carina_installation}/bin/heartwood")" = "${published_command}"
+test "$(find "${carina_installation}/installations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "${published_generation_count}"
+test ! -e "${carina_installation}/.installer"
+test ! -e "${carina_installation}/.installer.lock"
+test "$("${carina_installation}/bin/heartwood")" = "heartwood synthetic command"
+
+publish_counter="${workspace}/publish-counter"
+publish_failure_log="${workspace}/publish-failure.log"
+published_hf="$(readlink "${carina_installation}/bin/hf")"
+if HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
+  HEARTWOOD_TEST_INSTALL_ROOT="${carina_installation}" \
+  HEARTWOOD_TEST_FAIL_PUBLISHED_COMMAND=true \
+  HEARTWOOD_TEST_PUBLISH_COUNTER="${publish_counter}" \
+  PATH="${workspace}/bin:${PATH}" \
+  "${assets}/heartwood-installer" \
+  --bundle "${assets}/heartwood-native.tar.gz" \
+  --checksums "${assets}/SHA256SUMS" \
+  --root "${carina_installation}" \
+  --minimum-free-gib 1 \
+  --platform carina >"${publish_failure_log}" 2>&1; then
+  echo "installer accepted a failed published command" >&2
+  exit 1
+fi
+test "$(cat "${publish_counter}")" = "4"
+grep --quiet 'published Heartwood command cannot start' "${publish_failure_log}"
+test "$(readlink "${carina_installation}/current")" = "${published_current}"
+test "$(readlink "${carina_installation}/bin/heartwood")" = "${published_command}"
+test "$(readlink "${carina_installation}/bin/hf")" = "${published_hf}"
+test "$(find "${carina_installation}/installations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "${published_generation_count}"
+test ! -e "${carina_installation}/.installer"
+test ! -e "${carina_installation}/.installer.lock"
+test "$("${carina_installation}/bin/heartwood")" = "heartwood synthetic command"
 
 printf '%064d  heartwood-native.tar.gz\n' 0 >"${workspace}/invalid-SHA256SUMS"
 if "${assets}/heartwood-installer" \

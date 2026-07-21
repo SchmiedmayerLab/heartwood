@@ -18,6 +18,7 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._model_catalog import ModelConnection, model_connections_from_mapping
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
+from heartwood.gateway._openhands_sdk import prepare_openhands_sdk
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
     ProjectConfig,
@@ -159,6 +160,25 @@ def inspect_deployment(
     adapter = select_platform_adapter(active_env)
     detection = adapter.detect(active_env)
     checks: list[ReadinessCheck] = []
+
+    try:
+        prepare_openhands_sdk(active_env)
+    except Exception:
+        checks.append(
+            ReadinessCheck(
+                "agent-runtime",
+                "fail",
+                "OpenHands agent dependencies cannot be loaded",
+            )
+        )
+    else:
+        checks.append(
+            ReadinessCheck(
+                "agent-runtime",
+                "pass",
+                "OpenHands agent dependencies are available",
+            )
+        )
 
     writable = os.access(project.root, os.W_OK)
     checks.append(

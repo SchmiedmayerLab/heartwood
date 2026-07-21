@@ -1472,7 +1472,7 @@ wheels = [
 
 [[package]]
 name = "heartwood-adapters"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/adapters" }
 dependencies = [
     { name = "heartwood-detector" },
@@ -1489,7 +1489,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-audit"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/audit" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -1500,7 +1500,7 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-cli"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/cli" }
 dependencies = [
     { name = "heartwood-gateway" },
@@ -1521,7 +1521,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-compliance"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/compliance" }
 dependencies = [
     { name = "heartwood-audit" },
@@ -1536,7 +1536,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-core-adapter"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/core-adapter" }
 dependencies = [
     { name = "heartwood-adapters" },
@@ -1557,7 +1557,7 @@ requires-dist = [
 
 [[package]]
 name = "heartwood-detector"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/detector" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -1568,12 +1568,12 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-fixtures"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/fixtures" }
 
 [[package]]
 name = "heartwood-gateway"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/gateway" }
 dependencies = [
     { name = "anthropic" },
@@ -1587,13 +1587,9 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "keyring" },
     { name = "openai" },
-    { name = "tomli-w" },
-]
-
-[package.optional-dependencies]
-agent = [
     { name = "openhands-sdk" },
     { name = "openhands-tools" },
+    { name = "tomli-w" },
 ]
 
 [package.metadata]
@@ -1609,15 +1605,14 @@ requires-dist = [
     { name = "huggingface-hub", specifier = "==1.23.0" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "openai", specifier = "==2.45.0" },
-    { name = "openhands-sdk", marker = "extra == 'agent'", specifier = "==1.36.0" },
-    { name = "openhands-tools", marker = "extra == 'agent'", specifier = "==1.36.0" },
+    { name = "openhands-sdk", specifier = "==1.36.1" },
+    { name = "openhands-tools", specifier = "==1.36.1" },
     { name = "tomli-w", specifier = "==1.2.0" },
 ]
-provides-extras = ["agent"]
 
 [[package]]
 name = "heartwood-model-policy"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/model-policy" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -1628,7 +1623,7 @@ requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
 
 [[package]]
 name = "heartwood-notebook"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/notebook" }
 dependencies = [
     { name = "heartwood-gateway" },
@@ -1652,7 +1647,7 @@ provides-extras = ["widgets"]
 
 [[package]]
 name = "heartwood-schemas"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/schemas" }
 dependencies = [
     { name = "pydantic" },
@@ -1663,7 +1658,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
 
 [[package]]
 name = "heartwood-session"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/session" }
 dependencies = [
     { name = "pydantic" },
@@ -1674,7 +1669,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
 
 [[package]]
 name = "heartwood-skills"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "packages/skills" }
 dependencies = [
     { name = "heartwood-schemas" },
@@ -3171,7 +3166,7 @@ wheels = [
 
 [[package]]
 name = "openhands-sdk"
-version = "1.36.0"
+version = "1.36.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -3192,14 +3187,14 @@ dependencies = [
     { name = "tree-sitter-bash" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/38/7e/e8fb791a8c57e088d16d02a2bc3331dbdfc8994d6dce0af5835f47a0780e/openhands_sdk-1.36.0.tar.gz", hash = "sha256:e157bcf423e77e66dbd269fd65571c1a8f6519130f096ede89ec3cf68fc662f9", size = 632002, upload-time = "2026-07-13T15:19:12.44Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/6f/801c463eb4a2fbcbd23b2972ac5835c6e5f53c29968361e6b0b15a93e892/openhands_sdk-1.36.1.tar.gz", hash = "sha256:dc9e15ed2857fc65532dc568b18b5893f6517109addd3bb189a8bba5b95a6117", size = 632098, upload-time = "2026-07-15T06:13:16.681Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/24/f8338ebe96d5029493c3bd05fe4c456a3087e3dec8ae303b978157883fd5/openhands_sdk-1.36.0-py3-none-any.whl", hash = "sha256:3a219a7df52cc60fa64957d39cff5fa7d07739162c9dedb720eab5a424259b27", size = 756685, upload-time = "2026-07-13T15:19:08.117Z" },
+    { url = "https://files.pythonhosted.org/packages/33/44/ea2659d223c618d072822dabf7d7c4a4b4158f207ac57ec8e53c0f5443c2/openhands_sdk-1.36.1-py3-none-any.whl", hash = "sha256:a55f11abec91cbc7af8a620a45840ef8b7e1cb31361980dc7ab503598494dda4", size = 756730, upload-time = "2026-07-15T06:13:12.778Z" },
 ]
 
 [[package]]
 name = "openhands-tools"
-version = "1.36.0"
+version = "1.36.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "binaryornot" },
@@ -3213,9 +3208,9 @@ dependencies = [
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2f/af/d48437c979c801555aad9a5b4100d35cf99893d036edceb668509f71f03e/openhands_tools-1.36.0.tar.gz", hash = "sha256:b454f62e6ee988112df61f42d12b84e54a5fc303df23452a92bccc2aeb7e3bd7", size = 145892, upload-time = "2026-07-13T15:19:13.697Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/61/6098ce519a148777bb22502f2c2c99e450bceb8cd2d897ed236f0fe4949a/openhands_tools-1.36.1.tar.gz", hash = "sha256:30f70c5f25c6a5b3ed884ac6a17d50091ff48ce3cc425b31939defdaf26d5ddf", size = 145891, upload-time = "2026-07-15T06:13:17.544Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/6d/df76055b435163833b08a1f8f9fb7986883bd9273d0e98a98ca8862fea7d/openhands_tools-1.36.0-py3-none-any.whl", hash = "sha256:852b83b5837b20d51785c0112a01567d6ddc3e651ee511b1df1d675ed89832de", size = 191218, upload-time = "2026-07-13T15:19:09.428Z" },
+    { url = "https://files.pythonhosted.org/packages/78/04/ae8afe8005febcdb8ffd6648249f47f94419cfa3e3a47390289065e8415a/openhands_tools-1.36.1-py3-none-any.whl", hash = "sha256:2cefdbcc2ba6c117802ce3c067b107d533d60e57081d719bd86a143edc2bc317", size = 191217, upload-time = "2026-07-15T06:13:13.841Z" },
 ]
 
 [[package]]

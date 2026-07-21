@@ -22,6 +22,20 @@ trap cleanup EXIT
 
 mkdir -p "${output_dir}" "${workspace}/heartwood"
 git archive --format=tar HEAD | tar -xf - -C "${workspace}/heartwood"
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm is required to build the native browser assets" >&2
+  exit 69
+fi
+(
+  cd "${workspace}/heartwood/packages/webui"
+  npm ci --no-audit --fund=false
+  npm run build
+)
+rm -rf "${workspace}/heartwood/packages/webui/node_modules"
+if [[ ! -f "${workspace}/heartwood/packages/webui/dist/index.html" ]]; then
+  echo "native browser assets were not produced" >&2
+  exit 70
+fi
 printf '%s\n' "${version}" >"${workspace}/heartwood/HEARTWOOD_VERSION"
 COPYFILE_DISABLE=1 tar --no-xattrs -czf "${archive}" -C "${workspace}" heartwood
 (

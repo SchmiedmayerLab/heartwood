@@ -27,6 +27,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `SETUP` | Non-secret Heartwood configuration and policy agreement |
 | `MODEL` | Model selection, compatibility, and managed model files |
 | `CREDENTIAL` | Provider token or managed-identity availability |
+| `AGENT` | OpenHands agent runtime availability |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |
 | `ENV` | Conditions that cannot yet be classified more precisely |
@@ -98,6 +99,14 @@ heartwood models inspect OWNER/MODEL
 Choose a supported candidate, confirm enough free disk, and download again.
 For an offline transfer, use `heartwood models import` with an immutable revision and license record.
 
+## Agent Runtime
+
+### `HW-AGENT-001` — Agent Runtime Is Unavailable
+
+The installed OpenHands dependency set cannot be loaded.
+Run `heartwood --version`, reinstall the same Heartwood release through its documented installation route, and rerun `heartwood doctor`.
+Model download, import, and inspection commands remain available so a broken agent runtime does not block project recovery.
+
 ## Managed Compute
 
 ### `HW-COMPUTE-001` — A Compute Allocation May Be Required
@@ -146,9 +155,11 @@ If the browser page does not open:
 1. keep the launching terminal running;
 2. confirm `heartwood --interface web` reported ready;
 3. use the exact printed URL;
-4. on Terra, open the exact authenticated Jupyter proxy path from the current Jupyter host;
-5. check whether port `8767` is already in use; and
-6. run `heartwood doctor` from the same directory.
+4. check whether port `8767` is already in use; and
+5. run `heartwood doctor` from the same directory.
+
+The browser interface is not supported on Terra or Stanford Carina.
+Use the terminal or the Terra notebook interface instead of constructing a proxy path.
 
 Do not work around a proxy failure by binding the gateway publicly without authentication.
 

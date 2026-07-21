@@ -191,7 +191,7 @@ async function main() {
         `unexpected browser-generated cohort: ${JSON.stringify(cohort)}`,
       );
     }
-    if (cohort.quality_checks?.row_values_exported !== false) {
+    if (cohort.quality_checks?.aggregate_only_output !== true) {
       throw new Error(
         "browser-generated cohort did not preserve aggregate-only output",
       );
@@ -202,7 +202,7 @@ async function main() {
       baseline.training_summary?.participant_count !== 24 ||
       baseline.training_summary?.positive_count !== 20 ||
       baseline.quality_checks?.holdout_evaluation_performed !== false ||
-      baseline.quality_checks?.row_values_exported !== false
+      baseline.quality_checks?.aggregate_only_output !== true
     ) {
       throw new Error(
         `unexpected browser-generated baseline: ${JSON.stringify(baseline)}`,

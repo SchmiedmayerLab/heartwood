@@ -18,6 +18,7 @@ from typing import Literal, Protocol, cast
 from heartwood.gateway._local_model_contract import (
     DEFAULT_LOCAL_CONTEXT_WINDOW,
     MAXIMUM_LOCAL_CONTEXT_WINDOW,
+    MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
     MINIMUM_LOCAL_CONTEXT_WINDOW,
 )
 from heartwood.gateway._model_artifacts import ModelArtifact
@@ -42,7 +43,7 @@ _PYTORCH_WEIGHTS = re.compile(
 )
 _ISSUE_URL = "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose"
 _GGUF_PREFERENCE = ("q4_k_m", "q5_k_m", "q4_k_s", "q5_k_s", "q8_0")
-_HERMES_MODEL_TYPES = {"qwen2"}
+_HERMES_MODEL_TYPES = {"qwen2", "qwen3"}
 _TEXT_GENERATION_PIPELINES = {"conversational", "text-generation"}
 _USER_SELECTED_PURPOSE = (
     "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
@@ -83,6 +84,7 @@ class LocalModelChoice:
     minimum_free_bytes: int
     license_posture: str
     catalog_source: LocalModelCatalogSource
+    model_type: str | None = None
     context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     artifact_sha256: str | None = None
     minimum_resource_envelope: str | None = None
@@ -107,6 +109,8 @@ class LocalModelChoice:
             raise ModelRepositoryError("managed model storage metadata is invalid")
         if not self.license_posture.strip():
             raise ModelRepositoryError("managed model license posture must not be empty")
+        if self.model_type is not None and re.fullmatch(r"[a-z0-9_-]+", self.model_type) is None:
+            raise ModelRepositoryError("managed model type must be a normalized identifier")
         if self.context_window < 2048:
             raise ModelRepositoryError("managed model context window must be at least 2048 tokens")
         if self.context_window > MAXIMUM_LOCAL_CONTEXT_WINDOW:
@@ -321,6 +325,13 @@ class HuggingFaceModelRepository:
         files = tuple(inspected_files)
         license_posture = _license_posture(getattr(info, "card_data", None))
         context_window = _context_window(info)
+        if context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
+            raise ModelRepositoryError(
+                "Heartwood agent sessions require a model context window of at least "
+                f"{MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:,} tokens; this repository reports "
+                f"{context_window:,}. Report a compatibility problem at {_ISSUE_URL}"
+            )
+        model_type = _model_type(info)
         candidates = [
             candidate
             for item in files
@@ -331,6 +342,7 @@ class HuggingFaceModelRepository:
                     item,
                     license_posture,
                     context_window=context_window,
+                    model_type=model_type,
                 )
             )
             is not None
@@ -343,6 +355,7 @@ class HuggingFaceModelRepository:
             metadata_complete=metadata_complete,
             supports_tool_calls=_supports_hermes_tool_calls(info),
             context_window=context_window,
+            model_type=model_type,
         )
         if snapshot is not None:
             candidates.append(snapshot)
@@ -402,6 +415,7 @@ def recommended_model_choices(
             minimum_free_bytes=artifact.minimum_free_bytes,
             license_posture=artifact.license_posture,
             catalog_source="recommended",
+            model_type=infer_model_type(artifact.source_repository),
             context_window=artifact.context_window,
             artifact_sha256=artifact.artifact_sha256,
             minimum_resource_envelope=artifact.minimum_resource_envelope,
@@ -423,6 +437,7 @@ def recommended_model_choices(
             minimum_free_bytes=snapshot.minimum_free_bytes,
             license_posture=snapshot.license_posture,
             catalog_source="recommended",
+            model_type=infer_model_type(snapshot.source_repository),
             context_window=snapshot.context_window,
             minimum_resource_envelope=snapshot.minimum_resource_envelope,
             recommended_resource_envelope=snapshot.recommended_resource_envelope,
@@ -454,6 +469,7 @@ def _gguf_candidate(
     license_posture: str,
     *,
     context_window: int,
+    model_type: str | None,
 ) -> LocalModelChoice | None:
     if (
         not file.path.casefold().endswith(".gguf")
@@ -476,6 +492,7 @@ def _gguf_candidate(
         minimum_free_bytes=(file.size * 3 + 1) // 2,
         license_posture=license_posture,
         catalog_source="user-selected",
+        model_type=model_type,
         context_window=context_window,
         artifact_sha256=file.sha256,
         minimum_resource_envelope=_cpu_resources(file.size, recommended=False),
@@ -492,6 +509,7 @@ def _snapshot_candidate(
     metadata_complete: bool,
     supports_tool_calls: bool,
     context_window: int,
+    model_type: str | None,
 ) -> LocalModelChoice | None:
     if not metadata_complete or not supports_tool_calls:
         return None
@@ -519,6 +537,7 @@ def _snapshot_candidate(
         minimum_free_bytes=(size * 3 + 1) // 2,
         license_posture=license_posture,
         catalog_source="user-selected",
+        model_type=model_type,
         context_window=context_window,
         minimum_resource_envelope=_gpu_resources(size, recommended=False),
         recommended_resource_envelope=_gpu_resources(size, recommended=True),
@@ -564,14 +583,36 @@ def _requires_custom_code(info: object) -> bool:
 
 
 def _supports_hermes_tool_calls(info: object) -> bool:
-    config = getattr(info, "config", None)
-    if not isinstance(config, dict):
-        return False
-    model_type = config.get("model_type")
-    if not isinstance(model_type, str) or model_type.casefold() not in _HERMES_MODEL_TYPES:
+    model_type = _model_type(info)
+    if model_type not in _HERMES_MODEL_TYPES:
         return False
     pipeline_tag = getattr(info, "pipeline_tag", None)
     return not isinstance(pipeline_tag, str) or pipeline_tag in _TEXT_GENERATION_PIPELINES
+
+
+def _model_type(info: object) -> str | None:
+    config = getattr(info, "config", None)
+    if not isinstance(config, dict):
+        return None
+    model_type = config.get("model_type")
+    if not isinstance(model_type, str):
+        return None
+    normalized = model_type.strip().casefold()
+    return normalized if re.fullmatch(r"[a-z0-9_-]+", normalized) is not None else None
+
+
+def infer_model_type(repository: str, declared: object = None) -> str | None:
+    """Normalize a declared family, falling back to a conservative repository hint."""
+    if isinstance(declared, str):
+        normalized_declared = declared.strip().casefold()
+        if re.fullmatch(r"[a-z0-9_-]+", normalized_declared) is not None:
+            return normalized_declared
+    normalized = repository.casefold().replace(".", "").replace("-", "")
+    if "qwen3" in normalized:
+        return "qwen3"
+    if "qwen25" in normalized:
+        return "qwen2"
+    return None
 
 
 def _context_window(info: object) -> int:
@@ -587,7 +628,11 @@ def _context_window(info: object) -> int:
             value = config.get(key)
             if isinstance(value, int) and value >= MINIMUM_LOCAL_CONTEXT_WINDOW:
                 return min(value, MAXIMUM_LOCAL_CONTEXT_WINDOW)
-    return DEFAULT_LOCAL_CONTEXT_WINDOW
+    raise ModelRepositoryError(
+        "Heartwood cannot verify this repository's model context capacity. "
+        f"Report the model at {_ISSUE_URL} or import a reviewed artifact with an explicit "
+        "context window."
+    )
 
 
 def _preferred_gguf(candidates: tuple[LocalModelChoice, ...]) -> LocalModelChoice | None:

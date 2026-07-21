@@ -17,7 +17,8 @@ Each recommendation includes the canonical Hugging Face repository, immutable re
 Heartwood shows the expected download size before any transfer begins.
 
 Recommendations are an onboarding aid, not a closed allowlist and not a guarantee of scientific suitability.
-They are selected for the supported runtime and documented tool-use checks in the release.
+They are selected for pinned runtime compatibility, immutable source metadata, and conservative resource planning.
+Release CI validates those contracts without treating a recommendation as evidence of scientific quality or a completed live GPU evaluation.
 
 List them from the terminal:
 

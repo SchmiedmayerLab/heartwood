@@ -61,7 +61,7 @@ bundles_model_artifact = false
 gpu_runtime = "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.10.1.1/vllm-0.10.1.1%2Bcu118-cp38-abi3-manylinux1_x86_64.whl"
 model_cache = "<project>/.heartwood/models"
 ci_required = true
-live_workspace_validation_required = true
+live_workspace_validation_required = false
 
 [platforms.terra.required_env_contains]
 PATH = ["/opt/llama.cpp", "/opt/conda/bin", "/usr/local/bin"]
@@ -70,12 +70,8 @@ JUPYTER_PATH = ["/opt/conda/share/jupyter"]
 
 [[platforms.terra.required_evidence]]
 name = "local-ci-smoke"
-description = "Build the no-weight Terra CI image through the shared production image assembly; verify arbitrary current-directory project isolation and restart persistence; exercise the inherited Jupyter contract, Heartwood UI, readiness API, and both notebook proxy routes; and run the OpenHands loopback smoke with Docker networking disabled."
+description = "Build the no-weight Terra CI image through the shared production image assembly; verify current-directory project isolation and restart persistence; exercise the inherited Jupyter contract, internal prefixed gateway path, terminal and notebook capabilities, and OpenHands loopback smoke with Docker networking disabled."
 
 [[platforms.terra.required_evidence]]
 name = "main-publish-real-terra"
-description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run current-directory persistence, Jupyter, Leonardo, Heartwood proxy, OpenHands, and mounted Heartwood-managed inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."
-
-[[platforms.terra.required_evidence]]
-name = "live-terra-smoke"
-description = "Launch the published Terra image in a synthetic workspace, configure an authorized model profile, use the web UI and CLI against one session, and record image digest, proxy behavior, and scrubbed audit export."
+description = "Build the no-weight runtime from the real Terra base as an untagged digest, verify its Docker schema-2 manifest and image configuration, run current-directory persistence, Jupyter inheritance, internal gateway path, OpenHands, and mounted Heartwood-managed inference smokes against that exact digest, then create the immutable commit tag and move the channel tag last."

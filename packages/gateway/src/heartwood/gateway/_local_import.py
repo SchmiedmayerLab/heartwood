@@ -15,11 +15,15 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from heartwood.gateway._local_model_contract import DEFAULT_LOCAL_CONTEXT_WINDOW
+from heartwood.gateway._local_model_contract import (
+    DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
+)
 from heartwood.gateway._local_models import (
     LocalModelChoice,
     LocalModelRuntime,
     ModelRepositoryError,
+    infer_model_type,
 )
 from heartwood.gateway._model_identity import (
     is_hugging_face_model_id,
@@ -70,6 +74,11 @@ def import_local_model(
         raise ModelRepositoryError("source revision must be an immutable commit hash")
     if not license_posture.strip():
         raise ModelRepositoryError("the upstream model license must be recorded")
+    if context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
+        raise ModelRepositoryError(
+            "Heartwood agent sessions require an imported model context window of at least "
+            f"{MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:,} tokens"
+        )
     source = source.expanduser()
     if not source.exists():
         raise ModelRepositoryError(f"model source does not exist: {source}")
@@ -85,6 +94,10 @@ def import_local_model(
             "model source and Heartwood project model storage must be separate paths"
         )
     runtime = _runtime_for_source(source)
+    model_type = infer_model_type(
+        source_repository,
+        _declared_model_type(source) if runtime == "vllm" else None,
+    )
     size_bytes = _source_size(source)
     minimum_free_bytes = size_bytes + _IMPORT_RESERVE_BYTES
     available = shutil.disk_usage(models_dir).free
@@ -116,6 +129,7 @@ def import_local_model(
         minimum_free_bytes=minimum_free_bytes,
         license_posture=license_posture.strip(),
         catalog_source="user-selected",
+        model_type=model_type,
         context_window=context_window,
         artifact_sha256=checksum,
         minimum_resource_envelope=_minimum_resource_envelope(runtime, size_bytes),
@@ -137,6 +151,7 @@ def import_local_model(
             "license_posture": license_posture.strip(),
             "size_bytes": size_bytes,
             "runtime": runtime,
+            "model_type": model_type,
             "artifact_sha256": checksum,
         }
         (temporary / "heartwood-model.json").write_text(
@@ -181,6 +196,15 @@ def _runtime_for_source(source: Path) -> LocalModelRuntime:
     if not has_weights:
         raise ModelRepositoryError("a vLLM model directory must contain safetensors weights")
     return "vllm"
+
+
+def _declared_model_type(source: Path) -> object:
+    """Return model-family metadata from a directory already validated above."""
+    try:
+        config = json.loads((source / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):  # pragma: no cover - validated by _runtime_for_source
+        return None
+    return config.get("model_type") if isinstance(config, dict) else None
 
 
 def _reject_symlinks(source: Path) -> None:
