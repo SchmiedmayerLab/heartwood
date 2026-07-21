@@ -33,18 +33,29 @@ esac
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(cd "${script_dir}/../../.." && pwd)}"
+heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
+heartwood_cli="${HEARTWOOD_CLI:-${runtime_root}/.venv/bin/heartwood}"
 state_root="${project}/.heartwood"
 workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-capable-model}"
 transcript="${HEARTWOOD_TRANSCRIPT:-${project}/heartwood-transcript.txt}"
 replay="${HEARTWOOD_REPLAY_TRANSCRIPT:-${project}/heartwood-replay.txt}"
 report="${HEARTWOOD_QUALIFICATION_REPORT:-${project}/heartwood-qualification.json}"
-inference="${state_root}/qualification-inference.json"
+inference="${project}/qualification-inference.json"
 command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-900}"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 cohort_path="${project}/cohort-summary.json"
 events_path="${workspace}/${session_id}/events.jsonl"
 audit_path="${state_root}/audit-export.jsonl"
+
+if [[ ! -x "${heartwood_python}" ]]; then
+  echo "Heartwood Python is unavailable: ${heartwood_python}" >&2
+  exit 69
+fi
+if [[ ! -x "${heartwood_cli}" ]]; then
+  echo "Heartwood CLI is unavailable: ${heartwood_cli}" >&2
+  exit 69
+fi
 
 export HEARTWOOD_SESSION_ID="${session_id}"
 export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
@@ -61,7 +72,7 @@ cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv "${project}/input/"
 cd "${project}"
 
 echo "Checking direct model inference..."
-python - "${inference}" <<'PY'
+"${heartwood_python}" - "${inference}" <<'PY'
 import json
 import os
 import sys
@@ -92,7 +103,7 @@ with open(sys.argv[1], "w", encoding="utf-8") as file:
 PY
 
 run_heartwood() {
-  timeout "${command_timeout}" heartwood "$@"
+  timeout "${command_timeout}" "${heartwood_cli}" "$@"
 }
 
 run_heartwood models refresh heartwood | tee -a "${transcript}"
@@ -104,7 +115,7 @@ run_heartwood --session-id "${session_id}" \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do
-  pending_id="$(python - "${events_path}" <<'PY'
+  pending_id="$("${heartwood_python}" - "${events_path}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -134,7 +145,7 @@ run_heartwood --session-id "${session_id}" replay | tee "${replay}"
 run_heartwood --session-id "${session_id}" audit export \
   --output "${audit_path}" | tee -a "${transcript}"
 
-python "${script_dir}/verify_coding_agent_e2e.py" \
+"${heartwood_python}" "${script_dir}/verify_coding_agent_e2e.py" \
   --events "${events_path}" \
   --audit "${audit_path}" \
   --artifact "${cohort_path}" \

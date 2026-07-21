@@ -15,6 +15,7 @@ runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(cd "${script_dir}/../.." && pwd)}"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${project}/vllm.log}"
 runtime_metadata="${HEARTWOOD_QUALIFICATION_RUNTIME_METADATA:-${project}/gpu-runtime.json}"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
 vllm_executable="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 vllm_python="${HEARTWOOD_VLLM_PYTHON:-/opt/heartwood-vllm/bin/python}"
 
@@ -22,12 +23,16 @@ if [[ ! -d "${model_path}" ]]; then
   echo "vLLM model snapshot is unavailable: ${model_path}" >&2
   exit 66
 fi
+if [[ ! -x "${heartwood_python}" ]]; then
+  echo "Heartwood Python is unavailable: ${heartwood_python}" >&2
+  exit 69
+fi
 mkdir -p "${project}"
 project="$(cd "${project}" && pwd -P)"
 model_path="$(cd "${model_path}" && pwd -P)"
 rm -f "${runtime_log}" "${runtime_metadata}"
 
-configuration="$(python "${script_dir}/qualification_config.py" "${configuration_id}")"
+configuration="$("${heartwood_python}" "${script_dir}/qualification_config.py" "${configuration_id}")"
 snapshot_id="$(jq -er '.configuration.model_snapshot' <<<"${configuration}")"
 repository="$(jq -er '.configuration.model_repository' <<<"${configuration}")"
 revision="$(jq -er '.configuration.model_revision' <<<"${configuration}")"
@@ -39,7 +44,7 @@ startup_min="$(jq -er '.configuration.startup_seconds_min' <<<"${configuration}"
 startup_max="$(jq -er '.configuration.startup_seconds_max' <<<"${configuration}")"
 
 echo "Verifying the pinned ${repository}@${revision} snapshot..."
-python - "${model_path}" "${snapshot_id}" "${repository}" "${revision}" <<'PY'
+"${heartwood_python}" - "${model_path}" "${snapshot_id}" "${repository}" "${revision}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -58,7 +63,7 @@ if any(source.get(key) != value for key, value in expected.items()):
 verify_model_snapshot(root)
 PY
 
-python - "${configuration}" <<'PY'
+"${heartwood_python}" - "${configuration}" <<'PY'
 import json
 import os
 import sys
@@ -77,7 +82,7 @@ if not compatible or not environment.visible_devices:
     raise SystemExit("the requested qualification requires compatible GPUs visible in this process")
 PY
 
-"${script_dir}/verify_runtime.sh"
+"${script_dir}/verify_runtime.sh" /opt
 "${vllm_executable}" --version >/dev/null
 "${vllm_python}" - "${runtime_metadata}" <<'PY'
 import json
@@ -137,7 +142,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python - "${runtime_port}" "${startup_max}" <<'PY'
+"${heartwood_python}" - "${runtime_port}" "${startup_max}" <<'PY'
 import sys
 import time
 import urllib.error

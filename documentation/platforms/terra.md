@@ -27,8 +27,17 @@ Terra does not apply those changes to an existing environment; create a new envi
 Deleting the compute environment and deleting its persistent disk are separate choices, so retain the disk when it contains project files you still need.
 See Terra's [GPU Cloud Environment guide](https://support.terra.bio/hc/en-us/articles/4403006001947-Getting-started-with-GPUs-in-a-Cloud-Environment).
 
-Open the workspace's Jupyter Cloud Environment settings, select **Customize**, and choose **Custom Environment** under application configuration.
-Enter one image:
+Open the workspace's Jupyter Cloud Environment settings and configure the environment in this order:
+
+1. Select **Customize**, then choose **Custom Environment** under application configuration.
+2. Select the CPU and memory combination from the table below.
+3. Enter the corresponding container image.
+4. Enable the GPU, when required, and verify the GPU type and count.
+5. Set auto-pause and review every value before selecting **Create**.
+
+Terra can reset the image or GPU selection when the CPU choice changes, so set compute resources first and verify the complete form before creation.
+
+Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
@@ -162,6 +171,7 @@ Deleting the persistent disk removes `.heartwood/` and project files stored only
 ## Troubleshooting Terra
 
 - If Jupyter returns **404**, open Jupyter from the Terra workspace rather than using a guessed host path.
+- If creation fails with `ZONE_RESOURCE_POOL_EXHAUSTED`, the requested Google Cloud resources are temporarily unavailable in Terra's default zone; the container has not started. Delete only the failed Cloud Environment, retain its persistent disk, and retry later. Terra also documents an [advanced Swagger API procedure](https://support.terra.bio/hc/en-us/articles/4403307463067-How-to-create-a-custom-Cloud-Environment-with-the-Swagger-API) for selecting another zone; use it only when you are comfortable creating and tracking a Cloud Environment outside the standard form.
 - If a Heartwood browser URL returns **401** or **404**, use the terminal or notebook interface; browser access is not supported on Terra.
 - If `import heartwood` fails in a notebook, switch the notebook kernel to **Python 3 (Heartwood)** and restart the kernel.
 - If a model download stops, rerun Heartwood from the same project; verified files in `.heartwood/models/` are reused.
