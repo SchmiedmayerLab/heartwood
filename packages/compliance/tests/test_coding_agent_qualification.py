@@ -234,6 +234,24 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
     )
 
 
+def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
+    module = _module(
+        "gpu_qualification_config_list",
+        _root() / "images/gpu/qualification_config.py",
+    )
+
+    configurations = module.list_configurations(
+        _root() / "images/gpu/compatibility.toml",
+        platform="terra",
+    )
+
+    assert {configuration["configuration_id"] for configuration in configurations} == {
+        "terra-t4-qwen25-coder-7b-awq",
+        "terra-t4-qwen25-coder-14b-awq",
+        "terra-4xt4-qwen3-coder-30b-fp8",
+    }
+
+
 def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
     verifier = _module(
         "gpu_compatibility_verifier",

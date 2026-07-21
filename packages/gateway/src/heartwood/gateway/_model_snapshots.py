@@ -51,6 +51,15 @@ _TOOL_CALL_PARSERS = {"hermes", "openai", "qwen3_coder"}
 _VALIDATED_PLATFORMS = {"carina", "generic", "terra"}
 
 
+def automatic_model_tier(platform_id: str) -> ModelTier:
+    """Return the highest tier considered by automatic model selection."""
+    if platform_id == "terra":
+        return "maximum"
+    if platform_id == "carina":
+        return "powerful"
+    return "standard"
+
+
 class SnapshotDownloader(Protocol):
     """Callable contract implemented by ``huggingface_hub.snapshot_download``."""
 

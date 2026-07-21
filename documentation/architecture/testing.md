@@ -23,6 +23,8 @@ No single layer establishes every property of a deployment.
 | Live synthetic validation | Exact published artifact in Terra or Carina without protected data |
 
 GPU image CI verifies the fully hashed CUDA 12.9 environment, exact vLLM and PyTorch versions, compatibility guards, available tool parsers, launcher, and absence of bundled model weights on standard runners.
+Each immutable GPU candidate embeds the complete compatibility matrix for its commit.
+Qualification profiles select external model weights and runtime arguments against that candidate; they do not produce profile-specific images.
 An optional protected self-hosted GPU job runs the same model qualification used on managed platforms when an eligible runner is configured.
 Without GPU hardware, CI does not claim successful CUDA initialization or GPU model loading.
 

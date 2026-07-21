@@ -20,6 +20,7 @@ from heartwood.gateway import (
     ModelSnapshot,
     ModelSnapshotCatalog,
     ModelSnapshotError,
+    automatic_model_tier,
     download_model_snapshot,
     load_model_snapshot_catalog,
     plan_local_context_window,
@@ -46,11 +47,27 @@ from heartwood.gateway import (
             "hermes",
         ),
         (
+            "qwen25-coder-14b-instruct-awq-vllm",
+            "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+            "eb3172f06a6d6b3a15f08947b0668d782e4d2d2c",
+            "powerful",
+            1,
+            "hermes",
+        ),
+        (
             "qwen3-coder-30b-a3b-instruct-fp8-vllm",
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
             "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
             "powerful",
             1,
+            "qwen3_coder",
+        ),
+        (
+            "qwen3-coder-30b-a3b-instruct-fp8-tp4-vllm",
+            "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+            "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
+            "maximum",
+            4,
             "qwen3_coder",
         ),
         (
@@ -113,6 +130,22 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
         assert snapshot.validated_platforms == ()
         assert snapshot.qualification_test is None
         assert snapshot.recommended is False
+
+
+@pytest.mark.parametrize(
+    ("platform_id", "tier"),
+    [
+        ("generic", "standard"),
+        ("terra", "maximum"),
+        ("carina", "powerful"),
+        ("custom", "standard"),
+    ],
+)
+def test_automatic_model_tier_is_shared_across_interfaces(
+    platform_id: str,
+    tier: str,
+) -> None:
+    assert automatic_model_tier(platform_id) == tier
 
 
 @pytest.mark.parametrize(
@@ -429,6 +462,23 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
     )
     with pytest.raises(ModelSnapshotError, match="snapshots table"):
         load_model_snapshot_catalog(missing_snapshots)
+
+    missing_policies = tmp_path / "missing-policies.toml"
+    missing_policies.write_text(
+        'schema_version = "heartwood.model-snapshot-catalog.v2"\n[snapshots]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ModelSnapshotError, match="download policies"):
+        load_model_snapshot_catalog(missing_policies)
+
+    invalid_policy = tmp_path / "invalid-policy.toml"
+    invalid_policy.write_text(
+        'schema_version = "heartwood.model-snapshot-catalog.v2"\n'
+        '[download_policies]\ninvalid = "value"\n[snapshots]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ModelSnapshotError, match="policy entries must be tables"):
+        load_model_snapshot_catalog(invalid_policy)
 
     invalid_entry = tmp_path / "entry.toml"
     invalid_entry.write_text(

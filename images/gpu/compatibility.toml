@@ -44,6 +44,30 @@ startup_seconds_min = 120
 startup_seconds_max = 480
 
 [[configurations]]
+configuration_id = "terra-t4-qwen25-coder-14b-awq"
+status = "candidate"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 1
+minimum_gpu_memory_bytes = 15000000000
+model_snapshot = "qwen25-coder-14b-instruct-awq-vllm"
+model_repository = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"
+model_revision = "eb3172f06a6d6b3a15f08947b0668d782e4d2d2c"
+precision = "AWQ int4"
+context_window = 18432
+tensor_parallel_size = 1
+tool_call_parser = "hermes"
+agent_tool_mode = "openhands-prompt"
+enforce_eager = true
+vllm_version = "0.25.1+cu129"
+pytorch_version = "2.11.0+cu129"
+cuda_version = "12.9"
+minimum_driver_version = "525.60.13"
+qualification_test = "heartwood.coding-agent-e2e.v1"
+startup_seconds_min = 180
+startup_seconds_max = 600
+
+[[configurations]]
 configuration_id = "carina-l40s-qwen25-coder-7b-awq"
 status = "candidate"
 platform = "carina"
@@ -88,6 +112,30 @@ minimum_driver_version = "525.60.13"
 qualification_test = "heartwood.coding-agent-e2e.v1"
 startup_seconds_min = 180
 startup_seconds_max = 600
+
+[[configurations]]
+configuration_id = "terra-4xt4-qwen3-coder-30b-fp8"
+status = "candidate"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 4
+minimum_gpu_memory_bytes = 15000000000
+model_snapshot = "qwen3-coder-30b-a3b-instruct-fp8-tp4-vllm"
+model_repository = "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+model_revision = "dcaee4d4dfc5ee71ad501f01f530e5652438fde0"
+precision = "FP8 W8A16"
+context_window = 32768
+tensor_parallel_size = 4
+tool_call_parser = "qwen3_coder"
+agent_tool_mode = "openhands-prompt"
+enforce_eager = true
+vllm_version = "0.25.1+cu129"
+pytorch_version = "2.11.0+cu129"
+cuda_version = "12.9"
+minimum_driver_version = "525.60.13"
+qualification_test = "heartwood.coding-agent-e2e.v1"
+startup_seconds_min = 300
+startup_seconds_max = 900
 
 [[configurations]]
 configuration_id = "carina-2xl40s-qwen3-coder-30b-bf16"

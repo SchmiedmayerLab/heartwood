@@ -82,6 +82,7 @@ from heartwood.gateway._model_snapshots import (
     ModelSnapshotCatalog,
     ModelSnapshotError,
     ModelTier,
+    automatic_model_tier,
     download_model_snapshot,
     load_model_snapshot_catalog,
 )
@@ -783,7 +784,7 @@ class SessionGateway:
             )
         )
         recommendation = self.recommend_managed_model(
-            maximum_tier=("powerful" if gpu_environment.platform_id == "carina" else "standard"),
+            maximum_tier=automatic_model_tier(gpu_environment.platform_id),
             gpu_environment=gpu_environment,
         )
         preferred_id = (

@@ -476,7 +476,9 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
     assert {
         "qwen25-coder-7b-instruct-awq-vllm",
+        "qwen25-coder-14b-instruct-awq-vllm",
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+        "qwen3-coder-30b-a3b-instruct-fp8-tp4-vllm",
         "qwen3-coder-30b-a3b-instruct-bf16-vllm",
         "qwen3-coder-next-fp8-vllm",
         "gpt-oss-120b-vllm",

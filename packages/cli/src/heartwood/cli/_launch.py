@@ -33,6 +33,7 @@ from heartwood.gateway import (
     ProjectConfigStore,
     ProjectContext,
     SessionGateway,
+    automatic_model_tier,
     discover_slurm_gpu_partitions,
     estimate_local_runtime_memory,
     inspect_gpu_environment,
@@ -257,7 +258,7 @@ def _recommend_model(
 ) -> ModelSnapshot | None:
     task_profile = options.task_profile
     if task_profile == "auto":
-        task_profile = "powerful" if platform_id == "carina" else "standard"
+        task_profile = automatic_model_tier(platform_id)
     gateway = SessionGateway(project=options.project, env=env)
     try:
         gpu_environment = gateway.gpu_environment()

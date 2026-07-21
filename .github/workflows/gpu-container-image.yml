@@ -27,6 +27,8 @@ on:
         type: choice
         options:
           - terra-t4-qwen25-coder-7b-awq
+          - terra-t4-qwen25-coder-14b-awq
+          - terra-4xt4-qwen3-coder-30b-fp8
           - carina-l40s-qwen25-coder-7b-awq
           - carina-l40s-qwen3-coder-30b-fp8
           - carina-2xl40s-qwen3-coder-30b-bf16
@@ -284,6 +286,15 @@ jobs:
           docker pull --platform linux/amd64 "${CANDIDATE}"
           docker run --rm --platform linux/amd64 \
             --entrypoint /opt/heartwood/images/gpu/verify_runtime.sh "${CANDIDATE}"
+          profiles="$(
+            docker run --rm --platform linux/amd64 \
+              --entrypoint heartwood-python "${CANDIDATE}" \
+              /opt/heartwood/images/gpu/qualification_config.py --list
+          )"
+          jq --exit-status '
+            length > 0
+            and all(.[].configuration_id; type == "string" and length > 0)
+          ' <<<"${profiles}" >/dev/null
       - name: Verify shared agent and platform interfaces
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}

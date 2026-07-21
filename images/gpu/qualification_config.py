@@ -15,6 +15,20 @@ from pathlib import Path
 from typing import Any
 
 
+def list_configurations(path: Path, *, platform: str | None = None) -> list[dict[str, Any]]:
+    """List reviewed configurations, optionally restricted to one platform."""
+    with path.open("rb") as file:
+        configurations = tomllib.load(file).get("configurations")
+    if not isinstance(configurations, list):
+        raise ValueError("GPU compatibility matrix is malformed")
+    return [
+        configuration
+        for configuration in configurations
+        if isinstance(configuration, dict)
+        and (platform is None or configuration.get("platform") == platform)
+    ]
+
+
 def load_configuration(path: Path, configuration_id: str) -> dict[str, Any]:
     """Load one compatibility entry together with its runtime contract."""
     with path.open("rb") as file:
@@ -33,15 +47,22 @@ def load_configuration(path: Path, configuration_id: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    """Print one resolved configuration for shell and CI consumers."""
+    """Print reviewed configuration metadata for shell and CI consumers."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("configuration_id")
+    parser.add_argument("configuration_id", nargs="?")
+    parser.add_argument("--list", action="store_true")
+    parser.add_argument("--platform")
     parser.add_argument(
         "--matrix",
         type=Path,
         default=Path(__file__).with_name("compatibility.toml"),
     )
     args = parser.parse_args()
+    if args.list:
+        print(json.dumps(list_configurations(args.matrix, platform=args.platform), sort_keys=True))
+        return 0
+    if args.configuration_id is None:
+        parser.error("configuration_id is required unless --list is used")
     print(json.dumps(load_configuration(args.matrix, args.configuration_id), sort_keys=True))
     return 0
 
