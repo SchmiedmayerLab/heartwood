@@ -264,6 +264,7 @@ class SessionGateway:
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
         self._state_lock: AbstractContextManager[object] = RLock()
+        self._gpu_environment: GpuEnvironment | None = None
         adapter = select_platform_adapter(self.env)
         self.config_store = ProjectConfigStore(
             self.project,
@@ -840,9 +841,14 @@ class SessionGateway:
             },
         }
 
-    def gpu_environment(self) -> GpuEnvironment:
+    def gpu_environment(self, *, refresh: bool = False) -> GpuEnvironment:
         """Return the shared GPU and scheduler inventory for this deployment."""
-        return inspect_gpu_environment(self.config_store.load().platform_id, self.env)
+        if refresh or self._gpu_environment is None:
+            self._gpu_environment = inspect_gpu_environment(
+                self.config_store.load().platform_id,
+                self.env,
+            )
+        return self._gpu_environment
 
     def recommend_managed_model(
         self,

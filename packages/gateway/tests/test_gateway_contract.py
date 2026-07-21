@@ -728,6 +728,34 @@ def test_rest_reserves_the_heartwood_managed_profile(tmp_path: Path) -> None:
     assert "managed by Heartwood" in str(removed.body["error"])
 
 
+def test_gpu_environment_is_cached_and_can_be_refreshed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def inspect(platform_id: str, _env: Mapping[str, str]) -> GpuEnvironment:
+        nonlocal calls
+        calls += 1
+        return GpuEnvironment(
+            platform_id=platform_id,
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(),
+        )
+
+    monkeypatch.setattr("heartwood.gateway._gateway.inspect_gpu_environment", inspect)
+    gateway = _gateway(tmp_path)
+
+    first = gateway.gpu_environment()
+    second = gateway.gpu_environment()
+    refreshed = gateway.gpu_environment(refresh=True)
+
+    assert first is second
+    assert refreshed is not first
+    assert calls == 2
+
+
 def test_local_model_availability_reflects_installed_runtime_executables(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

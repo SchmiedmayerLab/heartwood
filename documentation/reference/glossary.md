@@ -27,11 +27,11 @@ SPDX-License-Identifier: MIT
 **Context window**
 : The token budget available to a model for instructions, conversation history, project content, tool results, and output.
 
-**CUDA**
-: NVIDIA's software platform and application binary interface for GPU computing.
-
 **Credential binding**
 : A non-secret identifier that tells Heartwood where an authorized process or platform supplies a provider credential.
+
+**CUDA**
+: NVIDIA's software platform and application binary interface for GPU computing.
 
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
@@ -72,11 +72,11 @@ SPDX-License-Identifier: MIT
 **Slurm**
 : A scheduler that allocates compute resources for jobs on platforms such as Stanford Carina.
 
-**Terra**
-: A cloud platform for biomedical research workspaces, data, workflows, and interactive Jupyter compute.
-
 **Tensor parallelism**
 : A runtime layout that divides one model across a fixed number of GPUs.
+
+**Terra**
+: A cloud platform for biomedical research workspaces, data, workflows, and interactive Jupyter compute.
 
 **vLLM**
 : A GPU-oriented inference server used by supported Heartwood NVIDIA deployments.
