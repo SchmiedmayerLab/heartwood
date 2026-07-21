@@ -766,6 +766,8 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] is (model["runtime"] == "llama-cpp") for model in available)
     assert available[0]["model_id"] == "qwen25-7b-instruct-q4_k_m"
+    assert available[0]["active"] is False
+    assert available[0]["selected"] is False
     assert available[0]["availability_reason"] == "Recommended for this deployment"
 
     monkeypatch.setattr(
@@ -775,7 +777,7 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
     fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] for model in fully_available)
-    assert fully_available[0]["model_id"] == "qwen3-8b-awq-vllm"
+    assert fully_available[0]["model_id"] == "qwen25-7b-instruct-awq-vllm"
     assert fully_available[0]["availability_reason"] == "Recommended for this deployment"
 
 
@@ -1093,9 +1095,17 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
     models = cast(list[dict[str, object]], catalog["models"])
     selected = next(model for model in models if model["model_id"] == choice.model_id)
     assert models[0] == selected
+    assert selected["active"] is False
+    assert selected["selected"] is True
     assert str(selected["availability_reason"]).startswith("Selected for this project")
     assert selected["source_repository"] == choice.source_repository
     assert selected["catalog_source"] == "user-selected"
+
+    restarted.env["HEARTWOOD_LOCAL_RUNTIME_ACTIVE"] = "1"
+    restarted.env["HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID"] = choice.model_id
+    active_models = cast(list[dict[str, object]], restarted.model_artifacts()["models"])
+    active = next(model for model in active_models if model["model_id"] == choice.model_id)
+    assert active["active"] is True
     assert selected["license_posture"] == choice.license_posture
     assert selected["minimum_resource_envelope"] == choice.minimum_resource_envelope
     assert selected["recommended_resource_envelope"] == choice.recommended_resource_envelope
@@ -1183,6 +1193,11 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     restarted = _gateway(tmp_path)
     assert restarted.model_settings()["active_profile"] == "heartwood"
     assert restarted.project_readiness()["state"] == "compute-required"
+    restored_models = cast(list[dict[str, object]], restarted.model_artifacts()["models"])
+    restored_selection = next(
+        model for model in restored_models if model["model_id"] == "qwen25-7b-instruct-vllm"
+    )
+    assert restored_selection["selected"] is True
     with pytest.raises(ModelRepositoryError, match="unknown Heartwood-managed model: missing"):
         gateway.download_local_model_now("missing")
 

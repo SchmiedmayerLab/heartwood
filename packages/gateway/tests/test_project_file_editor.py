@@ -42,6 +42,25 @@ def test_project_file_editor_delegates_valid_project_action(tmp_path: Path) -> N
     assert target.read_text(encoding="utf-8") == "print('synthetic')\n"
 
 
+def test_project_file_editor_resolves_relative_paths_from_project_root(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    (project.root / "data").mkdir()
+
+    observation = _executor(project)(
+        FileEditorAction(
+            command="create",
+            path="data/summary.txt",
+            file_text="synthetic aggregate\n",
+        )
+    )
+
+    assert observation.is_error is False
+    assert (project.root / "data" / "summary.txt").read_text(encoding="utf-8") == (
+        "synthetic aggregate\n"
+    )
+
+
 @pytest.mark.parametrize("reserved_path", [".heartwood/config.toml", ".heartwood/logs/run.log"])
 def test_project_file_editor_blocks_reserved_state(
     tmp_path: Path,

@@ -13,6 +13,9 @@ Use it when agent interaction belongs beside exploratory code and results rather
 
 Open a notebook whose working directory is the intended project, then verify it:
 
+On Terra, select the **Python 3 (Heartwood)** kernel.
+The default Terra kernel and the `python` command in a terminal may not contain Heartwood; use the named kernel instead of installing another copy.
+
 ```python
 from pathlib import Path
 

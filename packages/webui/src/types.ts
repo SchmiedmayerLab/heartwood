@@ -392,7 +392,9 @@ export interface LocalModelChoice {
   artifact_sha256: string | null;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
+  active: boolean;
   available: boolean;
+  selected: boolean;
   availability_reason: string;
 }
 

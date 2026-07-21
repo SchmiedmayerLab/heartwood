@@ -23,6 +23,8 @@ sudo apt-get update
 sudo apt-get install ca-certificates coreutils curl git libgomp1 tar tmux
 ```
 
+If the shell is already running as `root`, omit `sudo` from both commands.
+
 On another compatible distribution, install packages that provide the same commands and libraries, then confirm the runtime can start before relying on the installation.
 Then install [uv](https://docs.astral.sh/uv/) by following its official installation instructions.
 
@@ -46,7 +48,7 @@ mkdir -m 700 heartwood-installation
 cd heartwood-installation
 
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.4/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.5/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform generic
 export PATH="$PWD/bin:$PATH"
@@ -79,6 +81,7 @@ heartwood-jupyter
 ```
 
 Start it from the project directory, open the URL it prints, and use the **Python 3 (ipykernel)** kernel.
+In a disposable container that runs only as `root`, add `--allow-root`; do not use that exception for a normal user installation.
 Then follow [notebook interaction](../use/notebooks.md).
 
 ## Update

@@ -480,6 +480,7 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
     executable.chmod(0o755)
     observed_processes: list[tuple[str, ...]] = []
     observed_runs: list[tuple[tuple[str, ...], Path | None]] = []
+    observed_environments: list[dict[str, str]] = []
 
     class FakeProcess:
         def __init__(self, command: object, **_kwargs: object) -> None:
@@ -503,6 +504,7 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
         command: Sequence[str], **kwargs: object
     ) -> subprocess.CompletedProcess[Sequence[str]]:
         observed_runs.append((tuple(command), cast(Path | None, kwargs.get("cwd"))))
+        observed_environments.append(dict(cast(dict[str, str], kwargs.get("env", {}))))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(
@@ -534,6 +536,8 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
     assert observed_processes[0][context_index + 1] == "131072"
     assert setup_options == [{"context_window": 131_072}]
     assert observed_runs[-1][1] == tmp_path
+    assert observed_environments[-1]["HEARTWOOD_LOCAL_RUNTIME_ACTIVE"] == "1"
+    assert observed_environments[-1]["HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID"] == "test-model"
     assert "--workspace" not in observed_runs[-1][0]
     assert (tmp_path / ".heartwood" / "logs" / "local-model.log").is_file()
     assert not (tmp_path / ".heartwood" / "runtime" / "scratch").exists()
@@ -646,6 +650,7 @@ def test_resource_assessment_reports_context_and_memory_status(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     selection = LocalRuntimeSelection(
+        artifact_id="test-model",
         model_root=tmp_path / "model",
         runtime="vllm",
         model_id="test-model",
@@ -1253,6 +1258,7 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
     source_file = tmp_path / "model.gguf"
     source_file.write_bytes(b"1234")
     selection = LocalRuntimeSelection(
+        artifact_id="test-model",
         model_root=source_file,
         runtime="llama-cpp",
         model_id="test-model",

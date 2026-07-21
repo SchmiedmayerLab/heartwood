@@ -45,10 +45,14 @@ def test_repository_snapshot_catalog_pins_the_carina_demo_model() -> None:
     assert terra_snapshot.minimum_free_bytes >= terra_snapshot.expected_size_bytes
     assert terra_snapshot.context_window == 32_768
 
-    recommended_snapshot = catalog.snapshot("qwen3-8b-awq-vllm")
-    assert recommended_snapshot.source_repository == "Qwen/Qwen3-8B-AWQ"
-    assert recommended_snapshot.source_revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
+    recommended_snapshot = catalog.snapshot("qwen25-7b-instruct-awq-vllm")
+    assert recommended_snapshot.source_repository == "Qwen/Qwen2.5-7B-Instruct-AWQ"
     assert recommended_snapshot.recommended is True
+
+    qwen3_snapshot = catalog.snapshot("qwen3-8b-awq-vllm")
+    assert qwen3_snapshot.source_repository == "Qwen/Qwen3-8B-AWQ"
+    assert qwen3_snapshot.source_revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
+    assert qwen3_snapshot.recommended is False
 
 
 @pytest.mark.parametrize(

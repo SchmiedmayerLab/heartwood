@@ -31,9 +31,38 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
 
 export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
   const viewModel = emptyViewModel(events.at(-1)?.session_id ?? "");
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
     viewModel.activity.push(activityItem(event));
     switch (event.kind) {
+      case "command.received":
+        break;
+      case "confirmation.resolved": {
+        const targetId = stringValue(event.payload.tool_call_id);
+        const resolvesKnownAction = viewModel.approvalControls.some(
+          (control) =>
+            control.targetType === "tool-call" &&
+            control.targetId === targetId &&
+            control.decision === null,
+        );
+        recordConfirmation(viewModel.approvalControls, event.payload);
+        const decision = stringValue(event.payload.decision) || "approved";
+        const previous = events[index - 1];
+        const startsActionSet =
+          previous?.kind !== "confirmation.resolved" ||
+          stringValue(previous.payload.decision) !== decision;
+        if (resolvesKnownAction && startsActionSet) {
+          addConversationMessage(viewModel, event, {
+            content:
+              decision === "approved" ?
+                "Action set approved"
+              : "Action set rejected",
+            detail: "The decision applied to every action in the set.",
+            label: "Approval",
+            role: "trace",
+          });
+        }
+        break;
+      }
       case "user_message.recorded":
         addConversationMessage(viewModel, event, {
           content: stringValue(event.payload.content),
@@ -75,9 +104,6 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
           viewModel.approvalControls,
           confirmationApproval(event.payload.request),
         );
-        break;
-      case "confirmation.resolved":
-        recordConfirmation(viewModel.approvalControls, event.payload);
         break;
       case "model_call.decision.recorded": {
         const decision = recordValue(event.payload.decision);
@@ -222,6 +248,14 @@ const activityLabel = (kind: EventKind): string =>
   })[kind];
 
 const activityDetail = (event: SessionEvent): string => {
+  if (event.kind === "command.received") {
+    const commandKind = stringValue(event.payload.command_kind);
+    const commandId = stringValue(event.payload.command_id);
+    return [commandKind, commandId].filter(Boolean).join(" · ");
+  }
+  if (event.kind === "confirmation.resolved") {
+    return stringValue(event.payload.decision) || "approved";
+  }
   if (event.kind === "model_call.decision.recorded") {
     const decision = recordValue(event.payload.decision);
     return `${stringValue(decision.decision)} ${stringValue(decision.endpoint)}`;

@@ -43,6 +43,7 @@ from heartwood.gateway import (
     CredentialStoreError,
     DeploymentReadiness,
     GatewayAsgiApp,
+    InterfaceKind,
     ModelArtifactError,
     ModelCatalogError,
     ModelProfile,
@@ -71,7 +72,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0-beta.4"
+__version__ = "0.2.0-beta.5"
 
 _PROG = "heartwood"
 
@@ -101,6 +102,16 @@ _MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
     label="Downloading and verifying the model",
     waiting_label="Still downloading and verifying the model",
     guidance="Large models can take several minutes. Keep this process running.",
+)
+_STARTUP_ACTIVITY = InteractionActivity(
+    label="Checking the project and environment",
+    waiting_label="Still checking the project and environment",
+    guidance="Managed environments can take additional time to inspect.",
+)
+_MODEL_CATALOG_ACTIVITY = InteractionActivity(
+    label="Checking available models",
+    waiting_label="Still checking available models",
+    guidance="Model services and managed environments can take additional time to respond.",
 )
 
 
@@ -408,8 +419,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return run_launch(_launch_options(project, args))
     configured_gateway: SessionGateway | None = None
     if args.command is None:
-        startup_gateway = SessionGateway(project=project)
-        startup = startup_gateway.startup(interface=args.interface, port=args.port)
+        startup_gateway, startup = _run_with_progress(
+            lambda: _inspect_startup(project, interface=args.interface, port=args.port),
+            activity=_STARTUP_ACTIVITY,
+        )
         if not startup.interface_supported or startup.phase == "recovery-required":
             print(_format_startup_plan(startup))
             startup_gateway.stop()
@@ -469,7 +482,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 base_path="/",
             )
 
-    gateway = configured_gateway or SessionGateway(project=project)
+    gateway = configured_gateway or _run_with_progress(
+        lambda: SessionGateway(project=project),
+        activity=_STARTUP_ACTIVITY,
+    )
     gateway.start()
     try:
         if args.command == "models":
@@ -557,6 +573,20 @@ def _format_startup_plan(startup: StartupPlan) -> str:
             f"Next: {plan['next_action']}",
         )
     )
+
+
+def _inspect_startup(
+    project: ProjectContext,
+    *,
+    interface: InterfaceKind,
+    port: int,
+) -> tuple[SessionGateway, StartupPlan]:
+    gateway = SessionGateway(project=project)
+    try:
+        return gateway, gateway.startup(interface=interface, port=port)
+    except BaseException:
+        gateway.stop()
+        raise
 
 
 def _launch_options(project: ProjectContext, args: argparse.Namespace) -> LaunchOptions:
@@ -787,7 +817,10 @@ def _configure_setup(
     snapshot = _snapshot_setup_file(project)
     gateway: SessionGateway | None = None
     try:
-        gateway = SessionGateway(project=project)
+        gateway = _run_with_progress(
+            lambda: SessionGateway(project=project),
+            activity=_STARTUP_ACTIVITY,
+        )
         if not resume_existing:
             gateway.configure_model_source(source)
         gateway.start()
@@ -843,12 +876,15 @@ def _configure_setup(
                     raise ModelCatalogError("credential storage choice was cancelled") from error
             elif source != "custom":
                 print("The token will be kept only until this Heartwood command exits.")
-        catalog = gateway.discover_models(
-            connection_id,
-            token=token,
-            base_url=base_url,
-            refresh=True,
-            remember=remember_credential,
+        catalog = _run_with_progress(
+            lambda: gateway.discover_models(
+                connection_id,
+                token=token,
+                base_url=base_url,
+                refresh=True,
+                remember=remember_credential,
+            ),
+            activity=_MODEL_CATALOG_ACTIVITY,
         )
         models = catalog.get("models", [])
         if not isinstance(models, list):
@@ -912,7 +948,10 @@ def _configure_local_model(
     model_id: str | None,
     non_interactive: bool,
 ) -> None:
-    local_catalog = gateway.model_artifacts()
+    local_catalog, service_models = _run_with_progress(
+        lambda: _available_managed_models(gateway),
+        activity=_MODEL_CATALOG_ACTIVITY,
+    )
     raw_recommendations = local_catalog.get("models", [])
     recommendations = (
         [
@@ -923,22 +962,6 @@ def _configure_local_model(
         if isinstance(raw_recommendations, list)
         else []
     )
-    service_models: list[str] = []
-    try:
-        service_catalog = gateway.discover_models("heartwood", refresh=True)
-    except ModelCatalogError:
-        pass
-    else:
-        raw_service_models = service_catalog.get("models", [])
-        if isinstance(raw_service_models, list):
-            service_models = [
-                str(item["model_id"])
-                for item in raw_service_models
-                if isinstance(item, dict)
-                and isinstance(item.get("model_id"), str)
-                and item.get("availability") != "unsupported"
-            ]
-
     if model_id is None:
         print("\nModels Heartwood can run:")
         choices: list[tuple[str, str]] = []
@@ -1008,6 +1031,27 @@ def _configure_local_model(
         f"unknown Heartwood-managed model{qualifier}: {model_id}; choose a recommended id, "
         "an owner/model identifier, or a model reported by the Heartwood runtime"
     )
+
+
+def _available_managed_models(
+    gateway: SessionGateway,
+) -> tuple[dict[str, object], list[str]]:
+    local_catalog = gateway.model_artifacts()
+    try:
+        service_catalog = gateway.discover_models("heartwood", refresh=True)
+    except ModelCatalogError:
+        return local_catalog, []
+    raw_service_models = service_catalog.get("models", [])
+    if not isinstance(raw_service_models, list):
+        return local_catalog, []
+    service_models = [
+        str(item["model_id"])
+        for item in raw_service_models
+        if isinstance(item, dict)
+        and isinstance(item.get("model_id"), str)
+        and item.get("availability") != "unsupported"
+    ]
+    return local_catalog, service_models
 
 
 def _prompt_for_provider_token(
@@ -1504,7 +1548,7 @@ def _run_with_progress[Result](
     """Run one blocking operation with animated TTY or line-safe status updates."""
     stopped = threading.Event()
     started = time.monotonic()
-    animated = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    animated = sys.stderr.isatty() and "NO_COLOR" not in os.environ
     frames = (".  ", ".. ", "...")
     frame = 0
 
@@ -1518,17 +1562,23 @@ def _run_with_progress[Result](
                 suffix = "" if elapsed < 10 else f" ({elapsed}s elapsed)"
                 marker = frames[frame % len(frames)]
                 frame += 1
-                print(f"\r\033[2K{label}{marker}{suffix}", end="", flush=True)
+                print(
+                    f"\r\033[2K{label}{marker}{suffix}",
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
             else:
                 print(
                     f"{activity.waiting_label} ({elapsed}s elapsed). {activity.guidance}",
+                    file=sys.stderr,
                     flush=True,
                 )
 
     if animated:
-        print(f"{activity.label}{frames[0]}", end="", flush=True)
+        print(f"{activity.label}{frames[0]}", end="", file=sys.stderr, flush=True)
     else:
-        print(f"{activity.label}...", flush=True)
+        print(f"{activity.label}...", file=sys.stderr, flush=True)
     reporter = threading.Thread(
         target=report_progress,
         name="heartwood-line-progress",
@@ -1541,7 +1591,7 @@ def _run_with_progress[Result](
         stopped.set()
         reporter.join()
         if animated:
-            print("\r\033[2K", end="", flush=True)
+            print("\r\033[2K", end="", file=sys.stderr, flush=True)
 
 
 def _supports_full_screen_terminal() -> bool:

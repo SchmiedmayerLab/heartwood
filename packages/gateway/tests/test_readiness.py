@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,8 @@ from heartwood.gateway import (
     model_source_options,
     persist_deployment_profile,
 )
+from heartwood.gateway._project_config import LocalModelSelection
+from heartwood.gateway._readiness import managed_local_runtime_active
 
 
 def _project(tmp_path: Path) -> ProjectContext:
@@ -43,6 +46,36 @@ def _store(project: ProjectContext, env: dict[str, str]) -> ProjectConfigStore:
             policy=adapter.default_policy_profile(),
         ),
     )
+
+
+def test_managed_runtime_activity_uses_exact_launch_state_or_loopback_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = LocalModelSelection(
+        artifact_id="synthetic-artifact",
+        path=".heartwood/models/synthetic-artifact",
+        model_id="heartwood-managed-model",
+    )
+
+    assert managed_local_runtime_active(
+        selection,
+        {
+            "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
+            "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID": "synthetic-artifact",
+        },
+    )
+
+    class Opener:
+        def open(self, _url: str, *, timeout: float) -> BytesIO:
+            assert timeout == 0.5
+            return BytesIO(b'{"data":[{"id":"heartwood-managed-model"}]}')
+
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.urllib.request.build_opener",
+        lambda *_args: Opener(),
+    )
+
+    assert managed_local_runtime_active(selection, {})
 
 
 def test_readiness_reports_agent_dependency_failure_without_raising(
@@ -163,9 +196,23 @@ def test_ready_local_project_reports_selected_artifact(tmp_path: Path) -> None:
     _configure_model(project, source="heartwood", env={})
 
     stopped = inspect_deployment(project, env={})
-    readiness = inspect_deployment(project, env={"HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1"})
+    mismatch = inspect_deployment(
+        project,
+        env={
+            "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
+            "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID": "other-model",
+        },
+    )
+    readiness = inspect_deployment(
+        project,
+        env={
+            "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
+            "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID": "synthetic-model",
+        },
+    )
 
     assert stopped.state == "compute-required"
+    assert mismatch.state == "compute-required"
     assert readiness.state == "ready"
     artifact = next(check for check in readiness.checks if check.check_id == "local-model-artifact")
     assert artifact.status == "pass"
@@ -322,7 +369,10 @@ def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: 
     stopped = inspect_deployment(project, env={})
     running = inspect_deployment(
         project,
-        env={"HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1"},
+        env={
+            "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
+            "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID": "synthetic-model",
+        },
     )
 
     assert stopped.state == "compute-required"
@@ -349,6 +399,7 @@ def test_carina_local_project_requires_and_validates_compute(tmp_path: Path) -> 
             "LOCAL_SCRATCH_JOB": str(scratch),
             "CUDA_VISIBLE_DEVICES": "0",
             "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
+            "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID": "synthetic-model",
         },
     )
 

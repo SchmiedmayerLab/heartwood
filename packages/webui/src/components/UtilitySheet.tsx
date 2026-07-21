@@ -457,6 +457,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
                         <small>{model.recommended_resource_envelope}</small>
                       : null}
                       <ArtifactDownloadStatus
+                        active={model.active}
                         alias={model.label}
                         download={download}
                       />
@@ -834,6 +835,7 @@ const CustomLocalModelSetup = ({
               </div>
             </details>
             <ArtifactDownloadStatus
+              active={false}
               alias={plan.model.label}
               download={modelDownload}
             />
@@ -1427,9 +1429,11 @@ const connectionStatus = (connection: ModelConnection): string => {
 };
 
 const ArtifactDownloadStatus = ({
+  active,
   alias,
   download,
 }: {
+  active: boolean;
   alias: string;
   download: ModelArtifacts["downloads"][number] | undefined;
 }) => {
@@ -1437,7 +1441,9 @@ const ArtifactDownloadStatus = ({
   if (download.status === "ready") {
     return (
       <small role="status">
-        Downloaded. Restart Heartwood to load this model.
+        {active ?
+          "Downloaded and running."
+        : "Downloaded. Restart Heartwood to load this model."}
       </small>
     );
   }

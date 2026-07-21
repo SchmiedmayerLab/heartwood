@@ -131,6 +131,7 @@ class FakeClient implements HeartwoodClient {
   replayCalls = 0;
   artifactCalls = 0;
   artifactFailures = 0;
+  activeManagedModel = false;
   savedProfile: ModelProfile | null = null;
   catalogRequest: ModelCatalogRequest | null = null;
   catalogError: Error | null = null;
@@ -282,7 +283,9 @@ class FakeClient implements HeartwoodClient {
         artifact_sha256: "a".repeat(64),
         minimum_resource_envelope: "4 GiB RAM",
         recommended_resource_envelope: "8 GiB RAM",
+        active: false,
         available: true,
+        selected: true,
         availability_reason: "Available on this deployment",
       },
       path: "/project/.heartwood/models/imported/model.gguf",
@@ -496,7 +499,9 @@ class FakeClient implements HeartwoodClient {
           minimum_resource_envelope: "Minimum: 4 CPU cores and 8 GB RAM.",
           recommended_resource_envelope:
             "Recommended: 8 CPU cores and 16 GB RAM.",
+          active: this.activeManagedModel,
           available: true,
+          selected: this.currentSettings.model_source === "heartwood",
           availability_reason: "Available on this deployment",
         },
         ...(this.customModel === null ? [] : [this.customModel]),
@@ -527,7 +532,9 @@ class FakeClient implements HeartwoodClient {
       minimum_resource_envelope:
         "Estimated minimum: 4 CPU cores and 12 GB RAM.",
       recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
+      active: false,
       available: true,
+      selected: false,
       availability_reason: "Available on this deployment",
     };
     return Promise.resolve({
@@ -572,7 +579,9 @@ class FakeClient implements HeartwoodClient {
       minimum_resource_envelope:
         "Estimated minimum: 4 CPU cores and 12 GB RAM.",
       recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
+      active: false,
       available: true,
+      selected: false,
       availability_reason: "Available on this deployment",
     };
     const download: ModelDownload = {
@@ -1245,6 +1254,31 @@ describe("App", () => {
     expect(client.artifactCalls).toBeGreaterThanOrEqual(3);
     expect(
       screen.queryByText("temporary model status failure"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports only the loaded managed model as running", async () => {
+    const client = new FakeClient();
+    client.activeManagedModel = true;
+    client.currentDownloads = [
+      {
+        model_id: "stories260k",
+        status: "ready",
+        bytes_downloaded: 256 * 1024 * 1024,
+        bytes_total: 256 * 1024 * 1024,
+        path: "/models/stories260k/model.gguf",
+        error: null,
+      },
+    ];
+    render(<App client={client} initialSessionId="session-test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByText("Downloaded and running."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Downloaded. Restart Heartwood to load this model."),
     ).not.toBeInTheDocument();
   });
 

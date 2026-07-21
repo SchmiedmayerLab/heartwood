@@ -41,7 +41,7 @@ Do not use a shared project root itself as the Heartwood project.
 ```bash
 cd heartwood-installation
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.4/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.5/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"
@@ -81,7 +81,7 @@ Model files are stored under the project's `.heartwood/models/`, not the install
 When you start Heartwood with a selected Heartwood-managed model, it discovers GPU-capable Slurm partitions, prints the complete `srun` request, and asks before allocating compute.
 The current Carina partitions are `dev`, `normal`, and `long`; all can provide GPUs, with different time limits described in the official [Slurm guide](https://docs.carina.stanford.edu/slurm-carina).
 
-For a short interactive session, the default `dev` partition is appropriate:
+For a short interactive session, normal `heartwood` startup automatically selects the `dev` partition when it is available:
 
 ```bash
 heartwood

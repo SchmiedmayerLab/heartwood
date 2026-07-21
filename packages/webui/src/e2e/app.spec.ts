@@ -523,7 +523,9 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           "Estimated minimum: 4 CPU cores and 12 GB RAM.",
         recommended_resource_envelope:
           "Recommended: 8 CPU cores and 16 GB RAM.",
+        active: false,
         available: true,
+        selected: false,
         availability_reason: "Available on this deployment",
       },
       selection_reason:

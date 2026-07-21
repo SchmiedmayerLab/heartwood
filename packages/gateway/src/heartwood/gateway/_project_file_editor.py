@@ -43,7 +43,7 @@ class ProjectFileEditorExecutor(ToolExecutor[FileEditorAction, FileEditorObserva
         conversation: LocalConversation | None = None,
     ) -> FileEditorObservation:
         try:
-            self._project.require_project_path(Path(action.path))
+            resolved = self._project.require_project_path(Path(action.path))
         except ProjectStateError:
             return FileEditorObservation.from_text(
                 text=(
@@ -53,7 +53,10 @@ class ProjectFileEditorExecutor(ToolExecutor[FileEditorAction, FileEditorObserva
                 command=action.command,
                 is_error=True,
             )
-        return self._delegate(action, conversation)
+        return self._delegate(
+            action.model_copy(update={"path": str(resolved)}),
+            conversation,
+        )
 
 
 class ProjectFileEditorTool(FileEditorTool):
