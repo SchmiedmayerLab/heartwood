@@ -75,13 +75,34 @@ Those current Stanford terms, not Heartwood platform detection, determine data e
 
 ### Heartwood-Managed GPU Model
 
-Choose **Run with Heartwood**, select a recommended model or another public Hugging Face repository, and review the download and resource plan.
+Choose **Run with Heartwood**, select a catalog model or another public Hugging Face repository, and review the download and resource plan.
 Model files are stored under the project's `.heartwood/models/`, not the installation directory.
 
-When you start Heartwood with a selected Heartwood-managed model, it discovers GPU-capable Slurm partitions, prints the complete `srun` request, and asks before allocating compute.
-The current Carina partitions are `dev`, `normal`, and `long`; all can provide GPUs, with different time limits described in the official [Slurm guide](https://docs.carina.stanford.edu/slurm-carina).
+When you start Heartwood with a selected Heartwood-managed model, it inspects the GPU-capable Slurm partitions, available L40S count, GPU memory, CPU and RAM limits, existing model cache, and requested capability tier.
+It then prints the strongest compatible qualified model, expected download and startup range, and complete `srun` request.
+Heartwood asks separately before downloading weights and before allocating GPUs; it does neither silently.
 
-For a short interactive session, normal `heartwood` startup automatically selects the `dev` partition when it is available:
+Carina 2.0 compute nodes provide eight NVIDIA L40S GPUs and 1.5 TB RAM, but the requested allocation should include only the resources the task needs.
+The current partitions are `dev`, `normal`, and `long`; all can provide GPUs, with different time limits described in the official [Slurm guide](https://docs.carina.stanford.edu/slurm-carina) and hardware described in [Carina Facts](https://docs.carina.stanford.edu/carina-facts).
+
+### Choose Carina Resources
+
+The following configurations are release-pinned evaluation targets.
+Heartwood labels one **Recommended** only after its complete tool, approval, edit, replay, and audit qualification passes on Carina.
+
+| Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated First Start |
+|---|---|---:|---:|---:|---:|---:|
+| Standard fallback | Qwen2.5 Coder 7B AWQ | 1 x L40S | 32 GiB | 16 GiB | 32,768 | 2-8 minutes |
+| Powerful | Qwen3 Coder 30B FP8 | 1 x L40S | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
+| Powerful, higher precision | Qwen3 Coder 30B BF16 | 2 x L40S | 128 GiB | 96 GiB | 65,536 | 4-12 minutes |
+| Maximum capability | Qwen3 Coder Next FP8 | 4 x L40S | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
+| Maximum alternative | GPT-OSS 120B MXFP4 | 2 x L40S | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
+
+Download sizes range from about 5.2 GiB for the Standard GPU model to 74.9 GiB for the largest candidate.
+See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
+
+For a short interactive session, normal `heartwood` startup selects Slurm's default compatible GPU partition.
+On the current Carina configuration this is typically `dev` when `sinfo` marks it with `*`:
 
 ```bash
 heartwood
@@ -93,7 +114,18 @@ If no default GPU partition can be selected, inspect the plan and specify one th
 heartwood runtime start --partition dev --time 01:00:00
 ```
 
-Heartwood prepares the compatible runtime libraries, scopes model caches to the project, waits up to ten minutes by default, and reports the current stage and elapsed startup time every 15 seconds.
+Preview a particular capability tier without downloading or allocating:
+
+```bash
+heartwood runtime start --task-profile powerful --dry-run
+```
+
+`auto` prefers **Powerful** on Carina and falls back to the strongest qualified configuration that fits one available allocation.
+Use `--task-profile standard`, `powerful`, or `maximum` when the task has a known resource envelope.
+The `--gpus` option is an advanced constraint and must match a catalog configuration that was qualified at that tensor-parallel size.
+
+Heartwood scopes model caches to the project, waits up to ten minutes by default, and reports the current stage and elapsed startup time every 15 seconds.
+For scripted deployment, `--yes-download` and `--yes-request-allocation` are separate explicit approvals; normal interactive use should retain both prompts.
 
 ## Review, Exit, and Return
 
@@ -107,6 +139,8 @@ The interactive Slurm allocation and supervised vLLM process end with the Heartw
 
 - If a command disappears or is killed on a login node, stop and use Slurm for the compute work; Carina documents strict login-node limits.
 - If a partition is unavailable, run `sinfo --noheader --format='%P|%G|%a'` and choose one of the GPU-capable partitions Heartwood reports.
+- If the requested model does not fit the available GPU count or memory, choose the strongest compatible lower tier instead of changing tensor parallelism or precision manually.
+- If startup reports a driver or CUDA incompatibility, retain the released CUDA 12.9 environment and report the detected driver; do not install CUDA 13 into the Heartwood runtime.
 - If model startup fails, inspect `.heartwood/logs/` and the `HW-COMPUTE-*` checks from `heartwood doctor` without sharing project content or secrets.
 - If an interactive allocation disconnects, the process ends with the terminal; Carina recommends `tmux`, `screen`, or a batch job for work that must survive a connection loss.
 - Use Carina's [troubleshooting guide](https://docs.carina.stanford.edu/troubleshooting) for platform and Slurm failures.

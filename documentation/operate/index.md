@@ -27,7 +27,7 @@ The browser service must remain on loopback or behind an authenticated platform 
 ## Select an Artifact
 
 - Use the multi-platform standard image for generic AMD64/ARM64 deployments.
-- Use the NVIDIA image for validated AMD64 vLLM deployments.
+- Use the NVIDIA image for AMD64 vLLM deployments and verify the selected configuration against the [GPU compatibility matrix](../reference/gpu-compatibility.md).
 - Use a Terra-specific single-platform image for Terra Leonardo.
 - Use the release native installer where containers are not the platform's normal execution mechanism.
 

@@ -58,6 +58,7 @@ nav = [
         { "Command Reference" = "reference/cli.md" },
         { "Configuration and State" = "reference/configuration.md" },
         { "Platform Capabilities" = "reference/capabilities.md" },
+        { "GPU Compatibility" = "reference/gpu-compatibility.md" },
         { "Diagnostics and Troubleshooting" = "reference/troubleshooting.md" },
         { "Glossary" = "reference/glossary.md" },
     ] },

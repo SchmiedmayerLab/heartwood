@@ -70,6 +70,9 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         path=model_root,
         runtime="vllm",
         model_id="test-model",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=1,
+        tool_call_parser="hermes",
     )
 
     _write_executable(
@@ -77,7 +80,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         """
         #!/usr/bin/env bash
         set -euo pipefail
-        printf 'dev*|gpu:nvidia_l40s:8|up\n'
+        printf 'dev*|gpu:nvidia_l40s:8|up|512000|128\n'
         """,
     )
     _write_executable(
@@ -126,6 +129,14 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         exec env -i "${clean_environment[@]}" "${command[@]}"
         """,
     )
+    _write_executable(
+        scheduler_bin / "nvidia-smi",
+        """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf '0, NVIDIA L40S, 46068, 45000, 570.148.08, 8.9\n'
+        """,
+    )
     heartwood_python = runtime_root / "heartwood" / "bin" / "python"
     heartwood_python.parent.mkdir(parents=True)
     heartwood_python.symlink_to(sys.executable)
@@ -134,7 +145,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         """
         #!/usr/bin/env bash
         set -euo pipefail
-        echo '0.10.1.1 2.7.1 11.8'
+        echo '0.25.1+cu129 2.11.0+cu129 12.9'
         """,
     )
     _write_python_executable(
@@ -243,7 +254,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
     assert runtime_environment["ld_library_path"].startswith(
         str(runtime_root / "bootstrap" / "lib")
     )
-    assert runtime_environment["sampler"] == "0"
+    assert runtime_environment["sampler"] is None
     assert not runtime_environment["secret_present"]
     assert runtime_environment["path"].startswith(str(runtime_root / "bootstrap" / "bin"))
     config = tomllib.loads(project.config_path.read_text(encoding="utf-8"))

@@ -13,8 +13,9 @@ port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 alias="${HEARTWOOD_MANAGED_MODEL_ALIAS:-heartwood-managed-runtime}"
 tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"
 context="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
+tensor_parallel_size="${HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE:-1}"
+gpu_memory_utilization="${HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 vllm="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
-export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
   echo "vLLM must bind to loopback, got ${host}" >&2
@@ -34,5 +35,7 @@ exec "${vllm}" serve "${model_path}" \
   --port "${port}" \
   --served-model-name "${alias}" \
   --max-model-len "${context}" \
+  --tensor-parallel-size "${tensor_parallel_size}" \
+  --gpu-memory-utilization "${gpu_memory_utilization}" \
   --enable-auto-tool-choice \
   --tool-call-parser "${tool_parser}"

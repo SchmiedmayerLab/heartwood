@@ -20,7 +20,8 @@ The platform determines installation, durable storage, available interfaces, cre
 | Stanford Carina | Native release installer | Yes | No | No | NVIDIA GPU inference through requested compute |
 
 The generic standard image is a multi-platform Linux image for AMD64 and ARM64.
-GPU images are AMD64 because the pinned NVIDIA/vLLM stack is validated there.
+GPU images are AMD64 because the pinned NVIDIA/vLLM stack is built for that architecture.
+Consult the [GPU compatibility matrix](../reference/gpu-compatibility.md) for configuration-specific qualification status.
 Terra images are AMD64 single-platform Docker manifests because Terra image auto-detection requires that shape.
 
 ## Choose the Simplest Route

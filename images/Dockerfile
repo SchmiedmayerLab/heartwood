@@ -85,10 +85,19 @@ RUN set -eux; \
     elif ! id "${HEARTWOOD_RUNTIME_USER}" >/dev/null 2>&1; then \
       echo "runtime base does not provide user ${HEARTWOOD_RUNTIME_USER}" >&2; exit 69; \
     fi; \
+    runtime_group="$(id -gn "${HEARTWOOD_RUNTIME_USER}")"; \
     mkdir -p /opt/heartwood /opt/heartwood-vllm /opt/llama.cpp "${HEARTWOOD_WORKDIR}"; \
+    install -d --mode=0755 \
+      --owner="${HEARTWOOD_RUNTIME_USER}" --group="${runtime_group}" \
+      "${HEARTWOOD_RUNTIME_HOME}/.cache" \
+      "${HEARTWOOD_RUNTIME_HOME}/.cache/flashinfer" \
+      "${HEARTWOOD_RUNTIME_HOME}/.cache/huggingface" \
+      "${HEARTWOOD_RUNTIME_HOME}/.cache/vllm"; \
+    install -d --mode=0700 \
+      --owner="${HEARTWOOD_RUNTIME_USER}" --group="${runtime_group}" \
+      "${HEARTWOOD_RUNTIME_HOME}/.openhands"; \
     if [ "${HEARTWOOD_CREATE_USER}" = "true" ]; then \
-      mkdir -p "${HEARTWOOD_RUNTIME_HOME}/.openhands"; \
-      chown -R "${HEARTWOOD_RUNTIME_USER}:${HEARTWOOD_RUNTIME_USER}" \
+      chown -R "${HEARTWOOD_RUNTIME_USER}:${runtime_group}" \
         "${HEARTWOOD_RUNTIME_HOME}" "${HEARTWOOD_WORKDIR}"; \
     fi; \
     missing_packages=""; \

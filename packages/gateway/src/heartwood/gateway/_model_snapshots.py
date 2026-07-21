@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from filelock import FileLock
 
@@ -36,9 +36,19 @@ from heartwood.gateway._model_identity import (
 
 _ENTRY = re.compile(r"^([0-9a-fA-F]{64}) [ *](.+)$")
 _SNAPSHOT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_SAFE_PATTERN = re.compile(r"^[A-Za-z0-9._*?/[\]-]+$")
 _SIZE_TOLERANCE = 0.20
 
 type ProgressCallback = Callable[[int, int], None]
+type ModelTier = Literal["standard", "powerful", "maximum"]
+type ModelQualification = Literal["candidate", "qualified"]
+type ToolCallParser = Literal["hermes", "openai", "qwen3_coder"]
+
+_MODEL_TIERS = {"standard", "powerful", "maximum"}
+_MODEL_TIER_RANK: dict[str, int] = {"standard": 0, "powerful": 1, "maximum": 2}
+_MODEL_QUALIFICATIONS = {"candidate", "qualified"}
+_TOOL_CALL_PARSERS = {"hermes", "openai", "qwen3_coder"}
+_VALIDATED_PLATFORMS = {"carina", "generic", "terra"}
 
 
 class SnapshotDownloader(Protocol):
@@ -52,6 +62,8 @@ class SnapshotDownloader(Protocol):
         local_dir: Path,
         cache_dir: Path,
         token: bool,
+        allow_patterns: tuple[str, ...],
+        ignore_patterns: tuple[str, ...],
     ) -> str: ...
 
 
@@ -70,8 +82,26 @@ class ModelSnapshot:
     source_revision: str
     expected_size_bytes: int
     minimum_free_bytes: int
+    license_id: str
     license_posture: str
     model_alias: str
+    precision: str
+    tier: ModelTier
+    qualification: ModelQualification
+    minimum_gpu_count: int
+    minimum_gpu_memory_bytes: int
+    recommended_ram_bytes: int
+    recommended_disk_bytes: int
+    maximum_context_window: int
+    tool_call_parser: ToolCallParser
+    tensor_parallel_size: int
+    startup_seconds_min: int
+    startup_seconds_max: int
+    download_policy: str
+    allow_patterns: tuple[str, ...]
+    ignore_patterns: tuple[str, ...]
+    validated_platforms: tuple[str, ...] = ()
+    qualification_test: str | None = None
     context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
@@ -88,17 +118,62 @@ class ModelSnapshot:
         for name, value in (
             ("runtime_profile", self.runtime_profile),
             ("purpose", self.purpose),
+            ("license_id", self.license_id),
             ("license_posture", self.license_posture),
             ("model_alias", self.model_alias),
+            ("precision", self.precision),
+            ("download_policy", self.download_policy),
         ):
             if not value:
                 raise ModelSnapshotError(f"{name} must be a non-empty string")
         if self.expected_size_bytes <= 0 or self.minimum_free_bytes < self.expected_size_bytes:
             raise ModelSnapshotError("snapshot storage metadata is invalid")
+        if self.recommended_disk_bytes < self.minimum_free_bytes:
+            raise ModelSnapshotError("recommended_disk_bytes must cover minimum_free_bytes")
+        if self.recommended_ram_bytes <= 0:
+            raise ModelSnapshotError("recommended_ram_bytes must be positive")
+        if self.minimum_gpu_count <= 0 or self.minimum_gpu_memory_bytes <= 0:
+            raise ModelSnapshotError("GPU resource metadata must be positive")
+        if self.tensor_parallel_size < self.minimum_gpu_count:
+            raise ModelSnapshotError("tensor_parallel_size must cover the minimum GPU count")
+        if self.tier not in _MODEL_TIERS:
+            raise ModelSnapshotError(f"unsupported model tier: {self.tier}")
+        if self.qualification not in _MODEL_QUALIFICATIONS:
+            raise ModelSnapshotError(f"unsupported model qualification: {self.qualification}")
+        if self.tool_call_parser not in _TOOL_CALL_PARSERS:
+            raise ModelSnapshotError(f"unsupported vLLM tool-call parser: {self.tool_call_parser}")
+        if self.startup_seconds_min <= 0 or self.startup_seconds_max < self.startup_seconds_min:
+            raise ModelSnapshotError("snapshot startup estimate is invalid")
         if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
             raise ModelSnapshotError(
                 f"context_window must be between 2048 and {MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
             )
+        if not self.context_window <= self.maximum_context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
+            raise ModelSnapshotError(
+                "maximum_context_window must cover the default context window and remain bounded"
+            )
+        if not self.allow_patterns:
+            raise ModelSnapshotError("allow_patterns must select reviewed snapshot files")
+        for name, patterns in (
+            ("allow_patterns", self.allow_patterns),
+            ("ignore_patterns", self.ignore_patterns),
+        ):
+            if len(patterns) != len(set(patterns)):
+                raise ModelSnapshotError(f"{name} must not contain duplicates")
+            if any(not _safe_pattern(pattern) for pattern in patterns):
+                raise ModelSnapshotError(f"{name} contains an unsafe repository pattern")
+        if len(self.validated_platforms) != len(set(self.validated_platforms)):
+            raise ModelSnapshotError("validated_platforms must not contain duplicates")
+        if any(platform not in _VALIDATED_PLATFORMS for platform in self.validated_platforms):
+            raise ModelSnapshotError("validated_platforms contains an unsupported platform")
+        if self.qualification == "qualified" and (
+            not self.validated_platforms or self.qualification_test is None
+        ):
+            raise ModelSnapshotError(
+                "qualified models require validated platforms and a qualification test"
+            )
+        if self.qualification == "candidate" and self.recommended:
+            raise ModelSnapshotError("candidate models cannot be recommended")
 
     def safe_dict(self) -> dict[str, object]:
         """Return non-secret catalog metadata."""
@@ -126,6 +201,76 @@ class ModelSnapshotCatalog:
             "snapshots": [snapshot.safe_dict() for snapshot in self.snapshots],
         }
 
+    def recommend(
+        self,
+        *,
+        platform_id: str,
+        gpu_count: int,
+        gpu_memory_bytes: int,
+        maximum_tier: ModelTier,
+        requested_gpus: int | None = None,
+    ) -> ModelSnapshot | None:
+        """Return the strongest qualified recommendation within reviewed resources."""
+        maximum_rank = _MODEL_TIER_RANK[maximum_tier]
+        candidates = [
+            (index, snapshot)
+            for index, snapshot in enumerate(self.snapshots)
+            if snapshot.recommended
+            and snapshot.qualification == "qualified"
+            and platform_id in snapshot.validated_platforms
+            and _MODEL_TIER_RANK[snapshot.tier] <= maximum_rank
+            and snapshot.minimum_gpu_count <= gpu_count
+            and snapshot.minimum_gpu_memory_bytes <= gpu_memory_bytes
+            and (requested_gpus is None or snapshot.tensor_parallel_size == requested_gpus)
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda item: (
+                _MODEL_TIER_RANK[item[1].tier],
+                item[1].tensor_parallel_size,
+                -item[0],
+            ),
+        )[1]
+
+    def recommend_for_capacities(
+        self,
+        *,
+        platform_id: str,
+        capacities: tuple[tuple[int, int], ...],
+        maximum_tier: ModelTier,
+        requested_gpus: int | None = None,
+    ) -> ModelSnapshot | None:
+        """Return the strongest recommendation from distinct resource envelopes."""
+        candidates = tuple(
+            dict.fromkeys(
+                recommendation
+                for gpu_count, gpu_memory_bytes in capacities
+                if (
+                    recommendation := self.recommend(
+                        platform_id=platform_id,
+                        gpu_count=gpu_count,
+                        gpu_memory_bytes=gpu_memory_bytes,
+                        maximum_tier=maximum_tier,
+                        requested_gpus=requested_gpus,
+                    )
+                )
+                is not None
+            )
+        )
+        if not candidates:
+            return None
+        positions = {snapshot.snapshot_id: index for index, snapshot in enumerate(self.snapshots)}
+        return max(
+            candidates,
+            key=lambda snapshot: (
+                _MODEL_TIER_RANK[snapshot.tier],
+                snapshot.tensor_parallel_size,
+                -positions[snapshot.snapshot_id],
+            ),
+        )
+
 
 def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
     """Load recommended snapshot metadata from the repository catalog."""
@@ -136,15 +281,33 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             f"unable to load model snapshot catalog {path}: {error}"
         ) from error
     schema_version = _string(data, "schema_version")
-    if schema_version != "heartwood.model-snapshot-catalog.v1":
+    if schema_version != "heartwood.model-snapshot-catalog.v2":
         raise ModelSnapshotError(f"unsupported model snapshot catalog schema: {schema_version}")
     raw_snapshots = data.get("snapshots")
     if not isinstance(raw_snapshots, dict):
         raise ModelSnapshotError("model snapshot catalog must include a snapshots table")
+    raw_policies = data.get("download_policies")
+    if not isinstance(raw_policies, dict) or not raw_policies:
+        raise ModelSnapshotError("model snapshot catalog must include download policies")
+    policies: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+    for policy_id, policy in raw_policies.items():
+        if not isinstance(policy_id, str) or not isinstance(policy, dict):
+            raise ModelSnapshotError("download policy entries must be tables")
+        policies[policy_id] = (
+            _string_tuple(policy, "allow_patterns", required=True),
+            _string_tuple(policy, "ignore_patterns"),
+        )
     snapshots: list[ModelSnapshot] = []
     for snapshot_id, item in raw_snapshots.items():
         if not isinstance(snapshot_id, str) or not isinstance(item, dict):
             raise ModelSnapshotError("model snapshot entries must be tables")
+        download_policy = _string(item, "download_policy")
+        try:
+            allow_patterns, ignore_patterns = policies[download_policy]
+        except KeyError as error:
+            raise ModelSnapshotError(
+                f"unknown snapshot download policy: {download_policy}"
+            ) from error
         snapshot = ModelSnapshot(
             snapshot_id=snapshot_id,
             runtime_profile=_string(item, "runtime_profile"),
@@ -153,8 +316,32 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             source_revision=_string(item, "source_revision"),
             expected_size_bytes=_positive_int(item, "expected_size_bytes"),
             minimum_free_bytes=_positive_int(item, "minimum_free_bytes"),
+            license_id=_string(item, "license_id"),
             license_posture=_string(item, "license_posture"),
             model_alias=_string(item, "model_alias"),
+            precision=_string(item, "precision"),
+            tier=cast(ModelTier, _enum_string(item, "tier", _MODEL_TIERS)),
+            qualification=cast(
+                ModelQualification,
+                _enum_string(item, "qualification", _MODEL_QUALIFICATIONS),
+            ),
+            minimum_gpu_count=_positive_int(item, "minimum_gpu_count"),
+            minimum_gpu_memory_bytes=_positive_int(item, "minimum_gpu_memory_bytes"),
+            recommended_ram_bytes=_positive_int(item, "recommended_ram_bytes"),
+            recommended_disk_bytes=_positive_int(item, "recommended_disk_bytes"),
+            maximum_context_window=_positive_int(item, "maximum_context_window"),
+            tool_call_parser=cast(
+                ToolCallParser,
+                _enum_string(item, "tool_call_parser", _TOOL_CALL_PARSERS),
+            ),
+            tensor_parallel_size=_positive_int(item, "tensor_parallel_size"),
+            startup_seconds_min=_positive_int(item, "startup_seconds_min"),
+            startup_seconds_max=_positive_int(item, "startup_seconds_max"),
+            download_policy=download_policy,
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
+            validated_platforms=_string_tuple(item, "validated_platforms"),
+            qualification_test=_optional_string(item, "qualification_test"),
             context_window=_positive_int(item, "context_window"),
             minimum_resource_envelope=_optional_string(item, "minimum_resource_envelope"),
             recommended_resource_envelope=_optional_string(item, "recommended_resource_envelope"),
@@ -229,6 +416,8 @@ def download_model_snapshot(
                     local_dir=staging,
                     cache_dir=staging / ".cache" / "huggingface",
                     token=False,
+                    allow_patterns=snapshot.allow_patterns,
+                    ignore_patterns=snapshot.ignore_patterns,
                 )
             finally:
                 progress_stop.set()
@@ -242,10 +431,13 @@ def download_model_snapshot(
             shutil.rmtree(staging / ".cache", ignore_errors=True)
             _verify_download_size(staging, snapshot)
             source_record = {
-                "schema_version": "heartwood.model-snapshot-source.v1",
+                "schema_version": "heartwood.model-snapshot-source.v2",
                 "snapshot_id": snapshot.snapshot_id,
                 "source_repository": snapshot.source_repository,
                 "source_revision": snapshot.source_revision,
+                "download_policy": snapshot.download_policy,
+                "allow_patterns": list(snapshot.allow_patterns),
+                "ignore_patterns": list(snapshot.ignore_patterns),
             }
             (staging / "HEARTWOOD-SOURCE.json").write_text(
                 json.dumps(source_record, indent=2, sort_keys=True) + "\n",
@@ -368,10 +560,13 @@ def _verify_source_record(root: Path, snapshot: ModelSnapshot) -> None:
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ModelSnapshotError("model snapshot source record is unavailable") from error
     expected = {
-        "schema_version": "heartwood.model-snapshot-source.v1",
+        "schema_version": "heartwood.model-snapshot-source.v2",
         "snapshot_id": snapshot.snapshot_id,
         "source_repository": snapshot.source_repository,
         "source_revision": snapshot.source_revision,
+        "download_policy": snapshot.download_policy,
+        "allow_patterns": list(snapshot.allow_patterns),
+        "ignore_patterns": list(snapshot.ignore_patterns),
     }
     if source != expected:
         raise ModelSnapshotError("model snapshot source record does not match the reviewed source")
@@ -403,3 +598,33 @@ def _optional_bool(data: dict[str, Any], key: str, *, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ModelSnapshotError(f"{key} must be a boolean")
     return value
+
+
+def _enum_string(data: dict[str, Any], key: str, allowed: set[str]) -> str:
+    value = _string(data, key)
+    if value not in allowed:
+        raise ModelSnapshotError(f"unsupported {key}: {value}")
+    return value
+
+
+def _string_tuple(
+    data: dict[str, Any],
+    key: str,
+    *,
+    required: bool = False,
+) -> tuple[str, ...]:
+    value = data.get(key, [])
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ModelSnapshotError(f"{key} must be an array of non-empty strings")
+    if required and not value:
+        raise ModelSnapshotError(f"{key} must not be empty")
+    return tuple(value)
+
+
+def _safe_pattern(value: str) -> bool:
+    path = PurePosixPath(value)
+    return (
+        _SAFE_PATTERN.fullmatch(value) is not None
+        and not path.is_absolute()
+        and ".." not in path.parts
+    )

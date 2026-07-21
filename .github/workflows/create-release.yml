@@ -67,7 +67,7 @@ jobs:
             echo "tag already exists: ${RELEASE_VERSION}" >&2
             exit 1
           fi
-      - name: Verify recommended model sources
+      - name: Verify catalog model sources
         run: python3 deploy/verify_model_sources.py --source-root .
       - name: Verify release readiness on the exact commit
         env:

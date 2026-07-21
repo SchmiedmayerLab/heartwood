@@ -308,8 +308,25 @@ def test_background_manager_downloads_and_selects_a_snapshot(
         source_revision="a" * 40,
         expected_size_bytes=7,
         minimum_free_bytes=7,
+        license_id="Apache-2.0",
         license_posture="Synthetic",
         model_alias="Test snapshot",
+        precision="Synthetic",
+        tier="standard",
+        qualification="candidate",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=1,
+        recommended_ram_bytes=1,
+        recommended_disk_bytes=7,
+        maximum_context_window=32_768,
+        tool_call_parser="hermes",
+        tensor_parallel_size=1,
+        startup_seconds_min=1,
+        startup_seconds_max=2,
+        download_policy="synthetic",
+        allow_patterns=("*.json", "*.safetensors"),
+        ignore_patterns=("*.bin",),
+        context_window=32_768,
     )
     installed = tmp_path / "models" / snapshot.snapshot_id
 
@@ -332,7 +349,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
             artifacts=(),
         ),
         snapshot_catalog=ModelSnapshotCatalog(
-            schema_version="heartwood.model-snapshot-catalog.v1",
+            schema_version="heartwood.model-snapshot-catalog.v2",
             snapshots=(snapshot,),
         ),
         cache_dir=tmp_path / "models",
@@ -547,7 +564,7 @@ def _artifact(content: bytes) -> ModelArtifact:
 
 def _empty_snapshot_catalog() -> ModelSnapshotCatalog:
     return ModelSnapshotCatalog(
-        schema_version="heartwood.model-snapshot-catalog.v1",
+        schema_version="heartwood.model-snapshot-catalog.v2",
         snapshots=(),
     )
 

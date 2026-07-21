@@ -51,7 +51,7 @@ if [[ ! -x "${vllm_executable}" ]]; then
 fi
 
 "${vllm_python}" -c \
-  'import torch, vllm; from importlib.metadata import version; assert torch.version.cuda == "11.8", f"unexpected CUDA build: {torch.version.cuda}"; print(version("vllm"), torch.__version__, torch.version.cuda)'
+  'import torch, vllm; from importlib.metadata import version; assert torch.version.cuda == "12.9", f"unexpected CUDA build: {torch.version.cuda}"; print(version("vllm"), torch.__version__, torch.version.cuda)'
 "${vllm_executable}" __heartwood_verify_runtime__
 
 if (($#)); then

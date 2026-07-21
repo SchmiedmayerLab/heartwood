@@ -35,6 +35,8 @@ jobs:
   container-smoke:
     name: Container Smoke Tests
     uses: ./.github/workflows/container-smoke.yml
+    with:
+      run_capable_model: ${{ github.event_name != 'pull_request' }}
   gpu-containers:
     name: GPU Container Images
     uses: ./.github/workflows/gpu-container-image.yml

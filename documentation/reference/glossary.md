@@ -27,6 +27,9 @@ SPDX-License-Identifier: MIT
 **Context window**
 : The token budget available to a model for instructions, conversation history, project content, tool results, and output.
 
+**CUDA**
+: NVIDIA's software platform and application binary interface for GPU computing.
+
 **Credential binding**
 : A non-secret identifier that tells Heartwood where an authorized process or platform supplies a provider credential.
 
@@ -60,6 +63,9 @@ SPDX-License-Identifier: MIT
 **Project state**
 : Private non-secret configuration, sessions, models, Skills, logs, caches, runtime files, and audit artifacts under `.heartwood/`.
 
+**Quantization**
+: A lower-precision model representation, such as AWQ, GPTQ, or FP8, used to reduce memory and storage requirements.
+
 **Research Skill**
 : A versioned instruction package with declared tools, metadata, and workflow guidance available to the OpenHands agent.
 
@@ -68,6 +74,9 @@ SPDX-License-Identifier: MIT
 
 **Terra**
 : A cloud platform for biomedical research workspaces, data, workflows, and interactive Jupyter compute.
+
+**Tensor parallelism**
+: A runtime layout that divides one model across a fixed number of GPUs.
 
 **vLLM**
 : A GPU-oriented inference server used by supported Heartwood NVIDIA deployments.

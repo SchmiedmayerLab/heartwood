@@ -8,5 +8,9 @@
 set -euo pipefail
 
 runtime_bin="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-export PYTHONPATH="${runtime_bin}"
-exec "${runtime_bin}/python" "${runtime_bin}/heartwood_vllm.py" "$@"
+
+if [[ "$#" -eq 1 && "$1" == "__heartwood_verify_runtime__" ]]; then
+  exec "${runtime_bin}/python" "${runtime_bin}/verify_vllm.py"
+fi
+
+exec "${runtime_bin}/vllm" "$@"

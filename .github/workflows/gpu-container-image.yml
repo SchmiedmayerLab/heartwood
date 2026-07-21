@@ -9,6 +9,29 @@ name: GPU Container Image
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      run_gpu_qualification:
+        description: Run the coding-agent acceptance suite on a protected self-hosted GPU runner
+        required: true
+        default: false
+        type: boolean
+      configuration_id:
+        description: Reviewed compatibility-matrix configuration
+        required: true
+        default: terra-t4-qwen25-coder-7b-awq
+        type: choice
+        options:
+          - terra-t4-qwen25-coder-7b-awq
+          - carina-l40s-qwen25-coder-7b-awq
+          - carina-l40s-qwen3-coder-30b-fp8
+          - carina-2xl40s-qwen3-coder-30b-bf16
+          - carina-4xl40s-qwen3-coder-next-fp8
+          - carina-2xl40s-gpt-oss-120b
+      qualification_runner:
+        description: JSON array of protected self-hosted GPU runner labels
+        required: true
+        default: '["self-hosted","linux","x64","gpu"]'
+        type: string
 
 concurrency:
   group: gpu-container-image-${{ github.workflow }}-${{ github.ref }}
@@ -44,46 +67,117 @@ jobs:
             --python-platform x86_64-manylinux_2_28 \
             --generate-hashes \
             --emit-index-url \
-            --exclude-newer 2026-07-15T00:00:00Z \
+            --exclude-newer 2026-07-20T00:00:00Z \
             --override images/gpu/vllm-overrides.txt \
+            --exclude images/gpu/vllm-exclusions.txt \
             --output-file images/gpu/vllm-requirements.txt \
             images/gpu/vllm.in
           cmp /tmp/vllm-requirements.expected images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'vllm-0.10.1.1%2Bcu118' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'certifi-2026.6.17-py3-none-any.whl' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'ray==2.55.0' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'setuptools==78.1.1' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'transformers==5.5.0' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'requests==2.34.2' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'urllib3==2.7.0' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'xgrammar==0.1.32' images/gpu/vllm-overrides.txt
-          grep --fixed-strings 'idna==3.18' images/gpu/vllm-requirements.txt
-          grep --fixed-strings 'idna==3.18' images/gpu/vllm-overrides.txt
-          grep --fixed-strings 'nvidia-cuda-runtime-cu11==11.8.89' images/gpu/vllm-requirements.txt
-          if grep --fixed-strings --quiet -- '--extra-index-url https://download.pytorch.org/whl/cu118' images/gpu/vllm-requirements.txt; then
-            echo 'CUDA artifacts must use immutable wheel URLs instead of exposing the CUDA index to general dependency resolution.' >&2
-            exit 1
-          fi
-          if grep --fixed-strings --quiet 'nvidia-cuda-runtime-cu13' images/gpu/vllm-requirements.txt; then
-            echo 'CUDA 13 is incompatible with the NVIDIA driver currently available on Terra.' >&2
-            exit 1
-          fi
-          if grep --fixed-strings --quiet 'certifi==2022.12.7' images/gpu/vllm-requirements.txt; then
-            echo 'The GPU lock must not use the obsolete CA bundle mirrored by the CUDA index.' >&2
-            exit 1
-          fi
+          grep --fixed-strings 'vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'flashinfer-python==0.6.13' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'nvidia-cuda-runtime-cu12==12.9.79' images/gpu/vllm-requirements.txt
+          grep --fixed-strings 'xgrammar==0.2.3' images/gpu/vllm-requirements.txt
           grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt
+          python3 deploy/verify_gpu_compatibility.py
+          python3 -m py_compile \
+            images/gpu/qualification_config.py \
+            images/gpu/verify_vllm.py \
+            images/generic/scripts/verify_coding_agent_e2e.py \
+            deploy/verify_gpu_compatibility.py
           bash -n images/gpu/start_vllm.sh
           bash -n images/gpu/heartwood-vllm
           bash -n images/gpu/install_runtime.sh
+          bash -n images/gpu/coding_agent_e2e.sh
+          bash -n images/generic/scripts/coding_agent_e2e.sh
           test -x images/gpu/start_vllm.sh
           test -x images/gpu/heartwood-vllm
           test -x images/gpu/install_runtime.sh
+          test -x images/gpu/coding_agent_e2e.sh
+          test -x images/generic/scripts/coding_agent_e2e.sh
+
+  gpu-qualification:
+    name: GPU Coding-Agent Qualification
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu_qualification
+    needs: contract
+    runs-on: ${{ fromJSON(inputs.qualification_runner) }}
+    timeout-minutes: 180
+    environment: gpu-qualification
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
+      - name: Build the locked GPU runtime
+        run: >-
+          docker buildx bake --file docker-bake.hcl --load
+          --set runtime-gpu-nvidia.platform=linux/amd64
+          --set runtime-gpu-nvidia.tags=heartwood-gpu-qualification:local
+          runtime-gpu-nvidia
+      - name: Prepare isolated model and project storage
+        run: |
+          sudo mkdir -p "${RUNNER_TEMP}/heartwood-gpu-model" "${RUNNER_TEMP}/heartwood-gpu-project"
+          sudo chown -R 10001:10001 \
+            "${RUNNER_TEMP}/heartwood-gpu-model" "${RUNNER_TEMP}/heartwood-gpu-project"
+      - name: Resolve qualification model
+        id: model
+        env:
+          CONFIGURATION_ID: ${{ inputs.configuration_id }}
+        run: |
+          payload="$(python3 images/gpu/qualification_config.py "${CONFIGURATION_ID}")"
+          echo "snapshot=$(jq -r '.configuration.model_snapshot' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
+          echo "platform=$(jq -r '.configuration.platform' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
+      - name: Download and verify the pinned model
+        env:
+          SNAPSHOT: ${{ steps.model.outputs.snapshot }}
+        run: >-
+          docker run --rm --gpus all
+          --volume "${RUNNER_TEMP}/heartwood-gpu-model:/workspace"
+          heartwood-gpu-qualification:local
+          heartwood models download "${SNAPSHOT}"
+      - name: Run GPU coding-agent qualification without network
+        env:
+          CONFIGURATION_ID: ${{ inputs.configuration_id }}
+          PLATFORM_ID: ${{ steps.model.outputs.platform }}
+          SNAPSHOT: ${{ steps.model.outputs.snapshot }}
+        run: >-
+          docker run --rm --gpus all --network none --read-only --shm-size=16g
+          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 2048
+          --tmpfs /tmp:rw,nosuid,nodev,size=8g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+          --volume "${RUNNER_TEMP}/heartwood-gpu-model/.heartwood/models/${SNAPSHOT}:/models/${SNAPSHOT}:ro"
+          --volume "${RUNNER_TEMP}/heartwood-gpu-project:/workspace"
+          --env HEARTWOOD_CAPABLE_PROJECT=/workspace
+          --env HEARTWOOD_GPU_CONFIGURATION_ID="${CONFIGURATION_ID}"
+          --env HEARTWOOD_LOCAL_MODEL_PATH="/models/${SNAPSHOT}"
+          --env HEARTWOOD_PLATFORM="${PLATFORM_ID}"
+          heartwood-gpu-qualification:local
+          bash /opt/heartwood/images/gpu/coding_agent_e2e.sh
+      - name: Prepare GPU qualification evidence
+        if: always()
+        run: >-
+          sudo chown -R "$(id -u):$(id -g)"
+          "${RUNNER_TEMP}/heartwood-gpu-project"
+      - name: Upload GPU qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpu-qualification-${{ inputs.configuration_id }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/heartwood-gpu-project/heartwood-qualification.json
+            ${{ runner.temp }}/heartwood-gpu-project/heartwood-replay.txt
+            ${{ runner.temp }}/heartwood-gpu-project/heartwood-transcript.txt
+          if-no-files-found: warn
+          retention-days: 30
 
   pull-request-build:
     name: Build GPU candidate ${{ matrix.target }}

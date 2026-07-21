@@ -167,6 +167,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Require explicit inputs and do not prompt.",
     )
     setup.add_argument("--yes", action="store_true", help="Confirm the displayed configuration.")
+    setup.add_argument(
+        "--yes-download",
+        action="store_true",
+        help="Confirm the displayed model download without an interactive prompt.",
+    )
 
     runtime = subparsers.add_parser(
         "runtime", help="Advanced Heartwood-managed inference operations."
@@ -182,12 +187,17 @@ def _build_parser() -> argparse.ArgumentParser:
     runtime_start.add_argument(
         "--gpus",
         type=int,
-        default=1,
-        help="Number of GPUs to request; the current runtime supports one GPU.",
+        help="Advanced: override the catalog model's qualified GPU count.",
     )
-    runtime_start.add_argument("--cpus", type=int, default=8)
-    runtime_start.add_argument("--memory", default="64G")
+    runtime_start.add_argument("--cpus", type=int)
+    runtime_start.add_argument("--memory")
     runtime_start.add_argument("--time", dest="time_limit", default="02:00:00")
+    runtime_start.add_argument(
+        "--task-profile",
+        choices=("auto", "standard", "powerful", "maximum"),
+        default="auto",
+        help="Capability tier used when Heartwood recommends a model.",
+    )
     runtime_start.add_argument("--startup-timeout", type=int, default=600)
     runtime_start.add_argument("--dry-run", action="store_true")
     runtime_start.add_argument("--no-allocate", action="store_true")
@@ -195,6 +205,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--yes-request-allocation",
         action="store_true",
         help="Confirm the displayed scheduler request without an interactive prompt.",
+    )
+    runtime_start.add_argument(
+        "--yes-download",
+        action="store_true",
+        help="Confirm the displayed pinned model download without an interactive prompt.",
     )
     runtime_start.add_argument("--inside-allocation", action="store_true", help=argparse.SUPPRESS)
 
@@ -412,9 +427,11 @@ def _main(argv: Sequence[str] | None = None) -> int:
     if args.command == "setup":
         return _handle_setup(parser, args, project=project)
     if args.command == "runtime" and args.runtime_command == "start":
-        if args.gpus != 1:
-            parser.error("--gpus must be 1; multi-GPU managed inference is not supported")
-        if args.cpus < 1 or args.startup_timeout < 1 or args.port < 1:
+        if args.gpus is not None and args.gpus < 1:
+            parser.error("--gpus must be positive")
+        if args.cpus is not None and args.cpus < 1:
+            parser.error("--cpus must be positive")
+        if args.startup_timeout < 1 or args.port < 1:
             parser.error("--cpus, --startup-timeout, and --port must be positive")
         return run_launch(_launch_options(project, args))
     configured_gateway: SessionGateway | None = None
@@ -594,13 +611,15 @@ def _launch_options(project: ProjectContext, args: argparse.Namespace) -> Launch
         project=project,
         session_id=args.session_id,
         partition=getattr(args, "partition", None),
-        gpus=getattr(args, "gpus", 1),
-        cpus=getattr(args, "cpus", 8),
-        memory=getattr(args, "memory", "64G"),
+        gpus=getattr(args, "gpus", None),
+        cpus=getattr(args, "cpus", None),
+        memory=getattr(args, "memory", None),
         time_limit=getattr(args, "time_limit", "02:00:00"),
+        task_profile=getattr(args, "task_profile", "auto"),
         dry_run=getattr(args, "dry_run", False),
         no_allocate=getattr(args, "no_allocate", False),
         yes_request_allocation=getattr(args, "yes_request_allocation", False),
+        yes_download=getattr(args, "yes_download", False),
         inside_allocation=getattr(args, "inside_allocation", False),
         plain=args.plain,
         web=args.interface == "web",
@@ -832,6 +851,7 @@ def _configure_setup(
                     gateway,
                     model_id=model_id,
                     non_interactive=non_interactive,
+                    yes_download=bool(getattr(args, "yes_download", False)),
                 )
             return 0, gateway
         source_option = next(
@@ -947,6 +967,7 @@ def _configure_local_model(
     *,
     model_id: str | None,
     non_interactive: bool,
+    yes_download: bool,
 ) -> None:
     local_catalog, service_models = _run_with_progress(
         lambda: _available_managed_models(gateway),
@@ -969,12 +990,14 @@ def _configure_local_model(
             recommendation_id = str(item.get("model_id"))
             label = str(item.get("label"))
             runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
-            source = (
-                "Recommended"
-                if item.get("catalog_source") == "recommended"
-                else "Previously selected"
-            )
-            choices.append((recommendation_id, f"{label} ({source}, {runtime})"))
+            if item.get("recommended") is True:
+                source = "Heartwood recommendation"
+            elif item.get("catalog_source") == "catalog":
+                source = "Under evaluation"
+            else:
+                source = "Previously selected"
+            tier = _model_tier_label(item.get("tier"))
+            choices.append((recommendation_id, f"{tier}: {label} ({source}, {runtime})"))
         choices.append(("other", "Other Hugging Face model"))
         choices.extend((model, f"{model} (already running)") for model in service_models)
         for index, (_value, label) in enumerate(choices, start=1):
@@ -1006,8 +1029,18 @@ def _configure_local_model(
         item = known_local_ids[model_id]
         print("\nSelected Heartwood-managed model")
         print(f"  {item.get('label')}")
+        print(f"  Hugging Face: {item.get('source_repository')}")
+        print(f"  Pinned revision: {item.get('source_revision')}")
+        size = item.get("size_bytes")
+        if isinstance(size, int):
+            print(f"  Download: {size / 1024**3:.2f} GiB")
         if resources := item.get("recommended_resource_envelope"):
             print(f"  {resources}")
+        _confirm_model_download(
+            label=str(item.get("label")),
+            non_interactive=non_interactive,
+            yes_download=yes_download,
+        )
         _run_with_progress(
             lambda: gateway.download_local_model_now(model_id),
             activity=_MODEL_DOWNLOAD_ACTIVITY,
@@ -1021,6 +1054,13 @@ def _configure_local_model(
         print()
         print(_format_model_repository(plan))
         print()
+        raw_model = plan.get("model", {})
+        label = str(raw_model.get("label")) if isinstance(raw_model, dict) else model_id
+        _confirm_model_download(
+            label=label,
+            non_interactive=non_interactive,
+            yes_download=yes_download,
+        )
         _run_with_progress(
             lambda: gateway.download_custom_local_model_now(model_id),
             activity=_MODEL_DOWNLOAD_ACTIVITY,
@@ -1031,6 +1071,27 @@ def _configure_local_model(
         f"unknown Heartwood-managed model{qualifier}: {model_id}; choose a recommended id, "
         "an owner/model identifier, or a model reported by the Heartwood runtime"
     )
+
+
+def _confirm_model_download(
+    *,
+    label: str,
+    non_interactive: bool,
+    yes_download: bool,
+) -> None:
+    if yes_download:
+        return
+    if non_interactive:
+        raise ModelRepositoryError(
+            "model weights are downloaded only after explicit approval; review the model plan "
+            "and rerun setup with --yes-download"
+        )
+    try:
+        approved = input(f"Download {label} into .heartwood/models? [y/N]: ").strip().lower()
+    except EOFError as error:
+        raise ModelRepositoryError("model download approval was cancelled") from error
+    if approved != "y":
+        raise ModelRepositoryError("model download was not approved")
 
 
 def _available_managed_models(
@@ -1339,24 +1400,33 @@ def _format_model_artifacts(catalog: dict[str, object]) -> str:
     lines = ["Models Heartwood can run", ""]
     models = catalog.get("models", [])
     if isinstance(models, list):
-        for item in models:
-            if not isinstance(item, dict):
+        for tier in ("standard", "powerful", "maximum"):
+            tier_models = [
+                item for item in models if isinstance(item, dict) and item.get("tier") == tier
+            ]
+            if not tier_models:
                 continue
-            size = item.get("size_bytes")
-            size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
-            runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
-            review = (
-                "Recommended" if item.get("catalog_source") == "recommended" else "User selected"
-            )
-            lines.append(f"{item.get('model_id')}  {runtime}  {size_gib:.2f} GiB  {review}")
-            lines.append(f"    {item.get('label')}: {item.get('purpose')}")
-            context_window = item.get("context_window")
-            if isinstance(context_window, int):
-                lines.append(f"    Context capacity: up to {context_window:,} tokens")
-            lines.append(f"    {item.get('availability_reason')}")
-            resources = item.get("recommended_resource_envelope")
-            if isinstance(resources, str):
-                lines.append(f"    {resources}")
+            lines.append(_model_tier_label(tier))
+            for item in tier_models:
+                size = item.get("size_bytes")
+                size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
+                runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
+                if item.get("recommended") is True:
+                    review = "Recommended"
+                elif item.get("catalog_source") == "catalog":
+                    review = "Evaluation candidate"
+                else:
+                    review = "User selected"
+                lines.append(f"  {item.get('model_id')}  {runtime}  {size_gib:.2f} GiB  {review}")
+                lines.append(f"      {item.get('label')}: {item.get('purpose')}")
+                context_window = item.get("context_window")
+                if isinstance(context_window, int):
+                    lines.append(f"      Context capacity: up to {context_window:,} tokens")
+                lines.append(f"      {item.get('availability_reason')}")
+                resources = item.get("recommended_resource_envelope")
+                if isinstance(resources, str):
+                    lines.append(f"      {resources}")
+            lines.append("")
     lines.extend(
         (
             "",
@@ -1366,6 +1436,14 @@ def _format_model_artifacts(catalog: dict[str, object]) -> str:
         )
     )
     return "\n".join(lines)
+
+
+def _model_tier_label(value: object) -> str:
+    if value == "powerful":
+        return "Powerful"
+    if value == "maximum":
+        return "Maximum capability"
+    return "Standard"
 
 
 def _format_model_repository(inspection: dict[str, object]) -> str:

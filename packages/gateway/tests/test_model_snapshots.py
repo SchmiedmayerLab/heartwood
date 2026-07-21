@@ -18,6 +18,7 @@ import pytest
 
 from heartwood.gateway import (
     ModelSnapshot,
+    ModelSnapshotCatalog,
     ModelSnapshotError,
     download_model_snapshot,
     load_model_snapshot_catalog,
@@ -26,41 +27,90 @@ from heartwood.gateway import (
 )
 
 
-def test_repository_snapshot_catalog_pins_the_carina_demo_model() -> None:
+@pytest.mark.parametrize(
+    (
+        "snapshot_id",
+        "repository",
+        "revision",
+        "tier",
+        "gpu_count",
+        "tool_parser",
+    ),
+    [
+        (
+            "qwen25-coder-7b-instruct-awq-vllm",
+            "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+            "8e8ed243bbe6f9a5aff549a0924562fc719b2b8a",
+            "standard",
+            1,
+            "hermes",
+        ),
+        (
+            "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+            "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+            "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
+            "powerful",
+            1,
+            "qwen3_coder",
+        ),
+        (
+            "qwen3-coder-30b-a3b-instruct-bf16-vllm",
+            "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+            "b2cff646eb4bb1d68355c01b18ae02e7cf42d120",
+            "powerful",
+            2,
+            "qwen3_coder",
+        ),
+        (
+            "qwen3-coder-next-fp8-vllm",
+            "Qwen/Qwen3-Coder-Next-FP8",
+            "da6e2ed27304dd39abadd9c82ef50e8de67bdd4c",
+            "maximum",
+            4,
+            "qwen3_coder",
+        ),
+        (
+            "gpt-oss-120b-vllm",
+            "openai/gpt-oss-120b",
+            "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
+            "maximum",
+            2,
+            "openai",
+        ),
+    ],
+)
+def test_repository_snapshot_catalog_pins_gpu_candidates(
+    snapshot_id: str,
+    repository: str,
+    revision: str,
+    tier: str,
+    gpu_count: int,
+    tool_parser: str,
+) -> None:
     catalog = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
 
-    snapshot = catalog.snapshot("qwen25-7b-instruct-vllm")
+    snapshot = catalog.snapshot(snapshot_id)
     assert snapshot.runtime_profile == "vllm-cuda"
-    assert snapshot.source_repository == "Qwen/Qwen2.5-7B-Instruct"
-    assert snapshot.source_revision == "a09a35458c702b33eeacc393d103063234e8bc28"
+    assert snapshot.source_repository == repository
+    assert snapshot.source_revision == revision
+    assert snapshot.tier == tier
+    assert snapshot.tensor_parallel_size == gpu_count
+    assert snapshot.tool_call_parser == tool_parser
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
-    assert snapshot.context_window == 32_768
-
-    terra_snapshot = catalog.snapshot("qwen25-7b-instruct-awq-vllm")
-    assert terra_snapshot.runtime_profile == "vllm-cuda"
-    assert terra_snapshot.source_repository == "Qwen/Qwen2.5-7B-Instruct-AWQ"
-    assert terra_snapshot.source_revision == "b25037543e9394b818fdfca67ab2a00ecc7dd641"
-    assert terra_snapshot.minimum_free_bytes >= terra_snapshot.expected_size_bytes
-    assert terra_snapshot.context_window == 32_768
-
-    recommended_snapshot = catalog.snapshot("qwen25-7b-instruct-awq-vllm")
-    assert recommended_snapshot.source_repository == "Qwen/Qwen2.5-7B-Instruct-AWQ"
-    assert recommended_snapshot.recommended is True
-
-    qwen3_snapshot = catalog.snapshot("qwen3-8b-awq-vllm")
-    assert qwen3_snapshot.source_repository == "Qwen/Qwen3-8B-AWQ"
-    assert qwen3_snapshot.source_revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
-    assert qwen3_snapshot.recommended is False
+    assert snapshot.recommended_disk_bytes >= snapshot.minimum_free_bytes
+    assert snapshot.context_window <= snapshot.maximum_context_window
+    assert snapshot.qualification == "candidate"
+    assert snapshot.validated_platforms == ()
+    assert snapshot.qualification_test is None
+    assert snapshot.recommended is False
 
 
 @pytest.mark.parametrize(
     ("snapshot_id", "minimum_vram_gib"),
     [
-        ("qwen25-7b-instruct-awq-vllm", 16),
-        ("qwen25-7b-instruct-vllm", 32),
-        ("qwen3-8b-awq-vllm", 16),
+        ("qwen25-coder-7b-instruct-awq-vllm", 16),
     ],
 )
 def test_snapshot_minimum_vram_supports_its_advertised_context(
@@ -80,7 +130,111 @@ def test_snapshot_minimum_vram_supports_its_advertised_context(
     )
 
     assert plan.effective_window == snapshot.context_window
-    assert f"at least {minimum_vram_gib} GB VRAM" in str(snapshot.minimum_resource_envelope)
+    assert f"{minimum_vram_gib} GB VRAM" in str(snapshot.minimum_resource_envelope)
+
+
+def test_catalog_recommends_only_qualified_models_with_compatible_resources() -> None:
+    source = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+    standard = replace(
+        source.snapshot("qwen25-coder-7b-instruct-awq-vllm"),
+        qualification="qualified",
+        validated_platforms=("terra",),
+        qualification_test="heartwood.coding-agent-e2e.v1",
+        recommended=True,
+    )
+    powerful = replace(
+        source.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm"),
+        qualification="qualified",
+        validated_platforms=("carina",),
+        qualification_test="heartwood.coding-agent-e2e.v1",
+        recommended=True,
+    )
+    catalog = ModelSnapshotCatalog(source.schema_version, (standard, powerful))
+
+    assert (
+        catalog.recommend(
+            platform_id="terra",
+            gpu_count=1,
+            gpu_memory_bytes=16_000_000_000,
+            maximum_tier="maximum",
+        )
+        == standard
+    )
+    assert (
+        catalog.recommend(
+            platform_id="carina",
+            gpu_count=1,
+            gpu_memory_bytes=48_000_000_000,
+            maximum_tier="powerful",
+        )
+        == powerful
+    )
+    assert (
+        catalog.recommend(
+            platform_id="carina",
+            gpu_count=1,
+            gpu_memory_bytes=16_000_000_000,
+            maximum_tier="powerful",
+        )
+        is None
+    )
+    assert (
+        source.recommend(
+            platform_id="terra",
+            gpu_count=1,
+            gpu_memory_bytes=16_000_000_000,
+            maximum_tier="maximum",
+        )
+        is None
+    )
+
+    assert (
+        catalog.recommend_for_capacities(
+            platform_id="terra",
+            capacities=((1, 16_000_000_000), (1, 48_000_000_000)),
+            maximum_tier="maximum",
+        )
+        == standard
+    )
+    assert (
+        catalog.recommend_for_capacities(
+            platform_id="generic",
+            capacities=((4, 48_000_000_000),),
+            maximum_tier="maximum",
+        )
+        is None
+    )
+
+
+def test_catalog_capacity_recommendation_prefers_more_parallelism_within_tier() -> None:
+    source = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+    single = replace(
+        source.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm"),
+        qualification="qualified",
+        validated_platforms=("carina",),
+        qualification_test="heartwood.coding-agent-e2e.v1",
+        recommended=True,
+    )
+    dual = replace(
+        source.snapshot("qwen3-coder-30b-a3b-instruct-bf16-vllm"),
+        qualification="qualified",
+        validated_platforms=("carina",),
+        qualification_test="heartwood.coding-agent-e2e.v1",
+        recommended=True,
+    )
+    catalog = ModelSnapshotCatalog(source.schema_version, (single, dual))
+
+    recommendation = catalog.recommend_for_capacities(
+        platform_id="carina",
+        capacities=((1, 48_000_000_000), (2, 48_000_000_000)),
+        maximum_tier="powerful",
+    )
+
+    assert recommendation == dual
 
 
 def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path) -> None:
@@ -216,7 +370,33 @@ def test_snapshot_metadata_rejects_floating_revisions() -> None:
         ({"purpose": ""}, "purpose must be"),
         ({"expected_size_bytes": 0}, "storage metadata"),
         ({"minimum_free_bytes": 1}, "storage metadata"),
+        ({"recommended_disk_bytes": 19}, "must cover minimum_free_bytes"),
+        ({"recommended_ram_bytes": 0}, "recommended_ram_bytes must be positive"),
+        ({"minimum_gpu_count": 0}, "GPU resource metadata must be positive"),
+        ({"minimum_gpu_memory_bytes": 0}, "GPU resource metadata must be positive"),
+        ({"tensor_parallel_size": 0}, "must cover the minimum GPU count"),
+        ({"tier": "unknown"}, "unsupported model tier"),
+        ({"qualification": "unknown"}, "unsupported model qualification"),
+        ({"tool_call_parser": "unknown"}, "unsupported vLLM tool-call parser"),
+        ({"startup_seconds_min": 0}, "startup estimate is invalid"),
+        ({"startup_seconds_max": 0}, "startup estimate is invalid"),
+        ({"context_window": 2047}, "between 2048 and 1048576"),
         ({"context_window": 1_048_577}, "between 2048 and 1048576"),
+        ({"maximum_context_window": 1024}, "must cover the default context window"),
+        ({"maximum_context_window": 1_048_577}, "must cover the default context window"),
+        ({"allow_patterns": ()}, "must select reviewed snapshot files"),
+        ({"allow_patterns": ("*.json", "*.json")}, "must not contain duplicates"),
+        ({"ignore_patterns": ("*.bin", "*.bin")}, "must not contain duplicates"),
+        ({"allow_patterns": ("../*.json",)}, "unsafe repository pattern"),
+        ({"ignore_patterns": ("/tmp/*",)}, "unsafe repository pattern"),
+        ({"validated_platforms": ("terra", "terra")}, "must not contain duplicates"),
+        ({"validated_platforms": ("unknown",)}, "unsupported platform"),
+        ({"qualification": "qualified"}, "require validated platforms"),
+        (
+            {"qualification": "qualified", "validated_platforms": ("terra",)},
+            "require validated platforms",
+        ),
+        ({"recommended": True}, "candidate models cannot be recommended"),
     ],
 )
 def test_snapshot_metadata_rejects_unsafe_values(changes: dict[str, object], message: str) -> None:
@@ -242,7 +422,7 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     missing_snapshots = tmp_path / "missing-snapshots.toml"
     missing_snapshots.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v1"\n',
+        'schema_version = "heartwood.model-snapshot-catalog.v2"\n',
         encoding="utf-8",
     )
     with pytest.raises(ModelSnapshotError, match="snapshots table"):
@@ -250,7 +430,11 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     invalid_entry = tmp_path / "entry.toml"
     invalid_entry.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v1"\n[snapshots]\ninvalid = "value"\n',
+        'schema_version = "heartwood.model-snapshot-catalog.v2"\n'
+        "[download_policies.safe]\n"
+        'allow_patterns = ["*.json"]\n'
+        "[snapshots]\n"
+        'invalid = "value"\n',
         encoding="utf-8",
     )
     with pytest.raises(ModelSnapshotError, match="entries must be tables"):
@@ -258,12 +442,14 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     invalid_fields = tmp_path / "fields.toml"
     invalid_fields.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v1"\n'
+        'schema_version = "heartwood.model-snapshot-catalog.v2"\n'
+        "[download_policies.safe]\n"
+        'allow_patterns = ["*.json"]\n'
         "[snapshots.invalid]\n"
         'runtime_profile = ""\n',
         encoding="utf-8",
     )
-    with pytest.raises(ModelSnapshotError, match="runtime_profile"):
+    with pytest.raises(ModelSnapshotError, match="download_policy"):
         load_model_snapshot_catalog(invalid_fields)
 
 
@@ -344,8 +530,25 @@ def _snapshot() -> ModelSnapshot:
         source_revision="0123456789abcdef0123456789abcdef01234567",
         expected_size_bytes=20,
         minimum_free_bytes=20,
+        license_id="Apache-2.0",
         license_posture="Synthetic test content only.",
         model_alias="Synthetic vLLM",
+        precision="Synthetic",
+        tier="standard",
+        qualification="candidate",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=1,
+        recommended_ram_bytes=1,
+        recommended_disk_bytes=20,
+        maximum_context_window=32_768,
+        tool_call_parser="hermes",
+        tensor_parallel_size=1,
+        startup_seconds_min=1,
+        startup_seconds_max=2,
+        download_policy="synthetic",
+        allow_patterns=("*.json", "*.safetensors"),
+        ignore_patterns=("*.bin",),
+        context_window=32_768,
     )
 
 

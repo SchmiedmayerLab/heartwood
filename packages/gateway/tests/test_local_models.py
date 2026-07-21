@@ -20,12 +20,12 @@ from heartwood.gateway import (
     ModelArtifact,
     ModelRepositoryError,
     ModelSnapshot,
+    catalog_model_choices,
     load_model_artifact_catalog,
     load_model_snapshot_catalog,
     managed_model_request_body,
     managed_model_token_budgets,
     plan_local_context_window,
-    recommended_model_choices,
 )
 
 
@@ -435,6 +435,11 @@ def test_local_model_choice_reuses_existing_download_contracts() -> None:
         runtime="vllm",
         source_path=None,
         artifact_sha256=None,
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=16 * 1024**3,
+        tool_call_parser="hermes",
+        download_policy="synthetic",
+        allow_patterns=("*.json", "*.safetensors"),
     )
     gpu_download = gpu.download_model()
 
@@ -454,8 +459,8 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
         root / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
 
-    choices = recommended_model_choices(artifacts.artifacts, snapshots.snapshots)
-    downloadable = recommended_model_choices(
+    choices = catalog_model_choices(artifacts.artifacts, snapshots.snapshots)
+    downloadable = catalog_model_choices(
         artifacts.artifacts,
         snapshots.snapshots,
         recommended_only=False,
@@ -463,12 +468,37 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
 
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
-        "qwen25-7b-instruct-awq-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
     assert all(choice.context_window == 32_768 for choice in choices)
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
+    assert {
+        "qwen25-coder-7b-instruct-awq-vllm",
+        "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+        "qwen3-coder-30b-a3b-instruct-bf16-vllm",
+        "qwen3-coder-next-fp8-vllm",
+        "gpt-oss-120b-vllm",
+    } <= {choice.model_id for choice in downloadable}
+    assert all(choice.catalog_source == "catalog" for choice in downloadable)
+    assert all(
+        choice.qualification == "candidate" for choice in downloadable if choice.runtime == "vllm"
+    )
+
+
+def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
+    root = Path(__file__).resolve().parents[3]
+    artifacts = load_model_artifact_catalog(
+        root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
+    )
+    snapshots = load_model_snapshot_catalog(
+        root / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+    cpu = catalog_model_choices(artifacts.artifacts, snapshots.snapshots)[0]
+
+    assert cpu.qualification_for("generic") == "qualified"
+    assert cpu.qualification_for("terra") == "qualified"
+    assert cpu.qualification_for("carina") == "candidate"
 
 
 def _repository(
@@ -515,4 +545,6 @@ def _cpu_choice() -> LocalModelChoice:
         license_posture="Source model card reports apache-2.0.",
         catalog_source="user-selected",
         artifact_sha256="a" * 64,
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=3072,
     )

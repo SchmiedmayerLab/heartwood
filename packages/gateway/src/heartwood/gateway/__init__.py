@@ -28,6 +28,15 @@ from heartwood.gateway._diagnostics import (
     diagnostic_for,
 )
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._gpu_environment import (
+    GpuCapacity,
+    GpuDevice,
+    GpuEnvironment,
+    SlurmGpuPartition,
+    discover_slurm_gpu_partitions,
+    discover_visible_gpus,
+    inspect_gpu_environment,
+)
 from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
     LocalContextPlan,
@@ -43,7 +52,7 @@ from heartwood.gateway._local_models import (
     LocalModelRuntime,
     ModelRepositoryError,
     ModelRepositoryInspection,
-    recommended_model_choices,
+    catalog_model_choices,
 )
 from heartwood.gateway._model_artifacts import (
     LocalModelDownloadManager,
@@ -79,9 +88,12 @@ from heartwood.gateway._model_settings import (
     model_settings_from_mapping,
 )
 from heartwood.gateway._model_snapshots import (
+    ModelQualification,
     ModelSnapshot,
     ModelSnapshotCatalog,
     ModelSnapshotError,
+    ModelTier,
+    ToolCallParser,
     download_model_snapshot,
     load_model_snapshot_catalog,
     verify_model_snapshot,
@@ -136,6 +148,9 @@ __all__ = [
     "DiagnosticDefinition",
     "GatewayAsgiApp",
     "GatewayEventStream",
+    "GpuCapacity",
+    "GpuDevice",
+    "GpuEnvironment",
     "HuggingFaceModelRepository",
     "InterfaceKind",
     "LocalContextPlan",
@@ -156,6 +171,7 @@ __all__ = [
     "ModelDownload",
     "ModelPreset",
     "ModelProfile",
+    "ModelQualification",
     "ModelRepositoryError",
     "ModelRepositoryInspection",
     "ModelSettings",
@@ -164,6 +180,7 @@ __all__ = [
     "ModelSnapshotCatalog",
     "ModelSnapshotError",
     "ModelSourceOption",
+    "ModelTier",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
     "ProjectConfig",
@@ -185,17 +202,23 @@ __all__ = [
     "SkillManager",
     "SkillSettingsError",
     "SkillSummary",
+    "SlurmGpuPartition",
     "StartupPlan",
+    "ToolCallParser",
     "action_settings_from_mapping",
+    "catalog_model_choices",
     "custom_model_connection",
     "custom_model_connection_requires_token",
     "diagnostic_catalog",
     "diagnostic_for",
+    "discover_slurm_gpu_partitions",
+    "discover_visible_gpus",
     "download_model_artifact",
     "download_model_snapshot",
     "estimate_local_runtime_memory",
     "import_local_model",
     "inspect_deployment",
+    "inspect_gpu_environment",
     "load_model_artifact_catalog",
     "load_model_connections",
     "load_model_snapshot_catalog",
@@ -209,7 +232,6 @@ __all__ = [
     "persist_deployment_profile",
     "plan_local_context_window",
     "plan_startup",
-    "recommended_model_choices",
     "verify_model_artifact",
     "verify_model_snapshot",
 ]

@@ -115,15 +115,13 @@ venv)
   mkdir -p "${runtime}/bin"
   cat >"${runtime}/bin/python" <<'COMMAND'
 #!/usr/bin/env bash
-if [[ "${1:-}" == */heartwood_vllm.py ]]; then
-  test "${2:-}" = "__heartwood_verify_runtime__"
-  grep --quiet 'GHSA-7rgv-gqhr-fxg3' "$1"
-  grep --quiet 'GHSA-65pc-fj4g-8rjx' "$1"
-  echo "Transformers synthetic integration and GPU security fixes verified"
+if [[ "${1:-}" == */verify_vllm.py ]]; then
+  grep --quiet 'vllm_version' "$1"
+  grep --quiet 'cuda_13_qualified' "$1"
+  echo "Heartwood GPU runtime verified: synthetic CUDA 12.9 stack"
   exit 0
 fi
-echo "vLLM: synthetic"
-echo "PyTorch: synthetic (CUDA 11.8)"
+echo "0.25.1+cu129 2.11.0+cu129 12.9"
 COMMAND
   cat >"${runtime}/bin/vllm" <<'COMMAND'
 #!/usr/bin/env bash
@@ -323,14 +321,16 @@ test -x "${carina_runtime}/heartwood/bin/heartwood"
 test -x "${carina_runtime}/vllm/bin/python"
 test -x "${carina_runtime}/vllm/bin/vllm"
 test -x "${carina_runtime}/vllm/bin/heartwood-vllm"
-test -r "${carina_runtime}/vllm/bin/heartwood_vllm.py"
-test -r "${carina_runtime}/vllm/bin/sitecustomize.py"
+test -r "${carina_runtime}/vllm/bin/verify_vllm.py"
+test -r "${carina_runtime}/vllm/bin/compatibility.toml"
+test ! -e "${carina_runtime}/vllm/bin/heartwood_vllm.py"
+test ! -e "${carina_runtime}/vllm/bin/sitecustomize.py"
 test -x "${carina_runtime}/vllm/bin/hf"
 test "$(file_mode "${carina_runtime}/vllm/bin/heartwood-vllm")" = "555"
-test "$(file_mode "${carina_runtime}/vllm/bin/heartwood_vllm.py")" = "444"
-test "$(file_mode "${carina_runtime}/vllm/bin/sitecustomize.py")" = "444"
+test "$(file_mode "${carina_runtime}/vllm/bin/verify_vllm.py")" = "444"
+test "$(file_mode "${carina_runtime}/vllm/bin/compatibility.toml")" = "444"
 "${carina_runtime}/vllm/bin/heartwood-vllm" __heartwood_verify_runtime__ | \
-  grep --quiet 'GPU security fixes verified'
+  grep --quiet 'synthetic CUDA 12.9 stack'
 test -L "${carina_installation}/bin/hf"
 carina_current_target="$(readlink "${carina_installation}/current")"
 test "$(readlink "${carina_installation}/bin/hf")" = \

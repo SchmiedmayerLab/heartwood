@@ -33,6 +33,7 @@ When project direction changes, update the relevant architecture or operations p
 | Browser workflow | [documentation/use/browser.md](documentation/use/browser.md) |
 | Command reference | [documentation/reference/cli.md](documentation/reference/cli.md) |
 | Readiness states, stable diagnostics, and recovery steps | [documentation/reference/troubleshooting.md](documentation/reference/troubleshooting.md) |
+| Qualified GPU runtime, model, and platform combinations | [documentation/reference/gpu-compatibility.md](documentation/reference/gpu-compatibility.md) |
 | Product boundaries and durable technical rationale | [documentation/architecture/index.md](documentation/architecture/index.md) |
 | Project, gateway, adapter, interface, and data-flow architecture | [documentation/architecture/system.md](documentation/architecture/system.md) |
 | Security and controlled-data responsibilities | [documentation/operate/security.md](documentation/operate/security.md) |

@@ -375,6 +375,9 @@ export interface ModelDownload {
 }
 
 export type LocalModelRuntime = "llama-cpp" | "vllm";
+export type LocalModelTier = "standard" | "powerful" | "maximum";
+export type LocalModelQualification = "candidate" | "qualified";
+export type ToolCallParser = "hermes" | "openai" | "qwen3_coder";
 
 export interface LocalModelChoice {
   model_id: string;
@@ -386,9 +389,27 @@ export interface LocalModelChoice {
   source_path: string | null;
   size_bytes: number;
   minimum_free_bytes: number;
+  license_id: string;
   license_posture: string;
-  catalog_source: "recommended" | "user-selected";
+  catalog_source: "catalog" | "user-selected";
   context_window: number;
+  maximum_context_window: number;
+  precision: string;
+  tier: LocalModelTier;
+  qualification: LocalModelQualification;
+  minimum_gpu_count: number;
+  minimum_gpu_memory_bytes: number;
+  recommended_ram_bytes: number;
+  recommended_disk_bytes: number;
+  tool_call_parser: ToolCallParser | null;
+  tensor_parallel_size: number;
+  startup_seconds_min: number;
+  startup_seconds_max: number;
+  download_policy: string | null;
+  allow_patterns: string[];
+  ignore_patterns: string[];
+  validated_platforms: string[];
+  qualification_test: string | null;
   artifact_sha256: string | null;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
@@ -396,6 +417,16 @@ export interface LocalModelChoice {
   available: boolean;
   selected: boolean;
   availability_reason: string;
+  recommended: boolean;
+}
+
+export interface GpuCapacity {
+  label: string;
+  gpu_model: string;
+  gpu_count: number;
+  gpu_memory_bytes: number;
+  allocation_required: boolean;
+  partition: string | null;
 }
 
 export interface ModelRepositoryPlan {
@@ -435,9 +466,27 @@ export interface ModelSnapshot {
   source_revision: string;
   expected_size_bytes: number;
   minimum_free_bytes: number;
+  license_id: string;
   license_posture: string;
   model_alias: string;
+  precision: string;
+  tier: LocalModelTier;
+  qualification: LocalModelQualification;
+  minimum_gpu_count: number;
+  minimum_gpu_memory_bytes: number;
+  recommended_ram_bytes: number;
+  recommended_disk_bytes: number;
   context_window: number;
+  maximum_context_window: number;
+  tool_call_parser: ToolCallParser;
+  tensor_parallel_size: number;
+  startup_seconds_min: number;
+  startup_seconds_max: number;
+  download_policy: string;
+  allow_patterns: string[];
+  ignore_patterns: string[];
+  validated_platforms: string[];
+  qualification_test: string | null;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
   recommended: boolean;
@@ -445,11 +494,15 @@ export interface ModelSnapshot {
 
 export interface ModelArtifacts {
   schema_version: "heartwood.local-model-catalog.v1";
-  snapshot_schema_version: "heartwood.model-snapshot-catalog.v1";
+  snapshot_schema_version: "heartwood.model-snapshot-catalog.v2";
   artifacts: ModelArtifact[];
   snapshots: ModelSnapshot[];
   models: LocalModelChoice[];
   downloads: ModelDownload[];
+  gpu_environment: {
+    platform_id: string;
+    capacities: GpuCapacity[];
+  };
 }
 
 export interface SkillSummary {

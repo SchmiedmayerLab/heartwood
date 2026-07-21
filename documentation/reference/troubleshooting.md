@@ -123,6 +123,8 @@ Keep durable project and model state in approved project storage.
 
 Choose a hosted model, a GGUF CPU model, or GPU-enabled compute.
 For containers, verify the NVIDIA Container Toolkit and `--gpus all`; for Terra, select the GPU image and attach an NVIDIA GPU.
+The CUDA 12.9 runtime requires compute capability 7.5 or newer, so P4, P100, and V100 GPUs are rejected before model startup.
+Compare the detected environment with [GPU Compatibility](gpu-compatibility.md).
 
 ## Terra
 
@@ -139,7 +141,7 @@ Do not use `/home/jupyter` itself as the agent boundary.
 ### `HW-TERRA-002` — Terra GPU Support Is Unavailable
 
 Use the `-terra-gpu-nvidia` image and attach supported GPU compute, or choose hosted inference.
-Recreate or update the Cloud Environment while retaining the persistent disk.
+Delete and recreate the Cloud Environment with a T4 while retaining the persistent disk; Terra does not apply a changed image or GPU selection to an existing environment.
 
 ## Environment Fallback
 

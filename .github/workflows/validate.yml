@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   model-sources:
-    name: Verify Recommended Model Sources
+    name: Verify Catalog Model Sources
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
