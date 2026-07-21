@@ -461,8 +461,7 @@ def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
     assert '"${script_dir}/verify_runtime.sh" /opt' in script
     assert "\npython " not in script
     assert (
-        'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"'
-        in coding_agent
+        'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in coding_agent
     )
     assert 'heartwood_cli="${HEARTWOOD_CLI:-${runtime_root}/.venv/bin/heartwood}"' in coding_agent
     assert 'inference="${project}/qualification-inference.json"' in coding_agent
