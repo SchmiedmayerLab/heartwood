@@ -18,7 +18,7 @@ No single layer establishes every property of a deployment.
 | Interface tests | Terminal, browser, and notebook projections over the same state |
 | Container smoke tests | Entrypoint, filesystem, architecture, no-secret image layers, and deterministic OpenHands integration |
 | No-network smoke tests | Gateway, OpenHands, grouped action, tool, replay, and audit operation without outbound network |
-| Capable-model evaluation | Real Heartwood-managed inference, native tool proposal, bounded execution, and exact synthetic output |
+| Capable-model evaluation | Real Heartwood-managed inference, OpenHands-compatible tool proposal, bounded execution, and exact synthetic output |
 | Platform-derived CI | Terra Jupyter inheritance, prefixed internal gateway routing, persistence, image media type, CI-only model rejection as an agent profile, and separate real inference |
 | Live synthetic validation | Exact published artifact in Terra or Carina without protected data |
 
@@ -27,7 +27,7 @@ An optional protected self-hosted GPU job runs the same model qualification used
 Without GPU hardware, CI does not claim successful CUDA initialization or GPU model loading.
 
 The shared coding-agent acceptance test performs direct model inference and then drives the real Heartwood gateway and OpenHands adapter through a structured terminal proposal, grouped approval, synthetic file modification, independent file verification, fresh-process replay, and hash-chain-verified audit export.
-It emits a machine-readable qualification record containing the exact runtime, model revision, GPU, driver, context, tensor parallelism, and parser.
+It emits a machine-readable qualification record containing the exact runtime, model revision, GPU, driver, context, tensor parallelism, server parser, and agent tool mode.
 The CPU capable-model job and GPU qualification wrapper use this same acceptance contract instead of maintaining separate agent scenarios.
 
 Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths.

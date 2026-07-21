@@ -189,7 +189,18 @@ def test_openhands_forwards_managed_model_request_defaults() -> None:
     assert options["litellm_extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
     assert options["max_input_tokens"] == 16_384
     assert options["max_output_tokens"] == 2_048
+    assert options["native_tool_calling"] is False
     assert options["input_cost_per_token"] == 0.0
+
+    hosted = ModelProfile(
+        profile_id="hosted",
+        model="openai/model",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+    hosted_options = _llm_options(hosted, api_key="test-key", extra_body={})
+    assert hosted_options["native_tool_calling"] is True
 
 
 def test_openhands_context_condenser_uses_the_active_model_budget() -> None:

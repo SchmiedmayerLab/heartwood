@@ -546,6 +546,7 @@ def _llm_options(
         "aws_profile_name": profile.aws_profile_name,
         "max_input_tokens": profile.max_input_tokens,
         "max_output_tokens": profile.max_output_tokens,
+        "native_tool_calling": not profile.is_local,
         "max_message_chars": _llm_max_message_chars(profile),
         "log_completions": False,
         "litellm_extra_body": dict(extra_body) or None,

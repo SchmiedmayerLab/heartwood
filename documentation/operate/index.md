@@ -56,7 +56,7 @@ Before real data, use a synthetic project to verify:
 1. exact artifact digest and platform capability response;
 2. project persistence across process or compute restart;
 3. model discovery and a real agent response;
-4. a native OpenHands tool proposal;
+4. an OpenHands-compatible structured tool proposal;
 5. grouped allow and reject behavior;
 6. tool execution confined to the project;
 7. terminal, browser, and notebook parity where advertised;

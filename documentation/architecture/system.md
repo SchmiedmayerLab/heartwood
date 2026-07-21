@@ -49,6 +49,7 @@ The terminal, browser, and notebook bridge may render these differently, but the
 
 The adapter creates an OpenHands conversation with the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and action-confirmation callback.
 Heartwood translates OpenHands messages, tool proposals, decisions, and results into its stable event contract rather than duplicating the agent loop.
+Loopback model routes use OpenHands' prompt-based tool conversion so models do not need to implement provider-native automatic tool selection; hosted provider profiles retain their native tool-calling behavior.
 
 ### Platform Adapter
 

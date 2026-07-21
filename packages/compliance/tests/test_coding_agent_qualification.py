@@ -226,6 +226,7 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
 
     assert resolved["runtime"]["cuda_version"] == "12.9"
     assert resolved["configuration"]["tool_call_parser"] == "hermes"
+    assert resolved["configuration"]["agent_tool_mode"] == "openhands-prompt"
     assert resolved["configuration"]["context_window"] == 18_432
     assert resolved["configuration"]["enforce_eager"] is True
     assert resolved["configuration"]["model_revision"] == (

@@ -32,6 +32,7 @@ _CONFIGURATION_FIELDS = {
     "context_window",
     "tensor_parallel_size",
     "tool_call_parser",
+    "agent_tool_mode",
     "vllm_version",
     "pytorch_version",
     "cuda_version",
@@ -177,6 +178,8 @@ def _verify_configuration(
             )
     if configuration.get("qualification_test") != _QUALIFICATION_TEST:
         raise CompatibilityError("GPU model uses an unsupported qualification test")
+    if configuration.get("agent_tool_mode") != "openhands-prompt":
+        raise CompatibilityError("GPU model uses an unsupported agent tool mode")
     for field in (
         "gpu_count",
         "minimum_gpu_memory_bytes",
