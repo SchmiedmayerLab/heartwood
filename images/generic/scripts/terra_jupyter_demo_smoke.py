@@ -310,6 +310,10 @@ def _verify_gateway_session(external_base: str) -> None:
     task_kinds = {event["kind"] for event in task["events"]}
     if "confirmation.requested" not in task_kinds:
         raise AssertionError("gateway chat did not return an OpenHands confirmation")
+    confirmation = next(
+        event for event in task["events"] if event["kind"] == "confirmation.requested"
+    )
+    target_id = confirmation["payload"]["request"]["tool_call_id"]
 
     _trace("approving OpenHands tool call")
     allowed = _request_json(
@@ -318,7 +322,7 @@ def _verify_gateway_session(external_base: str) -> None:
             "approve",
             "terra-demo-smoke-allow",
             {
-                "target_id": "call-heartwood-reference-analysis",
+                "target_id": target_id,
                 "target_type": "tool-call",
             },
         ),

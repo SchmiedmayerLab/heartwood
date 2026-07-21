@@ -803,6 +803,15 @@ def test_local_model_stub_preserves_explicit_action_risk() -> None:
 
     assert arguments["security_risk"] == "MEDIUM"
 
+    prompt_call = module._prompt_terminal_call(
+        "printf heartwood-openhands-action",
+        "run a bounded offline smoke command",
+    )
+    assert prompt_call.startswith("<function=terminal>\n")
+    assert "<parameter=command>printf heartwood-openhands-action</parameter>" in prompt_call
+    assert "<parameter=security_risk>LOW</parameter>" in prompt_call
+    assert prompt_call.endswith("</function>")
+
 
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     scripts = (

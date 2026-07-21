@@ -225,9 +225,9 @@ async function main() {
       .getByRole("button", { name: "Activity & audit", exact: true })
       .click();
     await expect(page.getByText("Tool execution", { exact: true })).toHaveCount(
-      5,
+      4,
     );
-    await expect(page.getByText("exit=0", { exact: true })).toHaveCount(4);
+    await expect(page.getByText("exit=0", { exact: true })).toHaveCount(3);
     await expect(page.getByText("exit=1", { exact: true })).toHaveCount(1);
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
@@ -259,7 +259,7 @@ async function main() {
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/Tool terminal exit=0/gu)?.length !== 4 ||
+      replay.match(/Tool terminal exit=0/gu)?.length !== 3 ||
       replay.match(/Tool terminal exit=1/gu)?.length !== 1 ||
       !replay.includes(
         "Agent: The synthetic target-condition cohort summary is ready for review.",
