@@ -47,7 +47,7 @@ The selection screen uses the release catalog as its authoritative source and re
 | Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated First Start |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Standard fallback | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
-| Standard candidate | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 32,768 | 2-8 minutes |
+| Standard, qualified on Terra | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 18,432 on Terra | 2-8 minutes |
 | Powerful candidate | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
 | Powerful candidate | Qwen3 Coder 30B BF16 | 56.88 GiB | 2 x 48 GB | 128 GiB | 96 GiB | 65,536 | 4-12 minutes |
 | Maximum candidate | Qwen3 Coder Next FP8 | 74.88 GiB | 4 x 48 GB | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |

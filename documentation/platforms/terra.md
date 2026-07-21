@@ -112,8 +112,7 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
-For managed GPU inference, choose the **Standard** Qwen2.5 Coder 7B AWQ configuration when Heartwood labels it **Recommended** for the detected T4.
-If it is labeled **Evaluation candidate**, use it only for a synthetic qualification task; Heartwood does not automatically recommend unqualified configurations.
+For managed GPU inference, choose the **Standard** Qwen2.5 Coder 7B AWQ configuration that Heartwood labels **Recommended** for the detected T4.
 You can instead choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 

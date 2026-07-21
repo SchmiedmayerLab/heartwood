@@ -839,6 +839,38 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     else:
         assert fully_available[0]["availability_reason"] == "Available on this deployment"
 
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
+    terra_models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    terra_standard = next(
+        model
+        for model in terra_models
+        if model["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
+    )
+    assert terra_standard["qualification"] == "qualified"
+    assert str(terra_standard["availability_reason"]).startswith(
+        "Recommended for this deployment"
+    )
+    assert "Compatible with 1 visible NVIDIA T4 GPU(s)" in str(
+        terra_standard["availability_reason"]
+    )
+
 
 def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
     tmp_path: Path,

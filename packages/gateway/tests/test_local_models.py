@@ -468,6 +468,7 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
 
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
+        "qwen25-coder-7b-instruct-awq-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
     assert all(choice.context_window == 32_768 for choice in choices)
@@ -481,8 +482,12 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
         "gpt-oss-120b-vllm",
     } <= {choice.model_id for choice in downloadable}
     assert all(choice.catalog_source == "catalog" for choice in downloadable)
+    gpu_choices = {choice.model_id: choice for choice in downloadable if choice.runtime == "vllm"}
+    assert gpu_choices["qwen25-coder-7b-instruct-awq-vllm"].qualification == "qualified"
     assert all(
-        choice.qualification == "candidate" for choice in downloadable if choice.runtime == "vllm"
+        choice.qualification == "candidate"
+        for model_id, choice in gpu_choices.items()
+        if model_id != "qwen25-coder-7b-instruct-awq-vllm"
     )
 
 
@@ -495,10 +500,17 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
         root / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
     cpu = catalog_model_choices(artifacts.artifacts, snapshots.snapshots)[0]
+    terra_gpu = next(
+        choice
+        for choice in catalog_model_choices(artifacts.artifacts, snapshots.snapshots)
+        if choice.model_id == "qwen25-coder-7b-instruct-awq-vllm"
+    )
 
     assert cpu.qualification_for("generic") == "qualified"
     assert cpu.qualification_for("terra") == "qualified"
     assert cpu.qualification_for("carina") == "candidate"
+    assert terra_gpu.qualification_for("terra") == "qualified"
+    assert terra_gpu.qualification_for("carina") == "candidate"
 
 
 def _repository(

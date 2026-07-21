@@ -79,7 +79,7 @@ from heartwood.gateway import (
         ),
     ],
 )
-def test_repository_snapshot_catalog_pins_gpu_candidates(
+def test_repository_snapshot_catalog_pins_gpu_model_variants(
     snapshot_id: str,
     repository: str,
     revision: str,
@@ -101,10 +101,18 @@ def test_repository_snapshot_catalog_pins_gpu_candidates(
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
     assert snapshot.recommended_disk_bytes >= snapshot.minimum_free_bytes
     assert snapshot.context_window <= snapshot.maximum_context_window
-    assert snapshot.qualification == "candidate"
-    assert snapshot.validated_platforms == ()
-    assert snapshot.qualification_test is None
-    assert snapshot.recommended is False
+    expected_qualification = (
+        "qualified" if snapshot_id == "qwen25-coder-7b-instruct-awq-vllm" else "candidate"
+    )
+    assert snapshot.qualification == expected_qualification
+    if expected_qualification == "qualified":
+        assert snapshot.validated_platforms == ("terra",)
+        assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
+        assert snapshot.recommended is True
+    else:
+        assert snapshot.validated_platforms == ()
+        assert snapshot.qualification_test is None
+        assert snapshot.recommended is False
 
 
 @pytest.mark.parametrize(
@@ -137,13 +145,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
     source = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
-    standard = replace(
-        source.snapshot("qwen25-coder-7b-instruct-awq-vllm"),
-        qualification="qualified",
-        validated_platforms=("terra",),
-        qualification_test="heartwood.coding-agent-e2e.v1",
-        recommended=True,
-    )
+    standard = source.snapshot("qwen25-coder-7b-instruct-awq-vllm")
     powerful = replace(
         source.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm"),
         qualification="qualified",
@@ -187,7 +189,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
             gpu_memory_bytes=16_000_000_000,
             maximum_tier="maximum",
         )
-        is None
+        == standard
     )
 
     assert (

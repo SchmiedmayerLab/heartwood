@@ -31,7 +31,9 @@ license_posture = "Apache-2.0; retain the model card and source provenance."
 model_alias = "Qwen2.5 Coder 7B"
 precision = "AWQ int4"
 tier = "standard"
-qualification = "candidate"
+qualification = "qualified"
+validated_platforms = ["terra"]
+qualification_test = "heartwood.coding-agent-e2e.v1"
 minimum_gpu_count = 1
 minimum_gpu_memory_bytes = 15000000000
 recommended_ram_bytes = 34359738368
@@ -45,7 +47,7 @@ startup_seconds_max = 480
 download_policy = "transformers-safetensors"
 minimum_resource_envelope = "One NVIDIA T4-class GPU with 16 GB VRAM, 8 CPU cores, 32 GB RAM, and 12 GB free project storage."
 recommended_resource_envelope = "One NVIDIA T4-class GPU with 16 GB VRAM, 8 or more CPU cores, 32 GB RAM, and 16 GB free project storage."
-recommended = false
+recommended = true
 
 [snapshots.qwen3-coder-30b-a3b-instruct-fp8-vllm]
 runtime_profile = "vllm-cuda"

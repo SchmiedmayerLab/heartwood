@@ -18,7 +18,7 @@ cuda_13_qualified = false
 
 [[configurations]]
 configuration_id = "terra-t4-qwen25-coder-7b-awq"
-status = "candidate"
+status = "qualified"
 platform = "terra"
 gpu_model = "NVIDIA T4"
 gpu_count = 1
