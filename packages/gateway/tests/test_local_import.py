@@ -54,7 +54,7 @@ def test_imports_supported_vllm_snapshot_and_rejects_executable_code(tmp_path: P
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "config.json").write_text(
-        json.dumps({"architectures": ["SyntheticForCausalLM"]}),
+        json.dumps({"architectures": ["Qwen3ForCausalLM"], "model_type": "qwen3"}),
         encoding="utf-8",
     )
     (snapshot / "model.safetensors").write_bytes(b"synthetic")
@@ -68,7 +68,10 @@ def test_imports_supported_vllm_snapshot_and_rejects_executable_code(tmp_path: P
     )
 
     assert imported.model.runtime == "vllm"
+    assert imported.model.model_type == "qwen3"
     assert (imported.path / "model.safetensors").is_file()
+    provenance = json.loads((imported.path / "heartwood-model.json").read_text())
+    assert provenance["model_type"] == "qwen3"
     verify_model_snapshot(imported.path)
 
     unsafe = tmp_path / "unsafe"
@@ -111,6 +114,16 @@ def test_import_rejects_symlinks_and_requires_immutable_provenance(tmp_path: Pat
             source_repository="example/model",
             source_revision="main",
             license_posture="Apache-2.0",
+        )
+
+    with pytest.raises(ModelRepositoryError, match="at least 18,432 tokens"):
+        import_local_model(
+            source,
+            models_dir=models,
+            source_repository="example/model",
+            source_revision="4" * 40,
+            license_posture="Apache-2.0",
+            context_window=4_096,
         )
 
 

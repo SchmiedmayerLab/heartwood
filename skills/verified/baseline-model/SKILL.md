@@ -14,7 +14,7 @@ metadata:
   heartwood.phi-risk: "none"
   heartwood.trust-tier: "verified"
   heartwood.requires-network: "false"
-  heartwood.version: "0.2.0-beta.3"
+  heartwood.version: "0.2.0-beta.4"
   heartwood.sig: "sigstore:synthetic-fixture"
 ---
 
@@ -24,11 +24,14 @@ Use this Skill only after inspecting the target-condition cohort and data-qualit
 
 The model is deliberately a baseline. Its Brier score and ROC AUC are measured on the training fixture, no holdout evaluation is performed, and the result is not a clinical prediction model or capability claim. Compare future models against it only with a separately reviewed evaluation design.
 
+Use the exact Skill directory reported by `invoke_skill` to run the entrypoint; do not resolve `scripts/run.py` from the project directory.
+
 Example:
 
 ```bash
-python scripts/run.py \
-  --data-root /path/to/localized/omop \
+SKILL_DIR=/exact/directory/reported/by/invoke_skill
+python "$SKILL_DIR/scripts/run.py" \
+  --data-root data \
   --target-condition-concept-id 201826 \
   --as-of-year 2025 \
   --output baseline-model.json

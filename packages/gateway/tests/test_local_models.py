@@ -22,6 +22,8 @@ from heartwood.gateway import (
     ModelSnapshot,
     load_model_artifact_catalog,
     load_model_snapshot_catalog,
+    managed_model_request_body,
+    managed_model_token_budgets,
     plan_local_context_window,
     recommended_model_choices,
 )
@@ -82,8 +84,8 @@ def test_context_planner_uses_stable_model_and_memory_bounded_tiers() -> None:
     assert "full" in larger_gpu.reason
     assert long_context_gpu.effective_window == 262_144
     assert "headroom" in long_context_gpu.reason
-    assert unknown.effective_window == 32_768
-    assert "safe default" in unknown.reason
+    assert unknown.effective_window == 18_432
+    assert "minimum" in unknown.reason
 
 
 def test_context_planner_never_exceeds_a_non_tier_model_limit() -> None:
@@ -95,6 +97,38 @@ def test_context_planner_never_exceeds_a_non_tier_model_limit() -> None:
     )
 
     assert plan.effective_window == 32_768
+
+
+def test_managed_model_budgets_reserve_output_inside_the_runtime_window() -> None:
+    assert managed_model_token_budgets(18_432) == (16_384, 2_048)
+    assert managed_model_token_budgets(32_768) == (28_672, 4_096)
+
+    with pytest.raises(ValueError, match="managed agent context window"):
+        managed_model_token_budgets(16_384)
+
+
+def test_context_planner_rejects_short_models_and_insufficient_memory() -> None:
+    with pytest.raises(ValueError, match="at least 18,432 tokens"):
+        plan_local_context_window(
+            model_limit=4_096,
+            model_size_bytes=1024,
+            runtime="llama-cpp",
+            available_memory_bytes=64 * 1024**3,
+        )
+    with pytest.raises(ValueError, match="cannot support the minimum 18,432-token"):
+        plan_local_context_window(
+            model_limit=32_768,
+            model_size_bytes=5 * 1024**3,
+            runtime="vllm",
+            available_memory_bytes=8 * 1024**3,
+        )
+
+
+def test_qwen3_managed_requests_disable_visible_reasoning_by_default() -> None:
+    assert managed_model_request_body("qwen3") == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+    assert managed_model_request_body("qwen2") == {}
 
 
 def test_repository_plan_prefers_standard_snapshot_when_gpu_runtime_is_available() -> None:
@@ -112,6 +146,7 @@ def test_repository_plan_prefers_standard_snapshot_when_gpu_runtime_is_available
     )
 
     assert plan.model.runtime == "vllm"
+    assert plan.model.model_type == "qwen2"
     assert plan.model.source_path is None
     assert "NVIDIA GPU" in str(plan.model.minimum_resource_envelope)
     assert "NVIDIA vLLM runtime" in plan.selection_reason
@@ -131,6 +166,21 @@ def test_repository_plan_bounds_context_from_model_metadata() -> None:
     )
 
     assert plan.model.context_window == 1_048_576
+
+
+def test_repository_plan_rejects_models_too_short_for_an_agent_session() -> None:
+    repository = _repository(
+        _file("config.json", 100),
+        _file("model-q4_k_m.gguf", 1024, digest="a" * 64),
+        context_window=4_096,
+    )
+
+    with pytest.raises(ModelRepositoryError, match="at least 18,432 tokens"):
+        repository.plan(
+            "example/short-context-model",
+            cpu_available=True,
+            gpu_available=False,
+        )
 
 
 def test_repository_plan_reports_unsupported_formats_and_runtime_mismatch() -> None:
@@ -194,6 +244,23 @@ def test_repository_plan_rejects_snapshots_without_supported_tool_metadata() -> 
             cpu_available=False,
             gpu_available=True,
         )
+
+
+def test_repository_plan_accepts_qwen3_snapshots_with_hermes_tool_calls() -> None:
+    repository = _repository(
+        _file("config.json", 100),
+        _file("model.safetensors", 1024, digest="a" * 64),
+        model_type="qwen3",
+    )
+
+    plan = repository.plan(
+        "example/qwen3-model",
+        cpu_available=False,
+        gpu_available=True,
+    )
+
+    assert plan.model.runtime == "vllm"
+    assert plan.model.model_type == "qwen3"
 
 
 def test_repository_plan_reports_deployments_without_a_compatible_runtime() -> None:
@@ -269,7 +336,7 @@ def test_repository_inspection_supports_hugging_face_model_info_contract() -> No
         ],
         tags=["gguf"],
         cardData={"license": "apache-2.0"},
-        config={},
+        config={"max_position_embeddings": 32_768},
     )
     repository = HuggingFaceModelRepository(model_info=lambda *_args, **_kwargs: info)
 
@@ -283,6 +350,26 @@ def test_repository_inspection_supports_hugging_face_model_info_contract() -> No
     assert plan.model.artifact_sha256 == "c" * 64
 
 
+def test_repository_inspection_rejects_unknown_context_capacity() -> None:
+    info = SimpleNamespace(
+        id="example/model-gguf",
+        sha="3" * 40,
+        siblings=[_file("model-q4_k_m.gguf", 1024, digest="c" * 64)],
+        tags=["gguf"],
+        card_data=SimpleNamespace(license="apache-2.0"),
+        config={},
+        pipeline_tag="text-generation",
+    )
+    repository = HuggingFaceModelRepository(model_info=lambda *_args, **_kwargs: info)
+
+    with pytest.raises(ModelRepositoryError, match=r"cannot verify.*issues/new/choose"):
+        repository.plan(
+            "example/model-gguf",
+            cpu_available=True,
+            gpu_available=False,
+        )
+
+
 def test_repository_inspection_normalizes_metadata_and_detects_configured_custom_code() -> None:
     class CardData:
         def to_dict(self) -> dict[str, str]:
@@ -294,7 +381,7 @@ def test_repository_inspection_normalizes_metadata_and_detects_configured_custom
         siblings=[object(), _file("model-q4_k_m.gguf", 1024, digest="b" * 64)],
         card_data=CardData(),
         tags=[],
-        config={},
+        config={"max_position_embeddings": 32_768},
     )
     repository = HuggingFaceModelRepository(model_info=lambda *_args, **_kwargs: info)
 
@@ -376,13 +463,12 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
 
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
-        "qwen25-coder-7b-instruct-q4_k_m",
-        "qwen25-7b-instruct-awq-vllm",
-        "qwen25-7b-instruct-vllm",
+        "qwen3-8b-awq-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
     assert all(choice.context_window == 32_768 for choice in choices)
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
+    assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
 
 
 def _repository(
@@ -390,7 +476,7 @@ def _repository(
     tags: tuple[str, ...] = ("text-generation",),
     model_type: str = "qwen2",
     pipeline_tag: str | None = "text-generation",
-    context_window: int | None = None,
+    context_window: int | None = 32_768,
 ) -> HuggingFaceModelRepository:
     config: dict[str, object] = {"model_type": model_type}
     if context_window is not None:

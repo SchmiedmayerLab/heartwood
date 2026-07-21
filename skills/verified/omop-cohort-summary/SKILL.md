@@ -14,7 +14,7 @@ metadata:
   heartwood.phi-risk: "none"
   heartwood.trust-tier: "verified"
   heartwood.requires-network: "false"
-  heartwood.version: "0.2.0-beta.3"
+  heartwood.version: "0.2.0-beta.4"
   heartwood.sig: "sigstore:synthetic-fixture"
 ---
 
@@ -23,15 +23,16 @@ metadata:
 Use this Skill when a researcher asks for a reproducible target-condition cohort over localized OMOP-like `person` and `condition_occurrence` tables.
 
 1. Confirm the local data root and target condition concept identifier. Do not infer a clinical label from an identifier.
-2. Run `scripts/run.py` with explicit input and output paths. The default synthetic reference concept is `201826`, minimum age is 18 years at first target occurrence, and aggregate count floor is 20.
+2. Use the exact Skill directory reported by `invoke_skill` to run `scripts/run.py`; do not resolve the script from the project directory. Use explicit input and output paths. The default synthetic reference concept is `201826`, minimum age is 18 years at first target occurrence, and aggregate count floor is 20.
 3. Report the cohort definition, inclusion and exclusion counts, age-at-index summary, and every data-quality check before interpreting the result.
 4. Treat the output as an in-boundary aggregate artifact. Do not claim that it is clinically validated or representative of a complete OMOP Common Data Model cohort implementation.
 
 Example:
 
 ```bash
-python scripts/run.py \
-  --data-root /path/to/localized/omop \
+SKILL_DIR=/exact/directory/reported/by/invoke_skill
+python "$SKILL_DIR/scripts/run.py" \
+  --data-root data \
   --target-condition-concept-id 201826 \
   --minimum-age 18 \
   --aggregate-count-floor 20 \

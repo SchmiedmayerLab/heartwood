@@ -326,21 +326,21 @@ jobs:
             --output /tmp/heartwood-model/stories260K.gguf
           test "$(stat --format=%s /tmp/heartwood-model/stories260K.gguf)" -eq 1185376
           echo "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d  /tmp/heartwood-model/stories260K.gguf" | sha256sum --check -
-      - name: Prepare staged Terra Heartwood-managed model
+      - name: Prepare staged Terra CI-only model fixture
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
           docker run --rm --platform linux/amd64
           --volume heartwood-terra-managed-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
-          --env CLUSTER_NAME=terra-managed-launch-smoke
-          --env WORKSPACE_ID=terra-managed-launch-smoke
+          --env CLUSTER_NAME=terra-ci-model-safety-smoke
+          --env WORKSPACE_ID=terra-ci-model-safety-smoke
           --entrypoint bash
           "${CANDIDATE_REFERENCE}"
           -c 'mkdir -p /home/jupyter/model-analysis &&
           cd /home/jupyter/model-analysis &&
           exec heartwood models download llama-cpp-stories260k-ci'
-      - name: Run staged Terra Heartwood-managed model launch smoke
+      - name: Verify staged Terra CI-only model remains non-agent
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
@@ -348,10 +348,10 @@ jobs:
           --workdir /home/jupyter/model-analysis --entrypoint bash
           --volume heartwood-terra-managed-project:/home/jupyter
           --env GOOGLE_PROJECT=heartwood-ci
-          --env CLUSTER_NAME=terra-managed-launch-smoke
-          --env WORKSPACE_ID=terra-managed-launch-smoke
+          --env CLUSTER_NAME=terra-ci-model-safety-smoke
+          --env WORKSPACE_ID=terra-ci-model-safety-smoke
           "${CANDIDATE_REFERENCE}"
-          /opt/heartwood/images/platform/scripts/terra_managed_launch_smoke.sh
+          /opt/heartwood/images/platform/scripts/terra_ci_model_safety_smoke.sh
       - name: Remove staged Terra managed project
         if: always()
         run: docker volume rm --force heartwood-terra-managed-project
@@ -365,13 +365,13 @@ jobs:
           --env HEARTWOOD_LOCAL_MODEL_PATH=/models/stories260K.gguf
           "${CANDIDATE_REFERENCE}"
           images/generic/scripts/local_inference_smoke.sh
-      - name: Run staged Terra Jupyter launch smoke
+      - name: Run staged Terra Jupyter and internal gateway smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: >-
           bash images/platform/scripts/terra_jupyter_launch_smoke.sh
           "${CANDIDATE_REFERENCE}"
-      - name: Run staged Terra Leonardo Jupyter launch smoke
+      - name: Run staged Terra Leonardo Jupyter and internal gateway smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
           HEARTWOOD_TERRA_HOST_PORT: "8001"

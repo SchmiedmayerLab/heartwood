@@ -78,7 +78,7 @@ fi
 
 docker exec "${container_name}" mkdir -p "${project_root}"
 docker exec --detach --workdir "${project_root}" "${container_name}" \
-  sh -c "exec heartwood --interface web --host 0.0.0.0 --port ${gateway_port} > /tmp/heartwood-web.log 2>&1"
+  sh -c "exec heartwood gateway serve --host 0.0.0.0 --port ${gateway_port} > /tmp/heartwood-web.log 2>&1"
 
 for _ in $(seq 1 60); do
   if curl --fail --silent "${heartwood_url}" >/dev/null; then
@@ -109,4 +109,4 @@ if observed != expected:
     )
 ' <<<"${readiness}"
 
-echo "Terra Jupyter and Heartwood proxy smoke (${launch_mode}): ok"
+echo "Terra Jupyter and internal gateway proxy contract (${launch_mode}): ok"

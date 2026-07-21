@@ -32,8 +32,7 @@ from heartwood.gateway import (
     ProjectConfigStore,
     ProjectContext,
     estimate_local_runtime_memory,
-    has_authenticated_jupyter_proxy,
-    jupyter_proxy_url,
+    managed_model_token_budgets,
     plan_local_context_window,
     verify_model_artifact,
 )
@@ -81,6 +80,8 @@ class LaunchOptions:
     web_host: str
     web_port: int
     startup_timeout: int
+    prompt: str | None
+    prompt_file: Path | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +138,10 @@ class LocalRuntimeSelection:
 
 def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchPlan:
     """Build a platform-specific launch plan without changing external state."""
+    if options.gpus != 1:
+        raise LaunchConfigurationError(
+            "Heartwood currently supports exactly one GPU per managed vLLM runtime"
+        )
     platform_id = select_platform_adapter(env).adapter_id
     selection = _local_model_selection(options.project, env)
     allocation_required = platform_id == "carina" and not env.get("SLURM_JOB_ID")
@@ -179,30 +184,73 @@ def run_launch(
 ) -> int:
     """Execute a reviewed allocation request or the in-allocation runtime."""
     active_env = dict(os.environ if env is None else env)
-    try:
-        plan = build_launch_plan(options, active_env)
-    except LaunchConfigurationError as error:
-        print(f"Launch configuration error: {error}")
+    owned_prompt_file: Path | None = None
+    requested_interface = "web" if options.web else "terminal"
+    capabilities = select_platform_adapter(active_env).capabilities()
+    if requested_interface not in capabilities.interfaces:
+        print(
+            "Launch configuration error: "
+            f"{capabilities.display_name} does not provide the {requested_interface} interface. "
+            f"Use the {capabilities.interfaces[0]} interface in this environment."
+        )
         return 64
-    active_env["HEARTWOOD_PLATFORM"] = plan.platform_id
-    print(plan.format())
-    if options.dry_run:
-        return 0
-    if plan.allocation_required:
-        if options.no_allocate:
-            print("\nA GPU allocation is required; rerun without --no-allocate.")
-            return 1
-        if not options.yes_request_allocation:
-            try:
-                approved = input_fn("\nRequest this GPU allocation? [y/N]: ").strip().lower() == "y"
-            except EOFError:
-                approved = False
-            if not approved:
-                print("Allocation cancelled.")
+    try:
+        try:
+            active_options, owned_prompt_file = _materialize_prompt(options)
+            plan = build_launch_plan(active_options, active_env)
+        except LaunchConfigurationError as error:
+            print(f"Launch configuration error: {error}")
+            return 64
+        active_env["HEARTWOOD_PLATFORM"] = plan.platform_id
+        print(plan.format())
+        if active_options.dry_run:
+            return 0
+        if plan.allocation_required:
+            if active_options.no_allocate:
+                print("\nA GPU allocation is required; rerun without --no-allocate.")
                 return 1
-        runner = run_fn or _run_command
-        return runner(plan.allocation_command)
-    return _run_runtime(options, active_env)
+            if not active_options.yes_request_allocation:
+                try:
+                    approved = (
+                        input_fn("\nRequest this GPU allocation? [y/N]: ").strip().lower() == "y"
+                    )
+                except EOFError:
+                    approved = False
+                if not approved:
+                    print("Allocation cancelled.")
+                    return 1
+            runner = run_fn or _run_command
+            return runner(plan.allocation_command)
+        return _run_runtime(active_options, active_env)
+    finally:
+        if owned_prompt_file is not None:
+            owned_prompt_file.unlink(missing_ok=True)
+
+
+def _materialize_prompt(options: LaunchOptions) -> tuple[LaunchOptions, Path | None]:
+    if options.prompt is None:
+        return options, None
+    options.project.initialize()
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix="pending-prompt.",
+        suffix=".txt",
+        dir=options.project.runtime_dir,
+        text=True,
+    )
+    path = Path(raw_path)
+    try:
+        os.fchmod(descriptor, 0o600)
+    except OSError as error:
+        os.close(descriptor)
+        path.unlink(missing_ok=True)
+        raise LaunchConfigurationError(f"unable to protect the pending task: {error}") from error
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(options.prompt)
+    except OSError as error:
+        path.unlink(missing_ok=True)
+        raise LaunchConfigurationError(f"unable to store the pending task: {error}") from error
+    return replace(options, prompt=None, prompt_file=path), path
 
 
 def _reentry_command(options: LaunchOptions) -> tuple[str, ...]:
@@ -217,6 +265,8 @@ def _reentry_command(options: LaunchOptions) -> tuple[str, ...]:
         command.append("--plain")
     if options.web:
         command.extend(("--interface", "web", "--host", options.web_host))
+    if options.prompt_file is not None:
+        command.extend(("--prompt-file", str(options.prompt_file)))
     command.extend(
         (
             "--port",
@@ -261,7 +311,11 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
         return 69
     runtime_env = _runtime_environment(env, project=options.project)
-    context_plan = _context_plan(selection, runtime_env)
+    try:
+        context_plan = _context_plan(selection, runtime_env)
+    except ValueError as error:
+        print(f"Heartwood-managed model cannot start an agent session: {error}")
+        return 64
     selection = replace(selection, context_window=context_plan.effective_window)
     runtime_env["HEARTWOOD_LOCAL_MODEL_CONTEXT"] = str(selection.context_window)
     _print_resource_assessment(selection, runtime_env, context_plan=context_plan)
@@ -363,15 +417,14 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         )
         if setup_code != 0:
             return setup_code
-        interaction, label = _interaction_command(options, env=env)
+        interaction, label = _interaction_command(options)
         _stage(6, 6, label)
         print(f"Project: {options.project.root}")
-        return subprocess.run(
+        return _run_interaction(
             interaction,
-            check=False,
             env=runtime_env,
             cwd=options.project.root,
-        ).returncode
+        )
     finally:
         if runtime is not None and runtime.poll() is None:
             runtime.terminate()
@@ -384,23 +437,23 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             shutil.rmtree(staged_model, ignore_errors=True)
 
 
+def _run_interaction(
+    command: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    cwd: Path,
+) -> int:
+    try:
+        return subprocess.run(command, check=False, env=env, cwd=cwd).returncode
+    except KeyboardInterrupt:
+        print("\nHeartwood stopped.")
+        return 130
+
+
 def _interaction_command(
     options: LaunchOptions,
-    *,
-    env: Mapping[str, str] | None = None,
 ) -> tuple[list[str], str]:
     if options.web:
-        active_env = {} if env is None else env
-        platform_id = select_platform_adapter(active_env).adapter_id
-        if platform_id == "terra" and has_authenticated_jupyter_proxy(active_env):
-            proxy_url = jupyter_proxy_url(port=options.web_port, env=active_env)
-            if proxy_url is None:  # pragma: no cover - shared evidence invariant
-                raise RuntimeError("Terra proxy evidence did not produce an access path")
-            location = f"through Terra's authenticated proxy: {proxy_url}"
-        elif platform_id == "terra":
-            location = "after opening the tutorial notebook to obtain the Terra proxy link"
-        else:
-            location = f"on {options.web_host}:{options.web_port}"
         return (
             [
                 sys.executable,
@@ -413,7 +466,7 @@ def _interaction_command(
                 "--port",
                 str(options.web_port),
             ],
-            f"Open the web interface {location}",
+            f"Open the web interface on {options.web_host}:{options.web_port}",
         )
     command = [
         sys.executable,
@@ -424,6 +477,8 @@ def _interaction_command(
     ]
     if options.plain:
         command.append("--plain")
+    if options.prompt_file is not None:
+        command.extend(("--prompt-file", str(options.prompt_file)))
     return command, f"Open session {options.session_id}"
 
 
@@ -455,6 +510,7 @@ def _runtime_command(
             str(executable),
             "--model",
             str(model_file),
+            "--jinja",
             "--alias",
             model_id,
             "--host",
@@ -876,7 +932,7 @@ def _ensure_setup(
 
 def _persist_effective_context(store: ProjectConfigStore, context_window: int) -> None:
     """Keep the active managed OpenHands profile aligned with the launched runtime."""
-    output_budget = min(4096, max(512, context_window // 8))
+    input_capacity, output_budget = managed_model_token_budgets(context_window)
 
     def update(config: ProjectConfig) -> ProjectConfig:
         profile = config.model_settings.profile()
@@ -884,7 +940,7 @@ def _persist_effective_context(store: ProjectConfigStore, context_window: int) -
             raise LaunchConfigurationError("the active model profile is not Heartwood-managed")
         updated = replace(
             profile,
-            max_input_tokens=context_window - output_budget,
+            max_input_tokens=input_capacity,
             max_output_tokens=output_budget,
         )
         return config.with_model_settings(config.model_settings.with_profile(updated))

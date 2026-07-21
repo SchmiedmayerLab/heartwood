@@ -16,6 +16,10 @@ variable "GIT_SHA" {
   default = "local"
 }
 
+variable "HEARTWOOD_VERSION" {
+  default = "0.2.0-beta.4"
+}
+
 variable "TERRA_BASE_IMAGE" {
   default = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
 }
@@ -54,6 +58,7 @@ target "runtime" {
   attest = ["type=sbom", "type=provenance,mode=max"]
   args = {
     HEARTWOOD_IMAGE_FLAVOR = "runtime"
+    HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"
   }
   tags = [
     "${IMAGE_NAME}:${IMAGE_CHANNEL}",
@@ -78,6 +83,7 @@ target "_terra_common" {
     HEARTWOOD_JUPYTER_PREFIX = "/opt/conda"
     HEARTWOOD_INSTALL_JUPYTER_KERNEL = "true"
     HEARTWOOD_UV_PYTHON_PREFERENCE = "managed"
+    HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"
   }
 }
 

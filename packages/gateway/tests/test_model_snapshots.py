@@ -21,6 +21,7 @@ from heartwood.gateway import (
     ModelSnapshotError,
     download_model_snapshot,
     load_model_snapshot_catalog,
+    plan_local_context_window,
     verify_model_snapshot,
 )
 
@@ -43,6 +44,39 @@ def test_repository_snapshot_catalog_pins_the_carina_demo_model() -> None:
     assert terra_snapshot.source_revision == "b25037543e9394b818fdfca67ab2a00ecc7dd641"
     assert terra_snapshot.minimum_free_bytes >= terra_snapshot.expected_size_bytes
     assert terra_snapshot.context_window == 32_768
+
+    recommended_snapshot = catalog.snapshot("qwen3-8b-awq-vllm")
+    assert recommended_snapshot.source_repository == "Qwen/Qwen3-8B-AWQ"
+    assert recommended_snapshot.source_revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
+    assert recommended_snapshot.recommended is True
+
+
+@pytest.mark.parametrize(
+    ("snapshot_id", "minimum_vram_gib"),
+    [
+        ("qwen25-7b-instruct-awq-vllm", 16),
+        ("qwen25-7b-instruct-vllm", 32),
+        ("qwen3-8b-awq-vllm", 16),
+    ],
+)
+def test_snapshot_minimum_vram_supports_its_advertised_context(
+    snapshot_id: str,
+    minimum_vram_gib: int,
+) -> None:
+    catalog = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+    snapshot = catalog.snapshot(snapshot_id)
+
+    plan = plan_local_context_window(
+        model_limit=snapshot.context_window,
+        model_size_bytes=snapshot.expected_size_bytes,
+        runtime="vllm",
+        available_memory_bytes=minimum_vram_gib * 1024**3,
+    )
+
+    assert plan.effective_window == snapshot.context_window
+    assert f"at least {minimum_vram_gib} GB VRAM" in str(snapshot.minimum_resource_envelope)
 
 
 def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path) -> None:

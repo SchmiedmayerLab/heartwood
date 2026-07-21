@@ -76,27 +76,14 @@ view = session.audit_export()
 view.export_actions
 ```
 
-## Open the Browser Beside Jupyter
+## Keep Required Services Running
 
-On a supported Jupyter platform, start `heartwood --interface web` in a terminal and keep it running.
-`session.web_proxy_url()` returns the authenticated proxy path only when the environment provides enough routing information; render that path as a link in the current notebook so the browser retains the Terra host and authentication context.
+The notebook bridge does not independently supervise a downloaded model runtime or retain a token entered in another process.
+Start Heartwood normally so the shared startup planner can prepare required compute and inference, then keep that process running while the notebook uses a different session identifier.
 
-```python
-from IPython.display import Markdown
-from IPython.display import display as display_markdown
-
-browser_path = session.web_proxy_url()
-if browser_path is None:
-    display_markdown(Markdown("Heartwood could not verify a browser proxy route in this kernel."))
-else:
-    display_markdown(Markdown(f"[Open the Heartwood browser]({browser_path})"))
-```
-
-Do not replace a missing route with `/proxy/8767/`.
-Use the terminal interface when the current Jupyter environment does not expose enough authenticated routing evidence.
-
-The notebook bridge does not independently supervise a downloaded model runtime.
-Start Heartwood normally so the shared startup planner can prepare required compute and inference.
+On a workstation, `session.browser_url()` returns the direct browser URL when the platform supports it.
+Terra and Stanford Carina do not expose a supported Heartwood browser route, so this method returns `None` there.
+Do not construct a proxy URL manually.
 
 ## Release the Session
 

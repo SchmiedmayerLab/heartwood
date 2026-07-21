@@ -19,6 +19,7 @@ import pytest
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._launch import (
+    LaunchConfigurationError,
     LaunchOptions,
     LocalRuntimeSelection,
     _available_gpu_memory_bytes,
@@ -39,6 +40,7 @@ from heartwood.cli._launch import (
     _reentry_command,
     _resolve_runtime_executable,
     _run_command,
+    _run_interaction,
     _runtime_command,
     _runtime_environment,
     _stage_model,
@@ -102,6 +104,8 @@ def _options(
         "web_host": "127.0.0.1",
         "web_port": 8767,
         "startup_timeout": 600,
+        "prompt": None,
+        "prompt_file": None,
     }
     values.update(overrides)
     return LaunchOptions(**values)  # type: ignore[arg-type]
@@ -142,6 +146,14 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert "OPENAI_API_KEY" not in export
     assert "--workspace" not in plan.allocation_command
     assert "--model-root" not in plan.allocation_command
+
+
+def test_launch_plan_rejects_unimplemented_multi_gpu_runtime(tmp_path: Path) -> None:
+    with pytest.raises(LaunchConfigurationError, match="exactly one GPU"):
+        build_launch_plan(
+            _options(tmp_path, gpus=2),
+            {"HEARTWOOD_PLATFORM": "carina"},
+        )
 
 
 def test_launch_requires_consent_and_honors_dry_run_and_no_allocate(
@@ -251,6 +263,36 @@ def test_launch_reports_missing_selection_artifact_and_runtime(
     )
     assert run_launch(_options(tmp_path), env=env) == 69
     assert "vLLM executable is unavailable" in capsys.readouterr().out
+
+
+def test_launch_rejects_short_context_before_starting_runtime(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, runtime="vllm", context_window=4_096)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _runtime: executable
+    )
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 64
+    assert "at least 18,432 tokens" in capsys.readouterr().out
+
+
+def test_explicit_runtime_start_rejects_unsupported_terra_web_interface(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    options = _options(tmp_path, web=True, dry_run=True)
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "terra"}) == 64
+    output = capsys.readouterr().out
+    assert "Terra does not provide the web interface" in output
+    assert "Use the terminal interface" in output
 
 
 def test_launch_scrubs_resource_and_runtime_preflight_environments(
@@ -593,11 +635,12 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         str(model),
     )
     assert "--alias" in command
+    assert "--jinja" in command
     context_index = command.index("--ctx-size")
     assert command[context_index + 1] == "32768"
 
 
-def test_resource_assessment_reports_context_and_memory_warnings(
+def test_resource_assessment_reports_context_and_memory_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -616,16 +659,16 @@ def test_resource_assessment_reports_context_and_memory_warnings(
     )
     monkeypatch.setattr(
         "heartwood.cli._launch._available_gpu_memory_bytes",
-        lambda _env: 12 * 1024**3,
+        lambda _env: 24 * 1024**3,
     )
 
     _print_resource_assessment(selection, {"PATH": "/usr/bin"})
 
     output = capsys.readouterr().out
-    assert "Context window: 16,384 tokens selected automatically" in output
+    assert "Context window: 32,768 tokens selected automatically" in output
     assert "model capacity: 32,768" in output
     assert "Warning: RAM may be insufficient" in output
-    assert "Warning: GPU memory may be insufficient" in output
+    assert "GPU memory available; estimated minimum" in output
 
 
 def test_available_system_memory_honors_cgroup_v1_limit(
@@ -759,6 +802,56 @@ def test_reentry_command_contains_no_storage_or_runtime_paths(tmp_path: Path) ->
     assert "--vllm-executable" not in command
 
 
+def test_task_handoff_uses_a_private_project_file_without_exposing_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, prompt="synthetic task with private details")
+    submitted: list[tuple[str, ...]] = []
+
+    def run_successfully(command: Sequence[str]) -> int:
+        submitted.append(tuple(command))
+        prompt_index = command.index("--prompt-file")
+        prompt_file = Path(command[prompt_index + 1])
+        assert prompt_file.parent == tmp_path / ".heartwood" / "runtime"
+        assert prompt_file.read_text(encoding="utf-8") == options.prompt
+        assert prompt_file.stat().st_mode & 0o777 == 0o600
+        return 0
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._discover_slurm_gpu_partitions",
+        lambda _env: (("gpu", True),),
+    )
+
+    assert (
+        run_launch(
+            options,
+            env={"HEARTWOOD_PLATFORM": "carina"},
+            input_fn=lambda _prompt: "y",
+            run_fn=run_successfully,
+        )
+        == 0
+    )
+    assert len(submitted) == 1
+    rendered = " ".join(submitted[0])
+    assert "synthetic task with private details" not in rendered
+    assert not tuple((tmp_path / ".heartwood" / "runtime").glob("pending-prompt.*"))
+
+
+def test_interaction_interrupt_exits_without_a_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def interrupted(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", interrupted)
+
+    assert _run_interaction(("heartwood",), env={}, cwd=tmp_path) == 130
+    assert capsys.readouterr().out == "\nHeartwood stopped.\n"
+
+
 def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     command = _reentry_command(
         _options(
@@ -795,42 +888,6 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
         "9876",
     ]
     assert label == "Open the web interface on 0.0.0.0:9876"
-
-
-def test_terra_web_launch_reports_the_authenticated_proxy_route(tmp_path: Path) -> None:
-    interaction, label = _interaction_command(
-        _options(tmp_path, web=True, web_port=8767),
-        env={
-            "HEARTWOOD_PLATFORM": "terra",
-            "GOOGLE_PROJECT": "terra-project",
-            "CLUSTER_NAME": "saturn-runtime",
-        },
-    )
-
-    assert interaction[-6:] == [
-        "gateway",
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8767",
-    ]
-    assert label == (
-        "Open the web interface through Terra's authenticated proxy: "
-        "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/"
-    )
-
-
-def test_terra_web_launch_does_not_present_an_incomplete_proxy_route(tmp_path: Path) -> None:
-    _, label = _interaction_command(
-        _options(tmp_path, web=True, web_port=8767),
-        env={"HEARTWOOD_PLATFORM": "terra"},
-    )
-
-    assert label == (
-        "Open the web interface after opening the tutorial notebook to obtain the Terra proxy link"
-    )
-    assert "/proxy/8767/" not in label
 
 
 def test_runtime_readiness_accepts_requested_model_and_stops_after_exit(
@@ -1005,12 +1062,18 @@ def test_partition_discovery_and_selection(
     )
     assert (
         run_launch(
-            _options(tmp_path, partition="gpu", dry_run=True),
+            _options(
+                tmp_path,
+                partition="gpu",
+                dry_run=True,
+                prompt="private task that must be removed",
+            ),
             env={"HEARTWOOD_PLATFORM": "carina"},
         )
         == 64
     )
     assert "choose one of: dev, normal" in capsys.readouterr().out
+    assert not tuple((tmp_path / ".heartwood" / "runtime").glob("pending-prompt.*"))
 
 
 def test_partition_discovery_handles_ambiguous_and_unavailable_schedulers(

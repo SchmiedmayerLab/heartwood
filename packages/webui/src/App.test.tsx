@@ -1033,7 +1033,9 @@ describe("App", () => {
     });
     expect(progress).toHaveAttribute("aria-valuenow", String(64 * 1024 * 1024));
     expect(
-      await screen.findByText("Ready for Heartwood launch"),
+      await screen.findByText(
+        "Downloaded. Restart Heartwood to load this model.",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("Model runtime needed")).toBeInTheDocument();
     expect(screen.getByLabelText("Active model profile")).toHaveTextContent(
@@ -1235,7 +1237,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(
       await screen.findByText(
-        "Ready for Heartwood launch",
+        "Downloaded. Restart Heartwood to load this model.",
         {},
         { timeout: 5_000 },
       ),

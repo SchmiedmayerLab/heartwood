@@ -85,6 +85,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Open setup and select the model connection again.",
         "/reference/troubleshooting/#configuration",
     ),
+    "agent-runtime": DiagnosticDefinition(
+        "HW-AGENT-001",
+        "Agent runtime is unavailable",
+        "Repair or reinstall Heartwood, then run `heartwood doctor` again.",
+        "/reference/troubleshooting/#agent-runtime",
+    ),
     "slurm-allocation": DiagnosticDefinition(
         "HW-COMPUTE-001",
         "A compute allocation may be required",

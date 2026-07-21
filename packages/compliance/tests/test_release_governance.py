@@ -135,6 +135,10 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
 ) -> None:
     version = "0.2.0-beta.1"
     (tmp_path / "VERSION.toml").write_text(f'version = "{version}"\n', encoding="utf-8")
+    (tmp_path / "docker-bake.hcl").write_text(
+        f'variable "HEARTWOOD_VERSION" {{\n  default = "{version}"\n}}\n',
+        encoding="utf-8",
+    )
     python_package = tmp_path / "packages" / "cli"
     python_module = python_package / "src" / "heartwood" / "cli"
     python_module.mkdir(parents=True)
@@ -162,22 +166,32 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
         encoding="utf-8",
     )
     documentation = {
-        "platforms/containers.md": f"heartwood:{version}",
+        "platforms/containers.md": "\n".join(
+            (
+                f"heartwood:{version}",
+                f"heartwood:{version}-gpu-nvidia",
+                f"heartwood:{version}-terra",
+                f"heartwood:{version}-terra-gpu-nvidia",
+            )
+        ),
         "platforms/carina.md": f"releases/download/{version}/heartwood-installer",
-        "platforms/terra.md": f"heartwood:{version}-terra",
+        "platforms/native-linux.md": f"releases/download/{version}/heartwood-installer",
+        "platforms/terra.md": (f"heartwood:{version}-terra\nheartwood:{version}-terra-gpu-nvidia"),
         "models/offline.md": f"heartwood:{version}",
+        "contribute/releases.md": version,
     }
     docs = tmp_path / "documentation"
     for name, content in documentation.items():
         path = docs / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+    (tmp_path / "README.md").write_text(f"heartwood:{version}\n", encoding="utf-8")
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
 
-    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.3"}\n', encoding="utf-8")
+    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.4"}\n', encoding="utf-8")
     assert (
-        "skills/verified/example/metadata.json: 0.2.0-beta.3"
+        "skills/verified/example/metadata.json: 0.2.0-beta.4"
         in _release_verifier().source_version_errors(tmp_path, version)
     )
 

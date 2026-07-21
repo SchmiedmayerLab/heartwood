@@ -23,6 +23,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packages/webui/package-lock.json
       - name: Build native assets
         env:
           RELEASE_VERSION: ${{ github.sha }}
@@ -37,6 +43,13 @@ jobs:
           --dry-run
       - name: Test native installation layout
         run: deploy/tests/native_installer_smoke.sh dist
+      - name: Test installation from empty Ubuntu
+        run: >-
+          docker run --rm --platform linux/amd64
+          --volume "${PWD}:/source:ro"
+          --workdir /source
+          ubuntu:24.04
+          bash deploy/tests/native_installer_ubuntu_smoke.sh dist
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:

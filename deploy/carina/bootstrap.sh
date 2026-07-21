@@ -8,17 +8,20 @@
 set -euo pipefail
 
 root=""
+installer_state=""
 while (($#)); do
   case "$1" in
     --environment-root) root="${2:?missing environment root}"; shift 2 ;;
+    --installer-state) installer_state="${2:?missing installer state}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 : "${root:?--environment-root is required}"
+: "${installer_state:?--installer-state is required}"
 
 umask 077
 root="$(mkdir -p "${root}" && cd "${root}" && pwd -P)"
-installer_state="${root%/runtimes/*}/.installer"
+installer_state="$(mkdir -p "${installer_state}" && cd "${installer_state}" && pwd -P)"
 installer_directories=(
   "${installer_state}"
   "${installer_state}/home"

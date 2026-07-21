@@ -15,7 +15,6 @@ from typing import Literal
 
 from heartwood.adapters import PlatformCapabilities
 from heartwood.adapters.platform import select_platform_adapter
-from heartwood.gateway._jupyter import has_authenticated_jupyter_proxy, jupyter_proxy_url
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._readiness import DeploymentReadiness, inspect_deployment
 
@@ -92,7 +91,6 @@ def plan_startup(
             interface=interface,
             platform_id=adapter.adapter_id,
             port=port,
-            env=active_env,
         ),
         requires_compute=phase == "compute-required",
         requires_confirmation=phase == "compute-required" and capabilities.scheduler == "slurm",
@@ -149,14 +147,9 @@ def _access_url(
     interface: InterfaceKind,
     platform_id: str,
     port: int,
-    env: Mapping[str, str],
 ) -> str | None:
     if interface != "web":
         return None
-    if platform_id == "terra":
-        return (
-            jupyter_proxy_url(port=port, env=env) if has_authenticated_jupyter_proxy(env) else None
-        )
-    if platform_id == "carina":
+    if platform_id in {"carina", "terra"}:
         return None
     return f"http://127.0.0.1:{port}/"

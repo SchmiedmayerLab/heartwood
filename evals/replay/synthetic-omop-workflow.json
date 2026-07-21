@@ -63,7 +63,7 @@
       "participant_count": 24,
       "positive_count": 20,
       "holdout_evaluation_performed": false,
-      "row_values_exported": false
+      "aggregate_only_output": true
     }
   },
   "expected_attestations": [

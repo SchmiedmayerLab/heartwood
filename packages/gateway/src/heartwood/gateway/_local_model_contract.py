@@ -14,9 +14,10 @@ from typing import Literal
 DEFAULT_LOCAL_CONTEXT_WINDOW = 32_768
 MINIMUM_LOCAL_CONTEXT_WINDOW = 2_048
 MINIMUM_AGENT_CONTEXT_WINDOW = 16_384
+MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW = 18_432
 MAXIMUM_LOCAL_CONTEXT_WINDOW = 1_048_576
 LOCAL_CONTEXT_WINDOW_TIERS = (
-    16_384,
+    MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
     32_768,
     65_536,
     131_072,
@@ -57,8 +58,14 @@ def plan_local_context_window(
             f"model context limit must be between {MINIMUM_LOCAL_CONTEXT_WINDOW} and "
             f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
         )
+    if model_limit < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
+        raise ValueError(
+            "Heartwood agent sessions require a model context window of at least "
+            f"{MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:,} tokens; this model supports "
+            f"{model_limit:,}"
+        )
     resource: Literal["RAM", "GPU memory"] = "GPU memory" if runtime == "vllm" else "RAM"
-    fallback = _tier_at_or_below(min(model_limit, DEFAULT_LOCAL_CONTEXT_WINDOW), model_limit)
+    fallback = MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW
     if model_size_bytes is None or model_size_bytes <= 0 or available_memory_bytes is None:
         return LocalContextPlan(
             model_limit=model_limit,
@@ -75,8 +82,8 @@ def plan_local_context_window(
                 else None
             ),
             reason=(
-                f"Selected the {fallback:,}-token safe default because {resource.lower()} "
-                "or model-size information is unavailable."
+                f"Selected the minimum {fallback:,}-token agent context because "
+                f"{resource.lower()} or model-size information is unavailable."
             ),
         )
 
@@ -85,7 +92,22 @@ def plan_local_context_window(
     context_budget = usable_memory - int(model_size_bytes * model_multiplier) - fixed_bytes
     resource_limit = max(0, context_budget // _CONTEXT_BYTES_PER_TOKEN)
     bounded_limit = min(model_limit, resource_limit)
-    effective = _tier_at_or_below(bounded_limit, min(model_limit, MINIMUM_AGENT_CONTEXT_WINDOW))
+    if bounded_limit < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
+        minimum_required = estimate_local_runtime_memory(
+            context_window=MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
+            model_size_bytes=model_size_bytes,
+            runtime=runtime,
+        )
+        raise ValueError(
+            f"available {resource.lower()} cannot support the minimum "
+            f"{MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:,}-token agent context; "
+            f"the runtime footprint estimate is {minimum_required / _GIB:.1f} GiB before "
+            f"headroom and {available_memory_bytes / _GIB:.1f} GiB is available"
+        )
+    effective = _tier_at_or_below(
+        bounded_limit,
+        MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
+    )
     required = estimate_local_runtime_memory(
         context_window=effective,
         model_size_bytes=model_size_bytes,
@@ -93,15 +115,10 @@ def plan_local_context_window(
     )
     if effective == model_limit:
         reason = f"Selected the model's full {effective:,}-token context."
-    elif bounded_limit >= MINIMUM_AGENT_CONTEXT_WINDOW:
+    else:
         reason = (
             f"Selected {effective:,} of {model_limit:,} supported tokens to retain "
             f"conservative {resource.lower()} headroom."
-        )
-    else:
-        reason = (
-            f"Selected the minimum viable {effective:,}-token agent context; observed "
-            f"{resource.lower()} is below the conservative estimate."
         )
     return LocalContextPlan(
         model_limit=model_limit,
@@ -111,6 +128,26 @@ def plan_local_context_window(
         estimated_required_bytes=required,
         reason=reason,
     )
+
+
+def managed_model_token_budgets(context_window: int) -> tuple[int, int]:
+    """Return OpenHands input capacity and output budget for one runtime window."""
+    if not MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW <= context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
+        raise ValueError(
+            f"managed agent context window must be between "
+            f"{MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW} and "
+            f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
+        )
+    output_budget = min(4096, max(512, context_window // 8))
+    output_budget = min(output_budget, context_window - MINIMUM_AGENT_CONTEXT_WINDOW)
+    return context_window - output_budget, output_budget
+
+
+def managed_model_request_body(model_type: str | None) -> dict[str, object]:
+    """Return runtime-native request defaults for a managed model family."""
+    if model_type == "qwen3":
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    return {}
 
 
 def _tier_at_or_below(limit: int, fallback: int) -> int:

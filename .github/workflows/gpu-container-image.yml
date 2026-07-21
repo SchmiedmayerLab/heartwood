@@ -183,6 +183,38 @@ jobs:
           docker pull --platform linux/amd64 "${CANDIDATE}"
           docker run --rm --platform linux/amd64 \
             --entrypoint /opt/heartwood/images/gpu/verify_runtime.sh "${CANDIDATE}"
+      - name: Verify shared agent and platform interfaces
+        env:
+          CANDIDATE: ${{ steps.candidate.outputs.reference }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "${TARGET}" = "terra-runtime-gpu-nvidia" ]; then
+            docker run --rm --platform linux/amd64 --network none \
+              --entrypoint bash \
+              "${CANDIDATE}" \
+              /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
+            docker run --rm --platform linux/amd64 --network none \
+              --entrypoint bash \
+              "${CANDIDATE}" \
+              -c 'mkdir -p /home/jupyter/synthetic-analysis &&
+              cd /home/jupyter/synthetic-analysis &&
+              exec /opt/heartwood/images/platform/scripts/terra_image_smoke.sh'
+            docker run --rm --platform linux/amd64 --network none \
+              --entrypoint bash \
+              --env HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis \
+              --env HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis \
+              "${CANDIDATE}" \
+              /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
+          else
+            docker run --rm --init --platform linux/amd64 \
+              --network none --read-only \
+              --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256 \
+              --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+              --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700 \
+              --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+              "${CANDIDATE}" \
+              bash /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
+          fi
       - name: Create and verify immutable commit tag
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}

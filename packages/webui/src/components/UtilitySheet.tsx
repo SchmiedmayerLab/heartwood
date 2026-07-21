@@ -950,7 +950,10 @@ const ModelConnectionSetup = ({
   const [error, setError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const connections = settings?.connections ?? [];
+  const connections =
+    settings?.connections.filter(
+      (candidate) => candidate.connection_id !== "heartwood",
+    ) ?? [];
   const connection = connections.find(
     (candidate) => candidate.connection_id === connectionId,
   );
@@ -958,6 +961,7 @@ const ModelConnectionSetup = ({
   const unconfiguredSources =
     settings?.source_options.filter(
       (source) =>
+        source.connection_id !== "heartwood" &&
         !connections.some(
           (candidate) => candidate.connection_id === source.connection_id,
         ),
@@ -1431,7 +1435,11 @@ const ArtifactDownloadStatus = ({
 }) => {
   if (!download) return null;
   if (download.status === "ready") {
-    return <small role="status">Ready for Heartwood launch</small>;
+    return (
+      <small role="status">
+        Downloaded. Restart Heartwood to load this model.
+      </small>
+    );
   }
   if (download.status === "error") {
     return <small role="alert">{download.error ?? "Download failed"}</small>;

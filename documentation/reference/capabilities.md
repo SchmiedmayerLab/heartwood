@@ -14,18 +14,14 @@ The manifest prevents the terminal, browser, and notebook from advertising route
 | Capability | Workstation or Container | Terra | Stanford Carina |
 |---|---|---|---|
 | Platform identifier | `generic` | `terra` | `carina` |
-| Interfaces | Terminal, browser, notebook | Terminal, browser, notebook | Terminal |
-| Browser route | Direct loopback | Authenticated Jupyter proxy | Unavailable |
+| Interfaces | Terminal, browser, notebook | Terminal, notebook | Terminal |
+| Browser route | Direct loopback | Unavailable | Unavailable |
 | Heartwood-managed runtimes | llama.cpp, vLLM | llama.cpp, vLLM | vLLM |
 | Compute model | Current host | Provisioned Terra compute | Slurm allocation |
 | Durable storage | Project directory | Dedicated directory below `/home/jupyter` | Approved project storage |
 | Credential backends | Process, system keyring, mounted file | Process, mounted file, managed identity | Process, mounted file |
 | Model sources | Heartwood-managed, OpenAI, Anthropic, other compatible service | Heartwood-managed, OpenAI, Anthropic, other compatible service | Heartwood-managed, Stanford AI API Gateway |
 | Managed model connection | None | None in the baseline adapter | Stanford AI API Gateway |
-| Validation evidence | CI | CI and a published synthetic platform run | CI and a published synthetic platform run |
-
-`published synthetic platform run` means that a versioned artifact has been exercised on the named platform without protected data.
-It does not mean institutional approval for every project or model route.
 
 ## Startup Projection
 

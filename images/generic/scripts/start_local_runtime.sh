@@ -41,6 +41,7 @@ case "${profile}" in
     fi
     exec llama-server \
       --model "${model_path}" \
+      --jinja \
       --alias "${model_alias}" \
       --host "${host}" \
       --port "${port}" \

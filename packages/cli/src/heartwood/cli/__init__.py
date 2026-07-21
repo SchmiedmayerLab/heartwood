@@ -57,9 +57,7 @@ from heartwood.gateway import (
     SkillSettingsError,
     StartupPlan,
     custom_model_connection_requires_token,
-    has_authenticated_jupyter_proxy,
     inspect_deployment,
-    jupyter_proxy_url,
     model_source_options,
 )
 from heartwood.session import (
@@ -73,7 +71,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0-beta.3"
+__version__ = "0.2.0-beta.4"
 
 _PROG = "heartwood"
 
@@ -133,6 +131,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Use the line-oriented terminal instead of the full-screen interface.",
     )
     parser.add_argument("--prompt", "-p", help="Submit one task and exit.")
+    parser.add_argument("--prompt-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=8767, help="Browser interface port.")
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
@@ -169,7 +168,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--partition",
         help="Slurm GPU partition; by default Heartwood selects the available default.",
     )
-    runtime_start.add_argument("--gpus", type=int, default=1)
+    runtime_start.add_argument(
+        "--gpus",
+        type=int,
+        default=1,
+        help="Number of GPUs to request; the current runtime supports one GPU.",
+    )
     runtime_start.add_argument("--cpus", type=int, default=8)
     runtime_start.add_argument("--memory", default="64G")
     runtime_start.add_argument("--time", dest="time_limit", default="02:00:00")
@@ -356,6 +360,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run ``heartwood`` and return a process exit code."""
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     project = ProjectContext.current()
@@ -363,13 +375,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--port must be between 1 and 65535")
     if args.plain and args.interface != "terminal":
         parser.error("--plain can be used only with --interface terminal")
-    if args.prompt is not None and args.interface != "terminal":
+    if args.prompt is not None and args.prompt_file is not None:
+        parser.error("--prompt and the internal prompt handoff cannot be combined")
+    has_prompt = args.prompt is not None or args.prompt_file is not None
+    if has_prompt and args.interface != "terminal":
         parser.error("--prompt can be used only with --interface terminal")
     if (
         args.command is None
         and args.interface == "terminal"
         and not sys.stdin.isatty()
-        and args.prompt is None
+        and not has_prompt
     ):
         parser.print_help()
         return 0
@@ -386,8 +401,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "setup":
         return _handle_setup(parser, args, project=project)
     if args.command == "runtime" and args.runtime_command == "start":
-        if args.gpus < 1 or args.cpus < 1 or args.startup_timeout < 1 or args.port < 1:
-            parser.error("--gpus, --cpus, --startup-timeout, and --port must be positive")
+        if args.gpus != 1:
+            parser.error("--gpus must be 1; multi-GPU managed inference is not supported")
+        if args.cpus < 1 or args.startup_timeout < 1 or args.port < 1:
+            parser.error("--cpus, --startup-timeout, and --port must be positive")
         return run_launch(_launch_options(project, args))
     configured_gateway: SessionGateway | None = None
     if args.command is None:
@@ -462,8 +479,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "skills":
             return _handle_skills(parser, gateway, args)
         if args.command is None:
-            if args.prompt is not None:
-                return _submit_task(gateway, session_id=args.session_id, prompt=args.prompt)
+            if has_prompt:
+                try:
+                    prompt = _consume_prompt(project, args.prompt, args.prompt_file)
+                except ProjectStateError as error:
+                    print(f"Pending task unavailable: {error}")
+                    return 64
+                return _submit_task(gateway, session_id=args.session_id, prompt=prompt)
             return _interactive_chat(
                 gateway,
                 session_id=args.session_id,
@@ -555,7 +577,33 @@ def _launch_options(project: ProjectContext, args: argparse.Namespace) -> Launch
         web_host=args.host,
         web_port=args.port,
         startup_timeout=getattr(args, "startup_timeout", 600),
+        prompt=args.prompt,
+        prompt_file=args.prompt_file,
     )
+
+
+def _consume_prompt(project: ProjectContext, prompt: str | None, prompt_file: Path | None) -> str:
+    if prompt is not None:
+        return prompt
+    if prompt_file is None:  # pragma: no cover - guarded by the caller
+        raise ProjectStateError("no pending task was provided")
+    if prompt_file.is_symlink():
+        raise ProjectStateError("the pending task must not be a symbolic link")
+    try:
+        resolved = prompt_file.resolve(strict=True)
+        runtime_dir = project.runtime_dir.resolve(strict=True)
+    except OSError as error:
+        raise ProjectStateError("the pending task file is unavailable") from error
+    if resolved.parent != runtime_dir or not resolved.name.startswith("pending-prompt."):
+        raise ProjectStateError("the pending task is outside this project's private runtime state")
+    if not resolved.is_file():
+        raise ProjectStateError("the pending task is not a regular file")
+    try:
+        return resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ProjectStateError("the pending task could not be read") from error
+    finally:
+        resolved.unlink(missing_ok=True)
 
 
 def _review_project(project: ProjectContext) -> bool:
@@ -1127,8 +1175,8 @@ def _handle_models(
                     ),
                     activity=_MODEL_DOWNLOAD_ACTIVITY,
                 )
-            print(f"Heartwood-managed model: {path}")
-            print("Run `heartwood` to start the model and open Heartwood.")
+            print(f"Model files are ready: {path}")
+            print("Run `heartwood` to continue setup or open Heartwood.")
             return 0
     except (
         ModelArtifactError,
@@ -1384,7 +1432,10 @@ def _submit_task(
         kind=kind,
         payload={"prompt": prompt},
     )
-    events = gateway.handle(command).events
+    events = _run_with_progress(
+        lambda: gateway.handle(command).events,
+        activity=interaction_activity(prompt),
+    )
     print(_format_transcript(events))
     return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
 
@@ -1653,18 +1704,6 @@ def _handle_serve(
         static_dir=web_root,
         static_base_path=base_path,
     )
-    if select_platform_adapter(os.environ).adapter_id == "terra":
-        print("Heartwood web interface")
-        if has_authenticated_jupyter_proxy():
-            proxy_url = jupyter_proxy_url(port=port)
-            if proxy_url is None:  # pragma: no cover - shared evidence invariant
-                raise RuntimeError("Terra proxy evidence did not produce an access path")
-            print(f"Terra authenticated proxy path: {proxy_url}")
-            print("Open this path from the current Terra Jupyter host.")
-        else:
-            print("Terra browser path unavailable in this terminal.")
-            print("Open the tutorial notebook to generate the authenticated browser link.")
-        print("Keep this terminal open while using the browser.")
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
 

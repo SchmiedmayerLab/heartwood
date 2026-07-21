@@ -29,7 +29,7 @@ def _load_json(path: Path) -> dict[str, object]:
 def test_omop_cohort_summary_script_emits_qc_and_export_guard(tmp_path: Path) -> None:
     manifest = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "omop-cohort-summary")
     output = tmp_path / "cohort-summary.json"
-    SkillTestHarness(_SKILLS_ROOT).run(
+    completed = SkillTestHarness(_SKILLS_ROOT).run(
         manifest,
         "--data-root",
         str(_DATA_ROOT),
@@ -37,6 +37,7 @@ def test_omop_cohort_summary_script_emits_qc_and_export_guard(tmp_path: Path) ->
         str(output),
     )
 
+    assert completed.stdout == "Wrote aggregate cohort summary to cohort-summary.json.\n"
     payload = _load_json(output)
     summary = payload["summary"]
     quality_checks = payload["quality_checks"]
@@ -54,7 +55,7 @@ def test_omop_cohort_summary_script_emits_qc_and_export_guard(tmp_path: Path) ->
     assert quality_checks["person_ids_unique"] is True
     assert quality_checks["condition_occurrence_ids_unique"] is True
     assert quality_checks["condition_years_not_before_birth"] is True
-    assert quality_checks["row_values_exported"] is False
+    assert quality_checks["aggregate_only_output"] is True
     assert export_guard["aggregate_count_floor"] == 20
     assert export_guard["exportable"] is True
 
@@ -93,7 +94,7 @@ def test_omop_cohort_summary_reports_malformed_input_quality_checks(tmp_path: Pa
     manifest = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "omop-cohort-summary")
     output = tmp_path / "cohort-summary.json"
 
-    SkillTestHarness(_SKILLS_ROOT).run(
+    completed = SkillTestHarness(_SKILLS_ROOT).run(
         manifest,
         "--data-root",
         str(data_root),
@@ -101,6 +102,7 @@ def test_omop_cohort_summary_reports_malformed_input_quality_checks(tmp_path: Pa
         str(output),
     )
 
+    assert completed.stdout == "Wrote aggregate cohort summary to cohort-summary.json.\n"
     payload = _load_json(output)
     quality_checks = payload["quality_checks"]
     assert isinstance(quality_checks, dict)
@@ -109,7 +111,7 @@ def test_omop_cohort_summary_reports_malformed_input_quality_checks(tmp_path: Pa
     assert quality_checks["condition_years_parseable"] is False
     assert quality_checks["condition_years_not_before_birth"] is False
     assert quality_checks["condition_references_known_persons"] is False
-    assert quality_checks["row_values_exported"] is False
+    assert quality_checks["aggregate_only_output"] is True
 
 
 def test_reference_cohort_exports_only_aggregate_counts(tmp_path: Path) -> None:
@@ -238,7 +240,7 @@ def test_baseline_model_script_omits_row_values(tmp_path: Path) -> None:
     assert float(training_summary["brier_score"]) < 0.2
     assert 0.5 < float(training_summary["roc_auc"]) < 1.0
     assert quality_checks["holdout_evaluation_performed"] is False
-    assert quality_checks["row_values_exported"] is False
+    assert quality_checks["aggregate_only_output"] is True
     assert "person_id" not in json.dumps(payload)
 
 

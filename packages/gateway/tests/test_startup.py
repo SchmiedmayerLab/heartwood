@@ -60,7 +60,7 @@ def test_setup_plan_distinguishes_connection_and_model_selection(tmp_path: Path)
     assert without_model.phase == "model-required"
 
 
-def test_terra_web_plan_requires_a_real_authenticated_proxy(tmp_path: Path) -> None:
+def test_terra_rejects_the_unsupported_web_interface(tmp_path: Path) -> None:
     project = tmp_path / "jupyter" / "analysis"
     project.mkdir(parents=True)
     base_env = {
@@ -68,15 +68,16 @@ def test_terra_web_plan_requires_a_real_authenticated_proxy(tmp_path: Path) -> N
         "HEARTWOOD_PLATFORM_HOME": str(tmp_path / "jupyter"),
     }
 
-    unavailable = plan_startup(ProjectContext(project), interface="web", env=base_env)
-    available = plan_startup(
+    plan = plan_startup(
         ProjectContext(project),
         interface="web",
         env={**base_env, "JUPYTERHUB_SERVICE_PREFIX": "/user/synthetic/"},
     )
 
-    assert unavailable.access_url is None
-    assert available.access_url == "/user/synthetic/proxy/8767/"
+    assert plan.phase == "recovery-required"
+    assert plan.interface_supported is False
+    assert plan.next_action == "Use the terminal interface in this environment."
+    assert plan.access_url is None
 
 
 def test_carina_rejects_an_unsupported_web_interface(tmp_path: Path) -> None:

@@ -36,6 +36,11 @@ from heartwood.gateway._action_settings import (
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
 from heartwood.gateway._local_import import import_local_model
+from heartwood.gateway._local_model_contract import (
+    MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
+    managed_model_request_body,
+    managed_model_token_budgets,
+)
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
     LocalModelChoice,
@@ -338,7 +343,7 @@ class SessionGateway:
         self._streams = EventStreamHub()
 
     def start(self) -> None:
-        """Start gateway dependencies lazily with the first conversation."""
+        """Start the interface lifecycle without requiring an agent dependency import."""
 
     @_serialized_state
     def initialize_project(self, *, interface: InterfaceKind = "web") -> dict[str, object]:
@@ -882,7 +887,7 @@ class SessionGateway:
         self,
         model_id: str,
     ) -> Path:
-        """Download, verify, and select a known Heartwood-managed model."""
+        """Download and verify a known model, selecting it when agent-compatible."""
         self.project.initialize()
         model = self._require_local_model_runtime(model_id).download_model()
         if isinstance(model, ModelArtifact):
@@ -1017,6 +1022,7 @@ class SessionGateway:
             profile = model_settings.profile()
         except ModelSettingsError:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
+        selected_model = self.config_store.load().local_model if profile.is_local else None
         return OpenHandsSdkBackend(
             profile=profile,
             workspace=self.project.root,
@@ -1032,6 +1038,9 @@ class SessionGateway:
             ),
             action_confirmation_mode=action_settings.confirmation_mode,
             env=self._credential_environment(),
+            llm_extra_body=managed_model_request_body(
+                selected_model.model_type if selected_model is not None else None
+            ),
         )
 
     def _policy_profile(self) -> PolicyProfile:
@@ -1235,12 +1244,14 @@ class SessionGateway:
             raise ModelRepositoryError(
                 f"Heartwood-managed model metadata is unavailable: {model_id}"
             )
-        output_budget = min(4096, max(512, choice.context_window // 8))
+        if choice.context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
+            return
+        input_capacity, output_budget = managed_model_token_budgets(choice.context_window)
         profile = replace(
             model_profile_from_preset("heartwood-managed", execution_model),
             profile_id="heartwood",
             description=choice.label,
-            max_input_tokens=choice.context_window - output_budget,
+            max_input_tokens=input_capacity,
             max_output_tokens=output_budget,
         )
         settings = (
@@ -1257,6 +1268,7 @@ class SessionGateway:
             source_repository=choice.source_repository,
             source_revision=choice.source_revision,
             source_path=choice.source_path,
+            model_type=choice.model_type,
             size_bytes=choice.size_bytes,
             minimum_free_bytes=choice.minimum_free_bytes,
             license_posture=choice.license_posture,
@@ -1341,7 +1353,7 @@ class SessionGateway:
         platform_id = self.config_store.load().platform_id
         executable_path = self.env.get("PATH")
         if runtime == "llama-cpp":
-            return Path("/opt/llama.cpp/llama-server").is_file() or (
+            return self._runtime_executable_available(Path("/opt/llama.cpp/llama-server")) or (
                 executable_path is not None
                 and shutil.which("llama-server", path=executable_path) is not None
             )
@@ -1349,10 +1361,19 @@ class SessionGateway:
             return False
         if platform_id == "carina":
             return True
-        runtime_available = Path("/opt/heartwood-vllm/bin/vllm").is_file() or (
+        runtime_available = self._runtime_executable_available(
+            Path("/opt/heartwood-vllm/bin/vllm")
+        ) or (
             executable_path is not None and shutil.which("vllm", path=executable_path) is not None
         )
         return runtime_available and gpu_visible(self.env)
+
+    @staticmethod
+    def _runtime_executable_available(path: Path) -> bool:
+        try:
+            return path.is_file() and os.access(path, os.X_OK)
+        except OSError:
+            return False
 
     def _local_model_size(self, model_id: str, path: Path) -> int:
         try:
@@ -1399,6 +1420,7 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         source_repository=selection.source_repository,
         source_revision=selection.source_revision,
         source_path=selection.source_path,
+        model_type=selection.model_type,
         size_bytes=selection.size_bytes,
         minimum_free_bytes=selection.minimum_free_bytes,
         license_posture=selection.license_posture,

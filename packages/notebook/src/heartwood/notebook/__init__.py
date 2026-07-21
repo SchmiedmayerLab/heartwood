@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-from heartwood.gateway import has_authenticated_jupyter_proxy, jupyter_proxy_url
 from heartwood.notebook._view_model import (
     ActivityItem,
     ApprovalAction,
@@ -37,9 +36,7 @@ __all__ = [
     "__version__",
     "build_view_model",
     "build_widget_spec",
-    "has_authenticated_jupyter_proxy",
-    "jupyter_proxy_url",
     "render_widgets",
 ]
 
-__version__ = "0.2.0-beta.3"
+__version__ = "0.2.0-beta.4"

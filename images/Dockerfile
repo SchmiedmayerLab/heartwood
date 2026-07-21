@@ -40,14 +40,13 @@ ARG HEARTWOOD_GID=10001
 ARG HEARTWOOD_JUPYTER_PREFIX=/usr/local
 ARG HEARTWOOD_INSTALL_JUPYTER_KERNEL=false
 ARG HEARTWOOD_UV_PYTHON_PREFERENCE=system
-ARG LLAMA_CPP_VERSION=b9937
-ARG LLAMA_CPP_UBUNTU_X64_SHA256=937e10a3fb6c4b1791f943230525e91bea168d1305c1d21079970acb70205df3
-ARG LLAMA_CPP_UBUNTU_ARM64_SHA256=c8212588514e33150dcff64fbadbf151d978fd9c4de05d0f66b2267b24310ac4
+ARG HEARTWOOD_VERSION=development
 
 LABEL org.opencontainers.image.title="Heartwood Runtime" \
     org.opencontainers.image.description="Heartwood CLI, web UI, notebook bridge, policy and audit controls, verified skills, OpenHands, and optional Heartwood-managed inference." \
     org.opencontainers.image.source="https://github.com/SchmiedmayerLab/heartwood" \
     org.opencontainers.image.licenses="MIT" \
+    org.opencontainers.image.version="${HEARTWOOD_VERSION}" \
     org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}" \
     org.heartwood.platform="${HEARTWOOD_PLATFORM}" \
     org.heartwood.platform.base="${HEARTWOOD_BASE_IMAGE}" \
@@ -73,6 +72,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 USER root
 
 COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
+COPY deploy/install-llama-cpp.sh /usr/local/libexec/heartwood-install-llama-cpp
 
 RUN set -eux; \
     if [ "${HEARTWOOD_CREATE_USER}" = "true" ]; then \
@@ -91,28 +91,23 @@ RUN set -eux; \
       chown -R "${HEARTWOOD_RUNTIME_USER}:${HEARTWOOD_RUNTIME_USER}" \
         "${HEARTWOOD_RUNTIME_HOME}" "${HEARTWOOD_WORKDIR}"; \
     fi; \
-    apt-get update; \
-    DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-      ca-certificates \
-      curl \
-      git \
-      jq \
-      libgomp1 \
-      tmux; \
-    rm -rf /var/lib/apt/lists/*
+    missing_packages=""; \
+    for package in ca-certificates curl git jq libgomp1 tmux; do \
+      if ! dpkg-query --show --showformat='${db:Status-Abbrev}' "${package}" 2>/dev/null \
+        | grep --quiet '^ii '; then \
+        missing_packages="${missing_packages} ${package}"; \
+      fi; \
+    done; \
+    if [ -n "${missing_packages}" ]; then \
+      apt-get update; \
+      DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+        ${missing_packages}; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
 
 RUN set -eux; \
-    case "${TARGETARCH}" in \
-      amd64) llama_asset="llama-${LLAMA_CPP_VERSION}-bin-ubuntu-x64.tar.gz"; llama_sha256="${LLAMA_CPP_UBUNTU_X64_SHA256}" ;; \
-      arm64) llama_asset="llama-${LLAMA_CPP_VERSION}-bin-ubuntu-arm64.tar.gz"; llama_sha256="${LLAMA_CPP_UBUNTU_ARM64_SHA256}" ;; \
-      *) echo "unsupported llama.cpp TARGETARCH=${TARGETARCH}" >&2; exit 64 ;; \
-    esac; \
-    curl --fail --location --show-error --retry 5 --retry-delay 2 --retry-connrefused --connect-timeout 15 --max-time 600 \
-      "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_CPP_VERSION}/${llama_asset}" \
-      --output /tmp/llama.cpp.tar.gz; \
-    echo "${llama_sha256}  /tmp/llama.cpp.tar.gz" | sha256sum --check -; \
-    tar -xzf /tmp/llama.cpp.tar.gz -C /opt/llama.cpp --strip-components=1; \
-    rm /tmp/llama.cpp.tar.gz; \
+    /usr/local/libexec/heartwood-install-llama-cpp /opt/llama.cpp "${TARGETARCH}"; \
+    rm /opt/llama.cpp/.heartwood-runtime.tar.gz; \
     printf '%s\n' /opt/llama.cpp > /etc/ld.so.conf.d/heartwood-llama.conf; \
     ldconfig
 

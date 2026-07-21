@@ -25,6 +25,7 @@ from heartwood.gateway._openhands_sdk import (
     _configure_upstream_defaults,
     _context_condenser,
     _llm_max_message_chars,
+    _llm_options,
     _llm_resilience_options,
     _security_configuration,
     _terminal_tool_params,
@@ -66,6 +67,8 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
     assert "location returned by invoke_skill" in suffix
     assert "scripts/run.py" in suffix
     assert "never from the project directory" in suffix
+    assert "exit code of zero as success" in suffix
+    assert "Never install a dependency solely" in suffix
     assert "/opt/heartwood" not in suffix
     assert str(Path.cwd()) not in suffix
 
@@ -101,11 +104,15 @@ def test_openhands_defaults_are_quiet_offline_and_allow_deployment_override(
     for name in ("LITELLM_LOCAL_MODEL_COST_MAP", "LOG_LEVEL", "OPENHANDS_SUPPRESS_BANNER"):
         monkeypatch.delenv(name, raising=False)
 
-    _configure_upstream_defaults({"LOG_LEVEL": "ERROR"})
+    _configure_upstream_defaults({})
 
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
     assert os.environ["LOG_LEVEL"] == "ERROR"
     assert os.environ["OPENHANDS_SUPPRESS_BANNER"] == "1"
+
+    monkeypatch.delenv("LOG_LEVEL")
+    _configure_upstream_defaults({"LOG_LEVEL": "WARNING"})
+    assert os.environ["LOG_LEVEL"] == "WARNING"
 
 
 def test_openhands_bounds_interactive_model_retries() -> None:
@@ -160,6 +167,29 @@ def test_openhands_aligns_local_event_capacity_with_input_budget() -> None:
 
     assert _llm_max_message_chars(local) == 114_688
     assert _llm_max_message_chars(hosted) == 30_000
+
+
+def test_openhands_forwards_managed_model_request_defaults() -> None:
+    profile = ModelProfile(
+        profile_id="heartwood",
+        model="openai/local",
+        base_url="http://127.0.0.1:8765/v1",
+        policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+        credential_kind="none",
+        max_input_tokens=16_384,
+        max_output_tokens=2_048,
+    )
+
+    options = _llm_options(
+        profile,
+        api_key=None,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+
+    assert options["litellm_extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert options["max_input_tokens"] == 16_384
+    assert options["max_output_tokens"] == 2_048
+    assert options["input_cost_per_token"] == 0.0
 
 
 def test_openhands_context_condenser_uses_the_active_model_budget() -> None:

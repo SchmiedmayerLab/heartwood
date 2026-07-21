@@ -27,12 +27,14 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4 \
   heartwood
 ```
 
 The user mapping keeps files created in the project owned by the host user.
 The container is temporary, but the mounted project and `.heartwood/` persist on the host.
+The terminal flow continues automatically after a Heartwood-managed model finishes downloading.
+If the container was interrupted during setup, repeat the same `docker run` command; the project state and verified download are reused.
 
 ## Start the Browser
 
@@ -42,12 +44,13 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4 \
   heartwood --interface web --host 0.0.0.0
 ```
 
 Open `http://127.0.0.1:8767/` and keep the container running.
 The host binding is loopback-only; do not expose the unauthenticated service on a shared network.
+When the setup page reports that a managed model is downloaded, stop the container with `Ctrl-C` and repeat this command to load the model and return to the browser.
 
 ## Use an NVIDIA GPU
 
@@ -60,7 +63,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.3-gpu-nvidia \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-gpu-nvidia \
   heartwood
 ```
 
@@ -71,10 +74,10 @@ Heartwood inspects available GPU memory, selects a conservative context tier, an
 
 Use immutable release tags for research work:
 
-- `0.2.0-beta.3` — standard AMD64/ARM64 image;
-- `0.2.0-beta.3-gpu-nvidia` — NVIDIA GPU image;
-- `0.2.0-beta.3-terra` — Terra CPU image; and
-- `0.2.0-beta.3-terra-gpu-nvidia` — Terra NVIDIA image.
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4` — standard AMD64/ARM64 image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-gpu-nvidia` — NVIDIA GPU image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-terra` — Terra CPU image; and
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.4-terra-gpu-nvidia` — Terra NVIDIA image.
 
 The moving `edge` tags represent current `main` and are intended for development, not reproducible analyses.
 Release publication verifies candidate digests and manifest shape before creating version tags.

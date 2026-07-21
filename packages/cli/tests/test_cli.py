@@ -19,6 +19,7 @@ import pytest
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
     __version__,
+    _consume_prompt,
     _float_payload,
     _format_action_settings,
     _format_model_artifacts,
@@ -109,6 +110,21 @@ def test_no_command_prints_help_when_stdin_is_not_interactive(
 ) -> None:
     assert main([]) == 0
     assert "A coding agent for biomedical research projects" in capsys.readouterr().out
+
+
+def test_keyboard_interrupt_exits_without_a_traceback(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def interrupted(_argv: object) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("heartwood.cli._main", interrupted)
+
+    assert main([]) == 130
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "\nInterrupted.\n"
 
 
 def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
@@ -843,7 +859,7 @@ def test_invalid_session_and_launch_resources_are_argument_errors(
     with pytest.raises(SystemExit) as invalid_resources:
         _run(tmp_path / "launch", monkeypatch, ["runtime", "start", "--gpus", "0"])
     assert invalid_resources.value.code == 2
-    assert "must be positive" in capsys.readouterr().err
+    assert "--gpus must be 1" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -936,6 +952,23 @@ def test_chat_grouped_approval_and_replay_share_project_state(
     assert "Review 1 action as one OpenHands action set" in output
     assert "Action set approved (1 action)" in output
     assert (project / ".heartwood" / "sessions" / "synthetic" / "events.jsonl").is_file()
+
+
+def test_internal_prompt_handoff_is_project_private_and_consumed(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    prompt_file = project.runtime_dir / "pending-prompt.synthetic.txt"
+    prompt_file.write_text("inspect the synthetic project", encoding="utf-8")
+    prompt_file.chmod(0o600)
+
+    assert _consume_prompt(project, None, prompt_file) == "inspect the synthetic project"
+    assert not prompt_file.exists()
+
+    outside = tmp_path / "outside-prompt.txt"
+    outside.write_text("must remain", encoding="utf-8")
+    with pytest.raises(ValueError, match="outside this project's private runtime state"):
+        _consume_prompt(project, None, outside)
+    assert outside.read_text(encoding="utf-8") == "must remain"
 
 
 def test_one_shot_aliases_and_unknown_action_return_meaningful_status(
@@ -1055,6 +1088,10 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "heartwood.gateway._credentials._system_keyring_backend",
+        lambda: None,
+    )
     project = tmp_path / "analysis"
     model_args = [
         "models",
@@ -1276,6 +1313,8 @@ def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
     assert "Runtime: CPU" in output
     assert "Recommended: 8 CPU cores" in output
     assert "Downloading and verifying the model" in output
+    assert "Model files are ready:" in output
+    assert "Run `heartwood` to continue setup or open Heartwood." in output
     assert calls == [
         ("inspect:example/research-model-gguf", None),
         ("download:example/research-model-gguf", None),
@@ -1407,38 +1446,7 @@ def test_serve_starts_gateway_for_current_project(
     )
     assert observed == [("0.0.0.0", 9876)]
     assert not (project / ".heartwood").exists()
-    assert (
-        "Terra authenticated proxy path: "
-        "/proxy/terra-project/saturn-runtime/jupyter/proxy/9876/" in capsys.readouterr().out
-    )
-
-
-def test_serve_does_not_present_an_incomplete_terra_proxy_route(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    web_root = tmp_path / "web"
-    web_root.mkdir()
-    (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
-    monkeypatch.setattr("heartwood.cli.uvicorn.run", lambda *_args, **_kwargs: None)
-    monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
-    monkeypatch.delenv("GOOGLE_PROJECT", raising=False)
-    monkeypatch.delenv("CLUSTER_NAME", raising=False)
-    monkeypatch.delenv("JUPYTERHUB_SERVICE_PREFIX", raising=False)
-
-    assert (
-        _run(
-            tmp_path / "analysis",
-            monkeypatch,
-            ["gateway", "serve", "--web-root", str(web_root)],
-        )
-        == 0
-    )
-    output = capsys.readouterr().out
-    assert "Terra browser path unavailable" in output
-    assert "Open the tutorial notebook" in output
-    assert "/proxy/8767/" not in output
+    assert capsys.readouterr().out == ""
 
 
 def test_cli_formatters_fail_closed_on_malformed_projection_data(

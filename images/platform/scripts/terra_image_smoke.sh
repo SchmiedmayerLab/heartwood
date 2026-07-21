@@ -43,20 +43,24 @@ checks = {item["check_id"]: item for item in readiness["checks"]}
 assert readiness["platform_id"] == "terra"
 assert Path(readiness["project_root"]).resolve() == expected
 assert checks["terra-project-storage"]["status"] == "pass"
-assert checks["terra-gpu"]["summary"] == (
-    "Portable Terra runtime selected; Heartwood-managed models use CPU inference"
-)
+gpu_runtime = os.environ.get("HEARTWOOD_GPU_RUNTIME", "").strip().lower()
+if gpu_runtime == "vllm":
+    assert checks["terra-gpu"]["status"] in {"pass", "warning"}
+    assert checks["terra-gpu"]["summary"] in {
+        "Terra NVIDIA runtime and attached GPU detected",
+        "Terra NVIDIA runtime detected; attach a GPU before managed GPU inference",
+    }
+else:
+    assert checks["terra-gpu"]["summary"] == (
+        "Portable Terra runtime selected; Heartwood-managed models use CPU inference"
+    )
 ' <<<"${readiness_json}"
 HEARTWOOD_EXPECTED_PROJECT="${project_root}" "${heartwood_python}" - <<'PY'
 import os
 from pathlib import Path
 
 from heartwood.gateway import ProjectContext, SessionGateway
-from heartwood.notebook import (
-    NotebookSession,
-    has_authenticated_jupyter_proxy,
-    jupyter_proxy_url,
-)
+from heartwood.notebook import NotebookSession
 
 expected = Path(os.environ["HEARTWOOD_EXPECTED_PROJECT"]).resolve()
 project = ProjectContext.current()
@@ -74,12 +78,9 @@ assert session.project.root == expected
 view = session.pause()
 assert view.session_id == "terra-image-smoke"
 assert view.paused
-assert not has_authenticated_jupyter_proxy(env={})
-proxy_env = {"GOOGLE_PROJECT": "heartwood-ci", "CLUSTER_NAME": "terra-image-smoke"}
-assert has_authenticated_jupyter_proxy(env=proxy_env)
-assert jupyter_proxy_url(port=8767, env=proxy_env) == (
-    "/proxy/heartwood-ci/terra-image-smoke/jupyter/proxy/8767/"
-)
+capabilities = gateway.platform_capabilities()
+assert capabilities["interfaces"] == ["terminal", "notebook"]
+assert capabilities["browser_route"] == "unavailable"
 PY
 
 if [ -d "${jupyter_prefix}/share/jupyter/kernels" ]; then

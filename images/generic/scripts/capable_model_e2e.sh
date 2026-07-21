@@ -9,6 +9,24 @@ set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
 project="${HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project}"
+if [[ "${project}" == "/" ]]; then
+  echo "refusing to use the filesystem root as the capable-model project" >&2
+  exit 64
+fi
+if [[ ! -f "${model_path}" ]]; then
+  echo "capable-model artifact is unavailable: ${model_path}" >&2
+  exit 66
+fi
+mkdir -p "${project}"
+project="$(cd "${project}" && pwd -P)"
+model_path="$(cd "$(dirname "${model_path}")" && pwd -P)/$(basename "${model_path}")"
+case "${model_path}" in
+  "${project}"/*)
+    echo "capable-model artifact must be outside the disposable test project" >&2
+    exit 64
+    ;;
+esac
+
 state_root="${project}/.heartwood"
 workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-capable-model}"
@@ -32,12 +50,7 @@ export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
 
-if [[ "${project}" == "/" ]]; then
-  echo "refusing to use the filesystem root as the capable-model project" >&2
-  exit 64
-fi
-mkdir -p "${project}/input"
-rm -rf "${project}/input" "${state_root}/sessions" "${state_root}/audit"
+rm -rf "${project}/input" "${state_root}"
 mkdir -p "${project}/input"
 rm -f "${cohort_path}" "${transcript}" "${runtime_log}"
 cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv \
@@ -188,7 +201,7 @@ if summary["condition_occurrence_count"] != 35:
 if not cohort["export_guard"]["exportable"]:
     raise SystemExit("capable model reference cohort unexpectedly failed the count floor")
 checks = cohort["quality_checks"]
-if checks["row_values_exported"] is not False:
+if checks["aggregate_only_output"] is not True:
     raise SystemExit("capable model reference artifact contains row-level output")
 decisions = [
     event["payload"]["decision"]["decision"]

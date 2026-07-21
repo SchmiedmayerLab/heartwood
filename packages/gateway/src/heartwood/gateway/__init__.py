@@ -28,11 +28,12 @@ from heartwood.gateway._diagnostics import (
     diagnostic_for,
 )
 from heartwood.gateway._gateway import SessionGateway
-from heartwood.gateway._jupyter import has_authenticated_jupyter_proxy, jupyter_proxy_url
 from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
     LocalContextPlan,
     estimate_local_runtime_memory,
+    managed_model_request_body,
+    managed_model_token_budgets,
     plan_local_context_window,
 )
 from heartwood.gateway._local_models import (
@@ -193,13 +194,13 @@ __all__ = [
     "download_model_artifact",
     "download_model_snapshot",
     "estimate_local_runtime_memory",
-    "has_authenticated_jupyter_proxy",
     "import_local_model",
     "inspect_deployment",
-    "jupyter_proxy_url",
     "load_model_artifact_catalog",
     "load_model_connections",
     "load_model_snapshot_catalog",
+    "managed_model_request_body",
+    "managed_model_token_budgets",
     "model_connections_from_mapping",
     "model_profile_from_mapping",
     "model_profile_from_preset",
