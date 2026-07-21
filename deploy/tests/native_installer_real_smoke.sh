@@ -65,6 +65,7 @@ mkdir -m 700 "${project}"
     kill "${web_pid}" >/dev/null 2>&1 || true
     wait "${web_pid}" >/dev/null 2>&1 || true
   }
+  # This trap is scoped to the subshell; the parent EXIT trap still removes the workspace.
   trap cleanup_services EXIT
   "${runtime}/heartwood/bin/python" - <<'PY'
 import json
