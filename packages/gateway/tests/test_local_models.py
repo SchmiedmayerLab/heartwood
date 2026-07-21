@@ -469,16 +469,16 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-awq-vllm",
+        "qwen25-coder-14b-instruct-awq-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
-    assert all(choice.context_window == 32_768 for choice in choices)
+    assert {choice.context_window for choice in choices} == {18_432, 32_768}
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
     assert {
         "qwen25-coder-7b-instruct-awq-vllm",
         "qwen25-coder-14b-instruct-awq-vllm",
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-        "qwen3-coder-30b-a3b-instruct-fp8-tp4-vllm",
         "qwen3-coder-30b-a3b-instruct-bf16-vllm",
         "qwen3-coder-next-fp8-vllm",
         "gpt-oss-120b-vllm",
@@ -486,10 +486,15 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert all(choice.catalog_source == "catalog" for choice in downloadable)
     gpu_choices = {choice.model_id: choice for choice in downloadable if choice.runtime == "vllm"}
     assert gpu_choices["qwen25-coder-7b-instruct-awq-vllm"].qualification == "qualified"
+    assert gpu_choices["qwen25-coder-14b-instruct-awq-vllm"].qualification == "qualified"
     assert all(
         choice.qualification == "candidate"
         for model_id, choice in gpu_choices.items()
-        if model_id != "qwen25-coder-7b-instruct-awq-vllm"
+        if model_id
+        not in {
+            "qwen25-coder-7b-instruct-awq-vllm",
+            "qwen25-coder-14b-instruct-awq-vllm",
+        }
     )
 
 
@@ -505,7 +510,7 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
     terra_gpu = next(
         choice
         for choice in catalog_model_choices(artifacts.artifacts, snapshots.snapshots)
-        if choice.model_id == "qwen25-coder-7b-instruct-awq-vllm"
+        if choice.model_id == "qwen25-coder-14b-instruct-awq-vllm"
     )
 
     assert cpu.qualification_for("generic") == "qualified"

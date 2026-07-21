@@ -43,8 +43,7 @@ Use one of these combinations:
 |---|---|---|
 | Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
 | Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
-| Standard managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
-| Maximum managed GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
@@ -53,8 +52,9 @@ CPU inference is portable but can be too slow for an interactive coding workflow
 These are starting points rather than universal requirements.
 Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
 The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
-The qualified GPU path uses one T4 and the release-pinned Qwen2.5 Coder 7B AWQ configuration.
-The same image exposes larger configurations as evaluation candidates when the selected Terra environment has sufficient T4 GPUs, RAM, and persistent storage.
+The qualified GPU path uses one T4 and offers release-pinned Qwen2.5 Coder 7B and 14B AWQ configurations.
+The 14B model is the strongest qualified Terra recommendation; the 7B model is the lower-resource alternative.
+Four T4 GPUs do not make the catalog's Qwen3 Coder 30B FP8 snapshot compatible, so Heartwood does not offer that failed combination.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
 It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
 For the first model download and startup, set auto-pause to at least 120 minutes; image creation, model verification, and inference startup can each take several minutes without terminal output from the model itself.
@@ -114,11 +114,12 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
-For managed GPU inference, choose the **Standard** Qwen2.5 Coder 7B AWQ configuration that Heartwood labels **Recommended** for the detected T4.
+For managed GPU inference, choose the **Powerful** Qwen2.5 Coder 14B AWQ configuration that Heartwood labels **Recommended** for the detected T4.
+Choose the **Standard** 7B configuration when you prefer a smaller download and lower memory pressure.
 You can instead choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
-The pinned AWQ snapshot downloads about 5.2 GiB; allow at least 16 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
+The pinned 14B AWQ snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
 The first inference startup is planned for approximately 2-8 minutes while vLLM loads the model and prepares GPU memory.

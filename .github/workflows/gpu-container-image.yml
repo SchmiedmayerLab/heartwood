@@ -28,7 +28,6 @@ on:
         options:
           - terra-t4-qwen25-coder-7b-awq
           - terra-t4-qwen25-coder-14b-awq
-          - terra-4xt4-qwen3-coder-30b-fp8
           - carina-l40s-qwen25-coder-7b-awq
           - carina-l40s-qwen3-coder-30b-fp8
           - carina-2xl40s-qwen3-coder-30b-bf16

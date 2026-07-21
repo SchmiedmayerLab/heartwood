@@ -248,8 +248,31 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
     assert {configuration["configuration_id"] for configuration in configurations} == {
         "terra-t4-qwen25-coder-7b-awq",
         "terra-t4-qwen25-coder-14b-awq",
-        "terra-4xt4-qwen3-coder-30b-fp8",
     }
+
+
+def test_gpu_compatibility_records_rejected_terra_configuration() -> None:
+    with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
+        matrix = tomllib.load(file)
+
+    unsupported = matrix["unsupported_configurations"]
+    assert unsupported == [
+        {
+            "configuration_id": "terra-4xt4-qwen3-coder-30b-fp8",
+            "platform": "terra",
+            "gpu_model": "NVIDIA T4",
+            "gpu_count": 4,
+            "model_repository": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+            "model_revision": "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
+            "vllm_version": "0.25.1+cu129",
+            "validated_at": "2026-07-21",
+            "evidence": "https://github.com/SchmiedmayerLab/heartwood/pull/72",
+            "reason": (
+                "vLLM's FP8 Mixture-of-Experts path requires quantization dimensions "
+                "that this model does not provide on NVIDIA T4 GPUs."
+            ),
+        }
+    ]
 
 
 def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:

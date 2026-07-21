@@ -34,8 +34,7 @@ The exact driver used in a live qualification is recorded with its machine-reada
 | Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Status |
 |---|---|---|---|---|---:|---|---:|---|---|---|
 | Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Qualified |
-| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Candidate |
-| Terra | Maximum capability | 4 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 W8A16 | 32,768 | Eager | 4 | `qwen3_coder` | OpenHands prompt conversion | Candidate |
+| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Qualified |
 | Carina | Standard fallback | 1 x L40S, 48 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 32,768 | CUDA graphs | 1 | `hermes` | OpenHands prompt conversion | Candidate |
 | Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | OpenHands prompt conversion | Candidate |
 | Carina | Powerful | 2 x L40S, 48 GB each | [Qwen3-Coder-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/tree/b2cff646eb4bb1d68355c01b18ae02e7cf42d120) | BF16 | 65,536 | CUDA graphs | 2 | `qwen3_coder` | OpenHands prompt conversion | Candidate |
@@ -44,6 +43,9 @@ The exact driver used in a live qualification is recorded with its machine-reada
 
 All listed model repositories declare the Apache-2.0 license at the pinned revision.
 Confirm that a model's license and intended use remain suitable for the project before downloading it.
+
+The Qwen3 Coder 30B FP8 snapshot was also tested with four T4 GPUs and vLLM 0.25.1 on CUDA 12.9.
+That combination is unsupported because the FP8 Mixture-of-Experts kernel cannot load the model's quantization dimensions on T4 hardware.
 
 ## Qualification Requirement
 
