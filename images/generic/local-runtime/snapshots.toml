@@ -21,7 +21,7 @@ ignore_patterns = ["*.bin", "*.py", ".git/*", "metal/*", "original/*"]
 
 [snapshots.qwen25-coder-7b-instruct-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Standard single-GPU coding model candidate; Heartwood tool-use qualification is pending a native tool parser."
+purpose = "Standard single-GPU coding model candidate with native Hermes tool parsing; complete Heartwood tool-use qualification is pending."
 source_repository = "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
 source_revision = "8e8ed243bbe6f9a5aff549a0924562fc719b2b8a"
 expected_size_bytes = 5582398811
@@ -49,7 +49,7 @@ recommended = false
 
 [snapshots.qwen25-coder-14b-instruct-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Powerful single-GPU coding model candidate; Heartwood tool-use qualification is pending a native tool parser."
+purpose = "Powerful single-GPU coding model candidate with native Hermes tool parsing; complete Heartwood tool-use qualification is pending."
 source_repository = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"
 source_revision = "eb3172f06a6d6b3a15f08947b0668d782e4d2d2c"
 expected_size_bytes = 9991784616
@@ -137,7 +137,7 @@ recommended = true
 
 [snapshots.qwen25-coder-32b-instruct-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Powerful 32B coding model candidate for four 16 GB NVIDIA GPUs; Heartwood tool-use qualification is pending a native tool parser."
+purpose = "Powerful 32B coding model candidate for four 16 GB NVIDIA GPUs with native Hermes tool parsing; complete Heartwood tool-use qualification is pending."
 source_repository = "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
 source_revision = "1ed0a6145da0ce550c628e8e8b678f51e695995d"
 expected_size_bytes = 19328993904

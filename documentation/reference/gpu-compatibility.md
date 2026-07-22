@@ -33,10 +33,10 @@ The exact driver used in a live qualification is recorded with its machine-reada
 
 | Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Status |
 |---|---|---|---|---|---:|---|---:|---|---|---|
-| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Candidate |
-| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Candidate |
+| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands native tools | Candidate |
+| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands native tools | Candidate |
 | Terra | Powerful | 2 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ](https://huggingface.co/YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ/tree/e69e73813144d9b715648d8384b3f2c035397411) | W4A16 AWQ | 18,432 | Eager | 2 | `qwen3_coder` | OpenHands native tools | Qualified |
-| Terra | Powerful | 4 x T4, 16 GB each | [Qwen2.5-Coder-32B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ/tree/1ed0a6145da0ce550c628e8e8b678f51e695995d) | AWQ int4 | 32,768 | Eager | 4 | `hermes` | OpenHands prompt conversion | Candidate |
+| Terra | Powerful | 4 x T4, 16 GB each | [Qwen2.5-Coder-32B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ/tree/1ed0a6145da0ce550c628e8e8b678f51e695995d) | AWQ int4 | 32,768 | Eager | 4 | `hermes` | OpenHands native tools | Candidate |
 | Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | OpenHands native tools | Qualified |
 | Carina | Maximum capability | 4 x L40S, 48 GB each | [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8/tree/da6e2ed27304dd39abadd9c82ef50e8de67bdd4c) | FP8 | 65,536 | CUDA graphs | 4 | `qwen3_coder` | OpenHands native tools | Candidate |
 | Carina | Maximum capability alternative | 2 x L40S, 48 GB each | [GPT-OSS 120B](https://huggingface.co/openai/gpt-oss-120b/tree/b5c939de8f754692c1647ca79fbf85e8c1e70f8a) | MXFP4 | 65,536 | CUDA graphs | 2 | `openai` | OpenHands native tools | Candidate |
@@ -51,6 +51,8 @@ That combination is unsupported because vLLM requires compute capability 8.0 or 
 Qwen3 Coder 30B W4A16 AWQ cannot use tensor parallelism 4 because its quantization group size crosses four-way tensor shards.
 The two-way eager configuration is qualified.
 Its context is capped at 18,432 because a 32,768-token key/value cache leaves no cache blocks on two 16 GB T4 GPUs at the validated memory ceiling.
+The Qwen2.5 Coder 7B and 14B AWQ snapshots load and answer direct inference requests on one T4.
+Their coding-agent tool execution remains unqualified, so both stay candidates until the native Hermes path completes the full qualification below.
 
 ## Qualification Requirement
 

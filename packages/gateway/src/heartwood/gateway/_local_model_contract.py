@@ -150,6 +150,11 @@ def managed_model_request_body(model_type: str | None) -> dict[str, object]:
     return {}
 
 
+def managed_model_native_tool_calling(tool_call_parser: str | None) -> bool:
+    """Return whether OpenHands should use the runtime's structured tool calls."""
+    return tool_call_parser in {"hermes", "openai", "qwen3_coder"}
+
+
 def _tier_at_or_below(limit: int, fallback: int) -> int:
     eligible = [tier for tier in LOCAL_CONTEXT_WINDOW_TIERS if tier <= limit]
     return max(eligible) if eligible else fallback

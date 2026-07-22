@@ -151,6 +151,10 @@ cat >"${workspace}/bin/micromamba" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 root="${HEARTWOOD_TEST_INSTALL_ROOT:?HEARTWOOD_TEST_INSTALL_ROOT is required}"
+if [[ "${MAMBA_EXTRACT_THREADS:-}" != "8" ]]; then
+  echo "micromamba extraction workers are not bounded: ${MAMBA_EXTRACT_THREADS:-unset}" >&2
+  exit 1
+fi
 for name in HOME TMPDIR TMP TEMP XDG_CACHE_HOME XDG_CONFIG_HOME XDG_DATA_HOME \
   XDG_STATE_HOME UV_CACHE_DIR MAMBA_ROOT_PREFIX PIP_CACHE_DIR HF_HOME TORCH_HOME \
   CUDA_CACHE_PATH NUMBA_CACHE_DIR TRITON_CACHE_DIR; do
@@ -177,6 +181,32 @@ COMMAND
 chmod +x "${prefix}/bin/uv" "${prefix}/bin/python"
 EOF
 chmod +x "${workspace}/bin/micromamba"
+
+cat >"${workspace}/bin/srun" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+expected=(
+  "--partition=dev"
+  "--cpus-per-task=8"
+  "--mem=32G"
+  "--time=01:00:00"
+)
+for argument in "${expected[@]}"; do
+  if [[ " $* " != *" ${argument} "* ]]; then
+    echo "Carina installer omitted ${argument}" >&2
+    exit 1
+  fi
+done
+while (($#)); do
+  case "$1" in
+    --*) shift ;;
+    *) break ;;
+  esac
+done
+: "${1:?installer command is required}"
+SLURM_JOB_ID=synthetic SLURM_CPUS_PER_TASK=8 exec "$@"
+EOF
+chmod +x "${workspace}/bin/srun"
 
 expected_release="$(tar -xOf "${assets}/heartwood-native.tar.gz" heartwood/HEARTWOOD_VERSION)"
 grep --fixed-strings --line-regexp --quiet \

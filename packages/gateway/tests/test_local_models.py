@@ -23,6 +23,7 @@ from heartwood.gateway import (
     catalog_model_choices,
     load_model_artifact_catalog,
     load_model_snapshot_catalog,
+    managed_model_native_tool_calling,
     managed_model_request_body,
     managed_model_token_budgets,
     plan_local_context_window,
@@ -105,6 +106,14 @@ def test_managed_model_budgets_reserve_output_inside_the_runtime_window() -> Non
 
     with pytest.raises(ValueError, match="managed agent context window"):
         managed_model_token_budgets(16_384)
+
+
+def test_managed_model_native_tool_calling_uses_supported_runtime_parsers() -> None:
+    assert managed_model_native_tool_calling("hermes") is True
+    assert managed_model_native_tool_calling("openai") is True
+    assert managed_model_native_tool_calling("qwen3_coder") is True
+    assert managed_model_native_tool_calling(None) is False
+    assert managed_model_native_tool_calling("unsupported") is False
 
 
 def test_context_planner_rejects_short_models_and_insufficient_memory() -> None:

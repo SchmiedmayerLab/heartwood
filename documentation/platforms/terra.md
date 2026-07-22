@@ -118,13 +118,13 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
-For managed GPU inference on one T4, start with the **Powerful** Qwen2.5 Coder 14B AWQ candidate.
-With two or more T4 GPUs, start with the qualified **Powerful** Qwen3 Coder 30B W4A16 AWQ recommendation.
-Choose the **Standard** 7B Qwen2.5 candidate when you prefer a smaller download and lower memory pressure.
+For qualified managed coding-agent inference, start with the **Powerful** Qwen3 Coder 30B W4A16 AWQ recommendation on two T4 GPUs.
+The Qwen2.5 Coder 7B and 14B AWQ profiles fit one T4 and support direct inference, but remain evaluation candidates until their native Hermes tool path completes the full Heartwood qualification.
+Use them only when evaluating a lower-cost configuration, not as the default coding-agent route.
 You can instead choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
-The pinned 14B AWQ snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
+The pinned 14B AWQ evaluation snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
 The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 16.8 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
 The pinned Qwen2.5 Coder 32B AWQ snapshot downloads about 18.0 GiB and remains an evaluation candidate until its tool-calling path passes end-to-end.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.

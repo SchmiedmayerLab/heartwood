@@ -76,6 +76,11 @@ heartwood models download unsloth/Qwen2.5-Coder-7B-Instruct-GGUF
 Heartwood queries Hugging Face, resolves the requested tag or branch to an immutable commit, and selects a supported artifact.
 It prefers a balanced single-file GGUF for the portable llama.cpp CPU runtime or a standard safetensors snapshot for the NVIDIA vLLM runtime.
 No download begins until the plan is displayed and approved.
+Downloading a supported GPU model requires the vLLM runtime and sufficient project storage, but it does not require an active GPU allocation.
+Heartwood evaluates GPU count and memory separately when planning runtime startup.
+
+Large public snapshots can encounter Hugging Face's anonymous download limits.
+When an approved Hugging Face token is available, expose `HF_TOKEN` only to the download process and do not store it in the project or `.heartwood/` configuration.
 
 In the browser, expand **Advanced options** to request a particular tag, branch, or commit.
 In the terminal, pass `--revision REVISION` to `models inspect` or `models download`.

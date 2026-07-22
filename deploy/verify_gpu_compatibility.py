@@ -199,7 +199,7 @@ def _verify_configuration(
         raise CompatibilityError("GPU model uses an unsupported agent tool mode")
     expected_tool_mode = (
         "openhands-native"
-        if configuration.get("tool_call_parser") in {"openai", "qwen3_coder"}
+        if configuration.get("tool_call_parser") in {"hermes", "openai", "qwen3_coder"}
         else "openhands-prompt-conversion"
     )
     if configuration.get("agent_tool_mode") != expected_tool_mode:
