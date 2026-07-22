@@ -58,6 +58,25 @@ export CUDA_CACHE_PATH="${installer_state}/cache/cuda"
 export NUMBA_CACHE_DIR="${installer_state}/cache/numba"
 export TRITON_CACHE_DIR="${installer_state}/cache/triton"
 
+if [[ -z "${MAMBA_EXTRACT_THREADS:-}" ]]; then
+  extract_threads="${SLURM_CPUS_PER_TASK:-8}"
+  if [[ ! "${extract_threads}" =~ ^[1-9][0-9]*$ ]]; then
+    extract_threads=8
+  fi
+  if ((10#${extract_threads} > 8)); then
+    extract_threads=8
+  fi
+  MAMBA_EXTRACT_THREADS="${extract_threads}"
+elif [[ ! "${MAMBA_EXTRACT_THREADS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MAMBA_EXTRACT_THREADS must be a positive integer" >&2
+  exit 64
+fi
+if ((10#${MAMBA_EXTRACT_THREADS} > 8)); then
+  MAMBA_EXTRACT_THREADS=8
+fi
+export MAMBA_EXTRACT_THREADS
+printf 'Micromamba extraction workers: %s\n' "${MAMBA_EXTRACT_THREADS}"
+
 initialize_module_command() {
   if type module >/dev/null 2>&1; then
     return 0

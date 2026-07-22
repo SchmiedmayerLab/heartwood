@@ -7,6 +7,7 @@
 
 set -euo pipefail
 
+original_arguments=("$@")
 repository="SchmiedmayerLab/heartwood"
 root="${PWD}"
 installer_release="__HEARTWOOD_RELEASE_VERSION__"
@@ -72,6 +73,23 @@ fi
 if [[ ! "${minimum_free_gib}" =~ ^[1-9][0-9]*$ ]]; then
   echo "--minimum-free-gib must be a positive integer" >&2
   exit 64
+fi
+
+if [[ "${platform}" == "carina" && "${dry_run}" != "true" && -z "${SLURM_JOB_ID:-}" ]]; then
+  require_command srun "to run the Carina installation away from the login node"
+  install_partition="${HEARTWOOD_INSTALL_PARTITION:-dev}"
+  export MAMBA_EXTRACT_THREADS="${MAMBA_EXTRACT_THREADS:-8}"
+  printf 'Carina installation requires bounded CPU compute.\n'
+  printf 'Requesting partition %s with 8 CPUs and 32 GiB RAM for up to one hour.\n' \
+    "${install_partition}"
+  exec srun \
+    --partition="${install_partition}" \
+    --cpus-per-task=8 \
+    --mem=32G \
+    --time=01:00:00 \
+    --chdir="${PWD}" \
+    --export=ALL \
+    "$0" "${original_arguments[@]}"
 fi
 
 root_preexisting="true"

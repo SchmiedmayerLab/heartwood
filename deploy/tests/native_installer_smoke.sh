@@ -151,6 +151,11 @@ cat >"${workspace}/bin/micromamba" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 root="${HEARTWOOD_TEST_INSTALL_ROOT:?HEARTWOOD_TEST_INSTALL_ROOT is required}"
+expected_threads="${HEARTWOOD_TEST_EXPECT_THREADS:-${MAMBA_EXTRACT_THREADS:-}}"
+if [[ "${MAMBA_EXTRACT_THREADS:-}" != "${expected_threads}" ]]; then
+  echo "unexpected micromamba extraction workers: ${MAMBA_EXTRACT_THREADS:-unset}" >&2
+  exit 1
+fi
 for name in HOME TMPDIR TMP TEMP XDG_CACHE_HOME XDG_CONFIG_HOME XDG_DATA_HOME \
   XDG_STATE_HOME UV_CACHE_DIR MAMBA_ROOT_PREFIX PIP_CACHE_DIR HF_HOME TORCH_HOME \
   CUDA_CACHE_PATH NUMBA_CACHE_DIR TRITON_CACHE_DIR; do
@@ -177,6 +182,41 @@ COMMAND
 chmod +x "${prefix}/bin/uv" "${prefix}/bin/python"
 EOF
 chmod +x "${workspace}/bin/micromamba"
+
+cat >"${workspace}/bin/srun" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+expected=(
+  "--partition=dev"
+  "--cpus-per-task=8"
+  "--mem=32G"
+  "--time=01:00:00"
+  "--chdir=${PWD}"
+  "--export=ALL"
+)
+for argument in "${expected[@]}"; do
+  argument_found=false
+  for actual in "$@"; do
+    if [[ "${actual}" == "${argument}" ]]; then
+      argument_found=true
+      break
+    fi
+  done
+  if [[ "${argument_found}" != "true" ]]; then
+    echo "Carina installer omitted ${argument}" >&2
+    exit 1
+  fi
+done
+while (($#)); do
+  case "$1" in
+    --*) shift ;;
+    *) break ;;
+  esac
+done
+: "${1:?installer command is required}"
+SLURM_JOB_ID=synthetic SLURM_CPUS_PER_TASK=8 exec "$@"
+EOF
+chmod +x "${workspace}/bin/srun"
 
 expected_release="$(tar -xOf "${assets}/heartwood-native.tar.gz" heartwood/HEARTWOOD_VERSION)"
 grep --fixed-strings --line-regexp --quiet \
@@ -296,16 +336,33 @@ test -f "${locked_root}/.installer.lock/existing-owner"
 test ! -e "${locked_root}/.installer"
 
 carina_installation="${workspace}/carina-installation"
-for _ in 1 2; do
-  HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
-    HEARTWOOD_TEST_INSTALL_ROOT="${carina_installation}" \
-    PATH="${workspace}/bin:${PATH}" \
-    "${assets}/heartwood-installer" \
-    --bundle "${assets}/heartwood-native.tar.gz" \
-    --checksums "${assets}/SHA256SUMS" \
-    --root "${carina_installation}" \
-    --minimum-free-gib 1 \
-    --platform carina
+for thread_case in "default:8" "4:4" "64:8"; do
+  requested_threads="${thread_case%%:*}"
+  expected_threads="${thread_case##*:}"
+  installer_environment=(
+    "HOME=${workspace}/outside-home"
+    "TMPDIR=${workspace}/outside-tmp"
+    "HEARTWOOD_TEST_EXPECT_THREADS=${expected_threads}"
+    "HEARTWOOD_TEST_INSTALL_ROOT=${carina_installation}"
+    "PATH=${workspace}/bin:${PATH}"
+  )
+  if [[ "${requested_threads}" == "default" ]]; then
+    env -u MAMBA_EXTRACT_THREADS "${installer_environment[@]}" \
+      "${assets}/heartwood-installer" \
+      --bundle "${assets}/heartwood-native.tar.gz" \
+      --checksums "${assets}/SHA256SUMS" \
+      --root "${carina_installation}" \
+      --minimum-free-gib 1 \
+      --platform carina
+  else
+    env "${installer_environment[@]}" "MAMBA_EXTRACT_THREADS=${requested_threads}" \
+      "${assets}/heartwood-installer" \
+      --bundle "${assets}/heartwood-native.tar.gz" \
+      --checksums "${assets}/SHA256SUMS" \
+      --root "${carina_installation}" \
+      --minimum-free-gib 1 \
+      --platform carina
+  fi
 done
 
 carina_generation="$(cd "${carina_installation}/current" && pwd -P)"
@@ -340,7 +397,7 @@ test "$(readlink "${carina_generation}/bin/hf")" = "${carina_runtime}/vllm/bin/h
 test -L "${carina_installation}/bin/heartwood"
 test "$(readlink "${carina_installation}/bin/heartwood")" = \
   "../${carina_current_target}/bin/heartwood"
-test "$(find "${carina_installation}/installations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "2"
+test "$(find "${carina_installation}/installations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "3"
 for directory in installations bin; do
   test -d "${carina_installation}/${directory}"
   test "$(file_mode "${carina_installation}/${directory}")" = "700"

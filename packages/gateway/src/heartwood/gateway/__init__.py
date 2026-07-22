@@ -42,6 +42,7 @@ from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
     LocalContextPlan,
     estimate_local_runtime_memory,
+    managed_model_native_tool_calling,
     managed_model_request_body,
     managed_model_token_budgets,
     plan_local_context_window,
@@ -225,6 +226,7 @@ __all__ = [
     "load_model_artifact_catalog",
     "load_model_connections",
     "load_model_snapshot_catalog",
+    "managed_model_native_tool_calling",
     "managed_model_request_body",
     "managed_model_token_budgets",
     "minimum_compute_capability_for_model",

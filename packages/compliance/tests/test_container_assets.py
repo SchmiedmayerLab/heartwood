@@ -514,6 +514,7 @@ def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
 
 def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     bootstrap = _read("deploy/carina/bootstrap.sh")
+    installer = _read("deploy/install.sh")
     runtime_verifier = _read("images/gpu/verify_runtime.sh")
     launch_runtime = _read("packages/cli/src/heartwood/cli/_launch.py")
     environment = _toml("images/generic/image-flavors.toml")
@@ -524,7 +525,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert 'images/gpu/verify_runtime.sh "${root}/vllm"' in bootstrap
     assert "from importlib.metadata import version" not in bootstrap
     assert '--target "${root}/vllm"' in bootstrap
-    assert '--installer-state "${installer_state}"' in _read("deploy/install.sh")
+    assert '--installer-state "${installer_state}"' in installer
     assert ': "${installer_state:?--installer-state is required}"' in bootstrap
     assert '--python "${bootstrap_python}"' in bootstrap
     assert '--uv "${root}/bootstrap/bin/uv"' in bootstrap
@@ -533,6 +534,16 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "micromamba install" in bootstrap
     assert "module load" in bootstrap
     assert "HEARTWOOD_MODULE_INIT" in bootstrap
+    assert 'extract_threads="${SLURM_CPUS_PER_TASK:-8}"' in bootstrap
+    assert 'MAMBA_EXTRACT_THREADS="${extract_threads}"' in bootstrap
+    assert "if ((10#${extract_threads} > 8)); then" in bootstrap
+    assert "if ((10#${MAMBA_EXTRACT_THREADS} > 8)); then" in bootstrap
+    assert '"${platform}" == "carina"' in installer
+    assert '-z "${SLURM_JOB_ID:-}"' in installer
+    assert '--partition="${install_partition}"' in installer
+    assert "--cpus-per-task=8" in installer
+    assert "--mem=32G" in installer
+    assert '"$0" "${original_arguments[@]}"' in installer
     assert "/usr/share/lmod/lmod/init/profile" in bootstrap
     assert '"${root}/bootstrap/conda-meta"' in bootstrap
     assert "images/gpu/vllm-requirements.txt" not in bootstrap

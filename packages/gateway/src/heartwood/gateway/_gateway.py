@@ -39,6 +39,7 @@ from heartwood.gateway._gpu_environment import GpuEnvironment, inspect_gpu_envir
 from heartwood.gateway._local_import import import_local_model
 from heartwood.gateway._local_model_contract import (
     MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
+    managed_model_native_tool_calling,
     managed_model_request_body,
     managed_model_token_budgets,
 )
@@ -920,7 +921,7 @@ class SessionGateway:
     def download_local_model(self, model_id: str) -> dict[str, object]:
         """Start a known local-model download into project storage."""
         self.project.initialize()
-        choice = self._require_local_model_runtime(model_id)
+        choice = self._require_downloadable_local_model(model_id)
         return self.local_model_manager.start_model(choice.download_model()).safe_dict()
 
     def download_custom_local_model(
@@ -945,7 +946,7 @@ class SessionGateway:
     ) -> Path:
         """Download and verify a known model, selecting it when agent-compatible."""
         self.project.initialize()
-        model = self._require_local_model_runtime(model_id).download_model()
+        model = self._require_downloadable_local_model(model_id).download_model()
         if isinstance(model, ModelArtifact):
             path = download_artifact(
                 model,
@@ -1115,7 +1116,7 @@ class SessionGateway:
                 selected_model.model_type if selected_model is not None else None
             ),
             native_tool_calling=(
-                selected_model.tool_call_parser in {"openai", "qwen3_coder"}
+                managed_model_native_tool_calling(selected_model.tool_call_parser)
                 if selected_model is not None
                 else None
             ),
@@ -1479,19 +1480,31 @@ class SessionGateway:
             return "llama-cpp"
         return None
 
-    def _require_local_model_runtime(self, model_id: str) -> LocalModelChoice:
+    def _require_downloadable_local_model(self, model_id: str) -> LocalModelChoice:
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
             raise ModelRepositoryError(f"unknown Heartwood-managed model: {model_id}")
-        details = self._local_model_choice_dict(choice)
-        if not details["available"]:
-            raise ModelRepositoryError(
-                f"{choice.label} is unavailable: {details['availability_reason']}"
+        if not self._local_runtime_installed(choice.runtime):
+            reason = self._local_model_availability_reason(
+                choice.runtime,
+                available=False,
+                recommendation=None,
             )
+            raise ModelRepositoryError(f"{choice.label} cannot be downloaded: {reason}")
         return choice
 
     def _local_runtime_available(self, runtime: str) -> bool:
         platform_id = self.config_store.load().platform_id
+        installed = self._local_runtime_installed(runtime)
+        if runtime == "llama-cpp":
+            return installed
+        if runtime != "vllm":
+            return False
+        if platform_id == "carina":
+            return installed
+        return installed and gpu_visible(self.env)
+
+    def _local_runtime_installed(self, runtime: str) -> bool:
         executable_path = self.env.get("PATH")
         if runtime == "llama-cpp":
             return self._runtime_executable_available(Path("/opt/llama.cpp/llama-server")) or (
@@ -1500,14 +1513,11 @@ class SessionGateway:
             )
         if runtime != "vllm":
             return False
-        if platform_id == "carina":
+        if self.config_store.load().platform_id == "carina":
             return True
-        runtime_available = self._runtime_executable_available(
-            Path("/opt/heartwood-vllm/bin/vllm")
-        ) or (
+        return self._runtime_executable_available(Path("/opt/heartwood-vllm/bin/vllm")) or (
             executable_path is not None and shutil.which("vllm", path=executable_path) is not None
         )
-        return runtime_available and gpu_visible(self.env)
 
     @staticmethod
     def _runtime_executable_available(path: Path) -> bool:

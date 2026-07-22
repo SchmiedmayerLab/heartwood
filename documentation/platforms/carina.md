@@ -47,8 +47,10 @@ chmod 700 heartwood-installer
 export PATH="$PWD/bin:$PATH"
 ```
 
-The version-stamped installer downloads the matching native archive and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, loads the configured micromamba module when needed, and assembles a private source-and-runtime generation before making it current.
-Dependency resolution and the vLLM environment can take several minutes; the installer reports seven named stages and elapsed time.
+The version-stamped installer downloads the matching native archive and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
+When started on a login node, it moves the dependency installation into a bounded CPU-only Slurm allocation on the `dev` partition before loading micromamba and creating the environments.
+This avoids performing sustained dependency work on the login node; no GPU is requested for installation.
+Dependency resolution and the vLLM environment can take several minutes, and the installer reports the allocation, seven named stages, and elapsed time.
 
 To keep the command available in a later shell, add the printed `bin` path through your normal shell configuration or export it again.
 
@@ -136,6 +138,7 @@ The interactive Slurm allocation and supervised vLLM process end with the Heartw
 ## Troubleshooting Carina
 
 - If a command disappears or is killed on a login node, stop and use Slurm for the compute work; Carina documents strict login-node limits.
+- If the installer reports that its default `dev` partition is unavailable, inspect `sinfo --noheader --format='%P|%G|%a'` and retry with an available CPU partition, for example `HEARTWOOD_INSTALL_PARTITION=normal ./heartwood-installer --platform carina`.
 - If a partition is unavailable, run `sinfo --noheader --format='%P|%G|%a'` and choose one of the GPU-capable partitions Heartwood reports.
 - If Slurm reports `QOSMaxGRESPerUser` or `QOSMaxMemoryPerUser`, the account cannot request the planned GPU or RAM total; choose the strongest qualified lower tier or ask the Carina project owner to review the account limits.
 - If the requested model does not fit the available GPU count or memory, choose the strongest compatible lower tier instead of changing tensor parallelism or precision manually.
