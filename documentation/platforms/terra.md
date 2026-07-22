@@ -117,13 +117,13 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
 For managed GPU inference on one T4, start with the **Powerful** Qwen2.5 Coder 14B AWQ candidate.
-With four T4 GPUs, start with the **Powerful** Qwen3 Coder 30B W4A16 AWQ candidate while qualification is in progress.
+With two or more T4 GPUs, start with the **Powerful** Qwen3 Coder 30B W4A16 AWQ candidate while qualification is in progress.
 Choose the **Standard** 7B Qwen2.5 candidate when you prefer a smaller download and lower memory pressure.
 You can instead choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
 The pinned 14B AWQ snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
-The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 18.1 GiB; use at least 120 GB RAM and retain a 200 GB persistent disk for the four-T4 environment, model cache, notebooks, and results.
+The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 18.1 GiB; use at least 96 GB RAM and retain a 200 GB persistent disk for the two-T4 environment, model cache, notebooks, and results.
 The pinned Qwen2.5 Coder 32B AWQ snapshot downloads about 18.0 GiB and remains an evaluation candidate until its tool-calling path passes end-to-end.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.

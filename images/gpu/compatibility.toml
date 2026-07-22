@@ -106,19 +106,32 @@ validated_at = "2026-07-21"
 evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 reason = "vLLM's FP8 Mixture-of-Experts path requires quantization dimensions that this model does not provide on NVIDIA T4 GPUs."
 
-[[configurations]]
+[[unsupported_configurations]]
 configuration_id = "terra-4xt4-qwen3-coder-30b-awq"
-status = "candidate"
 platform = "terra"
 gpu_model = "NVIDIA T4"
 gpu_count = 4
+model_snapshot = "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
+model_repository = "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ"
+model_revision = "e69e73813144d9b715648d8384b3f2c035397411"
+vllm_version = "0.25.1+cu129"
+validated_at = "2026-07-21"
+evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
+reason = "The model's W4A16 quantization group size crosses four-way tensor-parallel shard boundaries; use the two-GPU configuration."
+
+[[configurations]]
+configuration_id = "terra-2xt4-qwen3-coder-30b-awq"
+status = "candidate"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 2
 minimum_gpu_memory_bytes = 15000000000
 model_snapshot = "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
 model_repository = "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ"
 model_revision = "e69e73813144d9b715648d8384b3f2c035397411"
 precision = "W4A16 AWQ"
 context_window = 32768
-tensor_parallel_size = 4
+tensor_parallel_size = 2
 tool_call_parser = "qwen3_coder"
 agent_tool_mode = "openhands-native"
 vllm_version = "0.25.1+cu129"

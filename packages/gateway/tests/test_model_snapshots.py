@@ -75,7 +75,7 @@ from heartwood.gateway import (
             "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
             "e69e73813144d9b715648d8384b3f2c035397411",
             "powerful",
-            4,
+            2,
             "qwen3_coder",
         ),
         (

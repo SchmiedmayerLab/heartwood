@@ -258,13 +258,15 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
 
     resolved = load(
         _root() / "images/gpu/compatibility.toml",
-        "terra-4xt4-qwen3-coder-30b-awq",
+        "terra-2xt4-qwen3-coder-30b-awq",
     )
 
     assert resolved["runtime"]["cuda_version"] == "12.9"
     assert resolved["configuration"]["tool_call_parser"] == "qwen3_coder"
     assert resolved["configuration"]["agent_tool_mode"] == "openhands-native"
     assert resolved["configuration"]["context_window"] == 32_768
+    assert resolved["configuration"]["gpu_count"] == 2
+    assert resolved["configuration"]["tensor_parallel_size"] == 2
     assert "enforce_eager" not in resolved["configuration"]
     assert resolved["configuration"]["model_revision"] == (
         "e69e73813144d9b715648d8384b3f2c035397411"
@@ -285,7 +287,7 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
     assert {configuration["configuration_id"] for configuration in configurations} == {
         "terra-t4-qwen25-coder-7b-awq",
         "terra-t4-qwen25-coder-14b-awq",
-        "terra-4xt4-qwen3-coder-30b-awq",
+        "terra-2xt4-qwen3-coder-30b-awq",
         "terra-4xt4-qwen25-coder-32b-awq",
     }
 
@@ -369,6 +371,22 @@ def test_gpu_compatibility_records_rejected_terra_configuration() -> None:
             "reason": (
                 "vLLM's FP8 Mixture-of-Experts path requires quantization dimensions "
                 "that this model does not provide on NVIDIA T4 GPUs."
+            ),
+        },
+        {
+            "configuration_id": "terra-4xt4-qwen3-coder-30b-awq",
+            "platform": "terra",
+            "gpu_model": "NVIDIA T4",
+            "gpu_count": 4,
+            "model_snapshot": "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
+            "model_repository": "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
+            "model_revision": "e69e73813144d9b715648d8384b3f2c035397411",
+            "vllm_version": "0.25.1+cu129",
+            "validated_at": "2026-07-21",
+            "evidence": "https://github.com/SchmiedmayerLab/heartwood/pull/72",
+            "reason": (
+                "The model's W4A16 quantization group size crosses four-way "
+                "tensor-parallel shard boundaries; use the two-GPU configuration."
             ),
         },
         {
