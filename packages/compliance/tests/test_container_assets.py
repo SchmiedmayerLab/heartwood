@@ -489,6 +489,10 @@ def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
     script = _read("images/gpu/coding_agent_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
 
+    assert "command -v setsid" in script
+    assert 'setsid bash "${script_dir}/start_vllm.sh"' in script
+    assert 'kill -TERM -- "-${runtime_pid}"' in script
+    assert 'kill -KILL -- "-${runtime_pid}"' in script
     system_python = re.compile(
         r"(?:^|[;&|]\s*|\bexec\s+)(?:/[^\s;|&]+/)?python(?:3(?:\.\d+)?)?\s",
         re.MULTILINE,

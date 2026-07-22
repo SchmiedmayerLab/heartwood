@@ -141,13 +141,24 @@ export HEARTWOOD_QUALIFICATION_MODEL_REVISION="${revision}"
 export HEARTWOOD_QUALIFICATION_RUNTIME_METADATA="${runtime_metadata}"
 
 echo "Loading ${repository}; expected startup is approximately ${startup_min}-${startup_max} seconds."
-bash "${script_dir}/start_vllm.sh" >"${runtime_log}" 2>&1 &
+if ! command -v setsid >/dev/null 2>&1; then
+  echo "setsid is required to isolate the vLLM process group" >&2
+  exit 69
+fi
+setsid bash "${script_dir}/start_vllm.sh" >"${runtime_log}" 2>&1 &
 runtime_pid="$!"
 
 cleanup() {
   status="$?"
   trap - EXIT
-  kill "${runtime_pid}" >/dev/null 2>&1 || true
+  kill -TERM -- "-${runtime_pid}" >/dev/null 2>&1 || true
+  for _ in {1..10}; do
+    if ! kill -0 "${runtime_pid}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  kill -KILL -- "-${runtime_pid}" >/dev/null 2>&1 || true
   wait "${runtime_pid}" >/dev/null 2>&1 || true
   if ((status != 0)) && [[ -f "${runtime_log}" ]]; then
     echo "vLLM runtime log (last 240 lines):" >&2
