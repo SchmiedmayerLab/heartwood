@@ -34,11 +34,8 @@ jobs:
       - name: Review dependencies
         uses: actions/dependency-review-action@v5.0.0
         with:
-          # The CUDA 11.8 vLLM environment is isolated in the hashed GPU lock.
+          # The CUDA 12.9 vLLM environment is isolated in the hashed GPU lock.
           # diskcache and torch have no patched compatible release; Heartwood
           # does not load caches across trust domains or expose torch.jit.script
-          # to input. vLLM GHSA-8fr4-5q9j-m8gm is backported by removing the
-          # vulnerable config registry entry exactly as upstream PR 28126 does,
-          # with an exploit-regression check at build, install, and launch time.
-          # Revisit these exact exceptions with every vLLM update.
-          allow-ghsas: GHSA-w8v5-vhqr-4h9v, GHSA-rrmf-rvhw-rf47, GHSA-8fr4-5q9j-m8gm
+          # to input. Revisit these exact exceptions with every vLLM update.
+          allow-ghsas: GHSA-w8v5-vhqr-4h9v, GHSA-rrmf-rvhw-rf47

@@ -124,6 +124,50 @@ const actions = (): ActionSettings => ({
   ],
 });
 
+const localModelChoice = (
+  overrides: Partial<LocalModelChoice> = {},
+): LocalModelChoice => ({
+  model_id: "stories260k",
+  label: "Stories 260K",
+  purpose: "Synthetic smoke-test model.",
+  runtime: "llama-cpp",
+  source_repository: "example/stories260k",
+  source_revision: "0".repeat(40),
+  source_path: "model.gguf",
+  size_bytes: 256 * 1024 * 1024,
+  minimum_free_bytes: 256 * 1024 * 1024,
+  license_id: "test-fixture",
+  license_posture: "Test fixture",
+  catalog_source: "catalog",
+  context_window: 32_768,
+  maximum_context_window: 32_768,
+  precision: "GGUF Q4_K_M",
+  tier: "standard",
+  qualification: "qualified",
+  minimum_gpu_count: 0,
+  minimum_gpu_memory_bytes: 0,
+  recommended_ram_bytes: 16 * 1024 * 1024 * 1024,
+  recommended_disk_bytes: 1024 * 1024 * 1024,
+  tool_call_parser: null,
+  tensor_parallel_size: 1,
+  startup_seconds_min: 5,
+  startup_seconds_max: 30,
+  download_policy: null,
+  allow_patterns: [],
+  ignore_patterns: [],
+  validated_platforms: ["ci"],
+  qualification_test: "synthetic-browser-e2e-v1",
+  artifact_sha256: "a".repeat(64),
+  minimum_resource_envelope: "Minimum: 4 CPU cores and 8 GB RAM.",
+  recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
+  active: false,
+  available: true,
+  selected: false,
+  availability_reason: "Available on this deployment",
+  recommended: true,
+  ...overrides,
+});
+
 class FakeClient implements HeartwoodClient {
   commands: SessionCommand[] = [];
   auditExportCalls = 0;
@@ -267,27 +311,21 @@ class FakeClient implements HeartwoodClient {
   ): Promise<LocalModelImportResult> {
     this.localImportRequest = request;
     return Promise.resolve({
-      model: {
+      model: localModelChoice({
         model_id: "imported-model",
         label: "Imported model",
         purpose: "User-imported model",
-        runtime: "llama-cpp",
         source_repository: request.repository,
         source_revision: request.revision,
-        source_path: "model.gguf",
         size_bytes: 1024,
         minimum_free_bytes: 2048,
+        license_id: request.license,
         license_posture: request.license,
         catalog_source: "user-selected",
-        context_window: 32_768,
-        artifact_sha256: "a".repeat(64),
         minimum_resource_envelope: "4 GiB RAM",
         recommended_resource_envelope: "8 GiB RAM",
-        active: false,
-        available: true,
         selected: true,
-        availability_reason: "Available on this deployment",
-      },
+      }),
       path: "/project/.heartwood/models/imported/model.gguf",
       status: "ready",
     });
@@ -459,8 +497,8 @@ class FakeClient implements HeartwoodClient {
       };
     }
     return Promise.resolve({
-      schema_version: "heartwood.local-model-catalog.v1",
-      snapshot_schema_version: "heartwood.model-snapshot-catalog.v1",
+      schema_version: "heartwood.local-model-catalog.v2",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v2",
       artifacts: [
         {
           artifact_id: "stories260k",
@@ -482,31 +520,17 @@ class FakeClient implements HeartwoodClient {
       ],
       snapshots: [],
       models: [
-        {
-          model_id: "stories260k",
-          label: "Stories 260K",
-          purpose: "Synthetic smoke-test model.",
-          runtime: "llama-cpp",
-          source_repository: "example/stories260k",
-          source_revision: "0".repeat(40),
-          source_path: "model.gguf",
-          size_bytes: 256 * 1024 * 1024,
-          minimum_free_bytes: 256 * 1024 * 1024,
-          license_posture: "Test fixture",
-          catalog_source: "recommended",
-          context_window: 32_768,
-          artifact_sha256: "a".repeat(64),
-          minimum_resource_envelope: "Minimum: 4 CPU cores and 8 GB RAM.",
-          recommended_resource_envelope:
-            "Recommended: 8 CPU cores and 16 GB RAM.",
+        localModelChoice({
           active: this.activeManagedModel,
-          available: true,
           selected: this.currentSettings.model_source === "heartwood",
-          availability_reason: "Available on this deployment",
-        },
+        }),
         ...(this.customModel === null ? [] : [this.customModel]),
       ],
       downloads: this.currentDownloads,
+      gpu_environment: {
+        platform_id: "generic",
+        capacities: [],
+      },
     });
   }
 
@@ -515,28 +539,23 @@ class FakeClient implements HeartwoodClient {
   ): Promise<ModelRepositoryPlan> {
     this.inspectedRepository = request;
     if (this.repositoryError) return Promise.reject(this.repositoryError);
-    const candidate: LocalModelChoice = {
+    const candidate = localModelChoice({
       model_id: "hf-research-model-123456789abc",
       label: "Research Model Q4_K_M",
       purpose: "User-selected Hugging Face model.",
-      runtime: "llama-cpp",
       source_repository: request.repository,
       source_revision: "1".repeat(40),
       source_path: "research-model-q4_k_m.gguf",
       size_bytes: 4 * 1024 * 1024 * 1024,
       minimum_free_bytes: 4 * 1024 * 1024 * 1024,
+      license_id: "Apache-2.0",
       license_posture: "Source model card reports apache-2.0.",
       catalog_source: "user-selected",
-      context_window: 32_768,
       artifact_sha256: "b".repeat(64),
       minimum_resource_envelope:
         "Estimated minimum: 4 CPU cores and 12 GB RAM.",
       recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
-      active: false,
-      available: true,
-      selected: false,
-      availability_reason: "Available on this deployment",
-    };
+    });
     return Promise.resolve({
       model: candidate,
       selection_reason: "Selected a balanced GGUF model for the CPU runtime.",
@@ -562,33 +581,29 @@ class FakeClient implements HeartwoodClient {
     request: CustomLocalModelDownloadRequest,
   ): Promise<ModelDownload> {
     this.customDownloadRequest = request;
-    this.customModel = {
+    const customModel = localModelChoice({
       model_id: "hf-research-model-123456789abc",
       label: "Research Model Q4_K_M",
       purpose: "User-selected Hugging Face model.",
-      runtime: "llama-cpp",
       source_repository: request.repository,
       source_revision: request.revision ?? "1".repeat(40),
       source_path: "research-model-q4_k_m.gguf",
       size_bytes: 4 * 1024 * 1024 * 1024,
       minimum_free_bytes: 4 * 1024 * 1024 * 1024,
+      license_id: "Apache-2.0",
       license_posture: "Source model card reports apache-2.0.",
       catalog_source: "user-selected",
-      context_window: 32_768,
       artifact_sha256: "b".repeat(64),
       minimum_resource_envelope:
         "Estimated minimum: 4 CPU cores and 12 GB RAM.",
       recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
-      active: false,
-      available: true,
-      selected: false,
-      availability_reason: "Available on this deployment",
-    };
+    });
+    this.customModel = customModel;
     const download: ModelDownload = {
-      model_id: this.customModel.model_id,
+      model_id: customModel.model_id,
       status: "downloading",
       bytes_downloaded: 0,
-      bytes_total: this.customModel.size_bytes,
+      bytes_total: customModel.size_bytes,
       path: null,
       error: null,
     };
@@ -1036,6 +1051,14 @@ describe("App", () => {
     expect(await screen.findByText("Authorized")).toBeInTheDocument();
     expect(screen.getByText("Allowed by this environment")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Download Stories 260K"));
+    expect(client.downloadedArtifact).toBeNull();
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Download Stories 260K?" }),
+      ).getByRole("button", {
+        name: "Download model",
+      }),
+    );
     await waitFor(() => expect(client.downloadedArtifact).toBe("stories260k"));
     const progress = await screen.findByRole("progressbar", {
       name: "Download progress for Stories 260K",
@@ -1178,6 +1201,14 @@ describe("App", () => {
       within(modelPlan as HTMLElement).getByText(`Revision: ${"1".repeat(40)}`),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download model" }));
+    expect(client.customDownloadRequest).toBeNull();
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Download Research Model Q4_K_M?" }),
+      ).getByRole("button", {
+        name: "Download model",
+      }),
+    );
 
     await waitFor(() =>
       expect(client.customDownloadRequest).toEqual({
@@ -1240,6 +1271,13 @@ describe("App", () => {
     client.artifactFailures = 1;
 
     fireEvent.click(screen.getByLabelText("Download Stories 260K"));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Download Stories 260K?" }),
+      ).getByRole("button", {
+        name: "Download model",
+      }),
+    );
 
     expect(
       await screen.findByText("temporary model status failure"),

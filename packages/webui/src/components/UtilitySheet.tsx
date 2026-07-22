@@ -9,6 +9,14 @@
 import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
 import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
 import { Checkbox } from "@stanfordspezi/spezi-web-design-system/components/Checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@stanfordspezi/spezi-web-design-system/components/Dialog";
 import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Progress } from "@stanfordspezi/spezi-web-design-system/components/Progress";
 import {
@@ -312,7 +320,13 @@ const SettingsContent = (props: UtilitySheetProps) => {
   const [settingsView, setSettingsView] = useState<"models" | "approvals">(
     "models",
   );
+  const [downloadConfirmation, setDownloadConfirmation] =
+    useState<LocalModelChoice | null>(null);
   const localModels = artifacts ? localModelOptions(artifacts) : [];
+  const recommendedModels = localModels.filter((model) => model.recommended);
+  const evaluationModels = localModels.filter(
+    (model) => model.catalog_source === "catalog" && !model.recommended,
+  );
   const applyPreset = (presetId: string) => {
     const preset = settings?.presets.find(
       (item) => item.preset_id === presetId,
@@ -432,65 +446,129 @@ const SettingsContent = (props: UtilitySheetProps) => {
 
           <section className="panel-section artifact-list">
             <h3>Models Heartwood can run</h3>
-            {artifacts && localModels.length ?
-              localModels.map((model) => {
-                const download = artifacts.downloads.find(
-                  (item) => item.model_id === model.model_id,
+            {artifacts && recommendedModels.length ?
+              (["standard", "powerful", "maximum"] as const).map((tier) => {
+                const tierModels = recommendedModels.filter(
+                  (model) => model.tier === tier,
                 );
-                return (
-                  <div className="artifact-row" key={model.model_id}>
-                    <div>
-                      <strong>
-                        {model.label}
-                        {model.catalog_source === "recommended" ?
-                          <Badge variant="outline">Recommended</Badge>
-                        : null}
-                      </strong>
-                      <span>
-                        {localComputeLabel(model.runtime)} ·{" "}
-                        {formatBytes(model.size_bytes)} · Up to{" "}
-                        {model.context_window.toLocaleString()} tokens
-                      </span>
-                      <small>{model.purpose}</small>
-                      <small>{model.availability_reason}</small>
-                      {model.recommended_resource_envelope ?
-                        <small>{model.recommended_resource_envelope}</small>
-                      : null}
-                      <ArtifactDownloadStatus
-                        active={model.active}
-                        alias={model.label}
-                        download={download}
-                      />
-                    </div>
-                    <Tooltip
-                      tooltip={
-                        download?.status === "ready" ?
-                          `${model.label} is ready`
-                        : `Download ${model.label}`
-                      }
-                    >
-                      <Button
-                        aria-label={`Download ${model.label}`}
-                        disabled={
-                          !model.available ||
-                          download?.status === "downloading" ||
-                          download?.status === "ready"
-                        }
-                        isPending={download?.status === "downloading"}
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onDownload(model.model_id)}
-                      >
-                        {download?.status === "ready" ?
-                          <Check size={15} />
-                        : <Download size={15} />}
-                      </Button>
-                    </Tooltip>
-                  </div>
-                );
+                return tierModels.length ?
+                    <Fragment key={tier}>
+                      <h4>{localTierLabel(tier)}</h4>
+                      {tierModels.map((model) => {
+                        const download = artifacts.downloads.find(
+                          (item) => item.model_id === model.model_id,
+                        );
+                        return (
+                          <div className="artifact-row" key={model.model_id}>
+                            <div>
+                              <strong>{model.label}</strong>
+                              <span>
+                                {localComputeLabel(model.runtime)} ·{" "}
+                                {formatBytes(model.size_bytes)} ·{" "}
+                                {model.context_window.toLocaleString()} tokens
+                              </span>
+                              <small>{model.purpose}</small>
+                              <small>{model.availability_reason}</small>
+                              {model.recommended_resource_envelope ?
+                                <small>
+                                  {model.recommended_resource_envelope}
+                                </small>
+                              : null}
+                              <details className="model-plan-source">
+                                <summary>Technical details</summary>
+                                <div>
+                                  <small>Precision: {model.precision}</small>
+                                  <small>License: {model.license_id}</small>
+                                  <small>
+                                    Maximum context:{" "}
+                                    {model.maximum_context_window.toLocaleString()}{" "}
+                                    tokens
+                                  </small>
+                                  {model.tool_call_parser ?
+                                    <small>
+                                      Tool parser: {model.tool_call_parser};
+                                      tensor parallelism:{" "}
+                                      {model.tensor_parallel_size}
+                                    </small>
+                                  : null}
+                                  <small>
+                                    Revision: {model.source_revision}
+                                  </small>
+                                </div>
+                              </details>
+                              <ArtifactDownloadStatus
+                                active={model.active}
+                                alias={model.label}
+                                download={download}
+                              />
+                            </div>
+                            <Tooltip
+                              tooltip={
+                                download?.status === "ready" ?
+                                  `${model.label} is ready`
+                                : `Download ${model.label}`
+                              }
+                            >
+                              <Button
+                                aria-label={`Download ${model.label}`}
+                                disabled={
+                                  !model.available ||
+                                  download?.status === "downloading" ||
+                                  download?.status === "ready"
+                                }
+                                isPending={download?.status === "downloading"}
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setDownloadConfirmation(model)}
+                              >
+                                {download?.status === "ready" ?
+                                  <Check size={15} />
+                                : <Download size={15} />}
+                              </Button>
+                            </Tooltip>
+                          </div>
+                        );
+                      })}
+                    </Fragment>
+                  : null;
               })
             : <p className="panel-empty">No recommended models available</p>}
           </section>
+
+          {evaluationModels.length ?
+            <details className="advanced-section">
+              <summary>Models under evaluation</summary>
+              <div className="advanced-section-content artifact-list">
+                <p className="panel-empty">
+                  These pinned configurations are available for qualification
+                  but are not Heartwood recommendations yet.
+                </p>
+                {evaluationModels.map((model) => (
+                  <div className="artifact-row" key={model.model_id}>
+                    <div>
+                      <strong>{model.label}</strong>
+                      <span>
+                        {localTierLabel(model.tier)} ·{" "}
+                        {formatBytes(model.size_bytes)}
+                      </span>
+                      <small>{model.availability_reason}</small>
+                    </div>
+                    <Tooltip tooltip={`Review ${model.label}`}>
+                      <Button
+                        aria-label={`Review download for ${model.label}`}
+                        disabled={!model.available}
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setDownloadConfirmation(model)}
+                      >
+                        <Download size={15} />
+                      </Button>
+                    </Tooltip>
+                  </div>
+                ))}
+              </div>
+            </details>
+          : null}
 
           <CustomLocalModelSetup
             downloads={artifacts?.downloads ?? []}
@@ -505,6 +583,17 @@ const SettingsContent = (props: UtilitySheetProps) => {
             onConfigureSource={onConfigureModelSource}
             onDiscover={onDiscoverModels}
             onForgetCredential={onForgetCredential}
+          />
+
+          <ModelDownloadConfirmation
+            model={downloadConfirmation}
+            onCancel={() => setDownloadConfirmation(null)}
+            onConfirm={() => {
+              if (downloadConfirmation) {
+                onDownload(downloadConfirmation.model_id);
+                setDownloadConfirmation(null);
+              }
+            }}
           />
 
           <details className="advanced-section">
@@ -671,6 +760,82 @@ const localModelOptions = (catalog: ModelArtifacts): LocalModelChoice[] =>
 const localComputeLabel = (runtime: LocalModelChoice["runtime"]): string =>
   runtime === "vllm" ? "Requires an NVIDIA GPU" : "Runs on CPU";
 
+const localTierLabel = (tier: LocalModelChoice["tier"]): string => {
+  if (tier === "maximum") return "Maximum capability";
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+};
+
+const ModelDownloadConfirmation = ({
+  model,
+  onCancel,
+  onConfirm,
+}: {
+  model: LocalModelChoice | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) => (
+  <Dialog open={model !== null} onOpenChange={(open) => !open && onCancel()}>
+    <DialogContent size="md">
+      <DialogHeader>
+        <DialogTitle>Download {model?.label ?? "model"}?</DialogTitle>
+        <DialogDescription>
+          Model weights are stored in this project and may take several minutes
+          to download and start.
+        </DialogDescription>
+      </DialogHeader>
+      {model ?
+        <div className="local-model-plan">
+          {model.qualification === "candidate" ?
+            <Badge variant="warningLight">Evaluation candidate</Badge>
+          : null}
+          <strong>{formatBytes(model.size_bytes)} download</strong>
+          <span>
+            Allow up to {formatBytes(model.recommended_disk_bytes)} of
+            persistent storage.
+          </span>
+          <small>{model.recommended_resource_envelope}</small>
+          <small>
+            Expected startup:{" "}
+            {formatDurationRange(
+              model.startup_seconds_min,
+              model.startup_seconds_max,
+            )}
+          </small>
+          <details className="model-plan-source">
+            <summary>Source and runtime details</summary>
+            <div>
+              <small>Repository: {model.source_repository}</small>
+              <small>Revision: {model.source_revision}</small>
+              <small>
+                {model.precision} · {model.context_window.toLocaleString()}{" "}
+                token default
+              </small>
+            </div>
+          </details>
+        </div>
+      : null}
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button onClick={onConfirm}>
+          <Download size={15} />
+          Download model
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+);
+
+const formatDurationRange = (minimum: number, maximum: number): string =>
+  `${formatDuration(minimum)} to ${formatDuration(maximum)}`;
+
+const formatDuration = (seconds: number): string => {
+  if (seconds < 60) return `${seconds} seconds`;
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+};
+
 const CustomLocalModelSetup = ({
   downloads,
   onDownload,
@@ -694,6 +859,7 @@ const CustomLocalModelSetup = ({
   const [importRevision, setImportRevision] = useState("");
   const [importLicense, setImportLicense] = useState("");
   const [importComplete, setImportComplete] = useState(false);
+  const [confirmDownload, setConfirmDownload] = useState(false);
   const modelDownload =
     plan === null ? undefined : (
       downloads.find((item) => item.model_id === plan.model.model_id)
@@ -846,7 +1012,7 @@ const CustomLocalModelSetup = ({
                 modelDownload?.status === "ready"
               }
               isPending={pending || modelDownload?.status === "downloading"}
-              onClick={() => void download()}
+              onClick={() => setConfirmDownload(true)}
             >
               {modelDownload?.status === "ready" ?
                 <Check size={15} />
@@ -855,6 +1021,14 @@ const CustomLocalModelSetup = ({
                 "Downloaded"
               : "Download model"}
             </Button>
+            <ModelDownloadConfirmation
+              model={confirmDownload ? plan.model : null}
+              onCancel={() => setConfirmDownload(false)}
+              onConfirm={() => {
+                setConfirmDownload(false);
+                void download();
+              }}
+            />
           </div>
         : null}
         <details className="model-plan-source">

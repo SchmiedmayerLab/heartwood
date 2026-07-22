@@ -6,25 +6,63 @@ SPDX-License-Identifier: MIT
 
 # Choose a Heartwood-Managed Model
 
-Heartwood-managed inference runs on the same compute environment as Heartwood rather than sending requests to a separate model provider.
-It requires compatible model files, sufficient storage and memory, and an agent-capable chat format.
-Heartwood supports a small release-pinned recommendation set and best-effort planning for other public Hugging Face repositories.
+Heartwood-managed inference keeps model requests in the environment where Heartwood is running.
+The model files are downloaded separately into the current project's `.heartwood/models/` directory; Heartwood images and installers do not contain model weights.
 
-## Recommended Models
+Start the guided selection from either interface:
 
-Choose **Run with Heartwood** during setup to see the current recommendations.
-Each recommendation includes the canonical Hugging Face repository, immutable revision, artifact format, license metadata, size, context capacity, and minimum and recommended resources.
-Heartwood shows the expected download size before any transfer begins.
+- run `heartwood` in the terminal and choose **Run with Heartwood**; or
+- open **Models** in the Heartwood browser interface.
 
-Recommendations are an onboarding aid, not a closed allowlist and not a guarantee of scientific suitability.
-They are selected for pinned runtime compatibility, immutable source metadata, and conservative resource planning.
-Release CI validates those contracts without treating a recommendation as evidence of scientific quality or a completed live GPU evaluation.
+Both interfaces read the same catalog and project state.
+They show the download size, resource guidance, license, and immutable source revision before asking for confirmation.
 
-List them from the terminal:
+## Capability Tiers
+
+Heartwood uses three simple tiers.
+The tier describes the intended agent workload, not scientific quality.
+
+| Tier | Intended Use |
+|---|---|
+| **Standard** | Bounded edits, focused analysis scripts, and first-time use |
+| **Powerful** | Larger repositories, multi-step coding tasks, and longer sessions |
+| **Maximum capability** | Broad multi-file work on substantial multi-GPU compute |
+
+Within each tier, Heartwood automatically recommends only configurations that fit the detected environment and have completed the full coding-agent qualification.
+Models still under evaluation are labeled **Evaluation candidate** and are never selected automatically.
+
+List the complete catalog from the terminal:
 
 ```bash
 heartwood models managed
 ```
+
+Technical fields such as precision, parser, context, tensor parallelism, and pinned revision remain available in the detailed model view and the [GPU compatibility matrix](../reference/gpu-compatibility.md).
+
+## Resource Guide
+
+Download and startup values below are planning estimates.
+The selection screen uses the release catalog as its authoritative source and reports the exact values before making changes.
+
+| Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated First Start |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Standard fallback | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
+| Standard Terra candidate | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 18,432 on Terra | 2-8 minutes |
+| Powerful Terra candidate | Qwen2.5 Coder 14B AWQ | 9.31 GiB | 1 x 16 GB | 60 GiB | 32 GiB | 18,432 | 3-10 minutes |
+| Powerful, qualified on Terra | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 96 GiB | 50 GiB | 18,432 | 4-15 minutes |
+| Powerful Terra candidate | Qwen2.5 Coder 32B AWQ | 18.00 GiB | 4 x 16 GB | 120 GiB | 48 GiB | 32,768 | 4-15 minutes |
+| Powerful, qualified on Carina | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
+| Maximum candidate | Qwen3 Coder Next FP8 | 74.88 GiB | 4 x 48 GB | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
+| Maximum alternative candidate | GPT-OSS 120B MXFP4 | 60.79 GiB | 2 x 48 GB | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
+
+Model weights are only part of the memory requirement.
+The runtime also needs space for temporary downloads, key/value cache, request handling, and the project itself.
+Heartwood therefore uses conservative headroom and may choose a smaller context than the model's advertised maximum.
+
+Four T4 GPUs do not make the Qwen3 Coder 30B FP8 snapshot or GPT-OSS MXFP4 snapshots compatible with the current runtime.
+Heartwood rejects those combinations before startup when metadata or runtime evidence shows the selected quantization requires a newer GPU generation.
+For two T4 GPUs, use the qualified Qwen3 Coder 30B W4A16 AWQ recommendation with its conservative 18,432-token context.
+For four T4 GPUs, the Qwen2.5 Coder 32B AWQ profile remains an evaluation candidate; the Qwen3 W4A16 quantization cannot be sharded four ways.
 
 ## Other Hugging Face Models
 
@@ -35,35 +73,32 @@ heartwood models inspect unsloth/Qwen2.5-Coder-7B-Instruct-GGUF
 heartwood models download unsloth/Qwen2.5-Coder-7B-Instruct-GGUF
 ```
 
-In the browser, expand **Version options** to request a tag, branch, or commit. In the terminal, pass `--revision REVISION` to `models inspect` or `models download`. Heartwood records the immutable revision resolved by Hugging Face before download.
+Heartwood queries Hugging Face, resolves the requested tag or branch to an immutable commit, and selects a supported artifact.
+It prefers a balanced single-file GGUF for the portable llama.cpp CPU runtime or a standard safetensors snapshot for the NVIDIA vLLM runtime.
+No download begins until the plan is displayed and approved.
 
-Heartwood asks Hugging Face for repository metadata, resolves an immutable revision, and looks for a supported candidate.
-It prefers a balanced single-file GGUF for the portable llama.cpp CPU runtime or a safetensors snapshot for vLLM when an NVIDIA runtime is available.
-The example above provides a GGUF candidate for the standard CPU image; a repository that contains only safetensors requires a GPU deployment with vLLM.
+In the browser, expand **Advanced options** to request a particular tag, branch, or commit.
+In the terminal, pass `--revision REVISION` to `models inspect` or `models download`.
 
-The current planner rejects repositories that require executable remote model code, unsupported weight layouts, missing architecture metadata, unresolved revisions, or an unsupported context range.
-When a compatible-looking repository cannot be planned, the error explains the reason and links to the [Heartwood issue form](https://github.com/SchmiedmayerLab/heartwood/issues/new/choose).
-The message states that the model is not yet supported rather than suggesting an unsafe manual workaround.
+The planner stops with a **not yet supported** message when a repository requires executable remote code, has an unsupported weight layout or architecture, lacks a resolvable revision, or cannot fit the available runtime.
+Report a compatible-looking rejection through the [Heartwood issue form](https://github.com/SchmiedmayerLab/heartwood/issues/new/choose) rather than bypassing the check.
 
-## What to Evaluate
+## Before You Approve a Download
 
-Before downloading, review:
+Review these items in the displayed plan:
 
-- **Tool use:** the model needs reliable structured tool calling, not only code completion.
-- **License:** confirm that the model and weights are permitted for the intended work.
-- **Provenance:** retain the repository and immutable revision with the managed artifact.
-- **Format:** use one GGUF file for llama.cpp or a standard safetensors snapshot for vLLM.
-- **Disk:** allow space for the model, download staging, runtime files, and project outputs.
-- **Memory:** model weights, runtime overhead, and the key/value cache must fit in RAM or GPU memory.
-- **Context:** larger windows consume substantially more memory and do not automatically improve task quality.
-- **Data policy:** in-environment execution still depends on the security of the compute, storage, and surrounding platform.
+- **Tool use:** a coding agent needs reliable structured tool calls, not only code completion.
+- **License and provenance:** confirm the license and retain the repository plus immutable revision.
+- **Compute:** check GPU count, GPU memory, RAM, disk, and expected allocation cost.
+- **Context:** larger windows consume substantially more memory and can increase latency.
+- **Data policy:** running in the same environment does not by itself approve the model or platform for controlled data.
 
-Parameter count alone does not predict coding-agent quality or memory use.
-Quantization, architecture, context window, concurrency, and runtime all matter.
+Parameter count alone does not predict agent quality or resource use.
+Architecture, quantization, context, concurrency, runtime, and tool parser all matter.
 
-## Import an Existing Model
+## Import Existing Model Files
 
-When model files were transferred through an approved offline process, import them into the project:
+For model files transferred through an approved process:
 
 ```bash
 heartwood models import /approved/path/model.gguf \
@@ -72,5 +107,6 @@ heartwood models import /approved/path/model.gguf \
   --license apache-2.0
 ```
 
-Heartwood accepts a valid GGUF file or a standard vLLM safetensors directory, rejects symbolic links and executable Python, records provenance, copies the artifact atomically into `.heartwood/models/`, and selects it.
-The source path must be visible to the Heartwood process; the browser uses the same server-side import and does not upload multi-gigabyte model files through the page.
+Heartwood accepts a valid GGUF file or standard vLLM safetensors directory, rejects symbolic links and executable Python, records provenance, and copies the artifact atomically into `.heartwood/models/`.
+The path must be visible to the Heartwood process.
+The browser uses this same server-side import and does not upload multi-gigabyte model files through the page.

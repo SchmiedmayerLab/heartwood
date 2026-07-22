@@ -21,6 +21,8 @@ import pytest
 
 from heartwood.core_adapter import SessionResult
 from heartwood.gateway import (
+    GpuCapacity,
+    GpuEnvironment,
     LocalModelChoice,
     LocalModelDownloadPlan,
     ModelArtifact,
@@ -679,8 +681,8 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert selected.body["active_profile"] == "custom-loopback"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
-    assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v1"
-    assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v1"
+    assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v2"
+    assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v2"
     assert artifacts.body["snapshots"]
     assert removed.body["active_profile"] is None
     artifact_ids = {
@@ -724,6 +726,34 @@ def test_rest_reserves_the_heartwood_managed_profile(tmp_path: Path) -> None:
     assert "reserved by Heartwood" in str(saved.body["error"])
     assert removed.status_code == 422
     assert "managed by Heartwood" in str(removed.body["error"])
+
+
+def test_gpu_environment_is_cached_and_can_be_refreshed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def inspect(platform_id: str, _env: Mapping[str, str]) -> GpuEnvironment:
+        nonlocal calls
+        calls += 1
+        return GpuEnvironment(
+            platform_id=platform_id,
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(),
+        )
+
+    monkeypatch.setattr("heartwood.gateway._gateway.inspect_gpu_environment", inspect)
+    gateway = _gateway(tmp_path)
+
+    first = gateway.gpu_environment()
+    second = gateway.gpu_environment()
+    refreshed = gateway.gpu_environment(refresh=True)
+
+    assert first is second
+    assert refreshed is not first
+    assert calls == 2
 
 
 def test_local_model_availability_reflects_installed_runtime_executables(
@@ -774,11 +804,86 @@ def test_local_model_availability_reflects_installed_runtime_executables(
         "heartwood.gateway._gateway.shutil.which",
         lambda executable, **_kwargs: f"/runtime/{executable}",
     )
-    gateway.env["CUDA_VISIBLE_DEVICES"] = "0"
+    gateway.env["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="generic",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="4 visible NVIDIA L40S GPUs",
+                    gpu_model="NVIDIA L40S",
+                    gpu_count=4,
+                    gpu_memory_bytes=48_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
     fully_available = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert all(model["available"] for model in fully_available)
-    assert fully_available[0]["model_id"] == "qwen25-7b-instruct-awq-vllm"
-    assert fully_available[0]["availability_reason"] == "Recommended for this deployment"
+    expected_runtime = (
+        "vllm" if any(model["runtime"] == "vllm" for model in fully_available) else "llama-cpp"
+    )
+    assert fully_available[0]["runtime"] == expected_runtime
+    if fully_available[0]["runtime"] == "vllm":
+        assert str(fully_available[0]["availability_reason"]).startswith(
+            "Evaluation candidate; not yet a recommended model"
+        )
+        assert "Compatible with 4 visible NVIDIA L40S GPU(s)" in str(
+            fully_available[0]["availability_reason"]
+        )
+    else:
+        assert fully_available[0]["availability_reason"] == "Available on this deployment"
+
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
+    terra_models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    terra_standard = next(
+        model for model in terra_models if model["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
+    )
+    assert terra_standard["qualification"] == "candidate"
+    assert str(terra_standard["availability_reason"]).startswith(
+        "Evaluation candidate; not yet a recommended model"
+    )
+    terra_powerful = next(
+        model for model in terra_models if model["model_id"] == "qwen25-coder-14b-instruct-awq-vllm"
+    )
+    assert terra_powerful["qualification"] == "candidate"
+    assert str(terra_powerful["availability_reason"]).startswith(
+        "Evaluation candidate; not yet a recommended model"
+    )
+    assert "Compatible with 1 visible NVIDIA T4 GPU(s)" in str(
+        terra_standard["availability_reason"]
+    )
+    rejected_large_model = RestGateway(gateway).handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/downloads",
+            body=json.dumps({"model_id": "qwen25-coder-32b-instruct-awq-vllm"}),
+        )
+    )
+    assert rejected_large_model.status_code == 422
+    assert "requires 4 gpu(s)" in str(rejected_large_model.body["error"])
 
 
 def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
@@ -1054,6 +1159,8 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
         artifact_sha256=hashlib.sha256(b"content").hexdigest(),
         minimum_resource_envelope="Estimated minimum resources",
         recommended_resource_envelope="Recommended resources",
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=21,
     )
 
     @dataclass
@@ -1072,7 +1179,13 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
         model_repository=cast(Any, repository),
     )
 
-    def download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+    def download(
+        artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: object = None,
+    ) -> Path:
+        del progress_callback
         destination = cache_dir / artifact.artifact_id / artifact.source_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"content")
@@ -1152,16 +1265,46 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
 ) -> None:
     gateway = _gateway(tmp_path)
     monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
     observed: list[tuple[str, str, Path]] = []
 
-    def artifact_download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+    def artifact_download(
+        artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: object = None,
+    ) -> Path:
+        del progress_callback
         artifact_id = artifact.artifact_id
         observed.append(("artifact", artifact_id, cache_dir))
         path = cache_dir / artifact_id
         path.mkdir(parents=True)
         return path
 
-    def snapshot_download(snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
+    def snapshot_download(
+        snapshot: ModelSnapshot,
+        *,
+        cache_dir: Path,
+        progress_callback: object = None,
+    ) -> Path:
+        del progress_callback
         snapshot_id = snapshot.snapshot_id
         observed.append(("snapshot", snapshot_id, cache_dir))
         path = cache_dir / snapshot_id
@@ -1173,19 +1316,20 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
 
     artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
     assert gateway.config_store.load().local_model is None
-    snapshot = gateway.download_local_model_now("qwen25-7b-instruct-vllm")
+    snapshot_id = "qwen25-coder-7b-instruct-awq-vllm"
+    snapshot = gateway.download_local_model_now(snapshot_id)
 
     model_cache = tmp_path / ".heartwood" / "models"
     assert artifact == model_cache / "llama-cpp-stories260k-ci"
-    assert snapshot == model_cache / "qwen25-7b-instruct-vllm"
+    assert snapshot == model_cache / snapshot_id
     assert observed == [
         ("artifact", "llama-cpp-stories260k-ci", model_cache),
-        ("snapshot", "qwen25-7b-instruct-vllm", model_cache),
+        ("snapshot", snapshot_id, model_cache),
     ]
     config = gateway.config_store.load()
     assert config.model_source == "heartwood"
     assert config.local_model is not None
-    assert config.local_model.artifact_id == "qwen25-7b-instruct-vllm"
+    assert config.local_model.artifact_id == snapshot_id
     assert config.model_settings.active_profile == "heartwood"
     assert config.model_settings.profile().model == "openai/heartwood-managed-model"
     assert config.model_settings.profile().max_input_tokens == 28_672
@@ -1195,7 +1339,7 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     assert restarted.project_readiness()["state"] == "compute-required"
     restored_models = cast(list[dict[str, object]], restarted.model_artifacts()["models"])
     restored_selection = next(
-        model for model in restored_models if model["model_id"] == "qwen25-7b-instruct-vllm"
+        model for model in restored_models if model["model_id"] == snapshot_id
     )
     assert restored_selection["selected"] is True
     with pytest.raises(ModelRepositoryError, match="unknown Heartwood-managed model: missing"):
@@ -1208,12 +1352,37 @@ def test_gateway_download_uses_the_normalized_model_catalog(
 ) -> None:
     gateway = _gateway(tmp_path)
     monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
-    destination = tmp_path / ".heartwood" / "models" / "qwen25-7b-instruct-vllm"
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
+    snapshot_id = "qwen25-coder-7b-instruct-awq-vllm"
+    destination = tmp_path / ".heartwood" / "models" / snapshot_id
 
     def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:
         raise ValueError("artifact catalog validation failed")
 
-    def snapshot_download(_snapshot: ModelSnapshot, *, cache_dir: Path) -> Path:
+    def snapshot_download(
+        _snapshot: ModelSnapshot,
+        *,
+        cache_dir: Path,
+        progress_callback: object = None,
+    ) -> Path:
+        del progress_callback
         assert cache_dir == tmp_path / ".heartwood" / "models"
         destination.mkdir(parents=True)
         return destination
@@ -1221,7 +1390,7 @@ def test_gateway_download_uses_the_normalized_model_catalog(
     monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
     monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
 
-    assert gateway.download_local_model_now("qwen25-7b-instruct-vllm") == destination
+    assert gateway.download_local_model_now(snapshot_id) == destination
 
 
 def test_rest_model_settings_routes_report_invalid_requests(tmp_path: Path) -> None:

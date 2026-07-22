@@ -20,7 +20,7 @@ import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from packaging.version import InvalidVersion, Version
 
@@ -28,11 +28,17 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
     LocalContextPlan,
+    ModelSnapshot,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    SessionGateway,
+    automatic_model_tier,
+    discover_slurm_gpu_partitions,
     estimate_local_runtime_memory,
+    inspect_gpu_environment,
     managed_model_token_budgets,
+    minimum_compute_capability_for_model,
     plan_local_context_window,
     verify_model_artifact,
 )
@@ -40,6 +46,7 @@ from heartwood.gateway import (
 InputFunction = Callable[[str], str]
 RunFunction = Callable[[Sequence[str]], int]
 
+_VLLM_EAGER_MEMORY_PER_GPU = 20 * 1024**3
 _SLURM_EXPORTED_ENVIRONMENT = (
     "PATH",
     "HOME",
@@ -52,7 +59,6 @@ _SLURM_EXPORTED_ENVIRONMENT = (
     "TERM",
     "LD_LIBRARY_PATH",
     "PYTHONPATH",
-    "VLLM_USE_FLASHINFER_SAMPLER",
 )
 
 
@@ -67,13 +73,15 @@ class LaunchOptions:
     project: ProjectContext
     session_id: str
     partition: str | None
-    gpus: int
-    cpus: int
-    memory: str
+    gpus: int | None
+    cpus: int | None
+    memory: str | None
     time_limit: str
+    task_profile: Literal["auto", "standard", "powerful", "maximum"]
     dry_run: bool
     no_allocate: bool
     yes_request_allocation: bool
+    yes_download: bool
     inside_allocation: bool
     plain: bool
     web: bool
@@ -96,8 +104,20 @@ class LaunchPlan:
     project_root: Path
     runtime: str | None
     model_id: str | None
+    artifact_id: str | None
     context_window: int | None
     partition: str | None = None
+    gpus: int | None = None
+    cpus: int | None = None
+    memory: str | None = None
+    model_size_bytes: int | None = None
+    model_tier: str | None = None
+    model_precision: str | None = None
+    model_qualification: str | None = None
+    startup_seconds_min: int | None = None
+    startup_seconds_max: int | None = None
+    environment_notes: tuple[str, ...] = ()
+    download_required: bool = False
 
     def format(self) -> str:
         """Render the launch proposal without secrets."""
@@ -108,6 +128,10 @@ class LaunchPlan:
             f"Platform: {self.platform_id}",
             f"Compute: {compute}",
             f"Model: {self.model_root if self.model_root is not None else 'not selected'}",
+            (
+                "Catalog model: "
+                f"{self.artifact_id if self.artifact_id is not None else 'not selected'}"
+            ),
             f"Runtime: {self.runtime if self.runtime is not None else 'not selected'}",
             (
                 f"Context capacity: up to {self.context_window:,} tokens"
@@ -117,10 +141,34 @@ class LaunchPlan:
             f"State: {self.state_root}",
             f"Project: {self.project_root}",
         ]
+        if self.model_tier is not None:
+            lines.append(f"Capability: {self.model_tier.title()}")
+        if self.model_precision is not None:
+            lines.append(f"Precision: {self.model_precision}")
+        if self.model_qualification is not None:
+            label = (
+                "Qualified" if self.model_qualification == "qualified" else "Evaluation candidate"
+            )
+            lines.append(f"Qualification: {label}")
+        if self.model_size_bytes is not None:
+            lines.append(f"Model download: {_format_bytes(self.model_size_bytes)}")
+        if self.startup_seconds_min is not None and self.startup_seconds_max is not None:
+            lines.append(
+                "Expected startup: "
+                f"{_format_duration(self.startup_seconds_min)} to "
+                f"{_format_duration(self.startup_seconds_max)}"
+            )
         if self.partition is not None:
             lines.append(f"GPU partition: {self.partition}")
+        if self.gpus is not None:
+            lines.append(f"GPU allocation: {self.gpus}")
+        if self.cpus is not None:
+            lines.append(f"CPU allocation: {self.cpus}")
+        if self.memory is not None:
+            lines.append(f"RAM allocation: {self.memory}")
         if self.allocation_command:
             lines.append(f"Request: {shlex.join(self.allocation_command)}")
+        lines.extend(f"Resource check: {note}" for note in self.environment_notes)
         return "\n".join(lines)
 
 
@@ -135,28 +183,179 @@ class LocalRuntimeSelection:
     size_bytes: int | None
     artifact_sha256: str | None
     context_window: int
+    maximum_context_window: int
+    tier: Literal["standard", "powerful", "maximum"]
+    precision: str
+    qualification: Literal["candidate", "qualified"]
+    minimum_gpu_count: int
+    minimum_gpu_memory_bytes: int
+    recommended_ram_bytes: int | None
+    recommended_disk_bytes: int | None
+    tool_call_parser: Literal["hermes", "openai", "qwen3_coder"] | None
+    tensor_parallel_size: int
+    startup_seconds_min: int
+    startup_seconds_max: int
+    catalog_source: Literal["catalog", "user-selected"]
+
+
+def _allocation_resources(
+    options: LaunchOptions,
+    selection: LocalRuntimeSelection | None,
+) -> tuple[int, int, str]:
+    if selection is None or selection.runtime == "llama-cpp":
+        gpus = options.gpus or 1
+    else:
+        gpus = options.gpus or selection.tensor_parallel_size
+        if gpus != selection.tensor_parallel_size:
+            raise LaunchConfigurationError(
+                f"{selection.model_id} was qualified with "
+                f"{selection.tensor_parallel_size} GPU(s); choose a catalog model configured "
+                f"for {gpus} GPU(s) instead"
+            )
+        if gpus < selection.minimum_gpu_count:
+            raise LaunchConfigurationError(
+                f"{selection.model_id} requires at least {selection.minimum_gpu_count} GPU(s)"
+            )
+    cpus = options.cpus or max(8, gpus * 8)
+    recommended_memory = selection.recommended_ram_bytes if selection is not None else None
+    memory = options.memory or (
+        f"{_ceil_gib(recommended_memory)}G" if recommended_memory is not None else "64G"
+    )
+    return gpus, cpus, memory
+
+
+def _validate_gpu_environment(
+    platform_id: str,
+    selection: LocalRuntimeSelection | None,
+    env: Mapping[str, str],
+    *,
+    allocation_required: bool,
+) -> tuple[str, ...]:
+    if selection is None or selection.runtime != "vllm":
+        return ()
+    environment = inspect_gpu_environment(platform_id, env)
+    available, reason = environment.assess(
+        gpu_count=selection.tensor_parallel_size,
+        gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
+        minimum_compute_capability=_minimum_compute_capability(selection),
+    )
+    if not available:
+        raise LaunchConfigurationError(reason)
+    notes = [reason]
+    if allocation_required:
+        notes.append("The exact devices and NVIDIA driver will be checked inside the allocation.")
+    elif environment.visible_devices:
+        drivers = ", ".join(
+            sorted({device.driver_version for device in environment.visible_devices})
+        )
+        notes.append(f"NVIDIA driver: {drivers}; Heartwood runtime ABI: CUDA 12.9")
+    return tuple(notes)
+
+
+def _minimum_compute_capability(
+    selection: LocalRuntimeSelection,
+) -> tuple[int, int] | None:
+    """Return the minimum GPU generation required by reviewed quantization paths."""
+    if selection.runtime != "vllm":
+        return None
+    return minimum_compute_capability_for_model(
+        model_id=selection.model_id,
+        precision=selection.precision,
+    )
+
+
+def _recommend_model(
+    options: LaunchOptions,
+    env: Mapping[str, str],
+    *,
+    platform_id: str,
+) -> ModelSnapshot | None:
+    task_profile = options.task_profile
+    if task_profile == "auto":
+        task_profile = automatic_model_tier(platform_id)
+    gateway = SessionGateway(project=options.project, env=env)
+    try:
+        gpu_environment = gateway.gpu_environment()
+        maximum_gpu_count = max(
+            (capacity.gpu_count for capacity in gpu_environment.capacities),
+            default=0,
+        )
+        if options.gpus is not None and options.gpus > maximum_gpu_count:
+            raise LaunchConfigurationError(
+                f"{options.gpus} GPU(s) were requested, but only {maximum_gpu_count} compatible "
+                "GPU(s) were detected"
+            )
+        return gateway.recommend_managed_model(
+            maximum_tier=task_profile,
+            requested_gpus=options.gpus,
+            gpu_environment=gpu_environment,
+        )
+    finally:
+        gateway.stop()
+
+
+def _selection_from_snapshot(
+    snapshot: ModelSnapshot,
+    project: ProjectContext,
+) -> LocalRuntimeSelection:
+    return LocalRuntimeSelection(
+        artifact_id=snapshot.snapshot_id,
+        model_root=project.models_dir / snapshot.snapshot_id,
+        runtime="vllm",
+        model_id="heartwood-managed-model",
+        size_bytes=snapshot.expected_size_bytes,
+        artifact_sha256=None,
+        context_window=snapshot.context_window,
+        maximum_context_window=snapshot.maximum_context_window,
+        tier=snapshot.tier,
+        precision=snapshot.precision,
+        qualification=snapshot.qualification,
+        minimum_gpu_count=snapshot.minimum_gpu_count,
+        minimum_gpu_memory_bytes=snapshot.minimum_gpu_memory_bytes,
+        recommended_ram_bytes=snapshot.recommended_ram_bytes,
+        recommended_disk_bytes=snapshot.recommended_disk_bytes,
+        tool_call_parser=snapshot.tool_call_parser,
+        tensor_parallel_size=snapshot.tensor_parallel_size,
+        startup_seconds_min=snapshot.startup_seconds_min,
+        startup_seconds_max=snapshot.startup_seconds_max,
+        catalog_source="catalog",
+    )
 
 
 def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchPlan:
     """Build a platform-specific launch plan without changing external state."""
-    if options.gpus != 1:
-        raise LaunchConfigurationError(
-            "Heartwood currently supports exactly one GPU per managed vLLM runtime"
-        )
     platform_id = select_platform_adapter(env).adapter_id
     selection = _local_model_selection(options.project, env)
+    if selection is None:
+        recommendation = _recommend_model(options, env, platform_id=platform_id)
+        if recommendation is not None:
+            selection = _selection_from_snapshot(recommendation, options.project)
+    gpus, cpus, memory = _allocation_resources(options, selection)
     allocation_required = platform_id == "carina" and not env.get("SLURM_JOB_ID")
+    environment_notes = _validate_gpu_environment(
+        platform_id,
+        selection,
+        env,
+        allocation_required=allocation_required,
+    )
     command: tuple[str, ...] = ()
     partition: str | None = None
     if allocation_required:
-        partition = _resolve_slurm_partition(options.partition, env)
+        partition = _resolve_slurm_partition(
+            options.partition,
+            env,
+            required_gpus=gpus,
+            required_gpu_memory_bytes=(
+                selection.minimum_gpu_memory_bytes if selection is not None else 0
+            ),
+        )
         command = (
             "srun",
             "--pty",
             f"--partition={partition}",
-            f"--gres=gpu:{options.gpus}",
-            f"--cpus-per-task={options.cpus}",
-            f"--mem={options.memory}",
+            f"--gres=gpu:{gpus}",
+            f"--cpus-per-task={cpus}",
+            f"--mem={memory}",
             f"--time={options.time_limit}",
             f"--chdir={options.project.root}",
             _slurm_export_argument(env),
@@ -171,8 +370,24 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
         options.project.root,
         selection.runtime if selection is not None else None,
         selection.model_id if selection is not None else None,
+        selection.artifact_id if selection is not None else None,
         selection.context_window if selection is not None else None,
         partition=partition,
+        gpus=gpus if allocation_required else None,
+        cpus=cpus if allocation_required else None,
+        memory=memory if allocation_required else None,
+        model_size_bytes=selection.size_bytes if selection is not None else None,
+        model_tier=selection.tier if selection is not None else None,
+        model_precision=selection.precision if selection is not None else None,
+        model_qualification=(selection.qualification if selection is not None else None),
+        startup_seconds_min=(selection.startup_seconds_min if selection is not None else None),
+        startup_seconds_max=(selection.startup_seconds_max if selection is not None else None),
+        environment_notes=environment_notes,
+        download_required=(
+            selection is not None
+            and selection.catalog_source == "catalog"
+            and not selection.model_root.exists()
+        ),
     )
 
 
@@ -206,6 +421,45 @@ def run_launch(
         print(plan.format())
         if active_options.dry_run:
             return 0
+        if plan.artifact_id is None:
+            print(
+                "\nNo qualified Heartwood-managed model matches the detected resources. "
+                "Run `heartwood models managed` for lower-resource and advanced options."
+            )
+            return 64
+        if plan.download_required:
+            if not active_options.yes_download:
+                try:
+                    approved = (
+                        input_fn("\nDownload this pinned model into .heartwood/models? [y/N]: ")
+                        .strip()
+                        .lower()
+                        == "y"
+                    )
+                except EOFError:
+                    approved = False
+                if not approved:
+                    print("Model download cancelled; no allocation was requested.")
+                    return 1
+            print("\nDownloading the reviewed model snapshot. This can take several minutes.")
+            gateway = SessionGateway(project=active_options.project, env=active_env)
+            try:
+                gateway.download_local_model_now(
+                    plan.artifact_id,
+                    progress_callback=_progress_reporter("Model download"),
+                )
+            except (OSError, ValueError) as error:
+                print(f"Model download failed: {error}")
+                return 74
+            finally:
+                gateway.stop()
+            try:
+                plan = build_launch_plan(active_options, active_env)
+            except LaunchConfigurationError as error:
+                print(f"Launch configuration error after model download: {error}")
+                return 64
+            print("\nModel ready. Updated launch plan:\n")
+            print(plan.format())
         if plan.allocation_required:
             if active_options.no_allocate:
                 print("\nA GPU allocation is required; rerun without --no-allocate.")
@@ -373,11 +627,10 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             )
             runtime = subprocess.Popen(
                 _runtime_command(
-                    runtime_kind,
                     runtime_executable,
                     staged_source,
-                    model_id,
-                    selection.context_window,
+                    selection,
+                    enforce_eager=_use_eager_vllm(selection, runtime_env),
                 ),
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
@@ -500,13 +753,13 @@ def _resolve_runtime_executable(runtime: str) -> Path:
 
 
 def _runtime_command(
-    runtime: str,
     executable: Path,
     model: Path,
-    model_id: str,
-    context_window: int,
+    selection: LocalRuntimeSelection,
+    *,
+    enforce_eager: bool = False,
 ) -> tuple[str, ...]:
-    if runtime == "llama-cpp":
+    if selection.runtime == "llama-cpp":
         model_file = _gguf_file(model)
         return (
             str(executable),
@@ -514,15 +767,17 @@ def _runtime_command(
             str(model_file),
             "--jinja",
             "--alias",
-            model_id,
+            selection.model_id,
             "--host",
             "127.0.0.1",
             "--port",
             "8765",
             "--ctx-size",
-            str(context_window),
+            str(selection.context_window),
         )
-    return (
+    if selection.tool_call_parser is None:  # pragma: no cover - persisted invariant
+        raise LaunchConfigurationError("the selected vLLM model has no tool-call parser")
+    command = (
         str(executable),
         "serve",
         str(model),
@@ -531,13 +786,30 @@ def _runtime_command(
         "--port",
         "8765",
         "--served-model-name",
-        model_id,
+        selection.model_id,
         "--max-model-len",
-        str(context_window),
+        str(selection.context_window),
+        "--tensor-parallel-size",
+        str(selection.tensor_parallel_size),
         "--enable-auto-tool-choice",
         "--tool-call-parser",
-        "hermes",
+        selection.tool_call_parser,
     )
+    return (*command, "--enforce-eager") if enforce_eager else command
+
+
+def _use_eager_vllm(
+    selection: LocalRuntimeSelection,
+    env: Mapping[str, str],
+) -> bool:
+    """Avoid CUDA graph capture overhead on constrained NVIDIA GPUs."""
+    if selection.runtime != "vllm":
+        return False
+    available = _available_gpu_memory_bytes(env, count=selection.tensor_parallel_size)
+    if available is None:
+        return False
+    per_device_available = available // selection.tensor_parallel_size
+    return per_device_available <= _VLLM_EAGER_MEMORY_PER_GPU
 
 
 def _local_model_selection(
@@ -574,6 +846,25 @@ def _local_model_selection(
         size_bytes=selection.size_bytes,
         artifact_sha256=selection.artifact_sha256,
         context_window=selection.context_window,
+        maximum_context_window=selection.maximum_context_window,
+        tier=cast(Literal["standard", "powerful", "maximum"], selection.tier),
+        precision=selection.precision or "Unspecified",
+        qualification=cast(Literal["candidate", "qualified"], selection.qualification),
+        minimum_gpu_count=selection.minimum_gpu_count,
+        minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
+        recommended_ram_bytes=selection.recommended_ram_bytes,
+        recommended_disk_bytes=selection.recommended_disk_bytes,
+        tool_call_parser=cast(
+            Literal["hermes", "openai", "qwen3_coder"] | None,
+            selection.tool_call_parser,
+        ),
+        tensor_parallel_size=selection.tensor_parallel_size,
+        startup_seconds_min=selection.startup_seconds_min,
+        startup_seconds_max=selection.startup_seconds_max,
+        catalog_source=cast(
+            Literal["catalog", "user-selected"],
+            selection.catalog_source,
+        ),
     )
 
 
@@ -614,8 +905,16 @@ def _print_resource_assessment(
             model_size_bytes=model_bytes,
             runtime="vllm",
         )
-        gpu_available = _available_gpu_memory_bytes(env)
+        gpu_available = _available_gpu_memory_bytes(
+            env,
+            count=selection.tensor_parallel_size,
+        )
         _print_memory_result("GPU memory", gpu_required, gpu_available)
+        if _use_eager_vllm(selection, env):
+            print(
+                "Runtime mode: eager execution selected to avoid CUDA graph capture "
+                "overhead on the available GPU memory."
+            )
 
 
 def _context_plan(
@@ -626,7 +925,7 @@ def _context_plan(
     if model_bytes is None and selection.model_root.exists():
         model_bytes = _model_size(selection.model_root)
     available = (
-        _available_gpu_memory_bytes(env)
+        _available_gpu_memory_bytes(env, count=selection.tensor_parallel_size)
         if selection.runtime == "vllm"
         else _available_system_memory_bytes()
     )
@@ -691,7 +990,11 @@ def _available_system_memory_bytes() -> int | None:
     return min(candidates) if candidates else None
 
 
-def _available_gpu_memory_bytes(env: Mapping[str, str]) -> int | None:
+def _available_gpu_memory_bytes(
+    env: Mapping[str, str],
+    *,
+    count: int = 1,
+) -> int | None:
     executable = shutil.which("nvidia-smi", path=env.get("PATH"))
     if executable is None:
         return None
@@ -718,7 +1021,9 @@ def _available_gpu_memory_bytes(env: Mapping[str, str]) -> int | None:
         ]
     except ValueError:
         return None
-    return min(values) if values else None
+    if len(values) < count:
+        return sum(values) if values else None
+    return sum(sorted(values, reverse=True)[:count])
 
 
 def _verify_local_model(
@@ -819,11 +1124,6 @@ def _runtime_environment(
                 "XDG_CACHE_HOME": str(project.cache_dir),
             }
         )
-    result.update(
-        {
-            "VLLM_USE_FLASHINFER_SAMPLER": env.get("VLLM_USE_FLASHINFER_SAMPLER", "0"),
-        }
-    )
     return result
 
 
@@ -952,63 +1252,64 @@ def _persist_effective_context(store: ProjectConfigStore, context_window: int) -
     store.update(update)
 
 
-def _resolve_slurm_partition(requested: str | None, env: Mapping[str, str]) -> str:
-    partitions = _discover_slurm_gpu_partitions(env)
+def _resolve_slurm_partition(
+    requested: str | None,
+    env: Mapping[str, str],
+    *,
+    required_gpus: int = 1,
+    required_gpu_memory_bytes: int = 0,
+) -> str:
+    partitions = discover_slurm_gpu_partitions(env)
+    eligible = tuple(
+        partition
+        for partition in partitions
+        if partition.gpu_count >= required_gpus
+        and (
+            partition.gpu_memory_bytes is None
+            or partition.gpu_memory_bytes >= required_gpu_memory_bytes
+        )
+    )
     if requested:
-        if partitions and requested not in {name for name, _is_default in partitions}:
-            available = ", ".join(name for name, _is_default in partitions)
+        requested_partitions = tuple(
+            partition for partition in partitions if partition.name == requested
+        )
+        if partitions and not requested_partitions:
+            available = ", ".join(sorted({partition.name for partition in partitions}))
             raise LaunchConfigurationError(
                 f"GPU partition {requested!r} is unavailable; choose one of: {available}"
             )
+        if requested_partitions and not any(
+            partition.gpu_count >= required_gpus
+            and (
+                partition.gpu_memory_bytes is None
+                or partition.gpu_memory_bytes >= required_gpu_memory_bytes
+            )
+            for partition in requested_partitions
+        ):
+            available_count = max(partition.gpu_count for partition in requested_partitions)
+            raise LaunchConfigurationError(
+                f"GPU partition {requested!r} exposes at most {available_count} GPU(s) or "
+                "insufficient per-device memory for the selected model"
+            )
         return requested
-    for name, is_default in partitions:
-        if is_default:
-            return name
-    if len(partitions) == 1:
-        return partitions[0][0]
-    if partitions:
-        available = ", ".join(name for name, _is_default in partitions)
+    for partition in eligible:
+        if partition.is_default:
+            return partition.name
+    eligible_names = tuple(dict.fromkeys(partition.name for partition in eligible))
+    if len(eligible_names) == 1:
+        return eligible_names[0]
+    if eligible:
+        available = ", ".join(eligible_names)
         raise LaunchConfigurationError(
             f"no default GPU partition was detected; choose one of: {available}"
         )
-    raise LaunchConfigurationError("no available GPU partition was detected; pass --partition")
-
-
-def _discover_slurm_gpu_partitions(env: Mapping[str, str]) -> tuple[tuple[str, bool], ...]:
-    try:
-        completed = subprocess.run(
-            ("sinfo", "--noheader", "--format=%P|%G|%a"),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=_scheduler_environment(env),
+    if partitions:
+        largest = max(partition.gpu_count for partition in partitions)
+        raise LaunchConfigurationError(
+            f"available GPU partitions expose at most {largest} GPU(s); "
+            f"the selected model requires {required_gpus}"
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return ()
-    if completed.returncode != 0:
-        return ()
-    partitions: list[tuple[str, bool]] = []
-    for line in completed.stdout.splitlines():
-        fields = line.strip().split("|")
-        if len(fields) != 3:
-            continue
-        raw_name, resources, state = fields
-        if "gpu" not in resources.lower() or state.lower() not in {"up", "idle", "mix", "alloc"}:
-            continue
-        name = raw_name.rstrip("*")
-        entry = (name, raw_name.endswith("*"))
-        if name and entry not in partitions:
-            partitions.append(entry)
-    return tuple(partitions)
-
-
-def _scheduler_environment(env: Mapping[str, str]) -> dict[str, str]:
-    return {
-        name: env[name]
-        for name in ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE")
-        if name in env
-    }
+    raise LaunchConfigurationError("no available GPU partition was detected; pass --partition")
 
 
 def _slurm_export_argument(env: Mapping[str, str]) -> str:
@@ -1145,6 +1446,44 @@ def _format_bytes(value: int) -> str:
             return f"{amount:.1f} {unit}"
         amount /= 1024
     return f"{amount:.1f} TiB"
+
+
+def _ceil_gib(value: int) -> int:
+    return max(1, (value + 1024**3 - 1) // 1024**3)
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds} seconds"
+    minutes = (seconds + 59) // 60
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
+def _progress_reporter(label: str) -> Callable[[int, int], None]:
+    started = time.monotonic()
+    last_report = -5.0
+
+    def report(completed: int, total: int) -> None:
+        nonlocal last_report
+        now = time.monotonic()
+        if completed < total and now - last_report < 5:
+            return
+        last_report = now
+        elapsed = max(now - started, 0.001)
+        percent = completed / total * 100 if total > 0 else 0.0
+        rate = completed / elapsed
+        remaining = (total - completed) / rate if rate > 0 and total > completed else 0
+        timing = (
+            f", about {_format_duration(max(1, int(remaining)))} remaining"
+            if remaining > 0 and elapsed >= 5
+            else ""
+        )
+        print(
+            f"{label}: {percent:5.1f}% "
+            f"({_format_bytes(completed)} of {_format_bytes(total)}{timing})"
+        )
+
+    return report
 
 
 def _print_runtime_failure(log_path: Path, return_code: int | None) -> None:

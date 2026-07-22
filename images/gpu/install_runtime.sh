@@ -26,6 +26,6 @@ runtime_sources="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
   --require-hashes \
   --python "${target}/bin/python" \
   "${runtime_sources}/vllm-requirements.txt"
-install -m 0444 "${runtime_sources}/heartwood_vllm.py" "${target}/bin/heartwood_vllm.py"
-install -m 0444 "${runtime_sources}/sitecustomize.py" "${target}/bin/sitecustomize.py"
+install -m 0444 "${runtime_sources}/verify_vllm.py" "${target}/bin/verify_vllm.py"
+install -m 0444 "${runtime_sources}/compatibility.toml" "${target}/bin/compatibility.toml"
 install -m 0555 "${runtime_sources}/heartwood-vllm" "${target}/bin/heartwood-vllm"

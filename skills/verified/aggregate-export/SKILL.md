@@ -14,7 +14,7 @@ metadata:
   heartwood.phi-risk: "none"
   heartwood.trust-tier: "verified"
   heartwood.requires-network: "false"
-  heartwood.version: "0.2.0-beta.5"
+  heartwood.version: "0.2.0-beta.6"
   heartwood.sig: "sigstore:synthetic-fixture"
 ---
 

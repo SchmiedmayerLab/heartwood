@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-gateway"
-version = "0.2.0-beta.5"
+version = "0.2.0-beta.6"
 description = "Session gateway for Heartwood command and event streams."
 readme = "README.md"
 requires-python = ">=3.12"

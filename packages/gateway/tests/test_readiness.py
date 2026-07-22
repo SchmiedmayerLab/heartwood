@@ -118,6 +118,9 @@ def _configure_model(
             artifact_id="synthetic-model",
             path=model_path,
             runtime="vllm",
+            minimum_gpu_count=1,
+            minimum_gpu_memory_bytes=1,
+            tool_call_parser="hermes",
         )
         config = store.load()
     else:

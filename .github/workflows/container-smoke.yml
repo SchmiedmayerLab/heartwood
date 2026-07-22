@@ -93,7 +93,7 @@ jobs:
 
   capable-model:
     name: Capable Model OpenHands Acceptance (linux/amd64)
-    if: github.event_name == 'workflow_dispatch' && inputs.run_capable_model
+    if: inputs.run_capable_model
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -139,6 +139,20 @@ jobs:
           --env HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
           heartwood-capable:local
           bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
+      - name: Prepare coding-agent qualification evidence
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" /tmp/heartwood-project
+      - name: Upload coding-agent qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capable-model-qualification-${{ github.sha }}
+          path: |
+            /tmp/heartwood-project/heartwood-qualification.json
+            /tmp/heartwood-project/heartwood-replay.txt
+            /tmp/heartwood-project/heartwood-transcript.txt
+          if-no-files-found: warn
+          retention-days: 14
 
   terra-smoke:
     name: Terra image smoke test (linux/amd64)

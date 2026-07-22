@@ -49,7 +49,7 @@ Provider tokens are not accepted as setup command arguments.
 | `heartwood models connect CONNECTION MODEL` | Select a discovered model |
 | `heartwood models validate [PROFILE]` | Evaluate credential and route policy for a profile |
 | `heartwood models forget CONNECTION` | Remove a saved provider credential from the system credential store |
-| `heartwood models managed` | Show recommended and user-selected models Heartwood can run |
+| `heartwood models managed` | Show qualified recommendations, evaluation candidates, and user-selected models Heartwood can run |
 | `heartwood models inspect OWNER/MODEL` | Inspect a public Hugging Face repository without downloading weights |
 | `heartwood models download MODEL` | Download and select a recommendation or `OWNER/MODEL` repository |
 | `heartwood models import PATH ...` | Copy and select an existing GGUF or vLLM snapshot with provenance |
@@ -89,6 +89,11 @@ Interactive users should use the visible controls or `/allow` and `/reject` with
 
 These commands support deployment automation and diagnostics.
 Researchers should normally use `heartwood` with `--interface` when needed.
+
+`heartwood runtime start --dry-run` prints the model, resource, and scheduler plan without downloading, starting inference, or requesting compute.
+On a scheduler-managed GPU platform, `--task-profile standard|powerful|maximum` constrains automatic recommendation to the requested capability tier.
+`--gpus` is an advanced constraint and must match a qualified catalog tensor-parallel configuration.
+Unattended operation requires separate `--yes-download` and `--yes-request-allocation` approvals; neither is implied by `--non-interactive` or another confirmation flag.
 
 ## Exit Status
 

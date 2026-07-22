@@ -4,14 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-vllm @ https://github.com/vllm-project/vllm/releases/download/v0.10.1.1/vllm-0.10.1.1%2Bcu118-cp38-abi3-manylinux1_x86_64.whl
-certifi @ https://files.pythonhosted.org/packages/ef/2f/c5464532e965badff2f4c4c1a3a83f5697f0d7c407ed0cda44aaa99bb451/certifi-2026.6.17-py3-none-any.whl
-ray==2.55.0
-requests==2.34.2
-setuptools==78.1.1
-torch @ https://download-r2.pytorch.org/whl/cu118/torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=91454dcfdb81f181fdf216d6d6d9912fbd8795578b90384b3b8b8132737072bb
-torchaudio @ https://download-r2.pytorch.org/whl/cu118/torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=6b64a313866b2a5bb43d4c6906e8820d3dc844f89a97c00dc5c8b92e6b70fe17
-torchvision @ https://download-r2.pytorch.org/whl/cu118/torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=e4a8696261b8c64297a2683656f4ee64418d7ee391627702fe5c06b72ce81123
-transformers==5.5.0
-urllib3==2.7.0
-xformers @ https://files.pythonhosted.org/packages/ff/e3/ee90c62a3235152d4ea8e983a5eb7ac00b10582fee86aaadb11571c1ecba/xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl#sha256=50aedaea82a38d7d28631f77617d1ed1f6f37c60bdc4bf167a69cbc0e39cee76
+vllm @ https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl#sha256=9e206f370c934a2d4b6b1f05d3d09708d344e05d80260189ef19f60755709431
+torch @ https://download-r2.pytorch.org/whl/cu129/torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=68b83cb7d7d43bc67c2833c8aebaea6a966f2017c3389885affa3361c258b7e3
+torchaudio @ https://download-r2.pytorch.org/whl/cu129/torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=de4105653562f031edd6ddf7dd1485f07db6ac62cdc90d17364648cd3c89eb5a
+torchvision @ https://download-r2.pytorch.org/whl/cu129/torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=086aa9ac91e56cf339ea6c646bc000b970e62159b609d84e0a2d3c9859fe5885

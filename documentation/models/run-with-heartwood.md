@@ -33,6 +33,7 @@ The restarted browser process verifies the stored model, starts its local server
 
 Heartwood reports model-specific minimum and recommended guidance before download.
 The estimates reserve space for runtime overhead and context, but no static estimate can account for every model architecture, driver, concurrent workload, or platform limit.
+For GPU configurations, Heartwood also checks the catalog GPU count, per-device memory, driver, precision, tool parser, tensor-parallel layout, and qualification status against the [GPU compatibility matrix](../reference/gpu-compatibility.md).
 
 ## Context Window
 
@@ -55,11 +56,12 @@ Operators can inspect or control runtime allocation separately:
 
 ```bash
 heartwood runtime start --dry-run
-heartwood runtime start --partition dev --time 01:00:00
+heartwood runtime start --task-profile powerful --partition dev --time 01:00:00
 ```
 
 On Carina, Heartwood prints the complete Slurm request and asks before allocating a GPU.
 On provisioned Terra compute, it uses the attached resources without submitting a scheduler request.
+Model download and scheduler allocation require separate confirmation.
 
 ## Stop the Runtime
 

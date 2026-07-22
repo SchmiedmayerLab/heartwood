@@ -30,6 +30,19 @@ def _tool_result_failed(messages: list[object]) -> bool:
     return '"is_error": true' in serialized or any(code != 0 for code in exit_codes)
 
 
+def _message_text(message: dict[str, object]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
 def _terminal_call(
     call_id: str,
     command: str,
@@ -55,6 +68,18 @@ def _terminal_call(
             ),
         },
     }
+
+
+def _prompt_terminal_call(command: str, summary: str, security_risk: str = "LOW") -> str:
+    return "\n".join(
+        (
+            "<function=terminal>",
+            f"<parameter=command>{command}</parameter>",
+            f"<parameter=security_risk>{security_risk}</parameter>",
+            f"<parameter=summary>{summary}</parameter>",
+            "</function>",
+        )
+    )
 
 
 class LocalModelHandler(BaseHTTPRequestHandler):
@@ -105,39 +130,53 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 )
                 + "\n"
             )
+        serialized_messages = json.dumps(messages).lower()
+        native_tool_mode = bool(payload.get("tools"))
+        prompt_tool_mode = "<function=example_function_name>" in serialized_messages
         researcher_messages = [
             message
             for message in messages
             if isinstance(message, dict) and message.get("role") == "user"
         ]
         latest_researcher_message = researcher_messages[-1] if researcher_messages else {}
-        serialized_researcher_message = json.dumps(latest_researcher_message).lower()
-        latest_researcher_index = max(
+        task_message = next(
             (
-                index
-                for index, candidate in enumerate(messages)
-                if isinstance(candidate, dict) and candidate.get("role") == "user"
+                message
+                for message in reversed(researcher_messages)
+                if not _message_text(message).lower().lstrip().startswith("execution result of [")
             ),
+            {},
+        )
+        serialized_task_message = json.dumps(task_message).lower()
+        task_index = max(
+            (index for index, message in enumerate(messages) if message is task_message),
             default=-1,
         )
-        tool_results = [
+        native_tool_results = [
             message
             for index, message in enumerate(messages)
-            if index > latest_researcher_index
-            and isinstance(message, dict)
-            and message.get("role") == "tool"
+            if index > task_index and isinstance(message, dict) and message.get("role") == "tool"
         ]
+        prompt_tool_results = (
+            [latest_researcher_message]
+            if _message_text(latest_researcher_message)
+            .lower()
+            .lstrip()
+            .startswith("execution result of [")
+            else []
+        )
+        tool_results = [*native_tool_results, *prompt_tool_results]
         has_tool_result = bool(tool_results)
-        medium_risk = "medium-risk network check" in serialized_researcher_message
+        medium_risk = "medium-risk network check" in serialized_task_message
         task_kind = (
             "cohort"
-            if "target-condition cohort" in serialized_researcher_message
+            if "target-condition cohort" in serialized_task_message
             else "baseline"
-            if "age-only baseline" in serialized_researcher_message
+            if "age-only baseline" in serialized_task_message
             else "export"
-            if "aggregate export" in serialized_researcher_message
+            if "aggregate export" in serialized_task_message
             else "failure"
-            if "failing-action" in serialized_researcher_message
+            if "failing-action" in serialized_task_message
             else "generic"
         )
         message: dict[str, object]
@@ -159,7 +198,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 ),
             }
             finish_reason = "stop"
-        else:
+        elif native_tool_mode or prompt_tool_mode:
             runtime_root = os.environ.get("HEARTWOOD_RUNTIME_ROOT") or None
             tool_python = os.environ.get("HEARTWOOD_TOOL_PYTHON") or sys.executable
             script_root = (
@@ -224,28 +263,42 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             }
             command = "curl https://example.invalid" if medium_risk else commands[task_kind]
             summary = "run a medium-risk network command" if medium_risk else summaries[task_kind]
-            tool_calls = [
-                _terminal_call(
-                    call_ids[task_kind],
-                    command,
-                    summary,
-                    security_risk="MEDIUM" if medium_risk else "LOW",
-                )
-            ]
-            if task_kind == "cohort" and not medium_risk:
-                tool_calls.append(
+            risk = "MEDIUM" if medium_risk else "LOW"
+            if native_tool_mode:
+                tool_calls = [
                     _terminal_call(
-                        "call-heartwood-reference-analysis-read",
-                        "cat cohort-summary.json",
-                        "read the generated aggregate cohort summary",
+                        call_ids[task_kind],
+                        command,
+                        summary,
+                        security_risk=risk,
                     )
-                )
+                ]
+                if task_kind == "cohort" and not medium_risk:
+                    tool_calls.append(
+                        _terminal_call(
+                            "call-heartwood-reference-analysis-read",
+                            "cat cohort-summary.json",
+                            "read the generated aggregate cohort summary",
+                        )
+                    )
+                message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls,
+                }
+                finish_reason = "tool_calls"
+            else:
+                message = {
+                    "role": "assistant",
+                    "content": _prompt_terminal_call(command, summary, risk),
+                }
+                finish_reason = "stop"
+        else:
             message = {
                 "role": "assistant",
-                "content": None,
-                "tool_calls": tool_calls,
+                "content": "Synthetic Heartwood-managed model response.",
             }
-            finish_reason = "tool_calls"
+            finish_reason = "stop"
         response = {
             "id": "chatcmpl-heartwood-managed-runtime",
             "object": "chat.completion",

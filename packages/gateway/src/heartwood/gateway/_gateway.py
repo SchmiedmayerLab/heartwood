@@ -16,7 +16,7 @@ from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Concatenate, Protocol, cast
+from typing import Any, Concatenate, Protocol, cast
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.core_adapter import (
@@ -35,6 +35,7 @@ from heartwood.gateway._action_settings import (
     ActionSettingsError,
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
+from heartwood.gateway._gpu_environment import GpuEnvironment, inspect_gpu_environment
 from heartwood.gateway._local_import import import_local_model
 from heartwood.gateway._local_model_contract import (
     MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
@@ -46,7 +47,7 @@ from heartwood.gateway._local_models import (
     LocalModelChoice,
     LocalModelRuntime,
     ModelRepositoryError,
-    recommended_model_choices,
+    catalog_model_choices,
 )
 from heartwood.gateway._model_artifacts import (
     LocalModelDownloadManager,
@@ -77,8 +78,11 @@ from heartwood.gateway._model_settings import (
     model_profile_from_preset,
 )
 from heartwood.gateway._model_snapshots import (
+    ModelSnapshot,
     ModelSnapshotCatalog,
     ModelSnapshotError,
+    ModelTier,
+    automatic_model_tier,
     download_model_snapshot,
     load_model_snapshot_catalog,
 )
@@ -261,6 +265,7 @@ class SessionGateway:
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
         self._state_lock: AbstractContextManager[object] = RLock()
+        self._gpu_environment: GpuEnvironment | None = None
         adapter = select_platform_adapter(self.env)
         self.config_store = ProjectConfigStore(
             self.project,
@@ -299,19 +304,24 @@ class SessionGateway:
         self.snapshot_catalog = snapshot_catalog or load_model_snapshot_catalog(
             snapshot_catalog_path
         )
-        downloadable_choices = recommended_model_choices(
+        downloadable_choices = catalog_model_choices(
             self.artifact_catalog.artifacts,
             self.snapshot_catalog.snapshots,
             recommended_only=False,
         )
-        choices = recommended_model_choices(
-            self.artifact_catalog.artifacts,
-            self.snapshot_catalog.snapshots,
-        )
         self._downloadable_local_model_choices = {
             choice.model_id: choice for choice in downloadable_choices
         }
-        self._local_model_choices = {choice.model_id: choice for choice in choices}
+        self._local_model_choices = dict(self._downloadable_local_model_choices)
+        self._recommended_local_model_ids = {
+            artifact.artifact_id
+            for artifact in self.artifact_catalog.artifacts
+            if artifact.recommended
+        } | {
+            snapshot.snapshot_id
+            for snapshot in self.snapshot_catalog.snapshots
+            if snapshot.recommended
+        }
         selected_local_model = self.config_store.load().local_model
         if selected_local_model is not None:
             selected_choice = self._downloadable_local_model_choices.get(
@@ -763,6 +773,7 @@ class SessionGateway:
                         bytes_total=size,
                         path=str(path),
                     )
+        gpu_environment = self.gpu_environment()
         preferred_runtime = self._preferred_local_runtime()
         local_choices = list(self._local_model_choices.values())
         local_choices.sort(
@@ -772,14 +783,24 @@ class SessionGateway:
                 choice.runtime != preferred_runtime,
             )
         )
-        preferred_id = next(
-            (
-                choice.model_id
-                for choice in local_choices
-                if self._local_runtime_available(choice.runtime)
-                and choice.runtime == preferred_runtime
-            ),
-            None,
+        recommendation = self.recommend_managed_model(
+            maximum_tier=automatic_model_tier(gpu_environment.platform_id),
+            gpu_environment=gpu_environment,
+        )
+        preferred_id = (
+            recommendation.snapshot_id
+            if recommendation is not None
+            else next(
+                (
+                    choice.model_id
+                    for choice in local_choices
+                    if choice.model_id in self._recommended_local_model_ids
+                    and choice.qualification_for(gpu_environment.platform_id) == "qualified"
+                    and self._local_runtime_available(choice.runtime)
+                    and choice.runtime == preferred_runtime
+                ),
+                None,
+            )
         )
         choices = [
             self._local_model_choice_dict(
@@ -795,6 +816,7 @@ class SessionGateway:
                         else None
                     )
                 ),
+                gpu_environment=gpu_environment,
             )
             for choice in local_choices
         ]
@@ -804,7 +826,49 @@ class SessionGateway:
             "snapshots": snapshot_catalog["snapshots"],
             "models": choices,
             "downloads": [status.safe_dict() for status in statuses.values()],
+            "gpu_environment": {
+                "platform_id": gpu_environment.platform_id,
+                "capacities": [
+                    {
+                        "label": capacity.label,
+                        "gpu_model": capacity.gpu_model,
+                        "gpu_count": capacity.gpu_count,
+                        "gpu_memory_bytes": capacity.gpu_memory_bytes,
+                        "allocation_required": capacity.allocation_required,
+                        "partition": capacity.partition,
+                    }
+                    for capacity in gpu_environment.capacities
+                ],
+            },
         }
+
+    def gpu_environment(self, *, refresh: bool = False) -> GpuEnvironment:
+        """Return the shared GPU and scheduler inventory for this deployment."""
+        if refresh or self._gpu_environment is None:
+            self._gpu_environment = inspect_gpu_environment(
+                self.config_store.load().platform_id,
+                self.env,
+            )
+        return self._gpu_environment
+
+    def recommend_managed_model(
+        self,
+        *,
+        maximum_tier: ModelTier,
+        requested_gpus: int | None = None,
+        gpu_environment: GpuEnvironment | None = None,
+    ) -> ModelSnapshot | None:
+        """Choose one qualified catalog model for the detected resource envelopes."""
+        environment = gpu_environment or self.gpu_environment()
+        return self.snapshot_catalog.recommend_for_capacities(
+            platform_id=environment.platform_id,
+            capacities=tuple(
+                (capacity.gpu_count, capacity.gpu_memory_bytes)
+                for capacity in environment.capacities
+            ),
+            maximum_tier=maximum_tier,
+            requested_gpus=requested_gpus,
+        )
 
     def _verify_selected_local_artifact(
         self,
@@ -876,14 +940,24 @@ class SessionGateway:
     def download_local_model_now(
         self,
         model_id: str,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path:
         """Download and verify a known model, selecting it when agent-compatible."""
         self.project.initialize()
         model = self._require_local_model_runtime(model_id).download_model()
         if isinstance(model, ModelArtifact):
-            path = download_artifact(model, cache_dir=self.model_cache_dir)
+            path = download_artifact(
+                model,
+                cache_dir=self.model_cache_dir,
+                progress_callback=progress_callback,
+            )
         else:
-            path = download_model_snapshot(model, cache_dir=self.model_cache_dir)
+            path = download_model_snapshot(
+                model,
+                cache_dir=self.model_cache_dir,
+                progress_callback=progress_callback,
+            )
         runtime_profile = model.runtime_profile
         self._select_downloaded_local_model(model_id, path, runtime_profile)
         return path
@@ -893,6 +967,7 @@ class SessionGateway:
         repository: str,
         *,
         revision: str | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path:
         """Resolve, download, verify, and select one user-selected model."""
         self.project.initialize()
@@ -902,9 +977,17 @@ class SessionGateway:
         )
         model = choice.download_model()
         if isinstance(model, ModelArtifact):
-            path = download_artifact(model, cache_dir=self.model_cache_dir)
+            path = download_artifact(
+                model,
+                cache_dir=self.model_cache_dir,
+                progress_callback=progress_callback,
+            )
         else:
-            path = download_model_snapshot(model, cache_dir=self.model_cache_dir)
+            path = download_model_snapshot(
+                model,
+                cache_dir=self.model_cache_dir,
+                progress_callback=progress_callback,
+            )
         self._select_downloaded_local_model(choice.model_id, path, model.runtime_profile)
         return path
 
@@ -1030,6 +1113,11 @@ class SessionGateway:
             env=self._credential_environment(),
             llm_extra_body=managed_model_request_body(
                 selected_model.model_type if selected_model is not None else None
+            ),
+            native_tool_calling=(
+                selected_model.tool_call_parser in {"openai", "qwen3_coder"}
+                if selected_model is not None
+                else None
             ),
         )
 
@@ -1249,6 +1337,7 @@ class SessionGateway:
             .model_settings.with_profile(profile)
             .selecting(profile.profile_id)
         )
+        platform_id = self.config_store.load().platform_id
         self.config_store.select_local_model(
             artifact_id=model_id,
             path=path,
@@ -1262,10 +1351,28 @@ class SessionGateway:
             size_bytes=choice.size_bytes,
             minimum_free_bytes=choice.minimum_free_bytes,
             license_posture=choice.license_posture,
+            license_id=choice.license_id,
             artifact_sha256=choice.artifact_sha256,
             context_window=choice.context_window,
+            maximum_context_window=choice.maximum_context_window,
             minimum_resource_envelope=choice.minimum_resource_envelope,
             recommended_resource_envelope=choice.recommended_resource_envelope,
+            precision=choice.precision,
+            tier=choice.tier,
+            qualification=choice.qualification_for(platform_id),
+            minimum_gpu_count=choice.minimum_gpu_count,
+            minimum_gpu_memory_bytes=choice.minimum_gpu_memory_bytes,
+            recommended_ram_bytes=choice.recommended_ram_bytes,
+            recommended_disk_bytes=choice.recommended_disk_bytes,
+            tool_call_parser=choice.tool_call_parser,
+            tensor_parallel_size=choice.tensor_parallel_size,
+            startup_seconds_min=choice.startup_seconds_min,
+            startup_seconds_max=choice.startup_seconds_max,
+            download_policy=choice.download_policy,
+            allow_patterns=choice.allow_patterns,
+            ignore_patterns=choice.ignore_patterns,
+            validated_platforms=choice.validated_platforms,
+            qualification_test=choice.qualification_test,
             catalog_source=choice.catalog_source,
             settings=settings,
         )
@@ -1300,19 +1407,52 @@ class SessionGateway:
         active: bool = False,
         selected: bool = False,
         recommendation: str | None = None,
+        gpu_environment: GpuEnvironment | None = None,
     ) -> dict[str, object]:
-        available = self._local_runtime_available(choice.runtime)
+        platform_id = (
+            gpu_environment.platform_id
+            if gpu_environment is not None
+            else self.config_store.load().platform_id
+        )
+        qualification = choice.qualification_for(platform_id)
+        runtime_available = self._local_runtime_available(choice.runtime)
+        resource_reason: str | None = None
+        available = runtime_available
+        if choice.runtime == "vllm" and runtime_available:
+            environment = gpu_environment or self.gpu_environment()
+            available, resource_reason = environment.assess(
+                gpu_count=choice.tensor_parallel_size,
+                gpu_memory_bytes=choice.minimum_gpu_memory_bytes,
+            )
+        if qualification == "candidate":
+            candidate_reason = "Evaluation candidate; not yet a recommended model"
+            recommendation = (
+                f"{recommendation}; {candidate_reason.lower()}"
+                if recommendation
+                else candidate_reason
+            )
+        unavailable_reason = resource_reason if resource_reason and not available else None
+        if resource_reason and available:
+            recommendation = (
+                f"{recommendation}; {resource_reason}" if recommendation else resource_reason
+            )
         reason = self._local_model_availability_reason(
             choice.runtime,
             available=available,
             recommendation=recommendation,
+            unavailable_reason=unavailable_reason,
         )
         return {
             **choice.safe_dict(),
+            "qualification": qualification,
             "active": active,
             "available": available,
             "selected": selected,
             "availability_reason": reason,
+            "recommended": (
+                qualification == "qualified"
+                and choice.model_id in self._recommended_local_model_ids
+            ),
         }
 
     @staticmethod
@@ -1321,10 +1461,11 @@ class SessionGateway:
         *,
         available: bool,
         recommendation: str | None,
+        unavailable_reason: str | None = None,
     ) -> str:
         if available:
             return recommendation or "Available on this deployment"
-        unavailable = (
+        unavailable = unavailable_reason or (
             "Requires a Heartwood NVIDIA GPU runtime"
             if runtime == "vllm"
             else "The portable CPU runtime is not available on this deployment"
@@ -1342,9 +1483,11 @@ class SessionGateway:
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
             raise ModelRepositoryError(f"unknown Heartwood-managed model: {model_id}")
-        if not self._local_runtime_available(choice.runtime):
-            reason = self._local_model_choice_dict(choice)["availability_reason"]
-            raise ModelRepositoryError(f"{choice.label} is unavailable: {reason}")
+        details = self._local_model_choice_dict(choice)
+        if not details["available"]:
+            raise ModelRepositoryError(
+                f"{choice.label} is unavailable: {details['availability_reason']}"
+            )
         return choice
 
     def _local_runtime_available(self, runtime: str) -> bool:
@@ -1427,6 +1570,24 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         context_window=selection.context_window,
         minimum_resource_envelope=selection.minimum_resource_envelope,
         recommended_resource_envelope=selection.recommended_resource_envelope,
+        license_id=selection.license_id or "Unspecified",
+        precision=selection.precision or "Unspecified",
+        tier=cast(Any, selection.tier),
+        qualification=cast(Any, selection.qualification),
+        minimum_gpu_count=selection.minimum_gpu_count,
+        minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
+        recommended_ram_bytes=selection.recommended_ram_bytes or selection.minimum_free_bytes,
+        recommended_disk_bytes=selection.recommended_disk_bytes or selection.minimum_free_bytes,
+        maximum_context_window=selection.maximum_context_window,
+        tool_call_parser=cast(Any, selection.tool_call_parser),
+        tensor_parallel_size=selection.tensor_parallel_size,
+        startup_seconds_min=selection.startup_seconds_min,
+        startup_seconds_max=selection.startup_seconds_max,
+        download_policy=selection.download_policy,
+        allow_patterns=selection.allow_patterns,
+        ignore_patterns=selection.ignore_patterns,
+        validated_platforms=selection.validated_platforms,
+        qualification_test=selection.qualification_test,
     )
     choice.validate()
     return choice

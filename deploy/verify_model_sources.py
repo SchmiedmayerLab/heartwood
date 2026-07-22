@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Verify that recommended Hugging Face model revisions still resolve exactly."""
+"""Verify that catalog Hugging Face model revisions still resolve exactly."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ModelSourceVerificationError(RuntimeError):
-    """Raised when a recommended model source cannot be verified."""
+    """Raised when a catalog model source cannot be verified."""
 
 
 class ModelSourceUnavailableError(RuntimeError):
@@ -35,7 +35,7 @@ class ModelSourceUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class ModelSource:
-    """One immutable recommended model source."""
+    """One immutable catalog model source."""
 
     model_id: str
     repository: str
@@ -53,7 +53,7 @@ JsonFetcher = Callable[[str, float], dict[str, Any]]
 
 
 def load_model_sources(source_root: Path) -> tuple[ModelSource, ...]:
-    """Load and validate every recommended model pin from the catalog."""
+    """Load and validate every model pin from the release catalog."""
     catalog_path = source_root / _SNAPSHOT_CATALOG
     with catalog_path.open("rb") as file:
         catalog = tomllib.load(file)

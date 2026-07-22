@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
 from threading import Event
@@ -273,6 +274,104 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
             "unsupported Heartwood-managed model runtime",
         ),
         (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                catalog_source="unknown",
+            ),
+            "unsupported Heartwood-managed model catalog source",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                tier="unknown",
+            ),
+            "unsupported Heartwood-managed model tier",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                qualification="unknown",
+            ),
+            "unsupported Heartwood-managed model qualification",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                display_name=" ",
+            ),
+            "display_name must not be empty",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                source_repository="invalid",
+            ),
+            "source_repository must use owner/model format",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                source_revision="main",
+            ),
+            "source_revision must be immutable",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                catalog_source="user-selected",
+                source_revision="abcdef0",
+            ),
+            "source_revision must be a resolved commit",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                source_path="../model.gguf",
+            ),
+            "source_path must be repository-relative",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                model_type="Not Normalized",
+            ),
+            "model_type must be normalized",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                size_bytes=0,
+            ),
+            "size_bytes must be positive",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                minimum_free_bytes=1,
+            ),
+            "minimum_free_bytes must cover its size",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                size_bytes=2,
+                minimum_free_bytes=1,
+            ),
+            "minimum_free_bytes must cover its size",
+        ),
+        (
             LocalModelSelection(artifact_id="model", path=".heartwood/models"),
             r"under \.heartwood/models",
         ),
@@ -287,6 +386,139 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
                 context_window=1_048_577,
             ),
             "between 2048 and 1048576",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                maximum_context_window=2047,
+            ),
+            "maximum context window is invalid",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                minimum_gpu_count=-1,
+            ),
+            "GPU requirements cannot be negative",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                minimum_gpu_memory_bytes=-1,
+            ),
+            "GPU requirements cannot be negative",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                tensor_parallel_size=0,
+            ),
+            "tensor parallelism must be positive",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                startup_seconds_min=0,
+            ),
+            "startup estimate is invalid",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                startup_seconds_min=10,
+                startup_seconds_max=9,
+            ),
+            "startup estimate is invalid",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                recommended_ram_bytes=0,
+            ),
+            "recommended_ram_bytes must be positive",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                recommended_disk_bytes=0,
+            ),
+            "recommended_disk_bytes must be positive",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                tool_call_parser="unknown",
+            ),
+            "unsupported Heartwood-managed tool-call parser",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                runtime="vllm",
+                minimum_gpu_count=1,
+                minimum_gpu_memory_bytes=1,
+            ),
+            "vLLM model runtime metadata is incomplete",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                runtime="llama-cpp",
+                minimum_gpu_count=1,
+            ),
+            "llama.cpp models cannot declare vLLM GPU settings",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                license_id=" ",
+            ),
+            "license_id must not be empty",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                artifact_sha256="invalid",
+            ),
+            "artifact_sha256 must be a SHA-256 digest",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                catalog_source="user-selected",
+            ),
+            "provenance is incomplete",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                catalog_source="user-selected",
+                display_name="Model",
+                source_repository="example/model",
+                source_revision="a" * 40,
+                source_path="model.gguf",
+                size_bytes=1,
+                minimum_free_bytes=1,
+                license_posture="Apache-2.0",
+                minimum_resource_envelope="Minimum",
+                recommended_resource_envelope="Recommended",
+            ),
+            "integrity metadata is incomplete",
         ),
     ],
 )
@@ -371,6 +603,70 @@ def test_project_config_parser_rejects_unsupported_structure(tmp_path: Path) -> 
         project_config_from_mapping({**valid, "model_source": []}, project=project)
     with pytest.raises(ProjectConfigError, match="local_model must be a table"):
         project_config_from_mapping({**valid, "local_model": []}, project=project)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("unknown", "value", "local_model contains unsupported fields"),
+        ("artifact_id", "", "artifact_id must be a non-empty string"),
+        ("display_name", [], "display_name must be a non-empty string"),
+        ("size_bytes", True, "size_bytes must be a positive integer"),
+        ("minimum_gpu_count", True, "minimum_gpu_count must be a nonnegative integer"),
+        ("allow_patterns", [""], "allow_patterns must be an array"),
+    ],
+)
+def test_project_config_parser_rejects_invalid_local_model_fields(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    project = ProjectContext(tmp_path)
+    config = replace(
+        _default_config(project),
+        local_model=LocalModelSelection(
+            artifact_id="model",
+            path=".heartwood/models/model",
+        ),
+    )
+    mapping = deepcopy(_config_mapping(config))
+    local_model = mapping["local_model"]
+    assert isinstance(local_model, dict)
+    local_model[field] = value
+
+    with pytest.raises(ProjectConfigError, match=message):
+        project_config_from_mapping(mapping, project=project)
+
+
+def test_project_config_parser_defaults_optional_local_model_collections(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    config = replace(
+        _default_config(project),
+        local_model=LocalModelSelection(
+            artifact_id="model",
+            path=".heartwood/models/model",
+        ),
+    )
+    mapping = deepcopy(_config_mapping(config))
+    local_model = mapping["local_model"]
+    assert isinstance(local_model, dict)
+    for field in (
+        "minimum_gpu_count",
+        "minimum_gpu_memory_bytes",
+        "allow_patterns",
+        "ignore_patterns",
+        "validated_platforms",
+        "catalog_source",
+    ):
+        local_model.pop(field, None)
+
+    parsed = project_config_from_mapping(mapping, project=project)
+
+    assert parsed.local_model is not None
+    assert parsed.local_model.minimum_gpu_count == 0
+    assert parsed.local_model.allow_patterns == ()
+    assert parsed.local_model.catalog_source == "catalog"
 
 
 def test_project_config_parser_rejects_non_platform_connection(tmp_path: Path) -> None:

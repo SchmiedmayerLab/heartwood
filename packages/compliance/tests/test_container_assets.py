@@ -59,7 +59,12 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
         assert digest in llama_installer
     assert "/etc/ld.so.conf.d/heartwood-llama.conf" in dockerfile
     assert "ldconfig" in dockerfile
-    assert 'chown -R "${HEARTWOOD_RUNTIME_USER}:${HEARTWOOD_RUNTIME_USER}"' in dockerfile
+    assert 'runtime_group="$(id -gn "${HEARTWOOD_RUNTIME_USER}")"' in dockerfile
+    assert '--owner="${HEARTWOOD_RUNTIME_USER}" --group="${runtime_group}"' in dockerfile
+    assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/flashinfer"' in dockerfile
+    assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/huggingface"' in dockerfile
+    assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/vllm"' in dockerfile
+    assert 'chown -R "${HEARTWOOD_RUNTIME_USER}:${runtime_group}"' in dockerfile
     assert "COPY --chown=heartwood:heartwood" not in dockerfile
     assert dockerfile.index("uv sync --locked --no-dev --all-extras") < dockerfile.index(
         "USER ${HEARTWOOD_RUNTIME_USER}"
@@ -138,6 +143,8 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR}" in dockerfile
     assert "HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM}" in dockerfile
     assert "HEARTWOOD_PLATFORM_HOME=${HEARTWOOD_RUNTIME_HOME}" in dockerfile
+    assert "install -d --mode=0755 \\" in dockerfile
+    assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/flashinfer"' in dockerfile
     assert 'dockerfile = "images/Dockerfile"' in bake
     assert 'target = "runtime-image"' in bake
     assert 'target = "platform-runtime-image"' in bake
@@ -167,10 +174,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert terra["gpu_runtime_tag"] == "edge-terra-gpu-nvidia"
     assert terra["commit_runtime_tag"] == "sha-<git-sha>-terra"
     assert terra["commit_gpu_runtime_tag"] == "sha-<git-sha>-terra-gpu-nvidia"
-    assert terra["gpu_runtime"] == (
-        "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.10.1.1/"
-        "vllm-0.10.1.1%2Bcu118-cp38-abi3-manylinux1_x86_64.whl"
-    )
+    assert terra["gpu_runtime"] == "vLLM 0.25.1+cu129 with PyTorch 2.11.0+cu129"
     assert terra["bundles_model_artifact"] is False
     assert terra["supported_platforms"] == ["linux/amd64"]
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
@@ -213,7 +217,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0-beta.5"' in bake
+    assert 'default = "0.2.0-beta.6"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
 
 
@@ -274,11 +278,11 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     installer = _read("images/gpu/install_runtime.sh")
     launcher = _read("images/gpu/start_vllm.sh")
     verifier = _read("images/gpu/verify_runtime.sh")
-    compatibility = _read("images/gpu/heartwood_vllm.py")
-    sitecustomize = _read("images/gpu/sitecustomize.py")
+    runtime_contract = _toml("images/gpu/compatibility.toml")
+    runtime_verifier = _read("images/gpu/verify_vllm.py")
     executable = _read("images/gpu/heartwood-vllm")
     lock = _read("images/gpu/vllm-requirements.txt")
-    overrides = _read("images/gpu/vllm-overrides.txt")
+    exclusions = _read("images/gpu/vllm-exclusions.txt")
 
     assert "images/gpu/install_runtime.sh" in dockerfile
     assert "--target /opt/heartwood-vllm --python 3.12" in dockerfile
@@ -296,75 +300,59 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert '"${uv}" venv "${target}"' in installer
     assert '"${uv}" pip sync' in installer
     assert '"${runtime_sources}/vllm-requirements.txt"' in installer
-    assert '"${runtime_sources}/heartwood_vllm.py"' in installer
-    assert '"${runtime_sources}/sitecustomize.py"' in installer
+    assert '"${runtime_sources}/verify_vllm.py"' in installer
+    assert '"${runtime_sources}/compatibility.toml"' in installer
     assert '"${runtime_sources}/heartwood-vllm"' in installer
-    assert "vllm-0.10.1.1%2Bcu118" in lock
-    assert "certifi-2026.6.17-py3-none-any.whl" in lock
-    assert "certifi==2022.12.7" not in lock
-    assert "ray==2.55.0" in lock
-    assert "setuptools==78.1.1" in lock
-    assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
-    assert "torchaudio-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
-    assert "torchvision-0.22.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
-    assert "xformers-0.0.31-cp39-abi3-manylinux_2_28_x86_64.whl" in lock
-    assert "transformers==5.5.0" in lock
-    assert "requests==2.34.2" in lock
-    assert "urllib3==2.7.0" in lock
-    assert "xgrammar==0.1.32" in lock
-    assert "GHSA-7rgv-gqhr-fxg3" in overrides
-    assert "xgrammar==0.1.32" in overrides
-    assert "idna==3.18" in lock
-    assert "GHSA-65pc-fj4g-8rjx" in overrides
-    assert "idna==3.18" in overrides
-    assert "nvidia-cuda-runtime-cu11==11.8.89" in lock
-    assert "--extra-index-url https://download.pytorch.org/whl/cu118" not in lock
-    assert "nvidia-cuda-runtime-cu13" not in lock
+    assert "vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl" in lock
+    assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "nvidia-cuda-runtime-cu12==12.9.79" in lock
+    assert "flashinfer-python==0.6.13" in lock
+    assert "xgrammar==0.2.3" in lock
+    assert "--extra-index-url" not in lock
+    for package in (
+        "cuda-tile==",
+        "nvidia-cuda-crt==",
+        "nvidia-cuda-nvcc==",
+        "nvidia-cuda-runtime==",
+        "nvidia-cuda-tileiras==",
+        "nvidia-nvvm==",
+    ):
+        assert package not in lock
+        assert package.removesuffix("==") in exclusions
     assert "--hash=sha256:" in lock
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
-    assert "VLLM_USE_FLASHINFER_SAMPLER" in launcher
+    assert 'flashinfer_sampler="${HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER:-0}"' in launcher
+    assert 'export VLLM_USE_FLASHINFER_SAMPLER="${flashinfer_sampler}"' in launcher
     assert "huggingface.co" not in launcher
     assert "/opt/heartwood-vllm/bin/heartwood-vllm" in launcher
     assert "/opt/heartwood-vllm/bin/python" in verifier
     assert "__heartwood_verify_runtime__" in verifier
-    assert 'torch.version.cuda == "11.8"' in verifier
+    assert 'torch.version.cuda == "12.9"' in verifier
     assert "-name '*.gguf' -o -name '*.safetensors'" in verifier
     assert "-name '*.bin' -size +10M" in verifier
     assert "compressed_tensors/transform/utils/hadamards.safetensors" in verifier
     assert "verify_no_model_artifacts /opt /home" in verifier
     assert "GPU runtime image contains a model artifact" in verifier
-    assert 'cls.__module__.startswith("vllm.")' in compatibility
-    assert "PreTrainedConfig.__init_subclass__ = classmethod" in compatibility
-    assert "_heartwood_compatibility_applied" in compatibility
-    assert 'hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended")' in compatibility
-    assert "self.added_tokens_decoder.values()" in compatibility
-    assert 'ModelRegistry.models.get("Qwen2ForCausalLM")' in compatibility
-    assert "registered_model.inspect_model_cls()" in compatibility
-    assert "get_cached_tokenizer" in compatibility
-    assert "tokenizer_check = subprocess.run" in compatibility
-    assert "activate_runtime_boundary" in sitecustomize
-    assert 'export PYTHONPATH="${runtime_bin}"' in executable
-    assert "${PYTHONPATH" not in executable
-    assert '_VULNERABLE_CONFIG_TYPE = "Llama_Nemotron_Nano_VL"' in compatibility
-    assert "_CONFIG_REGISTRY.pop(_VULNERABLE_CONFIG_TYPE, None)" in compatibility
-    assert (
-        "vulnerable_module.get_class_from_dynamic_module = reject_dynamic_loader" in compatibility
-    )
-    assert "GHSA-8fr4-5q9j-m8gm" in compatibility
-    assert "GHSA-7rgv-gqhr-fxg3" in compatibility
-    assert 'version("xgrammar") != "0.1.32"' in compatibility
-    assert "GHSA-65pc-fj4g-8rjx" in compatibility
-    assert 'version("idna") != "3.18"' in compatibility
-    assert "vllm.v1.structured_output import backend_xgrammar" in compatibility
-    assert "from vllm.transformers_utils import config as config_module" in compatibility
-    assert "vllm.transformers_utils.tokenizer" in compatibility
-    assert "vllm.model_executor.models.registry import ModelRegistry" in compatibility
-    assert 'os.environ["PYTHONPATH"] = str(runtime_bin)' in compatibility
-    assert "activate_runtime_boundary()" in sitecustomize
-    assert '"model_type": "qwen2"' in compatibility
-    assert "trust_remote_code=False" in compatibility
+    assert "PYTHONPATH" not in executable
+    assert runtime_contract["runtime"] == {
+        "python_version": "3.12",
+        "vllm_version": "0.25.1+cu129",
+        "pytorch_version": "2.11.0+cu129",
+        "torchaudio_version": "2.11.0+cu129",
+        "torchvision_version": "0.26.0+cu129",
+        "cuda_version": "12.9",
+        "minimum_driver_version": "525.60.13",
+        "cuda_13_qualified": False,
+    }
+    assert "ToolParserManager.list_registered" in runtime_verifier
+    assert 'import_module("flashinfer")' in runtime_verifier
+    assert "_FORBIDDEN_CUDA_13_PACKAGES" in runtime_verifier
+    assert not (_repo_root() / "images/gpu/heartwood_vllm.py").exists()
+    assert not (_repo_root() / "images/gpu/sitecustomize.py").exists()
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
     assert os.access(_repo_root() / "images/gpu/heartwood-vllm", os.X_OK)
     assert os.access(_repo_root() / "images/gpu/install_runtime.sh", os.X_OK)
@@ -427,9 +415,14 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     model = tmp_path / "model"
     model.mkdir()
     arguments = tmp_path / "arguments.txt"
+    environment = tmp_path / "environment.txt"
     executable = tmp_path / "vllm"
     executable.write_text(
-        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {arguments}\n",
+        (
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$@\" > {arguments}\n"
+            f"printf '%s\\n' \"$VLLM_USE_FLASHINFER_SAMPLER\" > {environment}\n"
+        ),
         encoding="utf-8",
     )
     executable.chmod(0o755)
@@ -449,10 +442,74 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert values[values.index("--host") + 1] == "127.0.0.1"
     assert values[values.index("--served-model-name") + 1] == "test-model"
     assert values[values.index("--tool-call-parser") + 1] == "hermes"
+    assert environment.read_text(encoding="utf-8") == "0\n"
+
+    env["HEARTWOOD_VLLM_ENFORCE_EAGER"] = "1"
+    eager = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert eager.returncode == 0
+    assert arguments.read_text(encoding="utf-8").splitlines()[-1] == "--enforce-eager"
+
+    env["HEARTWOOD_VLLM_ENFORCE_EAGER"] = "invalid"
+    invalid = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid.returncode == 64
+
+    env.pop("HEARTWOOD_VLLM_ENFORCE_EAGER")
+    env["HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER"] = "1"
+    enabled_sampler = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert enabled_sampler.returncode == 0
+    assert environment.read_text(encoding="utf-8") == "1\n"
+
+    env["HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER"] = "invalid"
+    invalid_sampler = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid_sampler.returncode == 64
+
+    env.pop("HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER")
+    env["HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE"] = "0"
+    invalid_tensor_parallel = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid_tensor_parallel.returncode == 64
+
+    env["HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE"] = "2"
+    env["HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION"] = "0"
+    invalid_memory_utilization = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid_memory_utilization.returncode == 64
+
+    env["HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION"] = "1.0"
+    valid_resources = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert valid_resources.returncode == 0
+    values = arguments.read_text(encoding="utf-8").splitlines()
+    assert values[values.index("--tensor-parallel-size") + 1] == "2"
+    assert values[values.index("--gpu-memory-utilization") + 1] == "1.0"
 
     env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
     denied = subprocess.run(["bash", str(script)], env=env, check=False)
     assert denied.returncode == 64
+
+
+def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
+    script = _read("images/gpu/coding_agent_e2e.sh")
+    coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
+
+    assert "command -v setsid" in script
+    assert 'setsid bash "${script_dir}/start_vllm.sh"' in script
+    assert 'kill -TERM -- "-${runtime_pid}"' in script
+    assert 'kill -KILL -- "-${runtime_pid}"' in script
+    system_python = re.compile(
+        r"(?:^|[;&|]\s*|\bexec\s+)(?:/[^\s;|&]+/)?python(?:3(?:\.\d+)?)?\s",
+        re.MULTILINE,
+    )
+
+    assert 'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in script
+    assert 'configuration="$("${heartwood_python}"' in script
+    assert 'HEARTWOOD_VLLM_ROOT="${vllm_root}"' in script
+    assert '"${script_dir}/verify_runtime.sh" "${vllm_root}"' in script
+    assert system_python.search(script) is None
+    assert (
+        'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in coding_agent
+    )
+    assert 'heartwood_cli="${HEARTWOOD_CLI:-${runtime_root}/.venv/bin/heartwood}"' in coding_agent
+    assert 'inference="${project}/qualification-inference.json"' in coding_agent
+    assert 'mkdir -p "${project}/input"' in coding_agent
+    assert system_python.search(coding_agent) is None
 
 
 def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
@@ -481,7 +538,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "images/gpu/vllm-requirements.txt" not in bootstrap
     assert '"${root}/vllm/bin/python"' in bootstrap
     assert "import torch, vllm" in runtime_verifier
-    assert "VLLM_USE_FLASHINFER_SAMPLER=0" in bootstrap
+    assert "VLLM_USE_FLASHINFER_SAMPLER" not in bootstrap
     assert "ffmpeg" not in bootstrap_environment
     assert "  - tmux" in bootstrap_environment
     assert "SLURM_JOB_ID" in launch_runtime
@@ -497,7 +554,8 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert '"--model-source"' in launch_runtime
     assert '"heartwood"' in launch_runtime
     assert "127.0.0.1:8765/v1/models" in launch_runtime
-    assert '"sinfo", "--noheader", "--format=%P|%G|%a"' in launch_runtime
+    gpu_environment = _read("packages/gateway/src/heartwood/gateway/_gpu_environment.py")
+    assert '"sinfo", "--noheader", "--format=%P|%G|%a|%m|%c"' in gpu_environment
     assert "_SLURM_EXPORTED_ENVIRONMENT" in launch_runtime
     assert "--export=ALL" not in launch_runtime
     assert environment["flavors"]["runtime_gpu_nvidia"]["public_default"] is False
@@ -634,6 +692,9 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     pull_request_build = workflow.split("  pull-request-build:\n", maxsplit=1)[1].split(
         "\n  build:\n", maxsplit=1
     )[0]
+    qualification = workflow.split("  gpu-qualification:\n", maxsplit=1)[1].split(
+        "\n  pull-request-build:\n", maxsplit=1
+    )[0]
     main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
 
     assert "runtime-gpu-nvidia" in workflow
@@ -648,6 +709,16 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "attest=type=sbom,disabled=true" in pull_request_build
     assert "attest=type=provenance,disabled=true" in pull_request_build
     assert "Promote GPU Channel Tags" in workflow
+    assert "publish_commit_candidate:" in workflow
+    assert "Publish validated immutable GPU tags for this commit" in workflow
+    assert "qualification_configuration:" in workflow
+    assert "used only when GPU qualification is enabled" in workflow
+    assert "inputs.qualification_configuration" in qualification
+    assert "inputs.qualification_configuration" not in pull_request_build
+    assert "inputs.qualification_configuration" not in main_build
+    assert "github.event_name == 'workflow_dispatch' && inputs.publish_commit_candidate" in (
+        main_build
+    )
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
@@ -662,12 +733,31 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "terra_image_smoke.sh" in main_build
     assert "offline_stack_smoke.sh" in main_build
     assert "immutable GPU commit tag does not match" in workflow
+    assert "sha-${GIT_SHA}-${COMMIT_SUFFIX}" in main_build
+    assert "edge-gpu-nvidia" not in main_build
+    assert "edge-terra-gpu-nvidia" not in main_build
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
     assert "promoted ${channel} digest does not match" in workflow
-    assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v" in dependency_review
-    assert "GHSA-rrmf-rvhw-rf47" in dependency_review
-    assert "GHSA-8fr4-5q9j-m8gm" in dependency_review
-    assert "upstream PR 28126" in dependency_review
+    assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v, GHSA-rrmf-rvhw-rf47" in dependency_review
+    assert "GHSA-8fr4-5q9j-m8gm" not in dependency_review
+
+
+def test_gpu_qualification_workflow_offers_every_candidate_configuration() -> None:
+    workflow = _read(".github/workflows/gpu-container-image.yml")
+    matrix = _toml("images/gpu/compatibility.toml")
+    configuration_input = workflow.split("      qualification_configuration:\n", maxsplit=1)[
+        1
+    ].split("      qualification_runner:\n", maxsplit=1)[0]
+    options = {
+        line.removeprefix("- ")
+        for line in (item.strip() for item in configuration_input.splitlines())
+        if line.startswith("- ")
+    }
+    configuration_ids = {
+        configuration["configuration_id"] for configuration in matrix["configurations"]
+    }
+
+    assert options == configuration_ids
 
 
 def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
@@ -693,11 +783,11 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     assert unexpected == []
     text = lock.read_text(encoding="utf-8")
     assert "diskcache==5.6.3" in text
-    assert "vllm-0.10.1.1%2Bcu118" in text
-    assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in text
-    assert "vllm-0.10.1.1%2Bcu118" in input_file.read_text(encoding="utf-8")
-    assert "torch-2.7.1%2Bcu118-cp312-cp312-manylinux_2_28_x86_64.whl" in input_file.read_text(
-        encoding="utf-8"
+    assert "vllm-0.25.1%2Bcu129" in text
+    assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in text
+    assert "vllm-0.25.1%2Bcu129" in input_file.read_text(encoding="utf-8")
+    assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in (
+        input_file.read_text(encoding="utf-8")
     )
 
 
@@ -706,6 +796,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     workflow = _read(".github/workflows/container-smoke.yml")
     smoke = _read("images/generic/scripts/offline_stack_smoke.sh")
     capable = _read("images/generic/scripts/capable_model_e2e.sh")
+    coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
     model_stub = _read("images/generic/scripts/local_model_stub.py")
 
     assert "network_mode: none" in compose
@@ -719,9 +810,11 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
     assert "HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project" in smoke
     assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
-    assert "capable-model artifact must be outside the disposable test project" in capable
+    assert "coding-agent model must be outside the disposable test project" in coding_agent
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
-    assert 'cohort_path="${project}/cohort-summary.json"' in capable
+    assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
+    assert "Checking direct model inference" in coding_agent
+    assert "verify_coding_agent_e2e.py" in coding_agent
     assert "/tmp/heartwood-model-cache/.heartwood/models:/models:ro" in workflow
     assert "models refresh heartwood" in smoke
     assert "models connect heartwood heartwood-managed-runtime" in smoke
@@ -771,14 +864,25 @@ def test_local_model_stub_preserves_explicit_action_risk() -> None:
 
     assert arguments["security_risk"] == "MEDIUM"
 
+    prompt_call = module._prompt_terminal_call(
+        "printf heartwood-openhands-action",
+        "run a bounded offline smoke command",
+    )
+    assert prompt_call.startswith("<function=terminal>\n")
+    assert "<parameter=command>printf heartwood-openhands-action</parameter>" in prompt_call
+    assert "<parameter=security_risk>LOW</parameter>" in prompt_call
+    assert prompt_call.endswith("</function>")
+
 
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     scripts = (
         "images/generic/scripts/capable_model_e2e.sh",
+        "images/generic/scripts/coding_agent_e2e.sh",
         "images/generic/scripts/offline_stack_smoke.sh",
         "images/generic/scripts/container_persistence_smoke.sh",
         "images/generic/scripts/local_inference_smoke.sh",
         "images/generic/scripts/start_local_runtime.sh",
+        "images/gpu/coding_agent_e2e.sh",
         "images/platform/scripts/terra_image_smoke.sh",
         "images/platform/scripts/terra_jupyter_contract_smoke.sh",
         "images/platform/scripts/terra_jupyter_launch_smoke.sh",
@@ -853,6 +957,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     smoke = _read(".github/workflows/container-smoke.yml")
     compose = _read("images/generic/compose.yaml")
     capable_model = _read("images/generic/scripts/capable_model_e2e.sh")
+    coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
+    qualification = _read("images/generic/scripts/verify_coding_agent_e2e.py")
 
     assert "packages: write" in publish
     assert "push-by-digest=true" in publish
@@ -949,22 +1055,25 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
         "images/generic/scripts/local_inference_smoke.sh"
     )
     assert "run_capable_model" in smoke
-    assert "github.event_name == 'workflow_dispatch'" in smoke
+    assert "if: inputs.run_capable_model" in smoke
+    assert "run_capable_model: ${{ github.event_name != 'pull_request' }}" in _read(
+        ".github/workflows/main-validation.yml"
+    )
     assert "qwen25-7b-instruct-q4_k_m" in smoke
     assert "capable_model_e2e.sh" in smoke
     assert "--network none --read-only" in smoke
     assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
-    assert "not 1 <= len(terminal_executions) <= 3" in capable_model
-    assert "not 1 <= len(tool_executions) <= 3" in capable_model
-    assert "&& cat cohort-summary.json" in capable_model
+    assert "not 1 <= len(terminal_executions) <= 3" in qualification
+    assert "not 1 <= len(tool_executions) <= 3" in qualification
+    assert "&& cat cohort-summary.json" in coding_agent
     assert 'f"http://127.0.0.1:{port}/health"' in capable_model
     assert "llama.cpp runtime log (last 200 lines)" in capable_model
-    assert "cohort_path.is_file()" in capable_model
+    assert "artifact_path.read_text" in qualification
     assert "--jinja" in _read("images/generic/scripts/start_local_runtime.sh")
-    assert 'summary["source_participant_count"] != 24' in capable_model
-    assert 'summary["participant_count"] != 20' in capable_model
-    assert 'checks["aggregate_only_output"] is not True' in capable_model
+    assert '"source_participant_count": 24' in qualification
+    assert '"participant_count": 20' in qualification
+    assert 'cohort["quality_checks"].get("aggregate_only_output") is not True' in qualification
 
 
 def test_buildx_metadata_reader_handles_runtime_target_names(tmp_path: Path) -> None:

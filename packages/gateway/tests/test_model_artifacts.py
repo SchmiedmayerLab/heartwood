@@ -168,7 +168,7 @@ def test_background_manager_reports_ready_download(
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
     installed = tmp_path / "models" / artifact.artifact_id / "model.gguf"
@@ -213,7 +213,7 @@ def test_background_manager_exposes_in_progress_byte_count(
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
     started = Event()
@@ -261,7 +261,7 @@ def test_background_manager_reports_actionable_safe_errors(
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
 
@@ -308,8 +308,25 @@ def test_background_manager_downloads_and_selects_a_snapshot(
         source_revision="a" * 40,
         expected_size_bytes=7,
         minimum_free_bytes=7,
+        license_id="Apache-2.0",
         license_posture="Synthetic",
         model_alias="Test snapshot",
+        precision="Synthetic",
+        tier="standard",
+        qualification="candidate",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=1,
+        recommended_ram_bytes=1,
+        recommended_disk_bytes=7,
+        maximum_context_window=32_768,
+        tool_call_parser="hermes",
+        tensor_parallel_size=1,
+        startup_seconds_min=1,
+        startup_seconds_max=2,
+        download_policy="synthetic",
+        allow_patterns=("*.json", "*.safetensors"),
+        ignore_patterns=("*.bin",),
+        context_window=32_768,
     )
     installed = tmp_path / "models" / snapshot.snapshot_id
 
@@ -328,11 +345,11 @@ def test_background_manager_downloads_and_selects_a_snapshot(
     selected: list[tuple[str, Path, str]] = []
     manager = LocalModelDownloadManager(
         artifact_catalog=ModelArtifactCatalog(
-            schema_version="heartwood.local-model-catalog.v1",
+            schema_version="heartwood.local-model-catalog.v2",
             artifacts=(),
         ),
         snapshot_catalog=ModelSnapshotCatalog(
-            schema_version="heartwood.model-snapshot-catalog.v1",
+            schema_version="heartwood.model-snapshot-catalog.v2",
             snapshots=(snapshot,),
         ),
         cache_dir=tmp_path / "models",
@@ -376,7 +393,7 @@ def test_artifact_metadata_rejects_unsafe_values(
 def test_catalog_lookup_and_safe_serialization() -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
 
@@ -398,7 +415,7 @@ def test_catalog_loader_rejects_malformed_catalogs_and_manifests(tmp_path: Path)
         load_model_artifact_catalog(catalog_path)
 
     catalog_path.write_text(
-        'schema_version = "heartwood.local-model-catalog.v1"\n',
+        'schema_version = "heartwood.local-model-catalog.v2"\n',
         encoding="utf-8",
     )
     with pytest.raises(ModelArtifactError, match="models table"):
@@ -407,7 +424,7 @@ def test_catalog_loader_rejects_malformed_catalogs_and_manifests(tmp_path: Path)
     catalog_path.write_text(
         "\n".join(
             (
-                'schema_version = "heartwood.local-model-catalog.v1"',
+                'schema_version = "heartwood.local-model-catalog.v2"',
                 "[models.invalid]",
                 'artifact_manifest = "manifest.toml"',
             )
@@ -427,7 +444,7 @@ def test_catalog_loader_rejects_duplicate_artifact_ids(tmp_path: Path) -> None:
     catalog_path.write_text(
         "\n".join(
             (
-                'schema_version = "heartwood.local-model-catalog.v1"',
+                'schema_version = "heartwood.local-model-catalog.v2"',
                 "[models.one]",
                 'artifact_manifest = "one.toml"',
                 "[models.ignored]",
@@ -547,7 +564,7 @@ def _artifact(content: bytes) -> ModelArtifact:
 
 def _empty_snapshot_catalog() -> ModelSnapshotCatalog:
     return ModelSnapshotCatalog(
-        schema_version="heartwood.model-snapshot-catalog.v1",
+        schema_version="heartwood.model-snapshot-catalog.v2",
         snapshots=(),
     )
 

@@ -27,22 +27,47 @@ Terra does not apply those changes to an existing environment; create a new envi
 Deleting the compute environment and deleting its persistent disk are separate choices, so retain the disk when it contains project files you still need.
 See Terra's [GPU Cloud Environment guide](https://support.terra.bio/hc/en-us/articles/4403006001947-Getting-started-with-GPUs-in-a-Cloud-Environment).
 
-Open the workspace's Jupyter Cloud Environment settings, select **Customize**, and choose **Custom Environment** under application configuration.
-Enter one image:
+Open the workspace's Jupyter Cloud Environment settings and configure the environment in this order:
+
+1. Select **Customize**, then choose **Custom Environment** under application configuration.
+2. Select the CPU and memory combination from the table below.
+3. Enter the corresponding container image.
+4. Enable the GPU, when required, and verify the GPU type and count.
+5. Set auto-pause and review every value before selecting **Create**.
+
+Terra can reset the image or GPU selection when the CPU choice changes, so set compute resources first and verify the complete form before creation.
+
+Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 52 GB RAM, 75 GB persistent disk |
-| Heartwood-managed NVIDIA GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 8 CPUs, 52 GB RAM, one T4-class GPU or better, 100 GB persistent disk |
+| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
+| Lower-cost GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
+| Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Four-GPU model evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
 CPU inference is portable but can be too slow for an interactive coding workflow.
 
 These are starting points rather than universal requirements.
+Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
+The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
+The GPU paths expose one release-pinned Terra recommendation and additional evaluation candidates.
+The one-T4 candidates are Qwen2.5 Coder 7B and 14B AWQ.
+The qualified two-T4 recommendation is Qwen3 Coder 30B W4A16 AWQ with a conservative 18,432-token context.
+The four-T4 candidate is Qwen2.5 Coder 32B AWQ; the Qwen3 W4A16 quantization cannot be sharded four ways.
+Four T4 GPUs do not make the catalog's Qwen3 Coder 30B FP8 or GPT-OSS MXFP4 snapshots compatible, so Heartwood rejects those combinations before startup.
+Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
+It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
+For the first model download and startup, set auto-pause to at least 120 minutes; image creation, model verification, and inference startup can each take several minutes without terminal output from the model itself.
+After setup is complete, shorten auto-pause to match the normal research workflow.
+
 Heartwood inspects model size and available memory before launch, chooses a context capacity with response headroom, and warns when the selected compute is below its conservative estimate.
-Larger GPU memory can enable context capacities above 32K when the model supports them.
+On a 16 GB T4, Heartwood uses eager vLLM execution to avoid the additional GPU-memory peak from CUDA graph capture.
+Larger GPU memory can enable context capacities above 32K when the model supports them, but increasing context also increases GPU-memory use and response latency.
+See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for download and resource estimates and [GPU Compatibility](../reference/gpu-compatibility.md) for exact runtime combinations.
 
 Retain the persistent disk when replacing compute and copy valuable results to workspace storage.
 See [Starting and Customizing Your Jupyter App](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app).
@@ -93,11 +118,18 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
-For managed GPU inference, start with the recommended Qwen2.5 7B AWQ model shown by Heartwood.
-You can instead enter another public Hugging Face repository; Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
+For managed GPU inference on one T4, start with the **Powerful** Qwen2.5 Coder 14B AWQ candidate.
+With two or more T4 GPUs, start with the qualified **Powerful** Qwen3 Coder 30B W4A16 AWQ recommendation.
+Choose the **Standard** 7B Qwen2.5 candidate when you prefer a smaller download and lower memory pressure.
+You can instead choose **Other Hugging Face model** and enter another public repository.
+Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
+The pinned 14B AWQ snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
+The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 16.8 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
+The pinned Qwen2.5 Coder 32B AWQ snapshot downloads about 18.0 GiB and remains an evaluation candidate until its tool-calling path passes end-to-end.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
-The first inference startup can take several minutes while vLLM loads the model and prepares GPU memory.
+Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
+Depending on the model and persistent-disk throughput, the first verification and inference startup is planned for approximately 2-15 minutes while Heartwood verifies the snapshot and vLLM prepares GPU memory.
 Heartwood reports the active stage, elapsed time, selected context capacity, and memory assessment while you wait.
 
 Use `heartwood --plain` when the full-screen terminal is not rendered correctly.
@@ -148,10 +180,13 @@ Deleting the persistent disk removes `.heartwood/` and project files stored only
 ## Troubleshooting Terra
 
 - If Jupyter returns **404**, open Jupyter from the Terra workspace rather than using a guessed host path.
+- If creation fails with `ZONE_RESOURCE_POOL_EXHAUSTED`, the requested Google Cloud resources are temporarily unavailable in Terra's default zone; the container has not started. Delete only the failed Cloud Environment, retain its persistent disk, and retry later. Terra also documents an [advanced Swagger API procedure](https://support.terra.bio/hc/en-us/articles/4403307463067-How-to-create-a-custom-Cloud-Environment-with-the-Swagger-API) for selecting another zone; use it only when you are comfortable creating and tracking a Cloud Environment outside the standard form.
 - If a Heartwood browser URL returns **401** or **404**, use the terminal or notebook interface; browser access is not supported on Terra.
 - If `import heartwood` fails in a notebook, switch the notebook kernel to **Python 3 (Heartwood)** and restart the kernel.
 - If a model download stops, rerun Heartwood from the same project; verified files in `.heartwood/models/` are reused.
 - If model startup is slow or fails, compare the printed model plan with attached RAM, GPU memory, and persistent-disk space, then inspect `.heartwood/logs/local-model.log` from the same project.
+- If Heartwood reports an unsupported P4, P100, or V100, delete and recreate the Cloud Environment with a T4 while retaining the persistent disk; do not replace the released vLLM or PyTorch packages in place.
+- If the GPU is not detected, confirm that the GPU image and GPU were selected together, then run `nvidia-smi` and `heartwood doctor` from the project terminal.
 - If Terra rejects the image during auto-detection, confirm that the tag ends in `-terra` or `-terra-gpu-nvidia`; these tags use the single-platform manifest format required by Terra's Leonardo service.
 - If `heartwood --version` does not match the requested image tag, replace the Cloud Environment while retaining the persistent disk; resuming an existing environment does not update its image.
 - Run `heartwood doctor` for stable `HW-TERRA-*` recovery guidance.

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import asdict, dataclass
+from fnmatch import fnmatchcase
 from importlib import import_module
 from pathlib import PurePosixPath
 from typing import Literal, Protocol, cast
@@ -27,24 +28,36 @@ from heartwood.gateway._model_identity import (
     is_immutable_revision,
     is_resolved_revision,
 )
-from heartwood.gateway._model_snapshots import ModelSnapshot
+from heartwood.gateway._model_snapshots import (
+    ModelQualification,
+    ModelSnapshot,
+    ModelTier,
+    ToolCallParser,
+)
 
 type LocalModelRuntime = Literal["llama-cpp", "vllm"]
-type LocalModelCatalogSource = Literal["recommended", "user-selected"]
+type LocalModelCatalogSource = Literal["catalog", "user-selected"]
 
 _SPLIT_GGUF = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.IGNORECASE)
 _SAFETENSORS_WEIGHTS = re.compile(
     r"^model(?:-\d{5}-of-\d{5})?\.safetensors(?:\.index\.json)?$",
     re.IGNORECASE,
 )
-_PYTORCH_WEIGHTS = re.compile(
-    r"^pytorch_model(?:-\d{5}-of-\d{5})?\.bin(?:\.index\.json)?$",
-    re.IGNORECASE,
-)
 _ISSUE_URL = "https://github.com/SchmiedmayerLab/heartwood/issues/new/choose"
 _GGUF_PREFERENCE = ("q4_k_m", "q5_k_m", "q4_k_s", "q5_k_s", "q8_0")
-_HERMES_MODEL_TYPES = {"qwen2", "qwen3"}
+_HERMES_MODEL_TYPES = {"qwen2", "qwen3", "qwen3_moe", "qwen3_next"}
 _TEXT_GENERATION_PIPELINES = {"conversational", "text-generation"}
+_SNAPSHOT_ALLOW_PATTERNS = (
+    "*.json",
+    "*.jinja",
+    "*.model",
+    "*.safetensors",
+    "*.tiktoken",
+    "LICENSE*",
+    "NOTICE*",
+    "README*",
+)
+_SNAPSHOT_IGNORE_PATTERNS = ("*.bin", "*.py", ".git/*", "metal/*", "original/*")
 _USER_SELECTED_PURPOSE = (
     "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
     "license, or suitability."
@@ -89,6 +102,24 @@ class LocalModelChoice:
     artifact_sha256: str | None = None
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
+    license_id: str = "Unspecified"
+    precision: str = "Unspecified"
+    tier: ModelTier = "standard"
+    qualification: ModelQualification = "candidate"
+    minimum_gpu_count: int = 0
+    minimum_gpu_memory_bytes: int = 0
+    recommended_ram_bytes: int = 0
+    recommended_disk_bytes: int = 0
+    maximum_context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
+    tool_call_parser: ToolCallParser | None = None
+    tensor_parallel_size: int = 1
+    startup_seconds_min: int = 30
+    startup_seconds_max: int = 600
+    download_policy: str | None = None
+    allow_patterns: tuple[str, ...] = ()
+    ignore_patterns: tuple[str, ...] = ()
+    validated_platforms: tuple[str, ...] = ()
+    qualification_test: str | None = None
 
     def validate(self) -> None:
         """Validate source provenance and runtime-specific integrity metadata."""
@@ -109,6 +140,16 @@ class LocalModelChoice:
             raise ModelRepositoryError("managed model storage metadata is invalid")
         if not self.license_posture.strip():
             raise ModelRepositoryError("managed model license posture must not be empty")
+        if not self.license_id.strip() or not self.precision.strip():
+            raise ModelRepositoryError("managed model license and precision must not be empty")
+        if self.tier not in {"standard", "powerful", "maximum"}:
+            raise ModelRepositoryError(f"unsupported managed model tier: {self.tier}")
+        if self.qualification not in {"candidate", "qualified"}:
+            raise ModelRepositoryError(
+                f"unsupported managed model qualification: {self.qualification}"
+            )
+        if self.startup_seconds_min <= 0 or self.startup_seconds_max < self.startup_seconds_min:
+            raise ModelRepositoryError("managed model startup estimate is invalid")
         if self.model_type is not None and re.fullmatch(r"[a-z0-9_-]+", self.model_type) is None:
             raise ModelRepositoryError("managed model type must be a normalized identifier")
         if self.context_window < 2048:
@@ -118,6 +159,10 @@ class LocalModelChoice:
                 "managed model context window must be at most "
                 f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
             )
+        if not self.context_window <= self.maximum_context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
+            raise ModelRepositoryError("managed model maximum context capacity is invalid")
+        if self.recommended_ram_bytes <= 0 or self.recommended_disk_bytes < self.minimum_free_bytes:
+            raise ModelRepositoryError("managed model RAM or disk recommendation is invalid")
         if self.runtime == "llama-cpp":
             if self.source_path is None or not self.source_path.casefold().endswith(".gguf"):
                 raise ModelRepositoryError("CPU models require one GGUF file")
@@ -129,13 +174,32 @@ class LocalModelChoice:
                 or re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256) is None
             ):
                 raise ModelRepositoryError("GGUF models require a source SHA-256 digest")
-        elif self.source_path is not None or self.artifact_sha256 is not None:
-            raise ModelRepositoryError("GPU snapshots must not select one repository file")
+            if self.minimum_gpu_count != 0 or self.minimum_gpu_memory_bytes != 0:
+                raise ModelRepositoryError("CPU models must not require GPU resources")
+            if self.tool_call_parser is not None or self.download_policy is not None:
+                raise ModelRepositoryError("CPU models must not declare vLLM settings")
+        else:
+            if self.source_path is not None or self.artifact_sha256 is not None:
+                raise ModelRepositoryError("GPU snapshots must not select one repository file")
+            if self.minimum_gpu_count <= 0 or self.minimum_gpu_memory_bytes <= 0:
+                raise ModelRepositoryError("GPU models require a positive GPU resource envelope")
+            if self.tensor_parallel_size < self.minimum_gpu_count:
+                raise ModelRepositoryError("tensor parallelism must cover the minimum GPU count")
+            if self.tool_call_parser not in {"hermes", "openai", "qwen3_coder"}:
+                raise ModelRepositoryError("GPU models require a supported tool-call parser")
+            if self.download_policy is None or not self.allow_patterns:
+                raise ModelRepositoryError("GPU models require a reviewed download policy")
 
     def safe_dict(self) -> dict[str, object]:
         """Return non-secret model metadata for every interaction surface."""
         self.validate()
         return asdict(self)
+
+    def qualification_for(self, platform_id: str) -> ModelQualification:
+        """Return qualification for one exact managed-platform configuration."""
+        if self.qualification == "qualified" and platform_id in self.validated_platforms:
+            return "qualified"
+        return "candidate"
 
     def download_model(self) -> ModelArtifact | ModelSnapshot:
         """Translate the normalized choice to the existing download implementation."""
@@ -170,8 +234,26 @@ class LocalModelChoice:
             source_revision=self.source_revision,
             expected_size_bytes=self.size_bytes,
             minimum_free_bytes=self.minimum_free_bytes,
+            license_id=self.license_id,
             license_posture=self.license_posture,
             model_alias=self.label,
+            precision=self.precision,
+            tier=self.tier,
+            qualification=self.qualification,
+            minimum_gpu_count=self.minimum_gpu_count,
+            minimum_gpu_memory_bytes=self.minimum_gpu_memory_bytes,
+            recommended_ram_bytes=self.recommended_ram_bytes,
+            recommended_disk_bytes=self.recommended_disk_bytes,
+            maximum_context_window=self.maximum_context_window,
+            tool_call_parser=cast(ToolCallParser, self.tool_call_parser),
+            tensor_parallel_size=self.tensor_parallel_size,
+            startup_seconds_min=self.startup_seconds_min,
+            startup_seconds_max=self.startup_seconds_max,
+            download_policy=cast(str, self.download_policy),
+            allow_patterns=self.allow_patterns,
+            ignore_patterns=self.ignore_patterns,
+            validated_platforms=self.validated_platforms,
+            qualification_test=self.qualification_test,
             context_window=self.context_window,
             minimum_resource_envelope=self.minimum_resource_envelope,
             recommended_resource_envelope=self.recommended_resource_envelope,
@@ -323,7 +405,7 @@ class HuggingFaceModelRepository:
             else:
                 metadata_complete = False
         files = tuple(inspected_files)
-        license_posture = _license_posture(getattr(info, "card_data", None))
+        license_id, license_posture = _license_metadata(getattr(info, "card_data", None))
         context_window = _context_window(info)
         if context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
             raise ModelRepositoryError(
@@ -343,6 +425,7 @@ class HuggingFaceModelRepository:
                     license_posture,
                     context_window=context_window,
                     model_type=model_type,
+                    license_id=license_id,
                 )
             )
             is not None
@@ -353,9 +436,10 @@ class HuggingFaceModelRepository:
             files,
             license_posture,
             metadata_complete=metadata_complete,
-            supports_tool_calls=_supports_hermes_tool_calls(info),
+            tool_call_parser=_tool_call_parser(source_repository, info),
             context_window=context_window,
             model_type=model_type,
+            license_id=license_id,
         )
         if snapshot is not None:
             candidates.append(snapshot)
@@ -395,13 +479,13 @@ class _RepositoryFile:
     sha256: str | None
 
 
-def recommended_model_choices(
+def catalog_model_choices(
     artifacts: tuple[ModelArtifact, ...],
     snapshots: tuple[ModelSnapshot, ...],
     *,
     recommended_only: bool = True,
 ) -> tuple[LocalModelChoice, ...]:
-    """Normalize the centrally configured recommendation catalogs into one ordered list."""
+    """Normalize the centrally configured model catalogs into one ordered list."""
     choices = [
         LocalModelChoice(
             model_id=artifact.artifact_id,
@@ -414,12 +498,24 @@ def recommended_model_choices(
             size_bytes=artifact.artifact_size_bytes,
             minimum_free_bytes=artifact.minimum_free_bytes,
             license_posture=artifact.license_posture,
-            catalog_source="recommended",
+            catalog_source="catalog",
             model_type=infer_model_type(artifact.source_repository),
             context_window=artifact.context_window,
             artifact_sha256=artifact.artifact_sha256,
             minimum_resource_envelope=artifact.minimum_resource_envelope,
             recommended_resource_envelope=artifact.recommended_resource_envelope,
+            license_id=_license_id_from_posture(artifact.license_posture),
+            precision=_gguf_precision(artifact.source_path),
+            tier="standard",
+            qualification="qualified",
+            recommended_ram_bytes=max(16 * 1024**3, artifact.artifact_size_bytes * 4),
+            recommended_disk_bytes=max(
+                artifact.minimum_free_bytes,
+                artifact.artifact_size_bytes * 3,
+            ),
+            maximum_context_window=artifact.context_window,
+            validated_platforms=("generic", "terra"),
+            qualification_test="heartwood.coding-agent-e2e.v1",
         )
         for artifact in artifacts
         if artifact.recommended or not recommended_only
@@ -436,11 +532,29 @@ def recommended_model_choices(
             size_bytes=snapshot.expected_size_bytes,
             minimum_free_bytes=snapshot.minimum_free_bytes,
             license_posture=snapshot.license_posture,
-            catalog_source="recommended",
+            catalog_source="catalog",
             model_type=infer_model_type(snapshot.source_repository),
             context_window=snapshot.context_window,
             minimum_resource_envelope=snapshot.minimum_resource_envelope,
             recommended_resource_envelope=snapshot.recommended_resource_envelope,
+            license_id=snapshot.license_id,
+            precision=snapshot.precision,
+            tier=snapshot.tier,
+            qualification=snapshot.qualification,
+            minimum_gpu_count=snapshot.minimum_gpu_count,
+            minimum_gpu_memory_bytes=snapshot.minimum_gpu_memory_bytes,
+            recommended_ram_bytes=snapshot.recommended_ram_bytes,
+            recommended_disk_bytes=snapshot.recommended_disk_bytes,
+            maximum_context_window=snapshot.maximum_context_window,
+            tool_call_parser=snapshot.tool_call_parser,
+            tensor_parallel_size=snapshot.tensor_parallel_size,
+            startup_seconds_min=snapshot.startup_seconds_min,
+            startup_seconds_max=snapshot.startup_seconds_max,
+            download_policy=snapshot.download_policy,
+            allow_patterns=snapshot.allow_patterns,
+            ignore_patterns=snapshot.ignore_patterns,
+            validated_platforms=snapshot.validated_platforms,
+            qualification_test=snapshot.qualification_test,
         )
         for snapshot in snapshots
         if snapshot.recommended or not recommended_only
@@ -470,6 +584,7 @@ def _gguf_candidate(
     *,
     context_window: int,
     model_type: str | None,
+    license_id: str,
 ) -> LocalModelChoice | None:
     if (
         not file.path.casefold().endswith(".gguf")
@@ -497,6 +612,11 @@ def _gguf_candidate(
         artifact_sha256=file.sha256,
         minimum_resource_envelope=_cpu_resources(file.size, recommended=False),
         recommended_resource_envelope=_cpu_resources(file.size, recommended=True),
+        license_id=license_id,
+        precision=_gguf_precision(file.path),
+        recommended_ram_bytes=max(16 * 1024**3, file.size * 4),
+        recommended_disk_bytes=max((file.size * 3 + 1) // 2, file.size * 3),
+        maximum_context_window=context_window,
     )
 
 
@@ -507,21 +627,19 @@ def _snapshot_candidate(
     license_posture: str,
     *,
     metadata_complete: bool,
-    supports_tool_calls: bool,
+    tool_call_parser: ToolCallParser | None,
     context_window: int,
     model_type: str | None,
+    license_id: str,
 ) -> LocalModelChoice | None:
-    if not metadata_complete or not supports_tool_calls:
+    if not metadata_complete or tool_call_parser is None:
         return None
-    paths = {file.path for file in files}
-    has_weights = any(
-        _SAFETENSORS_WEIGHTS.fullmatch(path) is not None
-        or _PYTORCH_WEIGHTS.fullmatch(path) is not None
-        for path in paths
-    )
-    if "config.json" not in paths or not has_weights or len(files) == 0:
+    included_files = tuple(file for file in files if _included_snapshot_file(file.path))
+    paths = {file.path for file in included_files}
+    has_weights = any(_SAFETENSORS_WEIGHTS.fullmatch(path) is not None for path in paths)
+    if "config.json" not in paths or not has_weights or len(included_files) == 0:
         return None
-    size = sum(file.size for file in files)
+    size = sum(file.size for file in included_files)
     if size <= 0:
         return None
     label = repository.rsplit("/", maxsplit=1)[-1]
@@ -541,6 +659,18 @@ def _snapshot_candidate(
         context_window=context_window,
         minimum_resource_envelope=_gpu_resources(size, recommended=False),
         recommended_resource_envelope=_gpu_resources(size, recommended=True),
+        license_id=license_id,
+        precision="Repository-defined safetensors",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=max(16_000_000_000, int(size * 1.25)),
+        recommended_ram_bytes=max(32 * 1024**3, size * 2),
+        recommended_disk_bytes=max((size * 3 + 1) // 2, size * 2),
+        maximum_context_window=context_window,
+        tool_call_parser=tool_call_parser,
+        tensor_parallel_size=1,
+        download_policy="transformers-safetensors",
+        allow_patterns=_SNAPSHOT_ALLOW_PATTERNS,
+        ignore_patterns=_SNAPSHOT_IGNORE_PATTERNS,
     )
 
 
@@ -557,7 +687,7 @@ def _model_id(
     return f"hf-{slug}-{digest}"
 
 
-def _license_posture(card_data: object) -> str:
+def _license_metadata(card_data: object) -> tuple[str, str]:
     license_id = getattr(card_data, "license", None)
     if not isinstance(license_id, str) and card_data is not None:
         to_dict = getattr(card_data, "to_dict", None)
@@ -568,8 +698,34 @@ def _license_posture(card_data: object) -> str:
                 if isinstance(value, str):
                     license_id = value
     if isinstance(license_id, str) and license_id.strip():
-        return f"Source model card reports {license_id.strip()}; review its terms before use."
-    return "No machine-readable license was reported; review the source repository before use."
+        normalized = license_id.strip()
+        return (
+            normalized,
+            f"Source model card reports {normalized}; review its terms before use.",
+        )
+    return (
+        "Unspecified",
+        "No machine-readable license was reported; review the source repository before use.",
+    )
+
+
+def _license_id_from_posture(posture: str) -> str:
+    for license_id in ("Apache-2.0", "MIT", "BSD-3-Clause", "BSD-2-Clause"):
+        if license_id.casefold() in posture.casefold():
+            return license_id
+    return "Unspecified"
+
+
+def _gguf_precision(path: str) -> str:
+    filename = PurePosixPath(path).stem.upper()
+    match = re.search(r"(?:^|[-_.])(Q\d+(?:_[A-Z0-9]+)+)(?:$|[-_.])", filename)
+    return f"GGUF {match.group(1)}" if match is not None else "GGUF quantized"
+
+
+def _included_snapshot_file(path: str) -> bool:
+    if any(fnmatchcase(path, pattern) for pattern in _SNAPSHOT_IGNORE_PATTERNS):
+        return False
+    return any(fnmatchcase(path, pattern) for pattern in _SNAPSHOT_ALLOW_PATTERNS)
 
 
 def _requires_custom_code(info: object) -> bool:
@@ -582,12 +738,34 @@ def _requires_custom_code(info: object) -> bool:
     return isinstance(config, dict) and bool(config.get("auto_map"))
 
 
-def _supports_hermes_tool_calls(info: object) -> bool:
+def _tool_call_parser(repository: str, info: object) -> ToolCallParser | None:
     model_type = _model_type(info)
-    if model_type not in _HERMES_MODEL_TYPES:
-        return False
     pipeline_tag = getattr(info, "pipeline_tag", None)
-    return not isinstance(pipeline_tag, str) or pipeline_tag in _TEXT_GENERATION_PIPELINES
+    if isinstance(pipeline_tag, str) and pipeline_tag not in _TEXT_GENERATION_PIPELINES:
+        return None
+    return infer_tool_call_parser(repository, model_type)
+
+
+def infer_tool_call_parser(
+    repository: str,
+    model_type: str | None,
+) -> ToolCallParser | None:
+    """Choose a supported vLLM parser from reviewed model-family metadata."""
+    normalized_repository = repository.casefold().replace("_", "-")
+    if "qwen3-coder" in normalized_repository:
+        return "qwen3_coder"
+    if model_type == "gpt_oss" or normalized_repository.startswith("openai/gpt-oss-"):
+        return "openai"
+    return "hermes" if model_type in _HERMES_MODEL_TYPES else None
+
+
+def safe_snapshot_download_policy() -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Return the shared no-custom-code safetensors download policy."""
+    return (
+        "transformers-safetensors",
+        _SNAPSHOT_ALLOW_PATTERNS,
+        _SNAPSHOT_IGNORE_PATTERNS,
+    )
 
 
 def _model_type(info: object) -> str | None:

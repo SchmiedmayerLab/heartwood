@@ -285,13 +285,21 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
         artifact_sha256=hashlib.sha256(b"content").hexdigest(),
         minimum_resource_envelope="Estimated minimum: 4 CPU cores.",
         recommended_resource_envelope="Recommended: 8 CPU cores.",
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=21,
     )
 
     class Repository:
         def plan(self, *_args: object, **_kwargs: object) -> LocalModelDownloadPlan:
             return LocalModelDownloadPlan(choice, "Selected a balanced GGUF model.")
 
-    def download(artifact: ModelArtifact, *, cache_dir: Path) -> Path:
+    def download(
+        artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: object = None,
+    ) -> Path:
+        del progress_callback
         destination = cache_dir / artifact.artifact_id / artifact.source_path
         destination.parent.mkdir(parents=True)
         destination.write_bytes(b"content")
@@ -304,22 +312,18 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
         model_repository=Repository(),
     )
 
-    assert (
-        _run(
-            project,
-            monkeypatch,
-            [
-                "setup",
-                "--model-source",
-                "heartwood",
-                "--model-id",
-                "example/research-model-gguf",
-                "--non-interactive",
-                "--yes",
-            ],
-        )
-        == 0
-    )
+    setup = [
+        "setup",
+        "--model-source",
+        "heartwood",
+        "--model-id",
+        "example/research-model-gguf",
+        "--non-interactive",
+        "--yes",
+    ]
+    assert _run(project, monkeypatch, setup) == 1
+    assert "rerun setup with --yes-download" in capsys.readouterr().out
+    assert _run(project, monkeypatch, [*setup, "--yes-download"]) == 0
 
     config = RealSessionGateway(project=ProjectContext(project), env={}).config_store.load()
     assert config.local_model is not None
@@ -860,7 +864,16 @@ def test_invalid_session_and_launch_resources_are_argument_errors(
     with pytest.raises(SystemExit) as invalid_resources:
         _run(tmp_path / "launch", monkeypatch, ["runtime", "start", "--gpus", "0"])
     assert invalid_resources.value.code == 2
-    assert "--gpus must be 1" in capsys.readouterr().err
+    assert "--gpus must be positive" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as invalid_timeout:
+        _run(
+            tmp_path / "timeout",
+            monkeypatch,
+            ["runtime", "start", "--startup-timeout", "0"],
+        )
+    assert invalid_timeout.value.code == 2
+    assert "--startup-timeout and --port must be positive" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -1478,8 +1491,9 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
                 {
                     "model_id": "gguf",
                     "runtime": "llama-cpp",
+                    "tier": "standard",
                     "size_bytes": "unknown",
-                    "catalog_source": "recommended",
+                    "catalog_source": "catalog",
                     "label": "GGUF",
                     "purpose": "Synthetic",
                     "availability_reason": "Available",
@@ -1487,6 +1501,7 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
                 {
                     "model_id": "vllm",
                     "runtime": "vllm",
+                    "tier": "powerful",
                     "size_bytes": 1024,
                     "catalog_source": "user-selected",
                     "label": "vLLM",

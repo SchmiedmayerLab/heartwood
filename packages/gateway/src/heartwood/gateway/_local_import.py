@@ -23,7 +23,10 @@ from heartwood.gateway._local_models import (
     LocalModelChoice,
     LocalModelRuntime,
     ModelRepositoryError,
+    _license_id_from_posture,
     infer_model_type,
+    infer_tool_call_parser,
+    safe_snapshot_download_policy,
 )
 from heartwood.gateway._model_identity import (
     is_hugging_face_model_id,
@@ -74,6 +77,7 @@ def import_local_model(
         raise ModelRepositoryError("source revision must be an immutable commit hash")
     if not license_posture.strip():
         raise ModelRepositoryError("the upstream model license must be recorded")
+    license_id = _license_id_from_posture(license_posture)
     if context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
         raise ModelRepositoryError(
             "Heartwood agent sessions require an imported model context window of at least "
@@ -114,6 +118,14 @@ def import_local_model(
     if destination.exists() or destination.is_symlink():
         raise ModelRepositoryError(f"this model is already imported: {model_id}")
     checksum = _sha256(source) if runtime == "llama-cpp" else None
+    download_policy, allow_patterns, ignore_patterns = safe_snapshot_download_policy()
+    tool_call_parser = (
+        infer_tool_call_parser(source_repository, model_type) if runtime == "vllm" else None
+    )
+    if runtime == "vllm" and tool_call_parser is None:
+        raise ModelRepositoryError(
+            "Heartwood cannot infer a supported tool-call parser for this imported model"
+        )
     choice = LocalModelChoice(
         model_id=model_id,
         label=source_repository.rsplit("/", maxsplit=1)[-1],
@@ -134,6 +146,23 @@ def import_local_model(
         artifact_sha256=checksum,
         minimum_resource_envelope=_minimum_resource_envelope(runtime, size_bytes),
         recommended_resource_envelope=_recommended_resource_envelope(runtime, size_bytes),
+        license_id=license_id,
+        precision="Repository-defined safetensors" if runtime == "vllm" else "GGUF quantized",
+        minimum_gpu_count=1 if runtime == "vllm" else 0,
+        minimum_gpu_memory_bytes=(
+            max(16_000_000_000, int(size_bytes * 1.25)) if runtime == "vllm" else 0
+        ),
+        recommended_ram_bytes=(
+            max(32 * 1024**3, size_bytes * 2)
+            if runtime == "vllm"
+            else max(16 * 1024**3, size_bytes * 4)
+        ),
+        recommended_disk_bytes=max(minimum_free_bytes, size_bytes * 2),
+        maximum_context_window=context_window,
+        tool_call_parser=tool_call_parser,
+        download_policy=download_policy if runtime == "vllm" else None,
+        allow_patterns=allow_patterns if runtime == "vllm" else (),
+        ignore_patterns=ignore_patterns if runtime == "vllm" else (),
     )
     choice.validate()
     temporary = Path(tempfile.mkdtemp(prefix=f".{model_id}.", dir=models_dir))
@@ -149,6 +178,7 @@ def import_local_model(
             "source_revision": source_revision,
             "source_path": source.name if runtime == "llama-cpp" else None,
             "license_posture": license_posture.strip(),
+            "license_id": license_id,
             "size_bytes": size_bytes,
             "runtime": runtime,
             "model_type": model_type,

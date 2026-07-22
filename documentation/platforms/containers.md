@@ -27,7 +27,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6 \
   heartwood
 ```
 
@@ -44,7 +44,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6 \
   heartwood --interface web --host 0.0.0.0
 ```
 
@@ -63,21 +63,22 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-gpu-nvidia \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-gpu-nvidia \
   heartwood
 ```
 
 Choose **Run with Heartwood** and a vLLM-compatible model.
-Heartwood inspects available GPU memory, selects a conservative context tier, and starts the included vLLM runtime after the model is ready.
+Heartwood inspects the GPU model, memory, driver, and catalog qualification, selects a conservative context tier, and starts the isolated CUDA 12.9 vLLM runtime after the model is ready.
+Review the [GPU compatibility matrix](../reference/gpu-compatibility.md) before using a catalog candidate on hardware that has not completed qualification.
 
 ## Image Tags
 
 Use immutable release tags for research work:
 
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5` — standard AMD64/ARM64 image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-gpu-nvidia` — NVIDIA GPU image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` — Terra CPU image; and
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` — Terra NVIDIA image.
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6` — standard AMD64/ARM64 image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-gpu-nvidia` — NVIDIA GPU image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` — Terra CPU image; and
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` — Terra NVIDIA image.
 
 The moving `edge` tags represent current `main` and are intended for development, not reproducible analyses.
 Release publication verifies candidate digests and manifest shape before creating version tags.

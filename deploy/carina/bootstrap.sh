@@ -128,7 +128,6 @@ images/gpu/install_runtime.sh \
 
 export PATH="${root}/bootstrap/bin:${PATH}"
 export LD_LIBRARY_PATH="${root}/bootstrap/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-export VLLM_USE_FLASHINFER_SAMPLER=0
 
 printf 'Heartwood: %s\n' "$("${root}/heartwood/bin/heartwood" --version)"
 HEARTWOOD_VLLM_ROOT="${root}/vllm" \

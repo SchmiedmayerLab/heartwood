@@ -84,11 +84,29 @@ class LocalModelSelection:
     size_bytes: int | None = None
     minimum_free_bytes: int | None = None
     license_posture: str | None = None
+    license_id: str | None = None
     artifact_sha256: str | None = None
     context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
+    maximum_context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
-    catalog_source: str = "recommended"
+    precision: str | None = None
+    tier: str = "standard"
+    qualification: str = "candidate"
+    minimum_gpu_count: int = 0
+    minimum_gpu_memory_bytes: int = 0
+    recommended_ram_bytes: int | None = None
+    recommended_disk_bytes: int | None = None
+    tool_call_parser: str | None = None
+    tensor_parallel_size: int = 1
+    startup_seconds_min: int = 30
+    startup_seconds_max: int = 600
+    download_policy: str | None = None
+    allow_patterns: tuple[str, ...] = ()
+    ignore_patterns: tuple[str, ...] = ()
+    validated_platforms: tuple[str, ...] = ()
+    qualification_test: str | None = None
+    catalog_source: str = "catalog"
 
     def validate(self, project: ProjectContext) -> None:
         """Validate identifiers and keep the selected artifact under the model root."""
@@ -96,8 +114,12 @@ class LocalModelSelection:
             raise ProjectConfigError("Heartwood-managed model identifiers must not be empty")
         if self.runtime not in {"auto", "llama-cpp", "vllm"}:
             raise ProjectConfigError(f"unsupported Heartwood-managed model runtime: {self.runtime}")
-        if self.catalog_source not in {"recommended", "user-selected"}:
+        if self.catalog_source not in {"catalog", "user-selected"}:
             raise ProjectConfigError("unsupported Heartwood-managed model catalog source")
+        if self.tier not in {"standard", "powerful", "maximum"}:
+            raise ProjectConfigError("unsupported Heartwood-managed model tier")
+        if self.qualification not in {"candidate", "qualified"}:
+            raise ProjectConfigError("unsupported Heartwood-managed model qualification")
         if self.display_name is not None and not self.display_name.strip():
             raise ProjectConfigError("Heartwood-managed model display_name must not be empty")
         if self.source_repository is not None and not is_hugging_face_model_id(
@@ -137,13 +159,51 @@ class LocalModelSelection:
                 f"Heartwood-managed model context_window must be between 2048 and "
                 f"{MAXIMUM_LOCAL_CONTEXT_WINDOW} tokens"
             )
+        if not self.context_window <= self.maximum_context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
+            raise ProjectConfigError("Heartwood-managed maximum context window is invalid")
+        if self.minimum_gpu_count < 0 or self.minimum_gpu_memory_bytes < 0:
+            raise ProjectConfigError("Heartwood-managed GPU requirements cannot be negative")
+        if self.tensor_parallel_size < 1:
+            raise ProjectConfigError("Heartwood-managed tensor parallelism must be positive")
+        if self.startup_seconds_min <= 0 or self.startup_seconds_max < self.startup_seconds_min:
+            raise ProjectConfigError("Heartwood-managed startup estimate is invalid")
         for field_name, value in (
+            ("recommended_ram_bytes", self.recommended_ram_bytes),
+            ("recommended_disk_bytes", self.recommended_disk_bytes),
+        ):
+            if value is not None and value <= 0:
+                raise ProjectConfigError(f"Heartwood-managed {field_name} must be positive")
+        if self.tool_call_parser is not None and self.tool_call_parser not in {
+            "hermes",
+            "openai",
+            "qwen3_coder",
+        }:
+            raise ProjectConfigError("unsupported Heartwood-managed tool-call parser")
+        if self.runtime == "vllm" and (
+            self.minimum_gpu_count < 1
+            or self.minimum_gpu_memory_bytes < 1
+            or self.tool_call_parser is None
+        ):
+            raise ProjectConfigError("vLLM model runtime metadata is incomplete")
+        if self.runtime == "llama-cpp" and (
+            self.minimum_gpu_count != 0
+            or self.minimum_gpu_memory_bytes != 0
+            or self.tool_call_parser is not None
+        ):
+            raise ProjectConfigError("llama.cpp models cannot declare vLLM GPU settings")
+        for metadata_name, metadata_value in (
             ("license_posture", self.license_posture),
+            ("license_id", self.license_id),
+            ("precision", self.precision),
+            ("download_policy", self.download_policy),
+            ("qualification_test", self.qualification_test),
             ("minimum_resource_envelope", self.minimum_resource_envelope),
             ("recommended_resource_envelope", self.recommended_resource_envelope),
         ):
-            if value is not None and not value.strip():
-                raise ProjectConfigError(f"Heartwood-managed model {field_name} must not be empty")
+            if metadata_value is not None and not metadata_value.strip():
+                raise ProjectConfigError(
+                    f"Heartwood-managed model {metadata_name} must not be empty"
+                )
         if (
             self.artifact_sha256 is not None
             and re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256) is None
@@ -340,11 +400,29 @@ class ProjectConfigStore:
         size_bytes: int | None = None,
         minimum_free_bytes: int | None = None,
         license_posture: str | None = None,
+        license_id: str | None = None,
         artifact_sha256: str | None = None,
         context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW,
+        maximum_context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW,
         minimum_resource_envelope: str | None = None,
         recommended_resource_envelope: str | None = None,
-        catalog_source: str = "recommended",
+        precision: str | None = None,
+        tier: str = "standard",
+        qualification: str = "candidate",
+        minimum_gpu_count: int = 0,
+        minimum_gpu_memory_bytes: int = 0,
+        recommended_ram_bytes: int | None = None,
+        recommended_disk_bytes: int | None = None,
+        tool_call_parser: str | None = None,
+        tensor_parallel_size: int = 1,
+        startup_seconds_min: int = 30,
+        startup_seconds_max: int = 600,
+        download_policy: str | None = None,
+        allow_patterns: tuple[str, ...] = (),
+        ignore_patterns: tuple[str, ...] = (),
+        validated_platforms: tuple[str, ...] = (),
+        qualification_test: str | None = None,
+        catalog_source: str = "catalog",
         settings: ModelSettings | None = None,
     ) -> ProjectConfig:
         """Persist one verified Heartwood-managed model and optional active profile."""
@@ -364,10 +442,28 @@ class ProjectConfigStore:
             size_bytes=size_bytes,
             minimum_free_bytes=minimum_free_bytes,
             license_posture=license_posture,
+            license_id=license_id,
             artifact_sha256=artifact_sha256,
             context_window=context_window,
+            maximum_context_window=maximum_context_window,
             minimum_resource_envelope=minimum_resource_envelope,
             recommended_resource_envelope=recommended_resource_envelope,
+            precision=precision,
+            tier=tier,
+            qualification=qualification,
+            minimum_gpu_count=minimum_gpu_count,
+            minimum_gpu_memory_bytes=minimum_gpu_memory_bytes,
+            recommended_ram_bytes=recommended_ram_bytes,
+            recommended_disk_bytes=recommended_disk_bytes,
+            tool_call_parser=tool_call_parser,
+            tensor_parallel_size=tensor_parallel_size,
+            startup_seconds_min=startup_seconds_min,
+            startup_seconds_max=startup_seconds_max,
+            download_policy=download_policy,
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
+            validated_platforms=validated_platforms,
+            qualification_test=qualification_test,
             catalog_source=catalog_source,
         )
 
@@ -514,12 +610,24 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "artifact_id",
             "artifact_sha256",
             "display_name",
+            "download_policy",
+            "allow_patterns",
+            "ignore_patterns",
             "license_posture",
+            "license_id",
             "minimum_free_bytes",
+            "minimum_gpu_count",
+            "minimum_gpu_memory_bytes",
             "minimum_resource_envelope",
             "model_id",
             "model_type",
+            "maximum_context_window",
             "path",
+            "precision",
+            "qualification",
+            "qualification_test",
+            "recommended_disk_bytes",
+            "recommended_ram_bytes",
             "recommended_resource_envelope",
             "catalog_source",
             "context_window",
@@ -528,10 +636,20 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "source_path",
             "source_repository",
             "source_revision",
+            "startup_seconds_max",
+            "startup_seconds_min",
+            "tensor_parallel_size",
+            "tier",
+            "tool_call_parser",
+            "validated_platforms",
         }
     )
     if unknown:
         raise ProjectConfigError(f"local_model contains unsupported fields: {', '.join(unknown)}")
+    context_window = (
+        _optional_positive_int(value.get("context_window"), "context_window")
+        or DEFAULT_LOCAL_CONTEXT_WINDOW
+    )
     return LocalModelSelection(
         artifact_id=_required_string(value, "artifact_id"),
         path=_required_string(value, "path"),
@@ -547,17 +665,55 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             value.get("minimum_free_bytes"), "minimum_free_bytes"
         ),
         license_posture=_optional_string(value.get("license_posture"), "license_posture"),
+        license_id=_optional_string(value.get("license_id"), "license_id"),
         artifact_sha256=_optional_string(value.get("artifact_sha256"), "artifact_sha256"),
-        context_window=_optional_positive_int(value.get("context_window"), "context_window")
-        or DEFAULT_LOCAL_CONTEXT_WINDOW,
+        context_window=context_window,
+        maximum_context_window=_optional_positive_int(
+            value.get("maximum_context_window"), "maximum_context_window"
+        )
+        or context_window,
         minimum_resource_envelope=_optional_string(
             value.get("minimum_resource_envelope"), "minimum_resource_envelope"
         ),
         recommended_resource_envelope=_optional_string(
             value.get("recommended_resource_envelope"), "recommended_resource_envelope"
         ),
-        catalog_source=_optional_string(value.get("catalog_source"), "catalog_source")
-        or "recommended",
+        precision=_optional_string(value.get("precision"), "precision"),
+        tier=_optional_string(value.get("tier"), "tier") or "standard",
+        qualification=_optional_string(value.get("qualification"), "qualification") or "candidate",
+        minimum_gpu_count=_optional_nonnegative_int(
+            value.get("minimum_gpu_count"), "minimum_gpu_count"
+        ),
+        minimum_gpu_memory_bytes=_optional_nonnegative_int(
+            value.get("minimum_gpu_memory_bytes"), "minimum_gpu_memory_bytes"
+        ),
+        recommended_ram_bytes=_optional_positive_int(
+            value.get("recommended_ram_bytes"), "recommended_ram_bytes"
+        ),
+        recommended_disk_bytes=_optional_positive_int(
+            value.get("recommended_disk_bytes"), "recommended_disk_bytes"
+        ),
+        tool_call_parser=_optional_string(value.get("tool_call_parser"), "tool_call_parser"),
+        tensor_parallel_size=_optional_positive_int(
+            value.get("tensor_parallel_size"), "tensor_parallel_size"
+        )
+        or 1,
+        startup_seconds_min=_optional_positive_int(
+            value.get("startup_seconds_min"), "startup_seconds_min"
+        )
+        or 30,
+        startup_seconds_max=_optional_positive_int(
+            value.get("startup_seconds_max"), "startup_seconds_max"
+        )
+        or 600,
+        download_policy=_optional_string(value.get("download_policy"), "download_policy"),
+        allow_patterns=_optional_string_tuple(value.get("allow_patterns"), "allow_patterns"),
+        ignore_patterns=_optional_string_tuple(value.get("ignore_patterns"), "ignore_patterns"),
+        validated_platforms=_optional_string_tuple(
+            value.get("validated_platforms"), "validated_platforms"
+        ),
+        qualification_test=_optional_string(value.get("qualification_test"), "qualification_test"),
+        catalog_source=_optional_string(value.get("catalog_source"), "catalog_source") or "catalog",
     )
 
 
@@ -586,3 +742,19 @@ def _optional_positive_int(value: object, name: str) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ProjectConfigError(f"{name} must be a positive integer when provided")
     return value
+
+
+def _optional_nonnegative_int(value: object, name: str) -> int:
+    if value is None:
+        return 0
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ProjectConfigError(f"{name} must be a nonnegative integer when provided")
+    return value
+
+
+def _optional_string_tuple(value: object, name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ProjectConfigError(f"{name} must be an array of non-empty strings")
+    return tuple(value)

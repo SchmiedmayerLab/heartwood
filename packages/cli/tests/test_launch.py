@@ -13,7 +13,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -25,12 +25,12 @@ from heartwood.cli._launch import (
     _available_gpu_memory_bytes,
     _available_system_memory_bytes,
     _catalog_contains_model,
-    _discover_slurm_gpu_partitions,
     _ensure_setup,
     _format_bytes,
     _gguf_file,
     _interaction_command,
     _local_model_selection,
+    _minimum_compute_capability,
     _model_size,
     _persist_effective_context,
     _preflight_vllm,
@@ -44,6 +44,7 @@ from heartwood.cli._launch import (
     _runtime_command,
     _runtime_environment,
     _stage_model,
+    _use_eager_vllm,
     _verify_local_model,
     _wait_for_runtime,
     build_launch_plan,
@@ -51,11 +52,13 @@ from heartwood.cli._launch import (
 )
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
+    GpuDevice,
     ModelSettings,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
     SessionGateway,
+    SlurmGpuPartition,
     model_profile_from_preset,
 )
 
@@ -66,6 +69,7 @@ def _options(
     selected: bool = True,
     runtime: str = "vllm",
     context_window: int = 32_768,
+    qualification: Literal["candidate", "qualified"] = "qualified",
     **overrides: object,
 ) -> LaunchOptions:
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -85,7 +89,25 @@ def _options(
             path=project.models_dir / ("model.gguf" if runtime == "llama-cpp" else "model"),
             runtime=runtime,
             model_id="test-model",
+            display_name="Synthetic test model",
+            source_repository="example/test-model",
+            source_revision="1" * 40,
+            size_bytes=1024,
+            minimum_free_bytes=2048,
+            license_posture="Synthetic test model.",
+            license_id="Apache-2.0",
             context_window=context_window,
+            maximum_context_window=context_window,
+            minimum_resource_envelope="Synthetic minimum resources.",
+            recommended_resource_envelope="Synthetic recommended resources.",
+            precision="Synthetic",
+            qualification=qualification,
+            minimum_gpu_count=0 if runtime == "llama-cpp" else 1,
+            minimum_gpu_memory_bytes=0 if runtime == "llama-cpp" else 1,
+            recommended_ram_bytes=16 * 1024**3,
+            recommended_disk_bytes=32 * 1024**3,
+            tool_call_parser=None if runtime == "llama-cpp" else "hermes",
+            catalog_source="user-selected",
         )
     values: dict[str, object] = {
         "project": project,
@@ -95,9 +117,11 @@ def _options(
         "cpus": 8,
         "memory": "64G",
         "time_limit": "02:00:00",
+        "task_profile": "auto",
         "dry_run": False,
         "no_allocate": False,
         "yes_request_allocation": False,
+        "yes_download": False,
         "inside_allocation": False,
         "plain": True,
         "web": False,
@@ -109,6 +133,41 @@ def _options(
     }
     values.update(overrides)
     return LaunchOptions(**values)  # type: ignore[arg-type]
+
+
+def _partition(
+    name: str = "gpu",
+    *,
+    default: bool = True,
+    gpu_model: str = "nvidia_l40s",
+    gpu_count: int = 8,
+) -> SlurmGpuPartition:
+    return SlurmGpuPartition(
+        name=name,
+        is_default=default,
+        gpu_model=gpu_model,
+        gpu_count=gpu_count,
+        node_memory_bytes=512 * 1024**3,
+        node_cpu_count=64,
+        state="up",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_visible_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "heartwood.gateway._gpu_environment.discover_visible_gpus",
+        lambda _env: (
+            GpuDevice(
+                index=0,
+                name="Tesla T4",
+                total_memory_bytes=16_000_000_000,
+                free_memory_bytes=15_000_000_000,
+                driver_version="570.86.15",
+                compute_capability=(7, 5),
+            ),
+        ),
+    )
 
 
 def _snapshot(root: Path) -> None:
@@ -123,7 +182,7 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("heartwood.cli._launch._discover_slurm_gpu_partitions", lambda _env: ())
+    monkeypatch.setattr("heartwood.cli._launch.discover_slurm_gpu_partitions", lambda _env: ())
     options = _options(tmp_path)
     plan = build_launch_plan(
         options,
@@ -139,6 +198,7 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert plan.allocation_required
     assert plan.context_window == 32_768
     assert "Context capacity: up to 32,768 tokens" in plan.format()
+    assert "Qualification: Qualified" in plan.format()
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
@@ -148,12 +208,63 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert "--model-root" not in plan.allocation_command
 
 
-def test_launch_plan_rejects_unimplemented_multi_gpu_runtime(tmp_path: Path) -> None:
-    with pytest.raises(LaunchConfigurationError, match="exactly one GPU"):
+def test_launch_plan_rejects_gpu_count_outside_the_model_qualification(tmp_path: Path) -> None:
+    with pytest.raises(LaunchConfigurationError, match="qualified with 1 GPU"):
         build_launch_plan(
             _options(tmp_path, gpus=2),
             {"HEARTWOOD_PLATFORM": "carina"},
         )
+
+
+def test_launch_plan_labels_evaluation_candidate(tmp_path: Path) -> None:
+    plan = build_launch_plan(
+        _options(tmp_path, qualification="candidate"),
+        {"HEARTWOOD_PLATFORM": "terra", "PATH": "/usr/bin"},
+    )
+
+    assert "Qualification: Evaluation candidate" in plan.format()
+
+
+@pytest.mark.parametrize(
+    ("model_id", "precision", "expected"),
+    [
+        ("gpt-oss-120b-vllm", "MXFP4", (8, 0)),
+        ("test-model", "FP8", (8, 9)),
+        ("qwen3-coder-awq", "W4A16 AWQ", None),
+    ],
+)
+def test_launch_preflight_infers_minimum_compute_capability(
+    tmp_path: Path,
+    model_id: str,
+    precision: str,
+    expected: tuple[int, int] | None,
+) -> None:
+    selection = _local_model_selection(_options(tmp_path).project, {})
+    assert selection is not None
+    selection = LocalRuntimeSelection(
+        artifact_id=selection.artifact_id,
+        model_root=selection.model_root,
+        runtime=selection.runtime,
+        model_id=model_id,
+        size_bytes=selection.size_bytes,
+        artifact_sha256=selection.artifact_sha256,
+        context_window=selection.context_window,
+        maximum_context_window=selection.maximum_context_window,
+        tier=selection.tier,
+        precision=precision,
+        qualification=selection.qualification,
+        minimum_gpu_count=selection.minimum_gpu_count,
+        minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
+        recommended_ram_bytes=selection.recommended_ram_bytes,
+        recommended_disk_bytes=selection.recommended_disk_bytes,
+        tool_call_parser=selection.tool_call_parser,
+        tensor_parallel_size=selection.tensor_parallel_size,
+        startup_seconds_min=selection.startup_seconds_min,
+        startup_seconds_max=selection.startup_seconds_max,
+        catalog_source=selection.catalog_source,
+    )
+
+    assert _minimum_compute_capability(selection) == expected
 
 
 def test_launch_requires_consent_and_honors_dry_run_and_no_allocate(
@@ -162,8 +273,8 @@ def test_launch_requires_consent_and_honors_dry_run_and_no_allocate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("gpu", True),),
+        "heartwood.cli._launch.discover_slurm_gpu_partitions",
+        lambda _env: (_partition(),),
     )
     called = False
 
@@ -207,8 +318,8 @@ def test_launch_handles_closed_consent_and_submits_approved_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("gpu", True),),
+        "heartwood.cli._launch.discover_slurm_gpu_partitions",
+        lambda _env: (_partition(),),
     )
     submitted: list[tuple[str, ...]] = []
 
@@ -254,7 +365,7 @@ def test_launch_reports_missing_selection_artifact_and_runtime(
 ) -> None:
     env = {"HEARTWOOD_PLATFORM": "generic"}
     assert run_launch(_options(tmp_path, selected=False), env=env) == 64
-    assert "No Heartwood-managed model is selected" in capsys.readouterr().out
+    assert "No qualified Heartwood-managed model" in capsys.readouterr().out
     assert run_launch(_options(tmp_path), env=env) == 66
     _snapshot(tmp_path / ".heartwood" / "models" / "model")
     monkeypatch.setattr(
@@ -513,7 +624,7 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
     monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
     monkeypatch.setattr(
         "heartwood.cli._launch._available_gpu_memory_bytes",
-        lambda _env: 48 * 1024**3,
+        lambda _env, **_kwargs: 48 * 1024**3,
     )
     monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", FakeProcess)
     monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kwargs: True)
@@ -626,12 +737,32 @@ def test_launch_reports_early_runtime_exit_without_claiming_timeout(
 def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
     model = tmp_path / "model.gguf"
     model.write_bytes(b"synthetic")
+    selection = LocalRuntimeSelection(
+        artifact_id="test-model",
+        model_root=model,
+        runtime="llama-cpp",
+        model_id="heartwood-managed-model",
+        size_bytes=model.stat().st_size,
+        artifact_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
+        context_window=32_768,
+        maximum_context_window=32_768,
+        tier="standard",
+        precision="GGUF synthetic",
+        qualification="qualified",
+        minimum_gpu_count=0,
+        minimum_gpu_memory_bytes=0,
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=32 * 1024**3,
+        tool_call_parser=None,
+        tensor_parallel_size=1,
+        startup_seconds_min=1,
+        startup_seconds_max=2,
+        catalog_source="user-selected",
+    )
     command = _runtime_command(
-        "llama-cpp",
         Path("/opt/llama.cpp/llama-server"),
         model,
-        "heartwood-managed-model",
-        32_768,
+        selection,
     )
     assert command[:3] == (
         "/opt/llama.cpp/llama-server",
@@ -657,6 +788,19 @@ def test_resource_assessment_reports_context_and_memory_status(
         size_bytes=10 * 1024**3,
         artifact_sha256=None,
         context_window=32_768,
+        maximum_context_window=32_768,
+        tier="standard",
+        precision="Synthetic",
+        qualification="qualified",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=1,
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=32 * 1024**3,
+        tool_call_parser="hermes",
+        tensor_parallel_size=1,
+        startup_seconds_min=1,
+        startup_seconds_max=2,
+        catalog_source="user-selected",
     )
     monkeypatch.setattr(
         "heartwood.cli._launch._available_system_memory_bytes",
@@ -664,7 +808,7 @@ def test_resource_assessment_reports_context_and_memory_status(
     )
     monkeypatch.setattr(
         "heartwood.cli._launch._available_gpu_memory_bytes",
-        lambda _env: 24 * 1024**3,
+        lambda _env, **_kwargs: 24 * 1024**3,
     )
 
     _print_resource_assessment(selection, {"PATH": "/usr/bin"})
@@ -674,6 +818,59 @@ def test_resource_assessment_reports_context_and_memory_status(
     assert "model capacity: 32,768" in output
     assert "Warning: RAM may be insufficient" in output
     assert "GPU memory available; estimated minimum" in output
+    assert "Runtime mode: eager execution selected" not in output
+
+
+def test_constrained_vllm_gpu_uses_eager_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    selection = LocalRuntimeSelection(
+        artifact_id="test-model",
+        model_root=tmp_path / "model",
+        runtime="vllm",
+        model_id="test-model",
+        size_bytes=5 * 1024**3,
+        artifact_sha256=None,
+        context_window=18_432,
+        maximum_context_window=32_768,
+        tier="standard",
+        precision="AWQ int4",
+        qualification="candidate",
+        minimum_gpu_count=1,
+        minimum_gpu_memory_bytes=15_000_000_000,
+        recommended_ram_bytes=32 * 1024**3,
+        recommended_disk_bytes=16 * 1024**3,
+        tool_call_parser="hermes",
+        tensor_parallel_size=1,
+        startup_seconds_min=120,
+        startup_seconds_max=480,
+        catalog_source="catalog",
+    )
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env, **_kwargs: 16 * 1024**3,
+    )
+
+    assert _use_eager_vllm(selection, {})
+    _print_resource_assessment(selection, {})
+    assert "Runtime mode: eager execution selected" in capsys.readouterr().out
+    assert (
+        _runtime_command(
+            Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
+            selection.model_root,
+            selection,
+            enforce_eager=True,
+        )[-1]
+        == "--enforce-eager"
+    )
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        lambda _env, **_kwargs: 48 * 1024**3,
+    )
+    assert not _use_eager_vllm(selection, {})
 
 
 def test_available_system_memory_honors_cgroup_v1_limit(
@@ -712,7 +909,7 @@ def test_available_gpu_memory_uses_least_available_visible_device(
         ),
     )
 
-    assert _available_gpu_memory_bytes({"PATH": "/usr/bin"}) == 8 * 1024**3
+    assert _available_gpu_memory_bytes({"PATH": "/usr/bin"}) == 16 * 1024**3
 
 
 def test_runtime_resolution_and_gguf_directory_contract(
@@ -789,7 +986,7 @@ def test_runtime_environment_scrubs_credentials_and_legacy_path_controls() -> No
     assert runtime_env["CLUSTER_NAME"] == "saturn-runtime"
     assert runtime_env["HEARTWOOD_GPU_RUNTIME"] == "vllm"
     assert runtime_env["HEARTWOOD_PLATFORM_HOME"] == "/home/jupyter"
-    assert runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert "VLLM_USE_FLASHINFER_SAMPLER" not in runtime_env
     assert not any("API_KEY" in name for name in runtime_env)
     assert "HEARTWOOD_HOME" not in runtime_env
     assert "HEARTWOOD_WORKSPACE" not in runtime_env
@@ -824,8 +1021,8 @@ def test_task_handoff_uses_a_private_project_file_without_exposing_prompt(
         return 0
 
     monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("gpu", True),),
+        "heartwood.cli._launch.discover_slurm_gpu_partitions",
+        lambda _env: (_partition(),),
     )
 
     assert (
@@ -1046,14 +1243,11 @@ def test_partition_discovery_and_selection(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        "heartwood.cli._launch.subprocess.run",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess(
-            (), 0, stdout="dev*|gpu:nvidia_l40s:8|up\nlong|gpu:nvidia_l40s:8|up\n"
+        "heartwood.cli._launch.discover_slurm_gpu_partitions",
+        lambda _env: (
+            _partition("dev", default=True),
+            _partition("long", default=False),
         ),
-    )
-    assert _discover_slurm_gpu_partitions({"PATH": "/usr/bin"}) == (
-        ("dev", True),
-        ("long", False),
     )
     plan = build_launch_plan(
         _options(tmp_path, partition=None),
@@ -1062,8 +1256,11 @@ def test_partition_discovery_and_selection(
     assert "--partition=dev" in plan.allocation_command
 
     monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("dev", True), ("normal", False)),
+        "heartwood.cli._launch.discover_slurm_gpu_partitions",
+        lambda _env: (
+            _partition("dev", default=True),
+            _partition("normal", default=False),
+        ),
     )
     assert (
         run_launch(
@@ -1087,8 +1284,11 @@ def test_partition_discovery_handles_ambiguous_and_unavailable_schedulers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "heartwood.cli._launch._discover_slurm_gpu_partitions",
-        lambda _env: (("dev", False), ("normal", False)),
+        "heartwood.cli._launch.discover_slurm_gpu_partitions",
+        lambda _env: (
+            _partition("dev", default=False),
+            _partition("normal", default=False),
+        ),
     )
     assert (
         run_launch(
@@ -1098,17 +1298,6 @@ def test_partition_discovery_handles_ambiguous_and_unavailable_schedulers(
         == 64
     )
     assert "no default GPU partition" in capsys.readouterr().out
-
-    monkeypatch.setattr(
-        "heartwood.cli._launch.subprocess.run",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess((), 1, stdout=""),
-    )
-    assert _discover_slurm_gpu_partitions({}) == ()
-    monkeypatch.setattr(
-        "heartwood.cli._launch.subprocess.run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("missing sinfo")),
-    )
-    assert _discover_slurm_gpu_partitions({}) == ()
 
 
 def test_vllm_preflight_and_output_helpers(
@@ -1135,7 +1324,7 @@ def test_vllm_preflight_and_output_helpers(
                     "xgrammar GHSA-7rgv-gqhr-fxg3 fixes verified\n"
                 ),
             )
-        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+        return subprocess.CompletedProcess(command, 0, stdout="0.25.1+cu129 2.11.0+cu129 12.9\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
     assert _preflight_vllm(executable, {"PATH": "/usr/bin"}) is None
@@ -1194,12 +1383,12 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
             stdout="",
             stderr=(
                 "Traceback (most recent call last):\n"
-                "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)\n"
+                "AssertionError: CUDA is unavailable to PyTorch 2.11.0 (built for CUDA 12.9)\n"
             ),
         ),
     )
     assert _preflight_vllm(executable, {}) == (
-        "AssertionError: CUDA is unavailable to PyTorch 2.7.1 (built for CUDA 11.8)"
+        "AssertionError: CUDA is unavailable to PyTorch 2.11.0 (built for CUDA 12.9)"
     )
 
     monkeypatch.setattr(
@@ -1238,7 +1427,7 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
                 stdout="",
                 stderr="first line\nincompatible model configuration\n",
             )
-        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+        return subprocess.CompletedProcess(command, 0, stdout="0.25.1+cu129 2.11.0+cu129 12.9\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", failed_compatibility)
     assert _preflight_vllm(wrapper, {}) == "incompatible model configuration"
@@ -1248,7 +1437,7 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
     ) -> subprocess.CompletedProcess[str]:
         if command == (str(wrapper), "__heartwood_verify_runtime__"):
             raise subprocess.TimeoutExpired(command, 60)
-        return subprocess.CompletedProcess(command, 0, stdout="0.10.1.1 2.7.1 11.8\n")
+        return subprocess.CompletedProcess(command, 0, stdout="0.25.1+cu129 2.11.0+cu129 12.9\n")
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", timed_out_compatibility)
     assert "timed out after 60 seconds" in str(_preflight_vllm(wrapper, {}))
@@ -1265,6 +1454,19 @@ def test_model_staging_helpers_cover_files_directories_and_sizes(tmp_path: Path)
         size_bytes=4,
         artifact_sha256=hashlib.sha256(b"1234").hexdigest(),
         context_window=32_768,
+        maximum_context_window=32_768,
+        tier="standard",
+        precision="GGUF synthetic",
+        qualification="qualified",
+        minimum_gpu_count=0,
+        minimum_gpu_memory_bytes=0,
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=32 * 1024**3,
+        tool_call_parser=None,
+        tensor_parallel_size=1,
+        startup_seconds_min=1,
+        startup_seconds_max=2,
+        catalog_source="user-selected",
     )
     _verify_local_model(selection)
     file_destination = tmp_path / "file-stage"
@@ -1300,7 +1502,7 @@ def test_imported_vllm_snapshot_passes_the_launch_integrity_gate(tmp_path: Path)
 
     gateway.import_local_model(
         snapshot,
-        source_repository="example/research-model",
+        source_repository="Qwen/Qwen2.5-Coder-7B-Instruct",
         source_revision="1" * 40,
         license_posture="Apache-2.0",
         context_window=32_768,
