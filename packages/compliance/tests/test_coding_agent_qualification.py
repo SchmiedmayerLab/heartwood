@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -76,7 +77,11 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
             "tool.execution.recorded",
             {"tool_name": "terminal", "exit_code": 0},
         ),
-        _event(5, "agent_message.emitted", {"content": "Complete"}),
+        _event(
+            5,
+            "tool.execution.recorded",
+            {"tool_name": "finish", "exit_code": 0},
+        ),
         _event(6, "audit.export.recorded", {"scrubbed": True}),
     )
     events_path = tmp_path / "events.jsonl"
@@ -137,8 +142,40 @@ def test_coding_agent_qualification_verifies_complete_acceptance_evidence(
         inference_path=inference,
     )
 
-    assert summary["tool_execution_count"] == 1
+    assert summary["tool_execution_count"] == 2
     assert cast(dict[str, bool], summary["checks"])["audit_export_verified"] is True
+
+
+def test_coding_agent_qualification_requires_successful_completion(
+    tmp_path: Path,
+) -> None:
+    module = _module(
+        "verify_coding_agent_e2e_completion",
+        _root() / "images/generic/scripts/verify_coding_agent_e2e.py",
+    )
+    verify = cast(Callable[..., dict[str, object]], module.verify_run)
+    events, audit, artifact, replay, inference = _acceptance_files(tmp_path)
+    payloads = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+    finish = next(
+        payload
+        for payload in payloads
+        if payload["kind"] == "tool.execution.recorded"
+        and payload["payload"].get("tool_name") == "finish"
+    )
+    finish["payload"]["tool_name"] = "unknown"
+    events.write_text(
+        "".join(json.dumps(payload) + "\n" for payload in payloads),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no successful completion"):
+        verify(
+            events_path=events,
+            audit_path=audit,
+            artifact_path=artifact,
+            replay_path=replay,
+            inference_path=inference,
+        )
 
 
 def test_coding_agent_qualification_rejects_incomplete_replay(tmp_path: Path) -> None:
@@ -209,7 +246,7 @@ def test_coding_agent_qualification_accepts_relative_artifact_path(
         inference_path=inference,
     )
 
-    assert summary["tool_execution_count"] == 1
+    assert summary["tool_execution_count"] == 2
 
 
 def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
@@ -250,6 +287,33 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
         "terra-t4-qwen25-coder-14b-awq",
         "terra-4xt4-qwen25-coder-32b-awq",
     }
+
+
+def test_gpu_qualification_catalog_rejects_malformed_entries(tmp_path: Path) -> None:
+    module = _module(
+        "gpu_qualification_config_invalid_list",
+        _root() / "images/gpu/qualification_config.py",
+    )
+    matrix = tmp_path / "compatibility.toml"
+    matrix.write_text('configurations = ["invalid"]\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="malformed configuration"):
+        module.list_configurations(matrix)
+
+
+def test_gpu_qualification_cli_rejects_id_with_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module(
+        "gpu_qualification_config_conflicting_arguments",
+        _root() / "images/gpu/qualification_config.py",
+    )
+    monkeypatch.setattr(sys, "argv", ["qualification_config.py", "profile", "--list"])
+
+    with pytest.raises(SystemExit) as error:
+        module.main()
+
+    assert error.value.code == 2
 
 
 def test_gpu_qualification_script_supports_native_runtime_and_external_matrix() -> None:

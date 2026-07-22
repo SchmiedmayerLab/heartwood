@@ -1478,9 +1478,11 @@ class SessionGateway:
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
             raise ModelRepositoryError(f"unknown Heartwood-managed model: {model_id}")
-        if not self._local_runtime_available(choice.runtime):
-            reason = self._local_model_choice_dict(choice)["availability_reason"]
-            raise ModelRepositoryError(f"{choice.label} is unavailable: {reason}")
+        details = self._local_model_choice_dict(choice)
+        if not details["available"]:
+            raise ModelRepositoryError(
+                f"{choice.label} is unavailable: {details['availability_reason']}"
+            )
         return choice
 
     def _local_runtime_available(self, runtime: str) -> bool:

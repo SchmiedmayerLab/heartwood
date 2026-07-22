@@ -456,18 +456,23 @@ def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
     script = _read("images/gpu/coding_agent_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
 
+    system_python = re.compile(
+        r"(?:^|[;&|]\s*|\bexec\s+)(?:/[^\s;|&]+/)?python(?:3(?:\.\d+)?)?\s",
+        re.MULTILINE,
+    )
+
     assert 'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in script
     assert 'configuration="$("${heartwood_python}"' in script
     assert 'HEARTWOOD_VLLM_ROOT="${vllm_root}"' in script
     assert '"${script_dir}/verify_runtime.sh" "${vllm_root}"' in script
-    assert "\npython " not in script
+    assert system_python.search(script) is None
     assert (
         'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in coding_agent
     )
     assert 'heartwood_cli="${HEARTWOOD_CLI:-${runtime_root}/.venv/bin/heartwood}"' in coding_agent
     assert 'inference="${project}/qualification-inference.json"' in coding_agent
     assert 'mkdir -p "${project}/input"' in coding_agent
-    assert "\npython " not in coding_agent
+    assert system_python.search(coding_agent) is None
 
 
 def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:

@@ -873,6 +873,15 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     assert "Compatible with 1 visible NVIDIA T4 GPU(s)" in str(
         terra_standard["availability_reason"]
     )
+    rejected_large_model = RestGateway(gateway).handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/downloads",
+            body=json.dumps({"model_id": "qwen25-coder-32b-instruct-awq-vllm"}),
+        )
+    )
+    assert rejected_large_model.status_code == 422
+    assert "requires 4 gpu(s)" in str(rejected_large_model.body["error"])
 
 
 def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
@@ -1254,6 +1263,24 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
 ) -> None:
     gateway = _gateway(tmp_path)
     monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
     observed: list[tuple[str, str, Path]] = []
 
     def artifact_download(
@@ -1323,6 +1350,24 @@ def test_gateway_download_uses_the_normalized_model_catalog(
 ) -> None:
     gateway = _gateway(tmp_path)
     monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
     snapshot_id = "qwen25-coder-7b-instruct-awq-vllm"
     destination = tmp_path / ".heartwood" / "models" / snapshot_id
 

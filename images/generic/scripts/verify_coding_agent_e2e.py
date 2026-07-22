@@ -21,7 +21,6 @@ from heartwood.session import SessionEvent
 
 _TEST_ID = "heartwood.coding-agent-e2e.v1"
 _REQUIRED_EVENT_KINDS = {
-    "agent_message.emitted",
     "confirmation.requested",
     "confirmation.resolved",
     "model_call.decision.recorded",
@@ -94,6 +93,18 @@ def verify_run(
         raise ValueError("coding-agent tool execution has no valid exit code")
     if any(event.payload["exit_code"] != 0 for event in tool_executions):
         raise ValueError("coding-agent tool execution failed")
+    completed_with_message = any(
+        event.kind == "agent_message.emitted"
+        and isinstance(event.payload.get("content"), str)
+        and bool(str(event.payload["content"]).strip())
+        for event in events
+    )
+    completed_with_finish = any(
+        event.payload.get("tool_name") == "finish" and event.payload.get("exit_code") == 0
+        for event in tool_executions
+    )
+    if not completed_with_message and not completed_with_finish:
+        raise ValueError("coding-agent session has no successful completion action or message")
 
     routes = [
         decision.get("decision")
