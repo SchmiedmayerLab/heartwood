@@ -49,7 +49,7 @@ The selection screen uses the release catalog as its authoritative source and re
 | Standard fallback | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
 | Standard Terra candidate | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 18,432 on Terra | 2-8 minutes |
 | Powerful Terra candidate | Qwen2.5 Coder 14B AWQ | 9.31 GiB | 1 x 16 GB | 60 GiB | 32 GiB | 18,432 | 3-10 minutes |
-| Powerful Terra candidate | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 96 GiB | 50 GiB | 32,768 | 4-15 minutes |
+| Powerful Terra candidate | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 96 GiB | 50 GiB | 18,432 | 4-15 minutes |
 | Powerful Terra candidate | Qwen2.5 Coder 32B AWQ | 18.00 GiB | 4 x 16 GB | 120 GiB | 48 GiB | 32,768 | 4-15 minutes |
 | Powerful, qualified on Carina | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
 | Maximum candidate | Qwen3 Coder Next FP8 | 74.88 GiB | 4 x 48 GB | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
@@ -61,7 +61,8 @@ Heartwood therefore uses conservative headroom and may choose a smaller context 
 
 Four T4 GPUs do not make the Qwen3 Coder 30B FP8 snapshot or GPT-OSS MXFP4 snapshots compatible with the current runtime.
 Heartwood rejects those combinations before startup when metadata or runtime evidence shows the selected quantization requires a newer GPU generation.
-For four T4 GPUs, evaluate the Qwen3 Coder 30B W4A16 AWQ or Qwen2.5 Coder 32B AWQ candidate and treat the result as unqualified until the full Heartwood acceptance workflow passes.
+For two T4 GPUs, evaluate the Qwen3 Coder 30B W4A16 AWQ candidate with its conservative 18,432-token context and treat the result as unqualified until the full Heartwood acceptance workflow passes.
+For four T4 GPUs, the Qwen2.5 Coder 32B AWQ profile remains an evaluation candidate; the Qwen3 W4A16 quantization cannot be sharded four ways.
 
 ## Other Hugging Face Models
 

@@ -55,7 +55,8 @@ Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs 
 The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
 The GPU paths expose release-pinned Terra candidates while qualification is still in progress.
 The one-T4 candidates are Qwen2.5 Coder 7B and 14B AWQ.
-The four-T4 candidates are Qwen3 Coder 30B W4A16 AWQ and Qwen2.5 Coder 32B AWQ.
+The two-T4 candidate is Qwen3 Coder 30B W4A16 AWQ with a conservative 18,432-token context.
+The four-T4 candidate is Qwen2.5 Coder 32B AWQ; the Qwen3 W4A16 quantization cannot be sharded four ways.
 Four T4 GPUs do not make the catalog's Qwen3 Coder 30B FP8 or GPT-OSS MXFP4 snapshots compatible, so Heartwood rejects those combinations before startup.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
 It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
@@ -123,7 +124,7 @@ You can instead choose **Other Hugging Face model** and enter another public rep
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
 The pinned 14B AWQ snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
-The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 18.1 GiB; use at least 96 GB RAM and retain a 200 GB persistent disk for the two-T4 environment, model cache, notebooks, and results.
+The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 18.1 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
 The pinned Qwen2.5 Coder 32B AWQ snapshot downloads about 18.0 GiB and remains an evaluation candidate until its tool-calling path passes end-to-end.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.

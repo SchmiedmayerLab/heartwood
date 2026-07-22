@@ -264,7 +264,7 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
     assert resolved["runtime"]["cuda_version"] == "12.9"
     assert resolved["configuration"]["tool_call_parser"] == "qwen3_coder"
     assert resolved["configuration"]["agent_tool_mode"] == "openhands-native"
-    assert resolved["configuration"]["context_window"] == 32_768
+    assert resolved["configuration"]["context_window"] == 18_432
     assert resolved["configuration"]["gpu_count"] == 2
     assert resolved["configuration"]["tensor_parallel_size"] == 2
     assert "enforce_eager" not in resolved["configuration"]
