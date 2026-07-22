@@ -272,6 +272,10 @@ jobs:
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/gpu-metadata.json "${TARGET}")"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Reclaim candidate verification space
+        run: |
+          docker buildx prune --all --force
+          docker system df
       - name: Verify candidate contents
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}
