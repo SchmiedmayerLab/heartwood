@@ -41,7 +41,7 @@ Do not use a shared project root itself as the Heartwood project.
 ```bash
 cd heartwood-installation
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.5/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.6/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"

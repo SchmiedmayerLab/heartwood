@@ -41,10 +41,11 @@ Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
-| Managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
-| Managed 32B GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.5-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
+| Lower-cost GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
+| Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Four-GPU model evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
@@ -124,11 +125,11 @@ You can instead choose **Other Hugging Face model** and enter another public rep
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
 The pinned 14B AWQ snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
-The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 18.1 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
+The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 16.8 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
 The pinned Qwen2.5 Coder 32B AWQ snapshot downloads about 18.0 GiB and remains an evaluation candidate until its tool-calling path passes end-to-end.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
-The first inference startup is planned for approximately 2-8 minutes while vLLM loads the model and prepares GPU memory.
+Depending on the model and persistent-disk throughput, the first verification and inference startup is planned for approximately 2-15 minutes while Heartwood verifies the snapshot and vLLM prepares GPU memory.
 Heartwood reports the active stage, elapsed time, selected context capacity, and memory assessment while you wait.
 
 Use `heartwood --plain` when the full-screen terminal is not rendered correctly.

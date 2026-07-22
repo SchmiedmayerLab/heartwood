@@ -217,7 +217,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0-beta.5"' in bake
+    assert 'default = "0.2.0-beta.6"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
 
 

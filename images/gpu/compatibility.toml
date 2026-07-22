@@ -122,7 +122,7 @@ reason = "The model's W4A16 quantization group size crosses four-way tensor-para
 [[configurations]]
 configuration_id = "terra-2xt4-qwen3-coder-30b-awq"
 status = "qualified"
-validated_at = "2026-07-21"
+validated_at = "2026-07-22"
 validated_driver_version = "535.154.05"
 evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 platform = "terra"
