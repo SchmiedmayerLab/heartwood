@@ -469,9 +469,10 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+        "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
-    assert {choice.context_window for choice in choices} == {32_768}
+    assert {choice.context_window for choice in choices} == {18_432, 32_768}
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
     assert {
@@ -486,13 +487,19 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     } <= {choice.model_id for choice in downloadable}
     assert all(choice.catalog_source == "catalog" for choice in downloadable)
     gpu_choices = {choice.model_id: choice for choice in downloadable if choice.runtime == "vllm"}
-    assert gpu_choices["qwen3-coder-30b-a3b-instruct-fp8-vllm"].qualification == "qualified"
+    assert {
+        model_id for model_id, choice in gpu_choices.items() if choice.qualification == "qualified"
+    } == {
+        "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+        "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
+    }
     assert all(
         choice.qualification == "candidate"
         for model_id, choice in gpu_choices.items()
         if model_id
         not in {
             "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
         }
     )
 
@@ -515,12 +522,23 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
         )
         if choice.model_id == "qwen25-coder-14b-instruct-awq-vllm"
     )
+    qualified_terra_gpu = next(
+        choice
+        for choice in catalog_model_choices(
+            artifacts.artifacts,
+            snapshots.snapshots,
+            recommended_only=False,
+        )
+        if choice.model_id == "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
+    )
 
     assert cpu.qualification_for("generic") == "qualified"
     assert cpu.qualification_for("terra") == "qualified"
     assert cpu.qualification_for("carina") == "candidate"
     assert terra_gpu.qualification_for("terra") == "candidate"
     assert terra_gpu.qualification_for("carina") == "candidate"
+    assert qualified_terra_gpu.qualification_for("terra") == "qualified"
+    assert qualified_terra_gpu.qualification_for("carina") == "candidate"
 
 
 def _repository(

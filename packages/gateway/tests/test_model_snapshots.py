@@ -123,6 +123,7 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
         if snapshot_id
         in {
             "qwen3-coder-30b-a3b-instruct-fp8-vllm",
+            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
         }
         else "candidate"
     )

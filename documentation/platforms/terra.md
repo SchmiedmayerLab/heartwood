@@ -53,9 +53,9 @@ CPU inference is portable but can be too slow for an interactive coding workflow
 These are starting points rather than universal requirements.
 Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
 The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
-The GPU paths expose release-pinned Terra candidates while qualification is still in progress.
+The GPU paths expose one release-pinned Terra recommendation and additional evaluation candidates.
 The one-T4 candidates are Qwen2.5 Coder 7B and 14B AWQ.
-The two-T4 candidate is Qwen3 Coder 30B W4A16 AWQ with a conservative 18,432-token context.
+The qualified two-T4 recommendation is Qwen3 Coder 30B W4A16 AWQ with a conservative 18,432-token context.
 The four-T4 candidate is Qwen2.5 Coder 32B AWQ; the Qwen3 W4A16 quantization cannot be sharded four ways.
 Four T4 GPUs do not make the catalog's Qwen3 Coder 30B FP8 or GPT-OSS MXFP4 snapshots compatible, so Heartwood rejects those combinations before startup.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
@@ -118,7 +118,7 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
 For managed GPU inference on one T4, start with the **Powerful** Qwen2.5 Coder 14B AWQ candidate.
-With two or more T4 GPUs, start with the **Powerful** Qwen3 Coder 30B W4A16 AWQ candidate while qualification is in progress.
+With two or more T4 GPUs, start with the qualified **Powerful** Qwen3 Coder 30B W4A16 AWQ recommendation.
 Choose the **Standard** 7B Qwen2.5 candidate when you prefer a smaller download and lower memory pressure.
 You can instead choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
