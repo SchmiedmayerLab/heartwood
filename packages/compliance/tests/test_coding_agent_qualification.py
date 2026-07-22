@@ -404,7 +404,7 @@ def test_gpu_compatibility_records_rejected_terra_configuration() -> None:
                 "vLLM rejects GPT-OSS MXFP4 on NVIDIA T4 because it requires compute "
                 "capability 8.0 and the T4 provides compute capability 7.5."
             ),
-        }
+        },
     ]
 
 

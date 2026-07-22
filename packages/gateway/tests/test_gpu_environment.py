@@ -297,9 +297,7 @@ def test_model_quantization_declares_minimum_compute_capability(
     precision: str,
     expected: tuple[int, int] | None,
 ) -> None:
-    assert (
-        minimum_compute_capability_for_model(model_id=model_id, precision=precision) == expected
-    )
+    assert minimum_compute_capability_for_model(model_id=model_id, precision=precision) == expected
 
 
 @pytest.mark.parametrize(
