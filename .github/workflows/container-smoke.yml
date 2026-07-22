@@ -103,8 +103,6 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-        with:
-          driver: docker
       - name: Build no-weight runtime image
         run: >-
           docker buildx bake --file docker-bake.hcl --load
@@ -141,7 +139,10 @@ jobs:
           bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
       - name: Prepare coding-agent qualification evidence
         if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" /tmp/heartwood-project
+        run: |
+          if [[ -d /tmp/heartwood-project ]]; then
+            sudo chown -R "$(id -u):$(id -g)" /tmp/heartwood-project
+          fi
       - name: Upload coding-agent qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
