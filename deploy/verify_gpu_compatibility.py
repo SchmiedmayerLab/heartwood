@@ -178,7 +178,7 @@ def _verify_configuration(
             )
     if configuration.get("qualification_test") != _QUALIFICATION_TEST:
         raise CompatibilityError("GPU model uses an unsupported qualification test")
-    if configuration.get("agent_tool_mode") != "openhands-prompt":
+    if configuration.get("agent_tool_mode") != "openhands-native":
         raise CompatibilityError("GPU model uses an unsupported agent tool mode")
     for field in (
         "gpu_count",

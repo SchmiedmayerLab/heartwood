@@ -63,14 +63,6 @@ from heartwood.gateway import (
             "qwen3_coder",
         ),
         (
-            "qwen3-coder-30b-a3b-instruct-bf16-vllm",
-            "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-            "b2cff646eb4bb1d68355c01b18ae02e7cf42d120",
-            "powerful",
-            2,
-            "qwen3_coder",
-        ),
-        (
             "qwen3-coder-next-fp8-vllm",
             "Qwen/Qwen3-Coder-Next-FP8",
             "da6e2ed27304dd39abadd9c82ef50e8de67bdd4c",
@@ -116,12 +108,17 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
         in {
             "qwen25-coder-7b-instruct-awq-vllm",
             "qwen25-coder-14b-instruct-awq-vllm",
+            "qwen25-coder-32b-instruct-awq-vllm",
+            "qwen3-coder-30b-a3b-instruct-fp8-vllm",
         }
         else "candidate"
     )
     assert snapshot.qualification == expected_qualification
     if expected_qualification == "qualified":
-        assert snapshot.validated_platforms == ("terra",)
+        expected_platform = (
+            "carina" if snapshot_id == "qwen3-coder-30b-a3b-instruct-fp8-vllm" else "terra"
+        )
+        assert snapshot.validated_platforms == (expected_platform,)
         assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
         assert snapshot.recommended is True
     else:
@@ -257,11 +254,10 @@ def test_catalog_capacity_recommendation_prefers_more_parallelism_within_tier() 
         recommended=True,
     )
     dual = replace(
-        source.snapshot("qwen3-coder-30b-a3b-instruct-bf16-vllm"),
-        qualification="qualified",
-        validated_platforms=("carina",),
-        qualification_test="heartwood.coding-agent-e2e.v1",
-        recommended=True,
+        single,
+        snapshot_id="synthetic-dual-gpu-model",
+        minimum_gpu_count=2,
+        tensor_parallel_size=2,
     )
     catalog = ModelSnapshotCatalog(source.schema_version, (single, dual))
 

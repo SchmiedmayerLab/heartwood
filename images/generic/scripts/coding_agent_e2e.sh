@@ -111,7 +111,7 @@ run_heartwood models connect heartwood heartwood-managed-runtime | tee -a "${tra
 run_heartwood models validate heartwood | tee -a "${transcript}"
 run_heartwood actions set ask-every-time | tee -a "${transcript}"
 run_heartwood --session-id "${session_id}" \
-  --prompt "Call the terminal tool to execute this exact command: python ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
+  --prompt "Call the terminal tool to execute this exact command: ${heartwood_python} ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do

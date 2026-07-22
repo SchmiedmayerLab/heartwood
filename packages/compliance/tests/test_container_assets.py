@@ -325,7 +325,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
-    assert "VLLM_USE_FLASHINFER_SAMPLER" not in launcher
+    assert 'flashinfer_sampler="${HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER:-0}"' in launcher
+    assert 'export VLLM_USE_FLASHINFER_SAMPLER="${flashinfer_sampler}"' in launcher
     assert "huggingface.co" not in launcher
     assert "/opt/heartwood-vllm/bin/heartwood-vllm" in launcher
     assert "/opt/heartwood-vllm/bin/python" in verifier
@@ -414,9 +415,14 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     model = tmp_path / "model"
     model.mkdir()
     arguments = tmp_path / "arguments.txt"
+    environment = tmp_path / "environment.txt"
     executable = tmp_path / "vllm"
     executable.write_text(
-        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {arguments}\n",
+        (
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$@\" > {arguments}\n"
+            f"printf '%s\\n' \"$VLLM_USE_FLASHINFER_SAMPLER\" > {environment}\n"
+        ),
         encoding="utf-8",
     )
     executable.chmod(0o755)
@@ -436,6 +442,7 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert values[values.index("--host") + 1] == "127.0.0.1"
     assert values[values.index("--served-model-name") + 1] == "test-model"
     assert values[values.index("--tool-call-parser") + 1] == "hermes"
+    assert environment.read_text(encoding="utf-8") == "0\n"
 
     env["HEARTWOOD_VLLM_ENFORCE_EAGER"] = "1"
     eager = subprocess.run(["bash", str(script)], env=env, check=False)
@@ -447,6 +454,11 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert invalid.returncode == 64
 
     env.pop("HEARTWOOD_VLLM_ENFORCE_EAGER")
+    env["HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER"] = "invalid"
+    invalid_sampler = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid_sampler.returncode == 64
+
+    env.pop("HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER")
     env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
     denied = subprocess.run(["bash", str(script)], env=env, check=False)
     assert denied.returncode == 64

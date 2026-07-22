@@ -92,13 +92,11 @@ Heartwood labels one **Recommended** only after its complete tool, approval, edi
 
 | Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated First Start |
 |---|---|---:|---:|---:|---:|---:|
-| Standard fallback | Qwen2.5 Coder 7B AWQ | 1 x L40S | 32 GiB | 16 GiB | 32,768 | 2-8 minutes |
-| Powerful | Qwen3 Coder 30B FP8 | 1 x L40S | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
-| Powerful, higher precision | Qwen3 Coder 30B BF16 | 2 x L40S | 128 GiB | 96 GiB | 65,536 | 4-12 minutes |
+| Powerful, qualified | Qwen3 Coder 30B FP8 | 1 x L40S | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
 | Maximum capability | Qwen3 Coder Next FP8 | 4 x L40S | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
 | Maximum alternative | GPT-OSS 120B MXFP4 | 2 x L40S | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
 
-Download sizes range from about 5.2 GiB for the Standard GPU model to 74.9 GiB for the largest candidate.
+Download sizes range from about 29.1 GiB for the qualified one-GPU model to 74.9 GiB for the largest candidate.
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
 
 For a short interactive session, normal `heartwood` startup selects Slurm's default compatible GPU partition.

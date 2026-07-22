@@ -48,10 +48,6 @@ def test_repository_model_sources_are_immutable_and_use_revision_routes() -> Non
             "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
             "1ed0a6145da0ce550c628e8e8b678f51e695995d",
         ),
-        "qwen3-coder-30b-a3b-instruct-bf16-vllm": (
-            "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-            "b2cff646eb4bb1d68355c01b18ae02e7cf42d120",
-        ),
         "qwen3-coder-30b-a3b-instruct-fp8-vllm": (
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
             "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",

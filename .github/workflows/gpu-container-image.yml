@@ -29,9 +29,7 @@ on:
           - terra-t4-qwen25-coder-7b-awq
           - terra-t4-qwen25-coder-14b-awq
           - terra-4xt4-qwen25-coder-32b-awq
-          - carina-l40s-qwen25-coder-7b-awq
           - carina-l40s-qwen3-coder-30b-fp8
-          - carina-2xl40s-qwen3-coder-30b-bf16
           - carina-4xl40s-qwen3-coder-next-fp8
           - carina-2xl40s-gpt-oss-120b
       qualification_runner:

@@ -17,6 +17,7 @@ tensor_parallel_size="${HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE:-1}"
 gpu_memory_utilization="${HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 enforce_eager="${HEARTWOOD_VLLM_ENFORCE_EAGER:-0}"
 vllm="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
+flashinfer_sampler="${HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
   echo "vLLM must bind to loopback, got ${host}" >&2
@@ -29,6 +30,10 @@ fi
 if [[ ! -x "${vllm}" ]]; then
   echo "vLLM executable is unavailable: ${vllm}" >&2
   exit 69
+fi
+if [[ "${flashinfer_sampler}" != "0" && "${flashinfer_sampler}" != "1" ]]; then
+  echo "HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER must be 0 or 1" >&2
+  exit 64
 fi
 
 arguments=(
@@ -49,4 +54,5 @@ elif [[ "${enforce_eager}" != "0" ]]; then
   exit 64
 fi
 
+export VLLM_USE_FLASHINFER_SAMPLER="${flashinfer_sampler}"
 exec "${vllm}" "${arguments[@]}"
