@@ -741,6 +741,12 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "if: github.ref == 'refs/heads/main'" in workflow
     assert "push-by-digest=true" in workflow
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
+    assert "docker buildx prune --all --force" in main_build
+    assert (
+        main_build.index("Build candidate by digest")
+        < main_build.index("docker buildx prune --all --force")
+        < main_build.index("Verify candidate contents")
+    )
     assert "--prefer-index=false" in workflow
     assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
     assert "observed media type:" in workflow
