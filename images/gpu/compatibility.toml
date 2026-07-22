@@ -129,6 +129,30 @@ evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 reason = "vLLM's FP8 Mixture-of-Experts path requires quantization dimensions that this model does not provide on NVIDIA T4 GPUs."
 
 [[configurations]]
+configuration_id = "terra-4xt4-qwen25-coder-32b-awq"
+status = "candidate"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 4
+minimum_gpu_memory_bytes = 15000000000
+model_snapshot = "qwen25-coder-32b-instruct-awq-vllm"
+model_repository = "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
+model_revision = "1ed0a6145da0ce550c628e8e8b678f51e695995d"
+precision = "AWQ int4"
+context_window = 32768
+tensor_parallel_size = 4
+tool_call_parser = "hermes"
+agent_tool_mode = "openhands-prompt"
+enforce_eager = true
+vllm_version = "0.25.1+cu129"
+pytorch_version = "2.11.0+cu129"
+cuda_version = "12.9"
+minimum_driver_version = "525.60.13"
+qualification_test = "heartwood.coding-agent-e2e.v1"
+startup_seconds_min = 240
+startup_seconds_max = 900
+
+[[configurations]]
 configuration_id = "carina-2xl40s-qwen3-coder-30b-bf16"
 status = "candidate"
 platform = "carina"

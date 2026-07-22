@@ -107,6 +107,34 @@ minimum_resource_envelope = "One NVIDIA L40S-class GPU with 48 GB VRAM, 12 CPU c
 recommended_resource_envelope = "One NVIDIA L40S-class GPU with 48 GB VRAM, 16 CPU cores, 96 GB RAM, and 64 GB free project storage."
 recommended = false
 
+[snapshots.qwen25-coder-32b-instruct-awq-vllm]
+runtime_profile = "vllm-cuda"
+purpose = "Powerful 32B coding-agent candidate for four 16 GB NVIDIA GPUs."
+source_repository = "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
+source_revision = "1ed0a6145da0ce550c628e8e8b678f51e695995d"
+expected_size_bytes = 19328993904
+minimum_free_bytes = 34359738368
+license_id = "Apache-2.0"
+license_posture = "Apache-2.0; retain the model card and source provenance."
+model_alias = "Qwen2.5 Coder 32B"
+precision = "AWQ int4"
+tier = "powerful"
+qualification = "candidate"
+minimum_gpu_count = 4
+minimum_gpu_memory_bytes = 15000000000
+recommended_ram_bytes = 128849018880
+recommended_disk_bytes = 51539607552
+context_window = 32768
+maximum_context_window = 32768
+tool_call_parser = "hermes"
+tensor_parallel_size = 4
+startup_seconds_min = 240
+startup_seconds_max = 900
+download_policy = "transformers-safetensors"
+minimum_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 24 CPU cores, 96 GB RAM, and 32 GB free project storage."
+recommended_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 32 CPU cores, 120 GB RAM, and 48 GB free project storage."
+recommended = false
+
 [snapshots.qwen3-coder-30b-a3b-instruct-bf16-vllm]
 runtime_profile = "vllm-cuda"
 purpose = "Powerful higher-precision coding-agent model for two 48 GB NVIDIA GPUs."

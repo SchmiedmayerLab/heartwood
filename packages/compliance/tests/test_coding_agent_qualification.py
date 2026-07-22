@@ -248,7 +248,18 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
     assert {configuration["configuration_id"] for configuration in configurations} == {
         "terra-t4-qwen25-coder-7b-awq",
         "terra-t4-qwen25-coder-14b-awq",
+        "terra-4xt4-qwen25-coder-32b-awq",
     }
+
+
+def test_gpu_qualification_script_supports_native_runtime_and_external_matrix() -> None:
+    script = (_root() / "images/gpu/coding_agent_e2e.sh").read_text(encoding="utf-8")
+
+    assert "HEARTWOOD_GPU_COMPATIBILITY_MATRIX" in script
+    assert '--matrix "${compatibility_matrix}"' in script
+    assert 'HEARTWOOD_VLLM_ROOT="${vllm_root}"' in script
+    assert 'verify_runtime.sh" "${vllm_root}"' in script
+    assert 'verify_runtime.sh" /opt' not in script
 
 
 def test_gpu_compatibility_records_rejected_terra_configuration() -> None:

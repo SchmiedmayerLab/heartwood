@@ -12,12 +12,14 @@ model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required
 project="${HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-gpu-qualification}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(cd "${script_dir}/../.." && pwd)}"
+compatibility_matrix="${HEARTWOOD_GPU_COMPATIBILITY_MATRIX:-${script_dir}/compatibility.toml}"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${project}/vllm.log}"
 runtime_metadata="${HEARTWOOD_QUALIFICATION_RUNTIME_METADATA:-${project}/gpu-runtime.json}"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
 vllm_executable="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 vllm_python="${HEARTWOOD_VLLM_PYTHON:-/opt/heartwood-vllm/bin/python}"
+vllm_root="${HEARTWOOD_VLLM_ROOT:-$(cd "$(dirname "${vllm_python}")/.." && pwd)}"
 
 if [[ ! -d "${model_path}" ]]; then
   echo "vLLM model snapshot is unavailable: ${model_path}" >&2
@@ -27,12 +29,17 @@ if [[ ! -x "${heartwood_python}" ]]; then
   echo "Heartwood Python is unavailable: ${heartwood_python}" >&2
   exit 69
 fi
+if [[ ! -f "${compatibility_matrix}" ]]; then
+  echo "GPU compatibility matrix is unavailable: ${compatibility_matrix}" >&2
+  exit 66
+fi
 mkdir -p "${project}"
 project="$(cd "${project}" && pwd -P)"
 model_path="$(cd "${model_path}" && pwd -P)"
 rm -f "${runtime_log}" "${runtime_metadata}"
 
-configuration="$("${heartwood_python}" "${script_dir}/qualification_config.py" "${configuration_id}")"
+configuration="$("${heartwood_python}" "${script_dir}/qualification_config.py" \
+  --matrix "${compatibility_matrix}" "${configuration_id}")"
 snapshot_id="$(jq -er '.configuration.model_snapshot' <<<"${configuration}")"
 repository="$(jq -er '.configuration.model_repository' <<<"${configuration}")"
 revision="$(jq -er '.configuration.model_revision' <<<"${configuration}")"
@@ -82,7 +89,10 @@ if not compatible or not environment.visible_devices:
     raise SystemExit("the requested qualification requires compatible GPUs visible in this process")
 PY
 
-"${script_dir}/verify_runtime.sh" /opt
+HEARTWOOD_VLLM_ROOT="${vllm_root}" \
+HEARTWOOD_VLLM_PYTHON="${vllm_python}" \
+HEARTWOOD_VLLM_EXECUTABLE="${vllm_executable}" \
+  "${script_dir}/verify_runtime.sh" "${vllm_root}"
 "${vllm_executable}" --version >/dev/null
 "${vllm_python}" - "${runtime_metadata}" <<'PY'
 import json

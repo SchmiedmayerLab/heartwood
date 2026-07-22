@@ -458,7 +458,8 @@ def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
 
     assert 'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in script
     assert 'configuration="$("${heartwood_python}"' in script
-    assert '"${script_dir}/verify_runtime.sh" /opt' in script
+    assert 'HEARTWOOD_VLLM_ROOT="${vllm_root}"' in script
+    assert '"${script_dir}/verify_runtime.sh" "${vllm_root}"' in script
     assert "\npython " not in script
     assert (
         'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in coding_agent
