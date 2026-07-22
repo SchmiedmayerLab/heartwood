@@ -272,7 +272,7 @@ def test_gpu_qualification_report_uses_external_matrix(
     )
     matrix = tmp_path / "compatibility.toml"
     matrix.write_text(
-        "[[configurations]]\nconfiguration_id = \"external-profile\"\nplatform = \"terra\"\n",
+        '[[configurations]]\nconfiguration_id = "external-profile"\nplatform = "terra"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("HEARTWOOD_GPU_COMPATIBILITY_MATRIX", str(matrix))
