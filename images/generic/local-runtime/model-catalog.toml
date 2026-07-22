@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-schema_version = "heartwood.local-model-catalog.v1"
+schema_version = "heartwood.local-model-catalog.v2"
 default_smoke_model = "llama-cpp-stories260k-ci"
 default_demo_agent_model = "qwen25-7b-instruct-q4_k_m"
 default_demo_coding_model = "qwen25-coder-7b-instruct-q4_k_m"

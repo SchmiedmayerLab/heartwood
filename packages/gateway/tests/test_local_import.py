@@ -43,8 +43,10 @@ def test_imports_gguf_atomically_with_provenance_and_integrity(tmp_path: Path) -
     assert imported.path != source
     assert imported.model.runtime == "llama-cpp"
     assert imported.model.artifact_sha256 is not None
+    assert imported.model.license_id == "Apache-2.0"
     manifest = json.loads((imported.path.parent / "heartwood-model.json").read_text())
     assert manifest["source_repository"] == "example/research-model-gguf"
+    assert manifest["license_id"] == "Apache-2.0"
     assert str(source) not in json.dumps(manifest)
 
 

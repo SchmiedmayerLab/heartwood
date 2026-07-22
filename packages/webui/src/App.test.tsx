@@ -497,7 +497,7 @@ class FakeClient implements HeartwoodClient {
       };
     }
     return Promise.resolve({
-      schema_version: "heartwood.local-model-catalog.v1",
+      schema_version: "heartwood.local-model-catalog.v2",
       snapshot_schema_version: "heartwood.model-snapshot-catalog.v2",
       artifacts: [
         {

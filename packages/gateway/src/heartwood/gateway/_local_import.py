@@ -23,6 +23,7 @@ from heartwood.gateway._local_models import (
     LocalModelChoice,
     LocalModelRuntime,
     ModelRepositoryError,
+    _license_id_from_posture,
     infer_model_type,
     infer_tool_call_parser,
     safe_snapshot_download_policy,
@@ -76,6 +77,7 @@ def import_local_model(
         raise ModelRepositoryError("source revision must be an immutable commit hash")
     if not license_posture.strip():
         raise ModelRepositoryError("the upstream model license must be recorded")
+    license_id = _license_id_from_posture(license_posture)
     if context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
         raise ModelRepositoryError(
             "Heartwood agent sessions require an imported model context window of at least "
@@ -144,7 +146,7 @@ def import_local_model(
         artifact_sha256=checksum,
         minimum_resource_envelope=_minimum_resource_envelope(runtime, size_bytes),
         recommended_resource_envelope=_recommended_resource_envelope(runtime, size_bytes),
-        license_id="Unspecified",
+        license_id=license_id,
         precision="Repository-defined safetensors" if runtime == "vllm" else "GGUF quantized",
         minimum_gpu_count=1 if runtime == "vllm" else 0,
         minimum_gpu_memory_bytes=(
@@ -176,6 +178,7 @@ def import_local_model(
             "source_revision": source_revision,
             "source_path": source.name if runtime == "llama-cpp" else None,
             "license_posture": license_posture.strip(),
+            "license_id": license_id,
             "size_bytes": size_bytes,
             "runtime": runtime,
             "model_type": model_type,

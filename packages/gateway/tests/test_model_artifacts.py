@@ -168,7 +168,7 @@ def test_background_manager_reports_ready_download(
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
     installed = tmp_path / "models" / artifact.artifact_id / "model.gguf"
@@ -213,7 +213,7 @@ def test_background_manager_exposes_in_progress_byte_count(
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
     started = Event()
@@ -261,7 +261,7 @@ def test_background_manager_reports_actionable_safe_errors(
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
 
@@ -345,7 +345,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
     selected: list[tuple[str, Path, str]] = []
     manager = LocalModelDownloadManager(
         artifact_catalog=ModelArtifactCatalog(
-            schema_version="heartwood.local-model-catalog.v1",
+            schema_version="heartwood.local-model-catalog.v2",
             artifacts=(),
         ),
         snapshot_catalog=ModelSnapshotCatalog(
@@ -393,7 +393,7 @@ def test_artifact_metadata_rejects_unsafe_values(
 def test_catalog_lookup_and_safe_serialization() -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
-        schema_version="heartwood.local-model-catalog.v1",
+        schema_version="heartwood.local-model-catalog.v2",
         artifacts=(artifact,),
     )
 
@@ -415,7 +415,7 @@ def test_catalog_loader_rejects_malformed_catalogs_and_manifests(tmp_path: Path)
         load_model_artifact_catalog(catalog_path)
 
     catalog_path.write_text(
-        'schema_version = "heartwood.local-model-catalog.v1"\n',
+        'schema_version = "heartwood.local-model-catalog.v2"\n',
         encoding="utf-8",
     )
     with pytest.raises(ModelArtifactError, match="models table"):
@@ -424,7 +424,7 @@ def test_catalog_loader_rejects_malformed_catalogs_and_manifests(tmp_path: Path)
     catalog_path.write_text(
         "\n".join(
             (
-                'schema_version = "heartwood.local-model-catalog.v1"',
+                'schema_version = "heartwood.local-model-catalog.v2"',
                 "[models.invalid]",
                 'artifact_manifest = "manifest.toml"',
             )
@@ -444,7 +444,7 @@ def test_catalog_loader_rejects_duplicate_artifact_ids(tmp_path: Path) -> None:
     catalog_path.write_text(
         "\n".join(
             (
-                'schema_version = "heartwood.local-model-catalog.v1"',
+                'schema_version = "heartwood.local-model-catalog.v2"',
                 "[models.one]",
                 'artifact_manifest = "one.toml"',
                 "[models.ignored]",

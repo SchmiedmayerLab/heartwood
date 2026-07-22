@@ -681,7 +681,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert selected.body["active_profile"] == "custom-loopback"
     assert validated.status_code == 200
     assert artifacts.status_code == 200
-    assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v1"
+    assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v2"
     assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v2"
     assert artifacts.body["snapshots"]
     assert removed.body["active_profile"] is None

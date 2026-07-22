@@ -338,7 +338,7 @@ def load_model_artifact_catalog(path: Path) -> ModelArtifactCatalog:
         msg = f"unable to load model artifact catalog {path}: {error}"
         raise ModelArtifactError(msg) from error
     schema_version = _string(data, "schema_version")
-    if schema_version != "heartwood.local-model-catalog.v1":
+    if schema_version != "heartwood.local-model-catalog.v2":
         msg = f"unsupported model artifact catalog schema: {schema_version}"
         raise ModelArtifactError(msg)
     models = data.get("models")

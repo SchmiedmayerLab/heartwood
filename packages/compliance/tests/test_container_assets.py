@@ -464,6 +464,22 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert invalid_sampler.returncode == 64
 
     env.pop("HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER")
+    env["HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE"] = "0"
+    invalid_tensor_parallel = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid_tensor_parallel.returncode == 64
+
+    env["HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE"] = "2"
+    env["HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION"] = "0"
+    invalid_memory_utilization = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert invalid_memory_utilization.returncode == 64
+
+    env["HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION"] = "1.0"
+    valid_resources = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert valid_resources.returncode == 0
+    values = arguments.read_text(encoding="utf-8").splitlines()
+    assert values[values.index("--tensor-parallel-size") + 1] == "2"
+    assert values[values.index("--gpu-memory-utilization") + 1] == "1.0"
+
     env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
     denied = subprocess.run(["bash", str(script)], env=env, check=False)
     assert denied.returncode == 64

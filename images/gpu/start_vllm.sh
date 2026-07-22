@@ -31,6 +31,15 @@ if [[ ! -x "${vllm}" ]]; then
   echo "vLLM executable is unavailable: ${vllm}" >&2
   exit 69
 fi
+if [[ ! "${tensor_parallel_size}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE must be a positive integer" >&2
+  exit 64
+fi
+if [[ ! "${gpu_memory_utilization}" =~ ^(0\.[0-9]+|1(\.0+)?)$ ]] || \
+  [[ "${gpu_memory_utilization}" =~ ^0\.0+$ ]]; then
+  echo "HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION must be greater than 0 and at most 1" >&2
+  exit 64
+fi
 if [[ "${flashinfer_sampler}" != "0" && "${flashinfer_sampler}" != "1" ]]; then
   echo "HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER must be 0 or 1" >&2
   exit 64
