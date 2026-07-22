@@ -267,7 +267,7 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
     assert resolved["configuration"]["context_window"] == 18_432
     assert resolved["configuration"]["gpu_count"] == 2
     assert resolved["configuration"]["tensor_parallel_size"] == 2
-    assert "enforce_eager" not in resolved["configuration"]
+    assert resolved["configuration"]["enforce_eager"] is True
     assert resolved["configuration"]["model_revision"] == (
         "e69e73813144d9b715648d8384b3f2c035397411"
     )

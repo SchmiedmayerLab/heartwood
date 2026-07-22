@@ -134,6 +134,7 @@ context_window = 18432
 tensor_parallel_size = 2
 tool_call_parser = "qwen3_coder"
 agent_tool_mode = "openhands-native"
+enforce_eager = true
 vllm_version = "0.25.1+cu129"
 pytorch_version = "2.11.0+cu129"
 cuda_version = "12.9"
