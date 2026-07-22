@@ -40,6 +40,7 @@ When project direction changes, update the relevant architecture or operations p
 | Audit integrity and session persistence | [documentation/architecture/sessions-audit.md](documentation/architecture/sessions-audit.md) |
 | Testing layers and evidence language | [documentation/architecture/testing.md](documentation/architecture/testing.md) |
 | Python and web development workflow | [documentation/contribute/development.md](documentation/contribute/development.md) |
+| Pull request description structure | [Schmiedmayer Lab pull request template](https://github.com/SchmiedmayerLab/.github/blob/main/.github/pull_request_template.md) |
 | Planned implementation, acceptance criteria, and delivery status | [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) |
 | Acronyms and specialized terms | [documentation/reference/glossary.md](documentation/reference/glossary.md) |
 
@@ -60,6 +61,7 @@ When project direction changes, update the relevant architecture or operations p
 - Assemble generic and platform-derived artifacts through shared manifests, installers, and image stages. Parameterize genuine platform differences instead of copying dependency installation, application assembly, or validation logic.
 - Until Heartwood reaches `1.0.0`, prefer one clean, coherent contract over backward compatibility with unreleased commands, flags, environment variables, state layouts, APIs, or internal abstractions. Remove superseded paths completely and update implementation, tests, documentation, and release notes together; add a compatibility layer only when a documented data-integrity, security, or deployment requirement makes it necessary.
 - Keep changes scoped to the requested behavior. Avoid unrelated refactors, metadata churn, or parallel architecture tracks.
+- Write pull request titles and descriptions as compact, natural project communication using the [organization template](https://github.com/SchmiedmayerLab/.github/blob/main/.github/pull_request_template.md). Include only decision-relevant context, release notes, documentation changes, and concise verification results; omit raw command output, development narration, and redundant detail.
 - Never merge a pull request, enable auto-merge, queue a merge, or bypass a merge requirement without the user's explicit approval to merge that specific pull request. Passing checks or a general request to prepare a pull request does not constitute merge approval.
 - Add or update tests when changing detector logic, policy decisions, adapter behavior, skill validation, audit records, attestation export, CLI output, notebook view models, or web-UI view models.
 - Keep security and compliance claims evidence-backed. If a claim cannot be tested, audited, or linked to a platform control, document it as a limitation.
