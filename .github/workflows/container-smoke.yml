@@ -108,6 +108,8 @@ jobs:
           docker buildx bake --file docker-bake.hcl --load
           --set runtime.platform=linux/amd64
           --set runtime.tags=heartwood-capable:local
+          --set runtime.attest=type=sbom,disabled=true
+          --set runtime.attest=type=provenance,disabled=true
           runtime
       - name: Prepare isolated model and project storage
         run: |
