@@ -93,8 +93,8 @@ Heartwood labels one **Recommended** only after its complete tool, approval, edi
 | Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated First Start |
 |---|---|---:|---:|---:|---:|---:|
 | Powerful, qualified | Qwen3 Coder 30B FP8 | 1 x L40S | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
-| Maximum capability | Qwen3 Coder Next FP8 | 4 x L40S | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
-| Maximum alternative | GPT-OSS 120B MXFP4 | 2 x L40S | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
+| Maximum candidate | Qwen3 Coder Next FP8 | 4 x L40S | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
+| Maximum alternative candidate | GPT-OSS 120B MXFP4 | 2 x L40S | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
 
 Download sizes range from about 29.1 GiB for the qualified one-GPU model to 74.9 GiB for the largest candidate.
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
@@ -137,6 +137,7 @@ The interactive Slurm allocation and supervised vLLM process end with the Heartw
 
 - If a command disappears or is killed on a login node, stop and use Slurm for the compute work; Carina documents strict login-node limits.
 - If a partition is unavailable, run `sinfo --noheader --format='%P|%G|%a'` and choose one of the GPU-capable partitions Heartwood reports.
+- If Slurm reports `QOSMaxGRESPerUser` or `QOSMaxMemoryPerUser`, the account cannot request the planned GPU or RAM total; choose the strongest qualified lower tier or ask the Carina project owner to review the account limits.
 - If the requested model does not fit the available GPU count or memory, choose the strongest compatible lower tier instead of changing tensor parallelism or precision manually.
 - If startup reports a driver or CUDA incompatibility, retain the released CUDA 12.9 environment and report the detected driver; do not install CUDA 13 into the Heartwood runtime.
 - If model startup fails, inspect `.heartwood/logs/` and the `HW-COMPUTE-*` checks from `heartwood doctor` without sharing project content or secrets.
