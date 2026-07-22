@@ -63,14 +63,18 @@ if [[ -z "${MAMBA_EXTRACT_THREADS:-}" ]]; then
   if [[ ! "${extract_threads}" =~ ^[1-9][0-9]*$ ]]; then
     extract_threads=8
   fi
-  if ((extract_threads > 8)); then
+  if ((10#${extract_threads} > 8)); then
     extract_threads=8
   fi
-  export MAMBA_EXTRACT_THREADS="${extract_threads}"
+  MAMBA_EXTRACT_THREADS="${extract_threads}"
 elif [[ ! "${MAMBA_EXTRACT_THREADS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "MAMBA_EXTRACT_THREADS must be a positive integer" >&2
   exit 64
 fi
+if ((10#${MAMBA_EXTRACT_THREADS} > 8)); then
+  MAMBA_EXTRACT_THREADS=8
+fi
+export MAMBA_EXTRACT_THREADS
 printf 'Micromamba extraction workers: %s\n' "${MAMBA_EXTRACT_THREADS}"
 
 initialize_module_command() {

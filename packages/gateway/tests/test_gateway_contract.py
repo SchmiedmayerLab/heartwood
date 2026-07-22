@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import pytest
 
-from heartwood.core_adapter import SessionResult
+from heartwood.core_adapter import AgentBackend, SessionResult
 from heartwood.gateway import (
     GpuCapacity,
     GpuEnvironment,
@@ -1325,6 +1325,21 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
         model for model in restored_models if model["model_id"] == snapshot_id
     )
     assert restored_selection["selected"] is True
+    assert restored_selection["available"] is False
+    constructed_backend: dict[str, object] = {}
+
+    def openhands_backend(**kwargs: object) -> AgentBackend:
+        constructed_backend.update(kwargs)
+        return cast(AgentBackend, object())
+
+    monkeypatch.setattr("heartwood.gateway._gateway.OpenHandsSdkBackend", openhands_backend)
+    gateway.backend_id = "auto"
+    gateway._backend(
+        model_settings=gateway.settings_store.load(),
+        action_settings=gateway.action_settings_store.load(),
+        session_id="hermes-wiring",
+    )
+    assert constructed_backend["native_tool_calling"] is True
     with pytest.raises(ModelRepositoryError, match="unknown Heartwood-managed model: missing"):
         gateway.download_local_model_now("missing")
 

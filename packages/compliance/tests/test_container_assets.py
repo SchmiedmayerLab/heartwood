@@ -535,8 +535,9 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert "module load" in bootstrap
     assert "HEARTWOOD_MODULE_INIT" in bootstrap
     assert 'extract_threads="${SLURM_CPUS_PER_TASK:-8}"' in bootstrap
-    assert 'export MAMBA_EXTRACT_THREADS="${extract_threads}"' in bootstrap
-    assert "if ((extract_threads > 8)); then" in bootstrap
+    assert 'MAMBA_EXTRACT_THREADS="${extract_threads}"' in bootstrap
+    assert "if ((10#${extract_threads} > 8)); then" in bootstrap
+    assert "if ((10#${MAMBA_EXTRACT_THREADS} > 8)); then" in bootstrap
     assert '"${platform}" == "carina"' in installer
     assert '-z "${SLURM_JOB_ID:-}"' in installer
     assert '--partition="${install_partition}"' in installer
