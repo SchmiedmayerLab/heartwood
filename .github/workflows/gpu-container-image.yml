@@ -202,15 +202,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Reclaim runner space for GPU build
-        run: |
-          df --human-readable /
-          sudo rm -rf \
-            /opt/ghc \
-            /usr/local/.ghcup \
-            /usr/local/lib/android \
-            /usr/share/dotnet \
-            /usr/share/swift
-          df --human-readable /
+        run: deploy/reclaim-github-runner-space.sh
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build and validate candidate without image export
@@ -254,6 +246,8 @@ jobs:
       - name: Set image name
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
+      - name: Reclaim runner space for GPU build
+        run: deploy/reclaim-github-runner-space.sh
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry

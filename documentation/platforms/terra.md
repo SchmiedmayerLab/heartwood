@@ -41,11 +41,11 @@ Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
-| Lower-cost GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
-| Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
-| Four-GPU model evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.6-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
+| Lower-cost GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
+| Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Four-GPU model evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
