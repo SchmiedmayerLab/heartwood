@@ -537,11 +537,11 @@ const SettingsContent = (props: UtilitySheetProps) => {
 
           {evaluationModels.length ?
             <details className="advanced-section">
-              <summary>Models under evaluation</summary>
+              <summary>Models not qualified for this platform</summary>
               <div className="advanced-section-content artifact-list">
                 <p className="panel-empty">
-                  These pinned configurations are available for qualification
-                  but are not Heartwood recommendations yet.
+                  These pinned configurations require explicit evaluation.
+                  Heartwood does not recommend them.
                 </p>
                 {evaluationModels.map((model) => (
                   <div className="artifact-row" key={model.model_id}>
@@ -785,8 +785,8 @@ const ModelDownloadConfirmation = ({
       </DialogHeader>
       {model ?
         <div className="local-model-plan">
-          {model.qualification === "candidate" ?
-            <Badge variant="warningLight">Evaluation candidate</Badge>
+          {model.qualification === "unvalidated" ?
+            <Badge variant="warningLight">Not tested</Badge>
           : null}
           <strong>{formatBytes(model.size_bytes)} download</strong>
           <span>

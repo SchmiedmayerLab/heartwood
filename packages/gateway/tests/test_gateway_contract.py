@@ -682,7 +682,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     assert validated.status_code == 200
     assert artifacts.status_code == 200
     assert artifacts.body["schema_version"] == "heartwood.local-model-catalog.v2"
-    assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v2"
+    assert artifacts.body["snapshot_schema_version"] == "heartwood.model-snapshot-catalog.v3"
     assert artifacts.body["snapshots"]
     assert removed.body["active_profile"] is None
     artifact_ids = {
@@ -819,6 +819,7 @@ def test_local_model_availability_reflects_installed_runtime_executables(
                     gpu_count=4,
                     gpu_memory_bytes=48_000_000_000,
                     allocation_required=False,
+                    compute_capability=(8, 9),
                 ),
             ),
         ),
@@ -831,7 +832,7 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     assert fully_available[0]["runtime"] == expected_runtime
     if fully_available[0]["runtime"] == "vllm":
         assert str(fully_available[0]["availability_reason"]).startswith(
-            "Evaluation candidate; not yet a recommended model"
+            "No completed Heartwood qualification exists for this platform"
         )
         assert "Compatible with 4 visible NVIDIA L40S GPU(s)" in str(
             fully_available[0]["availability_reason"]
@@ -858,23 +859,20 @@ def test_local_model_availability_reflects_installed_runtime_executables(
         ),
     )
     terra_models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
-    terra_standard = next(
-        model for model in terra_models if model["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
+    assert not {
+        "qwen25-coder-7b-instruct-awq-vllm",
+        "qwen25-coder-14b-instruct-awq-vllm",
+        "qwen25-coder-32b-instruct-awq-vllm",
+        "qwen3-coder-next-fp8-vllm",
+        "gpt-oss-120b-vllm",
+    } & {str(model["model_id"]) for model in terra_models}
+    terra_qualified = next(
+        model
+        for model in terra_models
+        if model["model_id"] == "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
     )
-    assert terra_standard["qualification"] == "candidate"
-    assert str(terra_standard["availability_reason"]).startswith(
-        "Evaluation candidate; not yet a recommended model"
-    )
-    terra_powerful = next(
-        model for model in terra_models if model["model_id"] == "qwen25-coder-14b-instruct-awq-vllm"
-    )
-    assert terra_powerful["qualification"] == "candidate"
-    assert str(terra_powerful["availability_reason"]).startswith(
-        "Evaluation candidate; not yet a recommended model"
-    )
-    assert "Compatible with 1 visible NVIDIA T4 GPU(s)" in str(
-        terra_standard["availability_reason"]
-    )
+    assert terra_qualified["qualification"] == "qualified"
+    assert terra_qualified["available"] is False
 
 
 def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
@@ -1299,7 +1297,7 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
 
     artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
     assert gateway.config_store.load().local_model is None
-    snapshot_id = "qwen25-coder-7b-instruct-awq-vllm"
+    snapshot_id = "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
     snapshot = gateway.download_local_model_now(snapshot_id)
 
     model_cache = tmp_path / ".heartwood" / "models"
@@ -1315,8 +1313,8 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     assert config.local_model.artifact_id == snapshot_id
     assert config.model_settings.active_profile == "heartwood"
     assert config.model_settings.profile().model == "openai/heartwood-managed-model"
-    assert config.model_settings.profile().max_input_tokens == 28_672
-    assert config.model_settings.profile().max_output_tokens == 4_096
+    assert config.model_settings.profile().max_input_tokens == 16_384
+    assert config.model_settings.profile().max_output_tokens == 2_048
     restarted = _gateway(tmp_path)
     assert restarted.model_settings()["active_profile"] == "heartwood"
     assert restarted.project_readiness()["state"] == "compute-required"
@@ -1368,7 +1366,7 @@ def test_gateway_download_uses_the_normalized_model_catalog(
             ),
         ),
     )
-    snapshot_id = "qwen25-coder-7b-instruct-awq-vllm"
+    snapshot_id = "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
     destination = tmp_path / ".heartwood" / "models" / snapshot_id
 
     def fail_lookup(_catalog: ModelArtifactCatalog, _model_id: str) -> ModelArtifact:

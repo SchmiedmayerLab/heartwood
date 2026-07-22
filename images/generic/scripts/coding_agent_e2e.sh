@@ -34,7 +34,7 @@ esac
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(cd "${script_dir}/../../.." && pwd)}"
 heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
-heartwood_cli="${HEARTWOOD_CLI:-${runtime_root}/.venv/bin/heartwood}"
+heartwood_cli="${HEARTWOOD_CLI:-$(dirname -- "${heartwood_python}")/heartwood}"
 state_root="${project}/.heartwood"
 workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-capable-model}"

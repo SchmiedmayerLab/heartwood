@@ -397,7 +397,7 @@ describe("GatewayClient", () => {
   it("lists and starts recommended model downloads", async () => {
     const artifacts = {
       schema_version: "heartwood.local-model-catalog.v2",
-      snapshot_schema_version: "heartwood.model-snapshot-catalog.v2",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v3",
       artifacts: [],
       snapshots: [],
       models: [],

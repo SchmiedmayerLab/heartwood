@@ -254,7 +254,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
     assert runtime_environment["ld_library_path"].startswith(
         str(runtime_root / "bootstrap" / "lib")
     )
-    assert runtime_environment["sampler"] is None
+    assert runtime_environment["sampler"] == "0"
     assert not runtime_environment["secret_present"]
     assert runtime_environment["path"].startswith(str(runtime_root / "bootstrap" / "bin"))
     config = tomllib.loads(project.config_path.read_text(encoding="utf-8"))

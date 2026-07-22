@@ -313,7 +313,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
         model_alias="Test snapshot",
         precision="Synthetic",
         tier="standard",
-        qualification="candidate",
+        qualification="unvalidated",
         minimum_gpu_count=1,
         minimum_gpu_memory_bytes=1,
         recommended_ram_bytes=1,
@@ -349,7 +349,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
             artifacts=(),
         ),
         snapshot_catalog=ModelSnapshotCatalog(
-            schema_version="heartwood.model-snapshot-catalog.v2",
+            schema_version="heartwood.model-snapshot-catalog.v3",
             snapshots=(snapshot,),
         ),
         cache_dir=tmp_path / "models",
@@ -448,7 +448,7 @@ def test_catalog_loader_rejects_duplicate_artifact_ids(tmp_path: Path) -> None:
                 "[models.one]",
                 'artifact_manifest = "one.toml"',
                 "[models.ignored]",
-                'status = "candidate"',
+                'status = "unvalidated"',
                 "[models.two]",
                 'artifact_manifest = "two.toml"',
             )
@@ -564,7 +564,7 @@ def _artifact(content: bytes) -> ModelArtifact:
 
 def _empty_snapshot_catalog() -> ModelSnapshotCatalog:
     return ModelSnapshotCatalog(
-        schema_version="heartwood.model-snapshot-catalog.v2",
+        schema_version="heartwood.model-snapshot-catalog.v3",
         snapshots=(),
     )
 

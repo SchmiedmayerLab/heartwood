@@ -1494,6 +1494,7 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
                     "tier": "standard",
                     "size_bytes": "unknown",
                     "catalog_source": "catalog",
+                    "qualification": "unvalidated",
                     "label": "GGUF",
                     "purpose": "Synthetic",
                     "availability_reason": "Available",
@@ -1511,7 +1512,7 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
             ],
         }
     )
-    assert "gguf  CPU  0.00 GiB" in artifacts
+    assert "gguf  CPU  0.00 GiB  Not tested" in artifacts
     assert "vllm  NVIDIA GPU  0.00 GiB" in artifacts
     assert "heartwood models inspect <owner/model>" in artifacts
     assert "invalid model plan" in _format_model_repository({"model": []})

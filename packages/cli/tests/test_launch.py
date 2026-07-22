@@ -11,6 +11,7 @@ import io
 import json
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal, cast
@@ -25,6 +26,7 @@ from heartwood.cli._launch import (
     _available_gpu_memory_bytes,
     _available_system_memory_bytes,
     _catalog_contains_model,
+    _context_plan,
     _ensure_setup,
     _format_bytes,
     _gguf_file,
@@ -69,7 +71,9 @@ def _options(
     selected: bool = True,
     runtime: str = "vllm",
     context_window: int = 32_768,
-    qualification: Literal["candidate", "qualified"] = "qualified",
+    qualification: Literal["unvalidated", "qualified"] = "qualified",
+    qualification_date: str | None = None,
+    qualification_evidence: str | None = None,
     **overrides: object,
 ) -> LaunchOptions:
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -102,8 +106,11 @@ def _options(
             recommended_resource_envelope="Synthetic recommended resources.",
             precision="Synthetic",
             qualification=qualification,
+            qualification_date=qualification_date,
+            qualification_evidence=qualification_evidence,
             minimum_gpu_count=0 if runtime == "llama-cpp" else 1,
             minimum_gpu_memory_bytes=0 if runtime == "llama-cpp" else 1,
+            recommended_cpu_count=16,
             recommended_ram_bytes=16 * 1024**3,
             recommended_disk_bytes=32 * 1024**3,
             tool_call_parser=None if runtime == "llama-cpp" else "hermes",
@@ -183,7 +190,7 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("heartwood.cli._launch.discover_slurm_gpu_partitions", lambda _env: ())
-    options = _options(tmp_path)
+    options = _options(tmp_path, cpus=None, memory=None)
     plan = build_launch_plan(
         options,
         {
@@ -200,12 +207,53 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert "Context capacity: up to 32,768 tokens" in plan.format()
     assert "Qualification: Qualified" in plan.format()
     assert plan.allocation_command[:3] == ("srun", "--pty", "--partition=gpu")
+    assert plan.cpus == 16
+    assert "--cpus-per-task=16" in plan.allocation_command
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
     assert export == "--export=PATH,HOME,HEARTWOOD_PLATFORM=carina"
     assert "OPENAI_API_KEY" not in export
     assert "--workspace" not in plan.allocation_command
     assert "--model-root" not in plan.allocation_command
+
+
+def test_qualified_context_requires_catalog_memory_for_every_gpu(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path)
+    selection = _local_model_selection(options.project, {"HEARTWOOD_PLATFORM": "generic"})
+    assert selection is not None
+    selection = replace(
+        selection,
+        catalog_source="catalog",
+        minimum_gpu_memory_bytes=15_000_000_000,
+        tensor_parallel_size=2,
+    )
+
+    def available_memory(_env: object, *, count: int) -> int:
+        assert count == 2
+        return 20_000_000_000
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        available_memory,
+    )
+
+    with pytest.raises(ValueError, match=r"27\.9 GiB is required and 18\.6 GiB is available"):
+        _context_plan(selection, {"PATH": str(tmp_path)})
+
+    def unavailable_memory(_env: object, *, count: int) -> None:
+        assert count == 2
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._available_gpu_memory_bytes",
+        unavailable_memory,
+    )
+    plan = _context_plan(selection, {"PATH": str(tmp_path)})
+    assert plan.effective_window == 32_768
+    assert plan.estimated_required_bytes == 30_000_000_000
+    assert "verified after allocation" in plan.reason
 
 
 def test_launch_plan_rejects_gpu_count_outside_the_model_qualification(tmp_path: Path) -> None:
@@ -216,13 +264,27 @@ def test_launch_plan_rejects_gpu_count_outside_the_model_qualification(tmp_path:
         )
 
 
-def test_launch_plan_labels_evaluation_candidate(tmp_path: Path) -> None:
+def test_launch_plan_labels_unvalidated_configuration(tmp_path: Path) -> None:
     plan = build_launch_plan(
-        _options(tmp_path, qualification="candidate"),
+        _options(tmp_path, qualification="unvalidated"),
         {"HEARTWOOD_PLATFORM": "terra", "PATH": "/usr/bin"},
     )
 
-    assert "Qualification: Evaluation candidate" in plan.format()
+    assert "Qualification: Not tested" in plan.format()
+
+
+def test_launch_plan_dates_a_qualified_platform_configuration(tmp_path: Path) -> None:
+    plan = build_launch_plan(
+        _options(
+            tmp_path,
+            qualification="qualified",
+            qualification_date="2026-07-22",
+            qualification_evidence="https://example.test/qualification",
+        ),
+        {"HEARTWOOD_PLATFORM": "carina", "PATH": "/usr/bin"},
+    )
+
+    assert "Qualification: Qualified (2026-07-22)" in plan.format()
 
 
 @pytest.mark.parametrize(
@@ -837,7 +899,7 @@ def test_constrained_vllm_gpu_uses_eager_execution(
         maximum_context_window=32_768,
         tier="standard",
         precision="AWQ int4",
-        qualification="candidate",
+        qualification="unvalidated",
         minimum_gpu_count=1,
         minimum_gpu_memory_bytes=15_000_000_000,
         recommended_ram_bytes=32 * 1024**3,

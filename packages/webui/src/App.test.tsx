@@ -157,6 +157,8 @@ const localModelChoice = (
   ignore_patterns: [],
   validated_platforms: ["ci"],
   qualification_test: "synthetic-browser-e2e-v1",
+  qualification_date: "2026-07-22",
+  qualification_evidence: "https://example.test/qualification",
   artifact_sha256: "a".repeat(64),
   minimum_resource_envelope: "Minimum: 4 CPU cores and 8 GB RAM.",
   recommended_resource_envelope: "Recommended: 8 CPU cores and 16 GB RAM.",
@@ -498,7 +500,7 @@ class FakeClient implements HeartwoodClient {
     }
     return Promise.resolve({
       schema_version: "heartwood.local-model-catalog.v2",
-      snapshot_schema_version: "heartwood.model-snapshot-catalog.v2",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v3",
       artifacts: [
         {
           artifact_id: "stories260k",
@@ -1261,6 +1263,29 @@ describe("App", () => {
     expect(
       await screen.findByText("Model imported and selected"),
     ).toHaveAttribute("role", "status");
+  });
+
+  it("labels user-selected models without qualification evidence", async () => {
+    const client = new FakeClient();
+    client.customModel = localModelChoice({
+      model_id: "user-selected-model",
+      label: "User-selected model",
+      qualification: "unvalidated",
+      validated_platforms: [],
+      qualification_date: null,
+      qualification_evidence: null,
+      recommended: false,
+    });
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(
+      await screen.findByText("Models not qualified for this platform"),
+    );
+    fireEvent.click(
+      screen.getByLabelText("Review download for User-selected model"),
+    );
+
+    expect(screen.getByText("Not tested")).toBeInTheDocument();
   });
 
   it("continues polling a model download after a transient status failure", async () => {

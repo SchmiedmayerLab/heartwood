@@ -287,7 +287,7 @@ def test_gpu_environment_rejects_unverified_compute_capability_for_model_require
 @pytest.mark.parametrize(
     ("model_id", "precision", "expected"),
     [
-        ("gpt-oss-20b-vllm", "MXFP4", (8, 0)),
+        ("gpt-oss-120b-vllm", "MXFP4", (8, 0)),
         ("qwen3-coder-30b-a3b-instruct-fp8-vllm", "FP8", (8, 9)),
         ("qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm", "W4A16 AWQ", None),
     ],

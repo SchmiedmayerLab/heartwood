@@ -63,6 +63,8 @@ heartwood
 ```
 
 Heartwood detects Carina, uses this exact directory as the project, and creates `.heartwood/` only after confirmation.
+The first Heartwood command after installation can take tens of seconds while Python dependencies load from the installed runtime; keep waiting while the activity indicator is moving.
+Later commands should start more quickly.
 The supported Carina interaction surface is the terminal; the platform adapter does not advertise a Heartwood browser route.
 
 ## Choose a Model Route
@@ -89,16 +91,15 @@ The current partitions are `dev`, `normal`, and `long`; all can provide GPUs, wi
 
 ### Choose Carina Resources
 
-The following configurations are release-pinned evaluation targets.
-Heartwood labels one **Recommended** only after its complete tool, approval, edit, replay, and audit qualification passes on Carina.
+The following release-pinned configuration has completed the tool, approval, edit, replay, and audit qualification on Carina.
 
-| Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated First Start |
+| Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated Runtime Startup |
 |---|---|---:|---:|---:|---:|---:|
 | Powerful, qualified | Qwen3 Coder 30B FP8 | 1 x L40S | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
-| Maximum candidate | Qwen3 Coder Next FP8 | 4 x L40S | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
-| Maximum alternative candidate | GPT-OSS 120B MXFP4 | 2 x L40S | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
 
-Download sizes range from about 29.1 GiB for the qualified one-GPU model to 74.9 GiB for the largest candidate.
+The qualified model downloads about 29.1 GiB.
+Runtime startup estimates apply after the model is available in `.heartwood/models/`.
+For the 29.1 GiB recommendation, budget 30-60 minutes for a first anonymous download on shared infrastructure; an approved `HF_TOKEN` can improve Hugging Face rate limits and is used only by the download process.
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
 
 For a short interactive session, normal `heartwood` startup selects Slurm's default compatible GPU partition.

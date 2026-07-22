@@ -96,7 +96,7 @@ heartwood models managed
 heartwood models inspect OWNER/MODEL
 ```
 
-Choose a supported candidate, confirm enough free disk, and download again.
+Choose a Qualified configuration, confirm enough free disk, and download again.
 For an offline transfer, use `heartwood models import` with an immutable revision and license record.
 
 ## Agent Runtime

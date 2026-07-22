@@ -85,7 +85,7 @@ def _runtime_contract() -> dict[str, object]:
     path = Path(__file__).with_name("compatibility.toml")
     with path.open("rb") as file:
         payload = tomllib.load(file)
-    if payload.get("schema_version") != "heartwood.gpu-compatibility.v1":
+    if payload.get("schema_version") != "heartwood.gpu-compatibility.v2":
         raise RuntimeError("unsupported GPU compatibility contract")
     runtime = payload.get("runtime")
     if not isinstance(runtime, dict):

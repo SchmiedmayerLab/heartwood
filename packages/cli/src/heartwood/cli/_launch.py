@@ -114,6 +114,7 @@ class LaunchPlan:
     model_tier: str | None = None
     model_precision: str | None = None
     model_qualification: str | None = None
+    model_qualification_date: str | None = None
     startup_seconds_min: int | None = None
     startup_seconds_max: int | None = None
     environment_notes: tuple[str, ...] = ()
@@ -146,10 +147,16 @@ class LaunchPlan:
         if self.model_precision is not None:
             lines.append(f"Precision: {self.model_precision}")
         if self.model_qualification is not None:
-            label = (
-                "Qualified" if self.model_qualification == "qualified" else "Evaluation candidate"
+            label = {
+                "qualified": "Qualified",
+                "unvalidated": "Not tested",
+            }.get(self.model_qualification, self.model_qualification)
+            date = (
+                f" ({self.model_qualification_date})"
+                if self.model_qualification_date is not None
+                else ""
             )
-            lines.append(f"Qualification: {label}")
+            lines.append(f"Qualification: {label}{date}")
         if self.model_size_bytes is not None:
             lines.append(f"Model download: {_format_bytes(self.model_size_bytes)}")
         if self.startup_seconds_min is not None and self.startup_seconds_max is not None:
@@ -186,7 +193,7 @@ class LocalRuntimeSelection:
     maximum_context_window: int
     tier: Literal["standard", "powerful", "maximum"]
     precision: str
-    qualification: Literal["candidate", "qualified"]
+    qualification: Literal["unvalidated", "qualified"]
     minimum_gpu_count: int
     minimum_gpu_memory_bytes: int
     recommended_ram_bytes: int | None
@@ -196,6 +203,8 @@ class LocalRuntimeSelection:
     startup_seconds_min: int
     startup_seconds_max: int
     catalog_source: Literal["catalog", "user-selected"]
+    recommended_cpu_count: int = 8
+    qualification_date: str | None = None
 
 
 def _allocation_resources(
@@ -216,7 +225,9 @@ def _allocation_resources(
             raise LaunchConfigurationError(
                 f"{selection.model_id} requires at least {selection.minimum_gpu_count} GPU(s)"
             )
-    cpus = options.cpus or max(8, gpus * 8)
+    cpus = options.cpus or (
+        selection.recommended_cpu_count if selection is not None else max(8, gpus * 8)
+    )
     recommended_memory = selection.recommended_ram_bytes if selection is not None else None
     memory = options.memory or (
         f"{_ceil_gib(recommended_memory)}G" if recommended_memory is not None else "64G"
@@ -314,6 +325,7 @@ def _selection_from_snapshot(
         minimum_gpu_memory_bytes=snapshot.minimum_gpu_memory_bytes,
         recommended_ram_bytes=snapshot.recommended_ram_bytes,
         recommended_disk_bytes=snapshot.recommended_disk_bytes,
+        recommended_cpu_count=snapshot.recommended_cpu_count,
         tool_call_parser=snapshot.tool_call_parser,
         tensor_parallel_size=snapshot.tensor_parallel_size,
         startup_seconds_min=snapshot.startup_seconds_min,
@@ -380,6 +392,7 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
         model_tier=selection.tier if selection is not None else None,
         model_precision=selection.precision if selection is not None else None,
         model_qualification=(selection.qualification if selection is not None else None),
+        model_qualification_date=(selection.qualification_date if selection is not None else None),
         startup_seconds_min=(selection.startup_seconds_min if selection is not None else None),
         startup_seconds_max=(selection.startup_seconds_max if selection is not None else None),
         environment_notes=environment_notes,
@@ -566,6 +579,8 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
         return 69
     runtime_env = _runtime_environment(env, project=options.project)
+    if runtime_kind == "vllm":
+        runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
     try:
         context_plan = _context_plan(selection, runtime_env)
     except ValueError as error:
@@ -849,11 +864,16 @@ def _local_model_selection(
         maximum_context_window=selection.maximum_context_window,
         tier=cast(Literal["standard", "powerful", "maximum"], selection.tier),
         precision=selection.precision or "Unspecified",
-        qualification=cast(Literal["candidate", "qualified"], selection.qualification),
+        qualification=cast(
+            Literal["unvalidated", "qualified"],
+            selection.qualification,
+        ),
+        qualification_date=selection.qualification_date,
         minimum_gpu_count=selection.minimum_gpu_count,
         minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
         recommended_ram_bytes=selection.recommended_ram_bytes,
         recommended_disk_bytes=selection.recommended_disk_bytes,
+        recommended_cpu_count=selection.recommended_cpu_count,
         tool_call_parser=cast(
             Literal["hermes", "openai", "qwen3_coder"] | None,
             selection.tool_call_parser,
@@ -900,7 +920,7 @@ def _print_resource_assessment(
     _print_memory_result("RAM", system_required, system_available)
 
     if selection.runtime == "vllm":
-        gpu_required = estimate_local_runtime_memory(
+        gpu_required = plan.estimated_required_bytes or estimate_local_runtime_memory(
             context_window=plan.effective_window,
             model_size_bytes=model_bytes,
             runtime="vllm",
@@ -934,6 +954,13 @@ def _context_plan(
         model_size_bytes=model_bytes,
         runtime=selection.runtime,
         available_memory_bytes=available,
+        qualified_memory_bytes=(
+            selection.minimum_gpu_memory_bytes * selection.tensor_parallel_size
+            if selection.runtime == "vllm"
+            and selection.qualification == "qualified"
+            and selection.catalog_source == "catalog"
+            else None
+        ),
     )
 
 

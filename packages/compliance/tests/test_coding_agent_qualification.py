@@ -285,10 +285,7 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
     )
 
     assert {configuration["configuration_id"] for configuration in configurations} == {
-        "terra-t4-qwen25-coder-7b-awq",
-        "terra-t4-qwen25-coder-14b-awq",
         "terra-2xt4-qwen3-coder-30b-awq",
-        "terra-4xt4-qwen25-coder-32b-awq",
     }
 
 
@@ -356,56 +353,70 @@ def test_gpu_compatibility_records_rejected_terra_configuration() -> None:
     with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
         matrix = tomllib.load(file)
 
-    unsupported = matrix["unsupported_configurations"]
-    assert unsupported == [
-        {
-            "configuration_id": "terra-4xt4-qwen3-coder-30b-fp8",
-            "platform": "terra",
-            "gpu_model": "NVIDIA T4",
-            "gpu_count": 4,
-            "model_repository": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
-            "model_revision": "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
-            "vllm_version": "0.25.1+cu129",
-            "validated_at": "2026-07-21",
-            "evidence": "https://github.com/SchmiedmayerLab/heartwood/pull/72",
-            "reason": (
-                "vLLM's FP8 Mixture-of-Experts path requires quantization dimensions "
-                "that this model does not provide on NVIDIA T4 GPUs."
-            ),
-        },
-        {
-            "configuration_id": "terra-4xt4-qwen3-coder-30b-awq",
-            "platform": "terra",
-            "gpu_model": "NVIDIA T4",
-            "gpu_count": 4,
-            "model_snapshot": "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
-            "model_repository": "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
-            "model_revision": "e69e73813144d9b715648d8384b3f2c035397411",
-            "vllm_version": "0.25.1+cu129",
-            "validated_at": "2026-07-21",
-            "evidence": "https://github.com/SchmiedmayerLab/heartwood/pull/72",
-            "reason": (
-                "The model's W4A16 quantization group size crosses four-way "
-                "tensor-parallel shard boundaries; use the two-GPU configuration."
-            ),
-        },
-        {
-            "configuration_id": "terra-4xt4-gpt-oss-20b",
-            "platform": "terra",
-            "gpu_model": "NVIDIA T4",
-            "gpu_count": 4,
-            "model_snapshot": "gpt-oss-20b-vllm",
-            "model_repository": "openai/gpt-oss-20b",
-            "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
-            "vllm_version": "0.25.1+cu129",
-            "validated_at": "2026-07-21",
-            "evidence": "https://github.com/SchmiedmayerLab/heartwood/pull/72",
-            "reason": (
-                "vLLM rejects GPT-OSS MXFP4 on NVIDIA T4 because it requires compute "
-                "capability 8.0 and the T4 provides compute capability 7.5."
-            ),
-        },
-    ]
+    unsupported = {
+        entry["configuration_id"]: entry for entry in matrix["unsupported_configurations"]
+    }
+    assert set(unsupported) == {
+        "terra-t4-qwen25-coder-7b-awq",
+        "terra-t4-qwen25-coder-14b-awq",
+        "terra-4xt4-qwen3-coder-30b-fp8",
+        "terra-4xt4-qwen3-coder-30b-awq",
+        "terra-4xt4-gpt-oss-20b",
+        "terra-4xt4-gpt-oss-120b",
+    }
+    assert all(entry["platform"] == "terra" for entry in unsupported.values())
+    assert all(entry["evaluated_at"] == "2026-07-21" for entry in unsupported.values())
+    assert "tool-use workflow" in unsupported["terra-t4-qwen25-coder-7b-awq"]["reason"]
+    assert "compute capability 8.0" in unsupported["terra-4xt4-gpt-oss-120b"]["reason"]
+
+
+def test_gpu_compatibility_records_inconclusive_carina_attempts() -> None:
+    with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
+        matrix = tomllib.load(file)
+
+    inconclusive = {
+        entry["configuration_id"]: entry for entry in matrix["inconclusive_configurations"]
+    }
+    assert inconclusive["carina-2xl40s-gpt-oss-120b"]["evaluated_at"] == "2026-07-22"
+    assert inconclusive["carina-2xl40s-qwen3-coder-next-fp8"]["evaluated_at"] == ("2026-07-22")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("model_revision", "main", "immutable commit"),
+        ("evaluated_at", "July 22, 2026", "ISO date"),
+    ],
+)
+def test_gpu_compatibility_rejects_ambiguous_attempt_evidence(
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    verifier = _module(
+        f"gpu_compatibility_{field}",
+        _root() / "deploy/verify_gpu_compatibility.py",
+    )
+    attempt = {
+        "configuration_id": "carina-attempt",
+        "platform": "carina",
+        "gpu_model": "NVIDIA L40S",
+        "gpu_count": 2,
+        "model_repository": "example/model",
+        "model_revision": "0" * 40,
+        "vllm_version": "0.25.1+cu129",
+        "evaluated_at": "2026-07-22",
+        "evidence": "https://example.com/evidence",
+        "reason": "The bounded qualification did not complete.",
+        field: value,
+    }
+
+    with pytest.raises(verifier.CompatibilityError, match=message):
+        verifier._verify_nonselectable_configurations(
+            [attempt],
+            label="inconclusive",
+            seen_ids=set(),
+        )
 
 
 def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
@@ -419,7 +430,7 @@ def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
     )
     resolved = loader.load_configuration(
         _root() / "images/gpu/compatibility.toml",
-        "terra-t4-qwen25-coder-7b-awq",
+        "terra-2xt4-qwen3-coder-30b-awq",
     )
     with (_root() / "images/generic/local-runtime/snapshots.toml").open("rb") as file:
         snapshot = tomllib.load(file)["snapshots"][resolved["configuration"]["model_snapshot"]]
