@@ -722,6 +722,24 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "GHSA-8fr4-5q9j-m8gm" not in dependency_review
 
 
+def test_gpu_qualification_workflow_offers_every_candidate_configuration() -> None:
+    workflow = _read(".github/workflows/gpu-container-image.yml")
+    matrix = _toml("images/gpu/compatibility.toml")
+    configuration_input = workflow.split("      qualification_configuration:\n", maxsplit=1)[
+        1
+    ].split("      qualification_runner:\n", maxsplit=1)[0]
+    options = {
+        line.removeprefix("- ")
+        for line in (item.strip() for item in configuration_input.splitlines())
+        if line.startswith("- ")
+    }
+    configuration_ids = {
+        configuration["configuration_id"] for configuration in matrix["configurations"]
+    }
+
+    assert options == configuration_ids
+
+
 def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     root = _repo_root()
     lock = root / "images/gpu/vllm-requirements.txt"
