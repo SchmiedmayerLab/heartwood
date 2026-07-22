@@ -174,7 +174,13 @@ def _mapping(value: object) -> dict[str, Any]:
 
 
 def _configuration(root: Path, configuration_id: str) -> dict[str, Any]:
-    with (root / "images/gpu/compatibility.toml").open("rb") as file:
+    matrix_path = Path(
+        os.environ.get(
+            "HEARTWOOD_GPU_COMPATIBILITY_MATRIX",
+            root / "images/gpu/compatibility.toml",
+        )
+    )
+    with matrix_path.open("rb") as file:
         matrix = tomllib.load(file)
     for item in matrix.get("configurations", []):
         if isinstance(item, dict) and item.get("configuration_id") == configuration_id:

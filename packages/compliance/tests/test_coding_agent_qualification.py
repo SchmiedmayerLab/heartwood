@@ -262,6 +262,29 @@ def test_gpu_qualification_script_supports_native_runtime_and_external_matrix() 
     assert 'verify_runtime.sh" /opt' not in script
 
 
+def test_gpu_qualification_report_uses_external_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module(
+        "verify_coding_agent_e2e_external_matrix",
+        _root() / "images/generic/scripts/verify_coding_agent_e2e.py",
+    )
+    matrix = tmp_path / "compatibility.toml"
+    matrix.write_text(
+        "[[configurations]]\nconfiguration_id = \"external-profile\"\nplatform = \"terra\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HEARTWOOD_GPU_COMPATIBILITY_MATRIX", str(matrix))
+
+    configuration = module._configuration(_root(), "external-profile")
+
+    assert configuration == {
+        "configuration_id": "external-profile",
+        "platform": "terra",
+    }
+
+
 def test_gpu_compatibility_records_rejected_terra_configuration() -> None:
     with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
         matrix = tomllib.load(file)
