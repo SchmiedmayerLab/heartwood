@@ -33,9 +33,9 @@ The exact driver used in a live qualification is recorded with its machine-reada
 
 | Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Status |
 |---|---|---|---|---|---:|---|---:|---|---|---|
-| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands native tools | Qualified |
-| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands native tools | Qualified |
-| Terra | Powerful | 4 x T4, 16 GB each | [Qwen2.5-Coder-32B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ/tree/1ed0a6145da0ce550c628e8e8b678f51e695995d) | AWQ int4 | 32,768 | Eager | 4 | `hermes` | OpenHands native tools | Qualified |
+| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Qualified |
+| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands prompt conversion | Qualified |
+| Terra | Powerful | 4 x T4, 16 GB each | [Qwen2.5-Coder-32B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ/tree/1ed0a6145da0ce550c628e8e8b678f51e695995d) | AWQ int4 | 32,768 | Eager | 4 | `hermes` | OpenHands prompt conversion | Qualified |
 | Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | OpenHands native tools | Qualified |
 | Carina | Maximum capability | 4 x L40S, 48 GB each | [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8/tree/da6e2ed27304dd39abadd9c82ef50e8de67bdd4c) | FP8 | 65,536 | CUDA graphs | 4 | `qwen3_coder` | OpenHands native tools | Candidate |
 | Carina | Maximum capability alternative | 2 x L40S, 48 GB each | [GPT-OSS 120B](https://huggingface.co/openai/gpt-oss-120b/tree/b5c939de8f754692c1647ca79fbf85e8c1e70f8a) | MXFP4 | 65,536 | CUDA graphs | 2 | `openai` | OpenHands native tools | Candidate |
@@ -52,7 +52,7 @@ A configuration becomes **qualified** only after the exact model revision and lo
 The acceptance test must establish all of the following:
 
 1. the model loads and returns a direct inference response;
-2. OpenHands sends its native tool definitions and receives a structured proposal through the configured vLLM parser;
+2. OpenHands uses the catalog-qualified tool mode: native structured tools for supported parsers or its prompt-conversion path for models that do not reliably emit native calls;
 3. Heartwood presents the complete action set for approval;
 4. approval executes the proposed operation and modifies only the synthetic project;
 5. an independent check verifies the exact file result;

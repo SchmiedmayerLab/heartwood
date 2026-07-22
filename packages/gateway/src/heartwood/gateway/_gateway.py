@@ -1114,6 +1114,11 @@ class SessionGateway:
             llm_extra_body=managed_model_request_body(
                 selected_model.model_type if selected_model is not None else None
             ),
+            native_tool_calling=(
+                selected_model.tool_call_parser in {"openai", "qwen3_coder"}
+                if selected_model is not None
+                else None
+            ),
         )
 
     def _policy_profile(self) -> PolicyProfile:

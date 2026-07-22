@@ -178,8 +178,18 @@ def _verify_configuration(
             )
     if configuration.get("qualification_test") != _QUALIFICATION_TEST:
         raise CompatibilityError("GPU model uses an unsupported qualification test")
-    if configuration.get("agent_tool_mode") != "openhands-native":
+    if configuration.get("agent_tool_mode") not in {
+        "openhands-native",
+        "openhands-prompt-conversion",
+    }:
         raise CompatibilityError("GPU model uses an unsupported agent tool mode")
+    expected_tool_mode = (
+        "openhands-native"
+        if configuration.get("tool_call_parser") in {"openai", "qwen3_coder"}
+        else "openhands-prompt-conversion"
+    )
+    if configuration.get("agent_tool_mode") != expected_tool_mode:
+        raise CompatibilityError("GPU model agent tool mode disagrees with its parser")
     for field in (
         "gpu_count",
         "minimum_gpu_memory_bytes",

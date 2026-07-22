@@ -129,6 +129,7 @@ class OpenHandsSdkBackend:
         action_confirmation_mode: ActionConfirmationMode = "always-confirm",
         env: Mapping[str, str] | None = None,
         llm_extra_body: Mapping[str, object] | None = None,
+        native_tool_calling: bool | None = None,
         conversation_factory: ConversationFactory | None = None,
     ) -> None:
         profile.validate()
@@ -145,6 +146,7 @@ class OpenHandsSdkBackend:
         self._credential_environment_names = tuple(sorted(set(credential_environment_names)))
         self.env = env
         self._llm_extra_body = dict(llm_extra_body or {})
+        self._native_tool_calling = native_tool_calling
         self._captured: list[object] = []
         self._pending: dict[str, ProposedToolCall] = {}
         self._security_analyzer: _SecurityAnalyzer | None = None
@@ -320,6 +322,7 @@ class OpenHandsSdkBackend:
                 self.profile,
                 api_key=api_key,
                 extra_body=self._llm_extra_body,
+                native_tool_calling=self._native_tool_calling,
             )
         )
         context = _agent_context(sdk, skills)
@@ -535,6 +538,7 @@ def _llm_options(
     *,
     api_key: str | None,
     extra_body: Mapping[str, object],
+    native_tool_calling: bool | None = None,
 ) -> dict[str, Any]:
     """Build the complete OpenHands LLM configuration for one model profile."""
     options: dict[str, Any] = {
@@ -549,6 +553,7 @@ def _llm_options(
         "max_message_chars": _llm_max_message_chars(profile),
         "log_completions": False,
         "litellm_extra_body": dict(extra_body) or None,
+        "native_tool_calling": native_tool_calling,
         **_llm_resilience_options(profile),
     }
     if profile.is_local:

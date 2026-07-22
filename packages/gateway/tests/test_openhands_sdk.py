@@ -184,12 +184,22 @@ def test_openhands_forwards_managed_model_request_defaults() -> None:
         profile,
         api_key=None,
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        native_tool_calling=False,
     )
 
     assert options["litellm_extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
     assert options["max_input_tokens"] == 16_384
     assert options["max_output_tokens"] == 2_048
     assert options["input_cost_per_token"] == 0.0
+    assert options["native_tool_calling"] is False
+
+    native_options = _llm_options(
+        profile,
+        api_key=None,
+        extra_body={},
+        native_tool_calling=True,
+    )
+    assert native_options["native_tool_calling"] is True
 
 
 def test_openhands_context_condenser_uses_the_active_model_budget() -> None:
