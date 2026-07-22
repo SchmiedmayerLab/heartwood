@@ -18,8 +18,7 @@ cuda_13_qualified = false
 
 [[configurations]]
 configuration_id = "terra-t4-qwen25-coder-7b-awq"
-status = "qualified"
-validated_at = "2026-07-21"
+status = "candidate"
 validated_driver_version = "535.154.05"
 evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 platform = "terra"
@@ -45,8 +44,7 @@ startup_seconds_max = 480
 
 [[configurations]]
 configuration_id = "terra-t4-qwen25-coder-14b-awq"
-status = "qualified"
-validated_at = "2026-07-21"
+status = "candidate"
 validated_driver_version = "535.154.05"
 evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 platform = "terra"
@@ -109,9 +107,31 @@ evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 reason = "vLLM's FP8 Mixture-of-Experts path requires quantization dimensions that this model does not provide on NVIDIA T4 GPUs."
 
 [[configurations]]
+configuration_id = "terra-4xt4-qwen3-coder-30b-awq"
+status = "candidate"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 4
+minimum_gpu_memory_bytes = 15000000000
+model_snapshot = "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
+model_repository = "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ"
+model_revision = "e69e73813144d9b715648d8384b3f2c035397411"
+precision = "W4A16 AWQ"
+context_window = 32768
+tensor_parallel_size = 4
+tool_call_parser = "qwen3_coder"
+agent_tool_mode = "openhands-native"
+vllm_version = "0.25.1+cu129"
+pytorch_version = "2.11.0+cu129"
+cuda_version = "12.9"
+minimum_driver_version = "525.60.13"
+qualification_test = "heartwood.coding-agent-e2e.v1"
+startup_seconds_min = 240
+startup_seconds_max = 900
+
+[[configurations]]
 configuration_id = "terra-4xt4-qwen25-coder-32b-awq"
-status = "qualified"
-validated_at = "2026-07-21"
+status = "candidate"
 validated_driver_version = "535.154.05"
 evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 platform = "terra"
@@ -134,6 +154,18 @@ minimum_driver_version = "525.60.13"
 qualification_test = "heartwood.coding-agent-e2e.v1"
 startup_seconds_min = 240
 startup_seconds_max = 900
+
+[[unsupported_configurations]]
+configuration_id = "terra-4xt4-gpt-oss-20b"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 4
+model_repository = "openai/gpt-oss-20b"
+model_revision = "6cee5e81ee83917806bbde320786a8fb61efebee"
+vllm_version = "0.25.1+cu129"
+validated_at = "2026-07-21"
+evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
+reason = "vLLM rejects GPT-OSS MXFP4 on NVIDIA T4 because it requires compute capability 8.0 and the T4 provides compute capability 7.5."
 
 [[configurations]]
 configuration_id = "carina-4xl40s-qwen3-coder-next-fp8"

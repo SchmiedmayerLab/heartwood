@@ -21,7 +21,7 @@ ignore_patterns = ["*.bin", "*.py", ".git/*", "metal/*", "original/*"]
 
 [snapshots.qwen25-coder-7b-instruct-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Standard coding-agent model for a single 16 GB NVIDIA GPU."
+purpose = "Standard single-GPU coding model candidate; Heartwood tool-use qualification is pending a native tool parser."
 source_repository = "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"
 source_revision = "8e8ed243bbe6f9a5aff549a0924562fc719b2b8a"
 expected_size_bytes = 5582398811
@@ -31,9 +31,7 @@ license_posture = "Apache-2.0; retain the model card and source provenance."
 model_alias = "Qwen2.5 Coder 7B"
 precision = "AWQ int4"
 tier = "standard"
-qualification = "qualified"
-validated_platforms = ["terra"]
-qualification_test = "heartwood.coding-agent-e2e.v1"
+qualification = "candidate"
 minimum_gpu_count = 1
 minimum_gpu_memory_bytes = 15000000000
 recommended_ram_bytes = 34359738368
@@ -47,11 +45,11 @@ startup_seconds_max = 480
 download_policy = "transformers-safetensors"
 minimum_resource_envelope = "One NVIDIA T4-class GPU with 16 GB VRAM, 8 CPU cores, 32 GB RAM, and 12 GB free project storage."
 recommended_resource_envelope = "One NVIDIA T4-class GPU with 16 GB VRAM, 8 or more CPU cores, 32 GB RAM, and 16 GB free project storage."
-recommended = true
+recommended = false
 
 [snapshots.qwen25-coder-14b-instruct-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Powerful coding-agent model qualified for one 16 GB NVIDIA GPU."
+purpose = "Powerful single-GPU coding model candidate; Heartwood tool-use qualification is pending a native tool parser."
 source_repository = "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ"
 source_revision = "eb3172f06a6d6b3a15f08947b0668d782e4d2d2c"
 expected_size_bytes = 9991784616
@@ -61,9 +59,7 @@ license_posture = "Apache-2.0; retain the model card and source provenance."
 model_alias = "Qwen2.5 Coder 14B"
 precision = "AWQ int4"
 tier = "powerful"
-qualification = "qualified"
-validated_platforms = ["terra"]
-qualification_test = "heartwood.coding-agent-e2e.v1"
+qualification = "candidate"
 minimum_gpu_count = 1
 minimum_gpu_memory_bytes = 15000000000
 recommended_ram_bytes = 64424509440
@@ -77,7 +73,7 @@ startup_seconds_max = 600
 download_policy = "transformers-safetensors"
 minimum_resource_envelope = "One NVIDIA T4-class GPU with 16 GB VRAM, 12 CPU cores, 48 GB RAM, and 20 GB free project storage."
 recommended_resource_envelope = "One NVIDIA T4-class GPU with 16 GB VRAM, 16 CPU cores, 60 GB RAM, and 32 GB free project storage."
-recommended = true
+recommended = false
 
 [snapshots.qwen3-coder-30b-a3b-instruct-fp8-vllm]
 runtime_profile = "vllm-cuda"
@@ -109,9 +105,37 @@ validated_platforms = ["carina"]
 qualification_test = "heartwood.coding-agent-e2e.v1"
 recommended = true
 
+[snapshots.qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm]
+runtime_profile = "vllm-cuda"
+purpose = "Powerful native tool-calling coding-agent candidate for four 16 GB NVIDIA GPUs."
+source_repository = "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ"
+source_revision = "e69e73813144d9b715648d8384b3f2c035397411"
+expected_size_bytes = 18049253118
+minimum_free_bytes = 30064771072
+license_id = "Apache-2.0"
+license_posture = "Apache-2.0; retain the model card and source provenance."
+model_alias = "Qwen3 Coder 30B AWQ"
+precision = "W4A16 AWQ"
+tier = "powerful"
+qualification = "candidate"
+minimum_gpu_count = 4
+minimum_gpu_memory_bytes = 15000000000
+recommended_ram_bytes = 128849018880
+recommended_disk_bytes = 53687091200
+context_window = 32768
+maximum_context_window = 262144
+tool_call_parser = "qwen3_coder"
+tensor_parallel_size = 4
+startup_seconds_min = 240
+startup_seconds_max = 900
+download_policy = "transformers-safetensors"
+minimum_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 24 CPU cores, 96 GB RAM, and 30 GB free project storage."
+recommended_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 32 CPU cores, 120 GB RAM, and 50 GB free project storage."
+recommended = false
+
 [snapshots.qwen25-coder-32b-instruct-awq-vllm]
 runtime_profile = "vllm-cuda"
-purpose = "Powerful 32B coding-agent model for four 16 GB NVIDIA GPUs."
+purpose = "Powerful 32B coding model candidate for four 16 GB NVIDIA GPUs; Heartwood tool-use qualification is pending a native tool parser."
 source_repository = "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
 source_revision = "1ed0a6145da0ce550c628e8e8b678f51e695995d"
 expected_size_bytes = 19328993904
@@ -121,9 +145,7 @@ license_posture = "Apache-2.0; retain the model card and source provenance."
 model_alias = "Qwen2.5 Coder 32B"
 precision = "AWQ int4"
 tier = "powerful"
-qualification = "qualified"
-validated_platforms = ["terra"]
-qualification_test = "heartwood.coding-agent-e2e.v1"
+qualification = "candidate"
 minimum_gpu_count = 4
 minimum_gpu_memory_bytes = 15000000000
 recommended_ram_bytes = 128849018880
@@ -137,7 +159,35 @@ startup_seconds_max = 900
 download_policy = "transformers-safetensors"
 minimum_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 24 CPU cores, 96 GB RAM, and 32 GB free project storage."
 recommended_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 32 CPU cores, 120 GB RAM, and 48 GB free project storage."
-recommended = true
+recommended = false
+
+[snapshots.gpt-oss-20b-vllm]
+runtime_profile = "vllm-cuda"
+purpose = "Powerful native tool-calling coding-agent model for four 16 GB NVIDIA GPUs."
+source_repository = "openai/gpt-oss-20b"
+source_revision = "6cee5e81ee83917806bbde320786a8fb61efebee"
+expected_size_bytes = 13789262904
+minimum_free_bytes = 21474836480
+license_id = "Apache-2.0"
+license_posture = "Apache-2.0 with the source repository usage policy; retain both with provenance."
+model_alias = "GPT-OSS 20B"
+precision = "MXFP4"
+tier = "powerful"
+qualification = "candidate"
+minimum_gpu_count = 4
+minimum_gpu_memory_bytes = 15000000000
+recommended_ram_bytes = 128849018880
+recommended_disk_bytes = 42949672960
+context_window = 32768
+maximum_context_window = 131072
+tool_call_parser = "openai"
+tensor_parallel_size = 4
+startup_seconds_min = 240
+startup_seconds_max = 900
+download_policy = "transformers-safetensors"
+minimum_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 24 CPU cores, 96 GB RAM, and 20 GB free project storage."
+recommended_resource_envelope = "Four NVIDIA T4-class GPUs with 16 GB VRAM each, 32 CPU cores, 120 GB RAM, and 40 GB free project storage."
+recommended = false
 
 [snapshots.qwen3-coder-next-fp8-vllm]
 runtime_profile = "vllm-cuda"

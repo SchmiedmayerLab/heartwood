@@ -861,15 +861,17 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     terra_standard = next(
         model for model in terra_models if model["model_id"] == "qwen25-coder-7b-instruct-awq-vllm"
     )
-    assert terra_standard["qualification"] == "qualified"
+    assert terra_standard["qualification"] == "candidate"
     assert str(terra_standard["availability_reason"]).startswith(
-        "Compatible with 1 visible NVIDIA T4 GPU(s)"
+        "Evaluation candidate; not yet a recommended model"
     )
     terra_powerful = next(
         model for model in terra_models if model["model_id"] == "qwen25-coder-14b-instruct-awq-vllm"
     )
-    assert terra_powerful["qualification"] == "qualified"
-    assert str(terra_powerful["availability_reason"]).startswith("Recommended for this deployment")
+    assert terra_powerful["qualification"] == "candidate"
+    assert str(terra_powerful["availability_reason"]).startswith(
+        "Evaluation candidate; not yet a recommended model"
+    )
     assert "Compatible with 1 visible NVIDIA T4 GPU(s)" in str(
         terra_standard["availability_reason"]
     )

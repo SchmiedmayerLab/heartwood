@@ -71,6 +71,22 @@ from heartwood.gateway import (
             "qwen3_coder",
         ),
         (
+            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
+            "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
+            "e69e73813144d9b715648d8384b3f2c035397411",
+            "powerful",
+            4,
+            "qwen3_coder",
+        ),
+        (
+            "gpt-oss-20b-vllm",
+            "openai/gpt-oss-20b",
+            "6cee5e81ee83917806bbde320786a8fb61efebee",
+            "powerful",
+            4,
+            "openai",
+        ),
+        (
             "gpt-oss-120b-vllm",
             "openai/gpt-oss-120b",
             "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
@@ -106,9 +122,6 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
         "qualified"
         if snapshot_id
         in {
-            "qwen25-coder-7b-instruct-awq-vllm",
-            "qwen25-coder-14b-instruct-awq-vllm",
-            "qwen25-coder-32b-instruct-awq-vllm",
             "qwen3-coder-30b-a3b-instruct-fp8-vllm",
         }
         else "candidate"
@@ -173,8 +186,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
     source = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
-    standard = source.snapshot("qwen25-coder-7b-instruct-awq-vllm")
-    terra_powerful = source.snapshot("qwen25-coder-14b-instruct-awq-vllm")
+    terra_candidate = source.snapshot("qwen25-coder-14b-instruct-awq-vllm")
     powerful = replace(
         source.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm"),
         qualification="qualified",
@@ -184,7 +196,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
     )
     catalog = ModelSnapshotCatalog(
         source.schema_version,
-        (standard, terra_powerful, powerful),
+        (terra_candidate, powerful),
     )
 
     assert (
@@ -194,7 +206,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
             gpu_memory_bytes=16_000_000_000,
             maximum_tier="maximum",
         )
-        == terra_powerful
+        is None
     )
     assert (
         catalog.recommend(
@@ -221,7 +233,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
             gpu_memory_bytes=16_000_000_000,
             maximum_tier="maximum",
         )
-        == terra_powerful
+        is None
     )
 
     assert (
@@ -230,7 +242,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
             capacities=((1, 16_000_000_000), (1, 48_000_000_000)),
             maximum_tier="maximum",
         )
-        == terra_powerful
+        is None
     )
     assert (
         catalog.recommend_for_capacities(

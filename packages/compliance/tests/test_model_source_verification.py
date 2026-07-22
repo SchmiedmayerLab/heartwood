@@ -36,6 +36,10 @@ def test_repository_model_sources_are_immutable_and_use_revision_routes() -> Non
             "openai/gpt-oss-120b",
             "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
         ),
+        "gpt-oss-20b-vllm": (
+            "openai/gpt-oss-20b",
+            "6cee5e81ee83917806bbde320786a8fb61efebee",
+        ),
         "qwen25-coder-7b-instruct-awq-vllm": (
             "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
             "8e8ed243bbe6f9a5aff549a0924562fc719b2b8a",
@@ -51,6 +55,10 @@ def test_repository_model_sources_are_immutable_and_use_revision_routes() -> Non
         "qwen3-coder-30b-a3b-instruct-fp8-vllm": (
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
             "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
+        ),
+        "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm": (
+            "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
+            "e69e73813144d9b715648d8384b3f2c035397411",
         ),
         "qwen3-coder-next-fp8-vllm": (
             "Qwen/Qwen3-Coder-Next-FP8",
