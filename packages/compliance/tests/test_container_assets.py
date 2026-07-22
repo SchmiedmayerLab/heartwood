@@ -217,7 +217,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0-beta.6"' in bake
+    assert 'default = "0.2.0-beta.7"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
 
 
@@ -283,6 +283,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     executable = _read("images/gpu/heartwood-vllm")
     lock = _read("images/gpu/vllm-requirements.txt")
     exclusions = _read("images/gpu/vllm-exclusions.txt")
+    overrides = _read("images/gpu/vllm-overrides.txt")
 
     assert "images/gpu/install_runtime.sh" in dockerfile
     assert "--target /opt/heartwood-vllm --python 3.12" in dockerfile
@@ -309,6 +310,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "nvidia-cuda-runtime-cu12==12.9.79" in lock
     assert "flashinfer-python==0.6.13" in lock
+    assert "setuptools==83.0.0" in lock
+    assert "setuptools==83.0.0" in overrides
     assert "xgrammar==0.2.3" in lock
     assert "--extra-index-url" not in lock
     for package in (
@@ -699,6 +702,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
 
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
+    runner_cleanup = _read("deploy/reclaim-github-runner-space.sh")
     dependency_review = _read(".github/workflows/dependency-review.yml")
     pull_request_build = workflow.split("  pull-request-build:\n", maxsplit=1)[1].split(
         "\n  build:\n", maxsplit=1
@@ -717,6 +721,10 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert 'output=type=cacheonly"' in pull_request_build
     assert "output=type=docker" not in pull_request_build
     assert "docker/setup-buildx-action@v4" in pull_request_build
+    assert pull_request_build.count("deploy/reclaim-github-runner-space.sh") == 1
+    assert main_build.count("deploy/reclaim-github-runner-space.sh") == 1
+    assert "/usr/local/lib/android" in runner_cleanup
+    assert "/usr/share/dotnet" in runner_cleanup
     assert "attest=type=sbom,disabled=true" in pull_request_build
     assert "attest=type=provenance,disabled=true" in pull_request_build
     assert "Promote GPU Channel Tags" in workflow

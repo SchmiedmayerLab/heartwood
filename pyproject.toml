@@ -26,14 +26,14 @@ members = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.21",
+    "ruff>=0.15.22",
     "mypy>=2.3.0",
     "pytest>=8.4",
     "pytest-cov>=7.0",
 ]
 docs = [
     "mike @ git+https://github.com/squidfunk/mike.git@0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3",
-    "zensical==0.0.50",
+    "zensical==0.0.51",
 ]
 
 # ---------------------------------------------------------------------------

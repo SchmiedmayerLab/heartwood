@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-adapters"
-version = "0.2.0-beta.6"
+version = "0.2.0-beta.7"
 description = "Adapter service provider interfaces and conformance checks for Heartwood."
 readme = "README.md"
 requires-python = ">=3.12"

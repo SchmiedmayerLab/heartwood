@@ -48,7 +48,7 @@ mkdir -m 700 heartwood-installation
 cd heartwood-installation
 
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.6/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.7/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform generic
 export PATH="$PWD/bin:$PATH"

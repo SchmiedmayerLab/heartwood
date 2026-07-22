@@ -1,6 +1,6 @@
 {
   "name": "@heartwood/webui",
-  "version": "0.2.0-beta.6",
+  "version": "0.2.0-beta.7",
   "private": true,
   "type": "module",
   "description": "Researcher web UI for Heartwood sessions.",
@@ -25,10 +25,10 @@
   },
   "dependencies": {
     "@stanfordspezi/spezi-web-design-system": "0.20.0",
-    "@tanstack/react-query": "5.101.2",
-    "lucide-react": "1.24.0",
-    "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "@tanstack/react-query": "5.101.4",
+    "lucide-react": "1.25.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "overrides": {
     "esbuild": "0.28.1",
@@ -38,21 +38,21 @@
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@stanfordspezi/spezi-web-configurations": "0.7.0",
-    "@tailwindcss/postcss": "4.3.2",
-    "@testing-library/jest-dom": "6.9.1",
+    "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
     "@types/node": "24.13.3",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "6.0.3",
+    "@vitejs/plugin-react": "6.0.4",
     "@vitest/coverage-v8": "4.1.10",
     "eslint": "9.39.5",
     "eslint-import-resolver-typescript": "4.4.5",
     "jsdom": "29.1.1",
-    "prettier": "3.9.5",
-    "tailwindcss": "4.3.2",
+    "prettier": "3.9.6",
+    "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
-    "vite": "8.1.4",
+    "vite": "8.1.5",
     "vitest": "4.1.10"
   }
 }

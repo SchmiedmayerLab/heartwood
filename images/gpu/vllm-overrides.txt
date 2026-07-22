@@ -8,3 +8,6 @@
 # are outside the qualified Heartwood runtime.
 nvidia-cutlass-dsl==4.5.2
 humming-kernels==0.1.10
+
+# Keep the runtime packaging toolchain above known vulnerable releases.
+setuptools==83.0.0
