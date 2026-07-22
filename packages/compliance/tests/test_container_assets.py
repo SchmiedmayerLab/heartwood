@@ -454,6 +454,11 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert invalid.returncode == 64
 
     env.pop("HEARTWOOD_VLLM_ENFORCE_EAGER")
+    env["HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER"] = "1"
+    enabled_sampler = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert enabled_sampler.returncode == 0
+    assert environment.read_text(encoding="utf-8") == "1\n"
+
     env["HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER"] = "invalid"
     invalid_sampler = subprocess.run(["bash", str(script)], env=env, check=False)
     assert invalid_sampler.returncode == 64
