@@ -47,9 +47,10 @@ The selection screen uses the release catalog as its authoritative source and re
 | Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated First Start |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Standard fallback | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
-| Standard, qualified on Terra | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 18,432 on Terra | 2-8 minutes |
-| Powerful, qualified on Terra | Qwen2.5 Coder 14B AWQ | 9.31 GiB | 1 x 16 GB | 60 GiB | 32 GiB | 18,432 | 3-10 minutes |
-| Powerful, qualified on Terra | Qwen2.5 Coder 32B AWQ | 18.00 GiB | 4 x 16 GB | 120 GiB | 48 GiB | 32,768 | 4-15 minutes |
+| Standard Terra candidate | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 18,432 on Terra | 2-8 minutes |
+| Powerful Terra candidate | Qwen2.5 Coder 14B AWQ | 9.31 GiB | 1 x 16 GB | 60 GiB | 32 GiB | 18,432 | 3-10 minutes |
+| Powerful Terra candidate | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 4 x 16 GB | 120 GiB | 50 GiB | 32,768 | 4-15 minutes |
+| Powerful Terra candidate | Qwen2.5 Coder 32B AWQ | 18.00 GiB | 4 x 16 GB | 120 GiB | 48 GiB | 32,768 | 4-15 minutes |
 | Powerful, qualified on Carina | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
 | Maximum candidate | Qwen3 Coder Next FP8 | 74.88 GiB | 4 x 48 GB | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
 | Maximum alternative candidate | GPT-OSS 120B MXFP4 | 60.79 GiB | 2 x 48 GB | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
@@ -58,9 +59,9 @@ Model weights are only part of the memory requirement.
 The runtime also needs space for temporary downloads, key/value cache, request handling, and the project itself.
 Heartwood therefore uses conservative headroom and may choose a smaller context than the model's advertised maximum.
 
-Four T4 GPUs do not make the Qwen3 Coder 30B FP8 snapshot compatible with the current runtime.
-Heartwood rejects that combination because vLLM's FP8 Mixture-of-Experts kernel cannot load the model on T4 hardware.
-For four T4 GPUs, use the qualified dense Qwen2.5 Coder 32B AWQ configuration instead.
+Four T4 GPUs do not make the Qwen3 Coder 30B FP8 snapshot or GPT-OSS MXFP4 snapshots compatible with the current runtime.
+Heartwood rejects those combinations before startup when metadata or runtime evidence shows the selected quantization requires a newer GPU generation.
+For four T4 GPUs, evaluate the Qwen3 Coder 30B W4A16 AWQ or Qwen2.5 Coder 32B AWQ candidate and treat the result as unqualified until the full Heartwood acceptance workflow passes.
 
 ## Other Hugging Face Models
 

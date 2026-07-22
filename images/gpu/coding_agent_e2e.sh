@@ -76,6 +76,7 @@ import os
 import sys
 
 from heartwood.gateway import inspect_gpu_environment
+from heartwood.gateway import minimum_compute_capability_for_model
 
 payload = json.loads(sys.argv[1])
 configuration = payload["configuration"]
@@ -83,6 +84,10 @@ environment = inspect_gpu_environment(os.environ.get("HEARTWOOD_PLATFORM", "gene
 compatible, reason = environment.assess(
     gpu_count=configuration["gpu_count"],
     gpu_memory_bytes=configuration["minimum_gpu_memory_bytes"],
+    minimum_compute_capability=minimum_compute_capability_for_model(
+        model_id=configuration["model_snapshot"],
+        precision=configuration["precision"],
+    ),
 )
 print(reason)
 if not compatible or not environment.visible_devices:

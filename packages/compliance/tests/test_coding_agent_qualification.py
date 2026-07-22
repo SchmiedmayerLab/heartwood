@@ -376,6 +376,7 @@ def test_gpu_compatibility_records_rejected_terra_configuration() -> None:
             "platform": "terra",
             "gpu_model": "NVIDIA T4",
             "gpu_count": 4,
+            "model_snapshot": "gpt-oss-20b-vllm",
             "model_repository": "openai/gpt-oss-20b",
             "model_revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
             "vllm_version": "0.25.1+cu129",

@@ -30,6 +30,7 @@ from heartwood.cli._launch import (
     _gguf_file,
     _interaction_command,
     _local_model_selection,
+    _minimum_compute_capability,
     _model_size,
     _persist_effective_context,
     _preflight_vllm,
@@ -222,6 +223,48 @@ def test_launch_plan_labels_evaluation_candidate(tmp_path: Path) -> None:
     )
 
     assert "Qualification: Evaluation candidate" in plan.format()
+
+
+@pytest.mark.parametrize(
+    ("model_id", "precision", "expected"),
+    [
+        ("gpt-oss-120b-vllm", "MXFP4", (8, 0)),
+        ("test-model", "FP8", (8, 9)),
+        ("qwen3-coder-awq", "W4A16 AWQ", None),
+    ],
+)
+def test_launch_preflight_infers_minimum_compute_capability(
+    tmp_path: Path,
+    model_id: str,
+    precision: str,
+    expected: tuple[int, int] | None,
+) -> None:
+    selection = _local_model_selection(_options(tmp_path).project, {})
+    assert selection is not None
+    selection = LocalRuntimeSelection(
+        artifact_id=selection.artifact_id,
+        model_root=selection.model_root,
+        runtime=selection.runtime,
+        model_id=model_id,
+        size_bytes=selection.size_bytes,
+        artifact_sha256=selection.artifact_sha256,
+        context_window=selection.context_window,
+        maximum_context_window=selection.maximum_context_window,
+        tier=selection.tier,
+        precision=precision,
+        qualification=selection.qualification,
+        minimum_gpu_count=selection.minimum_gpu_count,
+        minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
+        recommended_ram_bytes=selection.recommended_ram_bytes,
+        recommended_disk_bytes=selection.recommended_disk_bytes,
+        tool_call_parser=selection.tool_call_parser,
+        tensor_parallel_size=selection.tensor_parallel_size,
+        startup_seconds_min=selection.startup_seconds_min,
+        startup_seconds_max=selection.startup_seconds_max,
+        catalog_source=selection.catalog_source,
+    )
+
+    assert _minimum_compute_capability(selection) == expected
 
 
 def test_launch_requires_consent_and_honors_dry_run_and_no_allocate(

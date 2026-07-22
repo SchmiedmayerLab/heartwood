@@ -36,6 +36,7 @@ from heartwood.gateway._gpu_environment import (
     discover_slurm_gpu_partitions,
     discover_visible_gpus,
     inspect_gpu_environment,
+    minimum_compute_capability_for_model,
 )
 from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
@@ -226,6 +227,7 @@ __all__ = [
     "load_model_snapshot_catalog",
     "managed_model_request_body",
     "managed_model_token_budgets",
+    "minimum_compute_capability_for_model",
     "model_connections_from_mapping",
     "model_profile_from_mapping",
     "model_profile_from_preset",

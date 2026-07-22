@@ -102,6 +102,20 @@ def verify_repository(root: Path) -> None:
                 _string(configuration, "platform")
             )
 
+    for unsupported in matrix.get("unsupported_configurations", ()):
+        if not isinstance(unsupported, dict):
+            raise CompatibilityError("GPU compatibility unsupported entries must be tables")
+        snapshot_id = unsupported.get("model_snapshot")
+        if snapshot_id is None:
+            continue
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise CompatibilityError("unsupported GPU model_snapshot must be a non-empty string")
+        if snapshot_id not in snapshots:
+            raise CompatibilityError(
+                f"unknown model snapshot in unsupported GPU matrix: {snapshot_id}"
+            )
+        covered_snapshots.add(snapshot_id)
+
     if covered_snapshots != set(snapshots):
         missing = sorted(set(snapshots) - covered_snapshots)
         raise CompatibilityError(

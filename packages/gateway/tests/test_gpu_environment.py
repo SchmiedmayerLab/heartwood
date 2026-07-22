@@ -18,6 +18,7 @@ from heartwood.gateway._gpu_environment import (
     discover_slurm_gpu_partitions,
     discover_visible_gpus,
     inspect_gpu_environment,
+    minimum_compute_capability_for_model,
 )
 
 
@@ -201,6 +202,106 @@ def test_gpu_environment_assesses_visible_scheduler_and_insufficient_capacity() 
     assert "allocation approval is required" in reason
 
 
+def test_gpu_environment_rejects_models_requiring_newer_compute_capability() -> None:
+    environment = GpuEnvironment(
+        platform_id="terra",
+        visible_devices=(),
+        slurm_partitions=(),
+        capacities=(
+            GpuCapacity(
+                "4 visible Tesla T4 GPU(s)",
+                "Tesla T4",
+                4,
+                16_000_000_000,
+                False,
+                compute_capability=(7, 5),
+            ),
+        ),
+    )
+
+    compatible, reason = environment.assess(
+        gpu_count=4,
+        gpu_memory_bytes=15_000_000_000,
+        minimum_compute_capability=(8, 0),
+    )
+
+    assert not compatible
+    assert "Requires GPU compute capability 8.0 or newer" in reason
+    assert "Tesla T4 7.5" in reason
+
+
+def test_gpu_environment_accepts_scheduled_l40s_for_mxfp4() -> None:
+    environment = GpuEnvironment(
+        platform_id="carina",
+        visible_devices=(),
+        slurm_partitions=(),
+        capacities=(
+            GpuCapacity(
+                "Slurm partition dev",
+                "nvidia_l40s",
+                8,
+                48_000_000_000,
+                True,
+                "dev",
+                (8, 9),
+            ),
+        ),
+    )
+
+    compatible, reason = environment.assess(
+        gpu_count=2,
+        gpu_memory_bytes=42_000_000_000,
+        minimum_compute_capability=(8, 0),
+    )
+
+    assert compatible
+    assert "Slurm partition dev" in reason
+
+
+def test_gpu_environment_rejects_unverified_compute_capability_for_model_requirement() -> None:
+    environment = GpuEnvironment(
+        platform_id="generic",
+        visible_devices=(),
+        slurm_partitions=(),
+        capacities=(
+            GpuCapacity(
+                "1 visible NVIDIA GPU",
+                "NVIDIA GPU",
+                1,
+                48_000_000_000,
+                False,
+            ),
+        ),
+    )
+
+    compatible, reason = environment.assess(
+        gpu_count=1,
+        gpu_memory_bytes=42_000_000_000,
+        minimum_compute_capability=(8, 0),
+    )
+
+    assert not compatible
+    assert "could not be verified before startup" in reason
+
+
+@pytest.mark.parametrize(
+    ("model_id", "precision", "expected"),
+    [
+        ("gpt-oss-20b-vllm", "MXFP4", (8, 0)),
+        ("qwen3-coder-30b-a3b-instruct-fp8-vllm", "FP8", (8, 9)),
+        ("qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm", "W4A16 AWQ", None),
+    ],
+)
+def test_model_quantization_declares_minimum_compute_capability(
+    model_id: str,
+    precision: str,
+    expected: tuple[int, int] | None,
+) -> None:
+    assert (
+        minimum_compute_capability_for_model(model_id=model_id, precision=precision) == expected
+    )
+
+
 @pytest.mark.parametrize(
     ("platform_id", "message"),
     [
@@ -291,9 +392,45 @@ def test_environment_inspection_builds_known_slurm_capacity(
     environment = inspect_gpu_environment("carina", {})
 
     assert environment.capacities == (
-        GpuCapacity("Slurm partition dev", "nvidia_l40s", 8, 48_000_000_000, True, "dev"),
+        GpuCapacity(
+            "Slurm partition dev",
+            "nvidia_l40s",
+            8,
+            48_000_000_000,
+            True,
+            "dev",
+            (8, 9),
+        ),
     )
     assert environment.slurm_partitions[1].gpu_memory_bytes is None
+
+
+def test_slurm_discovery_accepts_generic_gpu_gres_and_invalid_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.gateway._gpu_environment.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="generic|gpu:2|up|unknown|8\n",
+        ),
+    )
+
+    partitions = discover_slurm_gpu_partitions({"PATH": "/usr/bin"})
+
+    assert partitions == (SlurmGpuPartition("generic", False, None, 2, None, 8, "up"),)
+
+
+def test_slurm_discovery_returns_empty_when_sinfo_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.gateway._gpu_environment.subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, stdout=""),
+    )
+
+    assert discover_slurm_gpu_partitions({"PATH": "/usr/bin"}) == ()
 
 
 def test_visible_gpu_discovery_handles_missing_malformed_and_failed_queries(

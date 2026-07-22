@@ -13,7 +13,7 @@ import io
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from packaging.version import InvalidVersion, Version
@@ -97,6 +97,7 @@ class GpuCapacity:
     gpu_memory_bytes: int
     allocation_required: bool
     partition: str | None = None
+    compute_capability: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,12 +114,15 @@ class GpuEnvironment:
         *,
         gpu_count: int,
         gpu_memory_bytes: int,
+        minimum_compute_capability: tuple[int, int] | None = None,
     ) -> tuple[bool, str]:
         """Explain whether the inventory can run one catalog configuration."""
         eligible = tuple(
             capacity
             for capacity in self.capacities
-            if capacity.gpu_count >= gpu_count and capacity.gpu_memory_bytes >= gpu_memory_bytes
+            if capacity.gpu_count >= gpu_count
+            and capacity.gpu_memory_bytes >= gpu_memory_bytes
+            and _meets_compute_capability(capacity, minimum_compute_capability)
         )
         if eligible:
             capacity = min(
@@ -150,6 +154,40 @@ class GpuEnvironment:
         )
         if issues:
             return False, "; ".join(issues)
+        if minimum_compute_capability is not None:
+            capability = ".".join(str(part) for part in minimum_compute_capability)
+            insufficient = tuple(
+                capacity
+                for capacity in self.capacities
+                if capacity.gpu_count >= gpu_count
+                and capacity.gpu_memory_bytes >= gpu_memory_bytes
+                and capacity.compute_capability is not None
+                and capacity.compute_capability < minimum_compute_capability
+            )
+            if insufficient:
+                observed = ", ".join(
+                    sorted(
+                        {
+                            (
+                                f"{capacity.gpu_model} "
+                                f"{capacity.compute_capability[0]}."
+                                f"{capacity.compute_capability[1]}"
+                            )
+                            for capacity in insufficient
+                            if capacity.compute_capability is not None
+                        }
+                    )
+                )
+                return (
+                    False,
+                    f"Requires GPU compute capability {capability} or newer; detected {observed}.",
+                )
+            if self.capacities:
+                return (
+                    False,
+                    f"Requires GPU compute capability {capability} or newer, but the detected "
+                    "GPU capability could not be verified before startup.",
+                )
         if not self.capacities:
             if self.platform_id == "terra":
                 return (
@@ -184,6 +222,21 @@ def inspect_gpu_environment(platform_id: str, env: Mapping[str, str]) -> GpuEnvi
         slurm_partitions=partitions,
         capacities=capacities,
     )
+
+
+def minimum_compute_capability_for_model(
+    *,
+    model_id: str,
+    precision: str,
+) -> tuple[int, int] | None:
+    """Return the minimum GPU generation required by reviewed quantization paths."""
+    normalized_model = model_id.casefold().replace("_", "-")
+    normalized_precision = precision.casefold().replace("_", "-")
+    if "gpt-oss" in normalized_model or "mxfp4" in normalized_precision:
+        return (8, 0)
+    if normalized_precision.startswith("fp8"):
+        return (8, 9)
+    return None
 
 
 def discover_visible_gpus(env: Mapping[str, str]) -> tuple[GpuDevice, ...]:
@@ -277,6 +330,10 @@ def _visible_capacities(devices: tuple[GpuDevice, ...]) -> tuple[GpuCapacity, ..
                 gpu_count=len(eligible),
                 gpu_memory_bytes=threshold,
                 allocation_required=False,
+                compute_capability=_minimum_capability(
+                    device.compute_capability or _capability_from_name(device.name)
+                    for device in eligible
+                ),
             )
         )
     return tuple(capacities)
@@ -293,6 +350,7 @@ def _slurm_capacities(
             gpu_memory_bytes=partition.gpu_memory_bytes,
             allocation_required=True,
             partition=partition.name,
+            compute_capability=_capability_from_name(partition.gpu_model or ""),
         )
         for partition in partitions
         if partition.gpu_memory_bytes is not None
@@ -340,6 +398,28 @@ def _capability_from_name(name: str) -> tuple[int, int] | None:
         ),
         None,
     )
+
+
+def _minimum_capability(
+    capabilities: Iterable[tuple[int, int] | None],
+) -> tuple[int, int] | None:
+    values = tuple(
+        capability
+        for capability in capabilities
+        if isinstance(capability, tuple)
+        and len(capability) == 2
+        and all(isinstance(part, int) for part in capability)
+    )
+    return min(values) if values else None
+
+
+def _meets_compute_capability(
+    capacity: GpuCapacity,
+    minimum: tuple[int, int] | None,
+) -> bool:
+    if minimum is None:
+        return True
+    return capacity.compute_capability is not None and capacity.compute_capability >= minimum
 
 
 def _parse_gres(value: str) -> tuple[str | None, int]:

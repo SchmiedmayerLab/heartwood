@@ -38,6 +38,7 @@ from heartwood.gateway import (
     estimate_local_runtime_memory,
     inspect_gpu_environment,
     managed_model_token_budgets,
+    minimum_compute_capability_for_model,
     plan_local_context_window,
     verify_model_artifact,
 )
@@ -236,6 +237,7 @@ def _validate_gpu_environment(
     available, reason = environment.assess(
         gpu_count=selection.tensor_parallel_size,
         gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
+        minimum_compute_capability=_minimum_compute_capability(selection),
     )
     if not available:
         raise LaunchConfigurationError(reason)
@@ -248,6 +250,18 @@ def _validate_gpu_environment(
         )
         notes.append(f"NVIDIA driver: {drivers}; Heartwood runtime ABI: CUDA 12.9")
     return tuple(notes)
+
+
+def _minimum_compute_capability(
+    selection: LocalRuntimeSelection,
+) -> tuple[int, int] | None:
+    """Return the minimum GPU generation required by reviewed quantization paths."""
+    if selection.runtime != "vllm":
+        return None
+    return minimum_compute_capability_for_model(
+        model_id=selection.model_id,
+        precision=selection.precision,
+    )
 
 
 def _recommend_model(
