@@ -403,13 +403,7 @@ def _capability_from_name(name: str) -> tuple[int, int] | None:
 def _minimum_capability(
     capabilities: Iterable[tuple[int, int] | None],
 ) -> tuple[int, int] | None:
-    values = tuple(
-        capability
-        for capability in capabilities
-        if isinstance(capability, tuple)
-        and len(capability) == 2
-        and all(isinstance(part, int) for part in capability)
-    )
+    values = tuple(capability for capability in capabilities if capability is not None)
     return min(values) if values else None
 
 
