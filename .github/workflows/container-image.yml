@@ -51,19 +51,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and stage image by digest
+        id: build
+        uses: docker/bake-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          source: .
+          targets: runtime
+          set: |
+            runtime.platform=${{ matrix.platform }}
+            runtime.tags=${{ steps.image.outputs.name }}
+            runtime.cache-from=type=gha,scope=runtime-${{ matrix.suffix }}
+            runtime.cache-to=type=gha,scope=runtime-${{ matrix.suffix }},mode=min
+            runtime.output=type=image,push-by-digest=true,name-canonical=true,push=true
+      - name: Record staged image digest
         id: candidate
         env:
-          DOCKER_PLATFORM: ${{ matrix.platform }}
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          docker buildx bake --file docker-bake.hcl \
-            --set runtime.platform="${DOCKER_PLATFORM}" \
-            --set runtime.tags="${IMAGE_NAME}" \
-            --set "runtime.cache-from=type=gha,scope=runtime-${{ matrix.suffix }}" \
-            --set "runtime.cache-to=type=gha,scope=runtime-${{ matrix.suffix }},mode=max" \
-            --set "runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" \
-            --metadata-file /tmp/metadata.json \
-            runtime
+          printf '%s\n' "${BUILD_METADATA}" > /tmp/metadata.json
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/metadata.json runtime)"
           mkdir -p /tmp/digests
           touch "/tmp/digests/${digest#sha256:}"
@@ -266,18 +274,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and stage Terra image by digest
-        id: candidate
+        id: build
+        uses: docker/bake-action@v7
         env:
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          source: .
+          targets: terra-runtime
+          set: |
+            terra-runtime.tags=${{ steps.image.outputs.name }}
+            terra-runtime.cache-from=type=gha,scope=terra-runtime-amd64
+            terra-runtime.cache-to=type=gha,scope=terra-runtime-amd64,mode=min
+            terra-runtime.output=type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
+      - name: Record staged Terra image digest
+        id: candidate
+        env:
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          docker buildx bake --file docker-bake.hcl \
-            --set terra-runtime.tags="${IMAGE_NAME}" \
-            --set terra-runtime.cache-from=type=gha,scope=terra-runtime-amd64 \
-            --set terra-runtime.cache-to=type=gha,scope=terra-runtime-amd64,mode=max \
-            --set "terra-runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false" \
-            --metadata-file /tmp/terra-metadata.json \
-            terra-runtime
+          printf '%s\n' "${BUILD_METADATA}" > /tmp/terra-metadata.json
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/terra-metadata.json terra-runtime)"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"

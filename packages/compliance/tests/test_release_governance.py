@@ -286,6 +286,8 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "blacksmith-16vcpu-ubuntu-2404" in gpu
     assert "blacksmith-16vcpu-ubuntu-2404" in capable
+    assert "uses: docker/bake-action@v7" in capable
+    assert "uses: docker/bake-action@v7" in gpu
     assert "cache-from=type=gha" in gpu
     assert "cache-to=type=gha" in gpu
     assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3

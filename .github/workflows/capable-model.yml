@@ -26,15 +26,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build no-weight runtime image
-        run: >-
-          docker buildx bake --file docker-bake.hcl --load
-          --set runtime.platform=linux/amd64
-          --set runtime.tags=heartwood-capable:local
-          --set runtime.cache-from=type=gha,scope=runtime-amd64
-          --set runtime.cache-to=type=gha,scope=runtime-amd64,mode=max
-          --set runtime.attest=type=sbom,disabled=true
-          --set runtime.attest=type=provenance,disabled=true
-          runtime
+        uses: docker/bake-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          load: true
+          provenance: false
+          sbom: false
+          source: .
+          targets: runtime
+          set: |
+            runtime.platform=linux/amd64
+            runtime.tags=heartwood-capable:local
+            runtime.cache-from=type=gha,scope=runtime-amd64
+            runtime.cache-to=type=gha,scope=runtime-amd64,mode=min
       - name: Prepare isolated model and project storage
         run: |
           sudo mkdir -p /tmp/heartwood-model-cache

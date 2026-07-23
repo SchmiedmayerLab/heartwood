@@ -44,14 +44,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build and validate candidate without image export
+        uses: docker/bake-action@v7
         env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          docker buildx bake --progress=plain --file docker-bake.hcl \
-            --set "${TARGET}.target=gpu-ci-validate" \
-            --set "${TARGET}.output=type=cacheonly" \
-            --set "${TARGET}.cache-from=type=gha,scope=gpu-${TARGET}" \
-            --set "${TARGET}.cache-to=type=gha,scope=gpu-${TARGET},mode=max" \
-            --set "${TARGET}.attest=type=sbom,disabled=true" \
-            --set "${TARGET}.attest=type=provenance,disabled=true" \
-            "${TARGET}"
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          provenance: false
+          sbom: false
+          source: .
+          targets: ${{ matrix.target }}
+          set: |
+            ${{ matrix.target }}.target=gpu-ci-validate
+            ${{ matrix.target }}.output=type=cacheonly
+            ${{ matrix.target }}.cache-from=type=gha,scope=gpu-${{ matrix.target }}
+            ${{ matrix.target }}.cache-to=type=gha,scope=gpu-${{ matrix.target }},mode=min
