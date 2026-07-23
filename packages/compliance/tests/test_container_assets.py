@@ -188,9 +188,10 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
 
 def test_container_smoke_uses_bake_as_the_heartwood_build_contract() -> None:
     workflow = _read(".github/workflows/container-smoke.yml")
+    capable_workflow = _read(".github/workflows/capable-model.yml")
 
     assert workflow.count("docker buildx bake --file docker-bake.hcl --call=check") == 2
-    assert "--set runtime.tags=heartwood-capable:local" in workflow
+    assert "--set runtime.tags=heartwood-capable:local" in capable_workflow
     assert "--build-arg HEARTWOOD_" not in workflow
     assert "--file images/Dockerfile" not in workflow
 
@@ -764,50 +765,46 @@ def test_native_release_assets_are_verified_before_installation() -> None:
 
 def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
+    pull_request_workflow = _read(".github/workflows/gpu-container-pr.yml")
+    qualification = _read(".github/workflows/gpu-qualification.yml")
     runner_cleanup = _read("deploy/reclaim-github-runner-space.sh")
     dependency_review = _read(".github/workflows/dependency-review.yml")
-    pull_request_build = workflow.split("  pull-request-build:\n", maxsplit=1)[1].split(
-        "\n  build:\n", maxsplit=1
-    )[0]
-    qualification = workflow.split("  gpu-qualification:\n", maxsplit=1)[1].split(
-        "\n  pull-request-build:\n", maxsplit=1
-    )[0]
     main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
 
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
-    assert "Build GPU candidate ${{ matrix.target }}" in workflow
-    assert 'target=gpu-ci-validate"' in pull_request_build
-    assert "bash -n images/gpu/install_runtime.sh" in workflow
-    assert "test -x images/gpu/install_runtime.sh" in workflow
-    assert 'output=type=cacheonly"' in pull_request_build
-    assert "output=type=docker" not in pull_request_build
-    assert "docker/setup-buildx-action@v4" in pull_request_build
-    assert pull_request_build.count("deploy/reclaim-github-runner-space.sh") == 1
-    assert main_build.count("deploy/reclaim-github-runner-space.sh") == 1
+    assert "Build GPU candidate ${{ matrix.target }}" in pull_request_workflow
+    assert 'target=gpu-ci-validate"' in pull_request_workflow
+    contract_action = _read(".github/actions/validate-gpu-contract/action.yml")
+    assert workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
+    assert pull_request_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
+    assert "bash -n images/gpu/install_runtime.sh" in contract_action
+    assert "test -x images/gpu/install_runtime.sh" in contract_action
+    assert 'output=type=cacheonly"' in pull_request_workflow
+    assert "output=type=docker" not in pull_request_workflow
+    assert "docker/setup-buildx-action@v4" in pull_request_workflow
+    assert "blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
+    assert "cache-from=type=gha,scope=gpu-${TARGET}" in pull_request_workflow
+    assert "cache-to=type=gha,scope=gpu-${TARGET},mode=max" in pull_request_workflow
+    assert "deploy/reclaim-github-runner-space.sh" not in pull_request_workflow
     assert "/usr/local/lib/android" in runner_cleanup
     assert "/usr/share/dotnet" in runner_cleanup
-    assert "attest=type=sbom,disabled=true" in pull_request_build
-    assert "attest=type=provenance,disabled=true" in pull_request_build
+    assert "attest=type=sbom,disabled=true" in pull_request_workflow
+    assert "attest=type=provenance,disabled=true" in pull_request_workflow
     assert "Promote GPU Channel Tags" in workflow
-    assert "publish_commit_candidate:" in workflow
-    assert "Publish validated immutable GPU tags for this commit" in workflow
-    assert "qualification_configuration:" in workflow
-    assert "used only when GPU qualification is enabled" in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "qualification_configuration:" in qualification
     assert "inputs.qualification_configuration" in qualification
-    assert "inputs.qualification_configuration" not in pull_request_build
+    assert "qualification_runner" not in qualification
+    assert "runs-on: [self-hosted, linux, x64, gpu]" in qualification
+    assert "inputs.qualification_configuration" not in pull_request_workflow
     assert "inputs.qualification_configuration" not in main_build
-    assert "github.event_name == 'workflow_dispatch' && inputs.publish_commit_candidate" in (
-        main_build
-    )
-    assert "if: github.ref == 'refs/heads/main'" in workflow
+    assert "if:" not in pull_request_workflow
     assert "push-by-digest=true" in workflow
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
-    assert "docker buildx prune --all --force" in main_build
-    assert (
-        main_build.index("Build candidate by digest")
-        < main_build.index("docker buildx prune --all --force")
-        < main_build.index("Verify candidate contents")
+    assert "deploy/reclaim-github-runner-space.sh" not in main_build
+    assert main_build.index("Build candidate by digest") < main_build.index(
+        "Verify candidate contents"
     )
     assert "--prefer-index=false" in workflow
     assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
@@ -830,11 +827,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
 
 
 def test_gpu_qualification_workflow_offers_every_candidate_configuration() -> None:
-    workflow = _read(".github/workflows/gpu-container-image.yml")
+    workflow = _read(".github/workflows/gpu-qualification.yml")
     matrix = _toml("images/gpu/compatibility.toml")
     configuration_input = workflow.split("      qualification_configuration:\n", maxsplit=1)[
         1
-    ].split("      qualification_runner:\n", maxsplit=1)[0]
+    ].split("\npermissions:\n", maxsplit=1)[0]
     options = {
         line.removeprefix("- ")
         for line in (item.strip() for item in configuration_input.splitlines())
@@ -880,7 +877,7 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     compose = _read("images/generic/compose.yaml")
-    workflow = _read(".github/workflows/container-smoke.yml")
+    capable_workflow = _read(".github/workflows/capable-model.yml")
     smoke = _read("images/generic/scripts/offline_stack_smoke.sh")
     capable = _read("images/generic/scripts/capable_model_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
@@ -902,7 +899,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
     assert "Checking direct model inference" in coding_agent
     assert "verify_coding_agent_e2e.py" in coding_agent
-    assert "/tmp/heartwood-model-cache/.heartwood/models:/models:ro" in workflow
+    assert "/tmp/heartwood-model-cache/.heartwood/models:/models:ro" in capable_workflow
     assert "models refresh heartwood" in smoke
     assert "models connect heartwood heartwood-managed-runtime" in smoke
     assert "models add inactive-smoke" in smoke
@@ -1042,6 +1039,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
+    capable_workflow = _read(".github/workflows/capable-model.yml")
     compose = _read("images/generic/compose.yaml")
     capable_model = _read("images/generic/scripts/capable_model_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
@@ -1068,7 +1066,11 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "--prefer-index=false" in publish
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
     assert publish.count("^sha256:[0-9a-f]{64}$") == 2
-    assert publish.count("if: github.ref == 'refs/heads/main'") == 3
+    assert "if: github.ref == 'refs/heads/main'" not in publish
+    assert "blacksmith-16vcpu-ubuntu-2404" in publish
+    assert "blacksmith-16vcpu-ubuntu-2404-arm" in publish
+    assert "cache-from=type=gha" in publish
+    assert "cache-to=type=gha" in publish
     assert "immutable generic commit tag already exists with a different manifest" in publish
     assert "newly created generic commit tag does not match validated candidate manifest" in publish
     assert "immutable Terra commit tag already exists with a different digest" in publish
@@ -1115,7 +1117,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "Generic OpenHands smoke" in smoke
     assert "platform: linux/amd64" in smoke
     assert "platform: linux/arm64" in smoke
-    assert "runner: ubuntu-24.04-arm" in smoke
+    assert "runner: blacksmith-8vcpu-ubuntu-2404-arm" in smoke
     assert "runtime runtime-gpu-nvidia" in smoke
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
@@ -1141,15 +1143,11 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert 'f"http://127.0.0.1:{port}/health"' in _read(
         "images/generic/scripts/local_inference_smoke.sh"
     )
-    assert "run_capable_model" in smoke
-    assert "if: inputs.run_capable_model" in smoke
-    assert "run_capable_model: ${{ github.event_name != 'pull_request' }}" in _read(
-        ".github/workflows/main-validation.yml"
-    )
-    assert "qwen25-7b-instruct-q4_k_m" in smoke
-    assert "capable_model_e2e.sh" in smoke
-    assert "--network none --read-only" in smoke
-    assert smoke.count("uid=10001,gid=10001,mode=0700") == 2
+    assert "run_capable_model" not in smoke
+    assert "qwen25-7b-instruct-q4_k_m" in capable_workflow
+    assert "capable_model_e2e.sh" in capable_workflow
+    assert "--network none --read-only" in capable_workflow
+    assert capable_workflow.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert "not 1 <= len(terminal_executions) <= 3" in qualification
     assert "not 1 <= len(tool_executions) <= 3" in qualification

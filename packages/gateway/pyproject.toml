@@ -25,7 +25,7 @@ dependencies = [
     "keyring==25.7.0",
     "openhands-sdk==1.36.1",
     "openhands-tools==1.36.1",
-    "openai==2.45.0",
+    "openai==2.47.0",
     "tomli-w==1.2.0",
 ]
 

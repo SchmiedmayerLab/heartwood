@@ -1,0 +1,104 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: GPU Coding-Agent Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      qualification_configuration:
+        description: Compatibility-matrix row to qualify
+        required: true
+        default: terra-2xt4-qwen3-coder-30b-awq
+        type: choice
+        options:
+          - terra-2xt4-qwen3-coder-30b-awq
+          - carina-l40s-qwen3-coder-30b-fp8
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-qualification-${{ github.ref }}-${{ inputs.qualification_configuration }}
+  cancel-in-progress: false
+
+jobs:
+  qualification:
+    name: GPU Coding-Agent Qualification
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 180
+    environment: gpu-qualification
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
+      - name: Build the locked GPU runtime
+        run: >-
+          docker buildx bake --file docker-bake.hcl --load
+          --set runtime-gpu-nvidia.platform=linux/amd64
+          --set runtime-gpu-nvidia.tags=heartwood-gpu-qualification:local
+          runtime-gpu-nvidia
+      - name: Prepare isolated model and project storage
+        run: |
+          sudo mkdir -p "${RUNNER_TEMP}/heartwood-gpu-model" "${RUNNER_TEMP}/heartwood-gpu-project"
+          sudo chown -R 10001:10001 \
+            "${RUNNER_TEMP}/heartwood-gpu-model" "${RUNNER_TEMP}/heartwood-gpu-project"
+      - name: Resolve qualification model
+        id: model
+        env:
+          CONFIGURATION_ID: ${{ inputs.qualification_configuration }}
+        run: |
+          payload="$(python3 images/gpu/qualification_config.py "${CONFIGURATION_ID}")"
+          echo "snapshot=$(jq -r '.configuration.model_snapshot' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
+          echo "platform=$(jq -r '.configuration.platform' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
+      - name: Download and verify the pinned model
+        env:
+          SNAPSHOT: ${{ steps.model.outputs.snapshot }}
+        run: >-
+          docker run --rm --gpus all
+          --volume "${RUNNER_TEMP}/heartwood-gpu-model:/workspace"
+          heartwood-gpu-qualification:local
+          heartwood models download "${SNAPSHOT}"
+      - name: Run GPU coding-agent qualification without network
+        env:
+          CONFIGURATION_ID: ${{ inputs.qualification_configuration }}
+          PLATFORM_ID: ${{ steps.model.outputs.platform }}
+          SNAPSHOT: ${{ steps.model.outputs.snapshot }}
+        run: >-
+          docker run --rm --gpus all --network none --read-only --shm-size=16g
+          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 2048
+          --tmpfs /tmp:rw,nosuid,nodev,size=8g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+          --volume "${RUNNER_TEMP}/heartwood-gpu-model/.heartwood/models/${SNAPSHOT}:/models/${SNAPSHOT}:ro"
+          --volume "${RUNNER_TEMP}/heartwood-gpu-project:/workspace"
+          --env HEARTWOOD_CAPABLE_PROJECT=/workspace
+          --env HEARTWOOD_GPU_CONFIGURATION_ID="${CONFIGURATION_ID}"
+          --env HEARTWOOD_LOCAL_MODEL_PATH="/models/${SNAPSHOT}"
+          --env HEARTWOOD_PLATFORM="${PLATFORM_ID}"
+          heartwood-gpu-qualification:local
+          bash /opt/heartwood/images/gpu/coding_agent_e2e.sh
+      - name: Prepare GPU qualification evidence
+        if: always()
+        run: >-
+          sudo chown -R "$(id -u):$(id -g)"
+          "${RUNNER_TEMP}/heartwood-gpu-project"
+      - name: Upload GPU qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpu-qualification-${{ inputs.qualification_configuration }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/heartwood-gpu-project/heartwood-qualification.json
+            ${{ runner.temp }}/heartwood-gpu-project/heartwood-replay.txt
+            ${{ runner.temp }}/heartwood-gpu-project/heartwood-transcript.txt
+          if-no-files-found: warn
+          retention-days: 30

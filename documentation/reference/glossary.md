@@ -18,6 +18,9 @@ SPDX-License-Identifier: MIT
 **Audit export**
 : A scrubbed JSON Lines representation of the tamper-evident session audit chain.
 
+**Blacksmith**
+: A hosted GitHub Actions runner service Heartwood uses for architecture-matched, compute-intensive validation jobs.
+
 **Carina**
 : Stanford's research-computing platform using project storage and Slurm-managed compute.
 

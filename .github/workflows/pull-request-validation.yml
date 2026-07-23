@@ -4,34 +4,28 @@
 #
 # SPDX-License-Identifier: MIT
 
-name: Main Validation
+name: Pull Request Validation
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  pull_request:
 
 concurrency:
-  group: main-validation-${{ github.ref }}
-  cancel-in-progress: false
+  group: pull-request-validation-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  containers:
-    name: Container Images
-    uses: ./.github/workflows/container-image.yml
   documentation:
     name: Documentation
     uses: ./.github/workflows/documentation.yml
-  capable-model:
-    name: Capable Model Acceptance
-    uses: ./.github/workflows/capable-model.yml
+  container-smoke:
+    name: Container Smoke Tests
+    uses: ./.github/workflows/container-smoke.yml
   gpu-containers:
-    name: GPU Container Images
-    uses: ./.github/workflows/gpu-container-image.yml
+    name: GPU Container Candidates
+    uses: ./.github/workflows/gpu-container-pr.yml
   native-assets:
     name: Native Release Assets
     uses: ./.github/workflows/native-release.yml
@@ -51,8 +45,7 @@ jobs:
     name: Release Candidate Ready
     if: ${{ always() }}
     needs:
-      - capable-model
-      - containers
+      - container-smoke
       - documentation
       - gpu-containers
       - native-assets
@@ -62,7 +55,7 @@ jobs:
       - web-ui
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every validation workflow
+      - name: Require every pull-request validation workflow
         env:
           VALIDATION_RESULTS: ${{ toJson(needs) }}
         run: |
