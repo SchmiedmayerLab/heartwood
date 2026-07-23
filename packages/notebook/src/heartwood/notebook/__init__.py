@@ -39,4 +39,4 @@ __all__ = [
     "render_widgets",
 ]
 
-__version__ = "0.2.0-beta.7"
+__version__ = "0.2.0-beta.8"
