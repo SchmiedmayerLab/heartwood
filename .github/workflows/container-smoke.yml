@@ -28,10 +28,10 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
             cache_scope: runtime-amd64
           - platform: linux/arm64
-            runner: blacksmith-8vcpu-ubuntu-2404-arm
+            runner: ubuntu-24.04-arm
             cache_scope: runtime-arm64
     steps:
       - name: Checkout repository
@@ -99,7 +99,7 @@ jobs:
 
   terra-smoke:
     name: Terra image smoke test (linux/amd64)
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

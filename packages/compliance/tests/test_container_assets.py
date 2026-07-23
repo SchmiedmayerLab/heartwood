@@ -784,7 +784,7 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert ".output=type=cacheonly" in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
-    assert "blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
+    assert "blacksmith-8vcpu-ubuntu-2404" in pull_request_workflow
     assert "uses: docker/bake-action@v7" in pull_request_workflow
     assert "cache-from=type=gha,scope=gpu-${{ matrix.target }}" in pull_request_workflow
     assert "cache-to=type=gha,scope=gpu-${{ matrix.target }},mode=min" in pull_request_workflow
@@ -1072,8 +1072,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
     assert publish.count("^sha256:[0-9a-f]{64}$") == 2
     assert "if: github.ref == 'refs/heads/main'" not in publish
-    assert "blacksmith-16vcpu-ubuntu-2404" in publish
-    assert "blacksmith-16vcpu-ubuntu-2404-arm" in publish
+    assert "runner: ubuntu-24.04" in publish
+    assert "runner: ubuntu-24.04-arm" in publish
     assert "cache-from=type=gha" in publish
     assert "cache-to=type=gha" in publish
     assert publish.count("uses: docker/bake-action@v7") == 2
