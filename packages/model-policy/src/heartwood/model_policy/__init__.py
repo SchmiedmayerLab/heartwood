@@ -23,4 +23,4 @@ __all__ = [
     "normalize_endpoint",
 ]
 
-__version__ = "0.2.0-beta.8"
+__version__ = "0.2.0-beta.9"
