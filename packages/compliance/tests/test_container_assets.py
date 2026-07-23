@@ -784,7 +784,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert ".output=type=cacheonly" in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
-    assert "blacksmith-8vcpu-ubuntu-2404" in pull_request_workflow
+    assert "runner: ubuntu-24.04" in pull_request_workflow
+    assert "runner: blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
     assert "uses: docker/bake-action@v7" in pull_request_workflow
     assert "cache-from=type=gha,scope=gpu-${{ matrix.target }}" in pull_request_workflow
     assert "cache-to=type=gha,scope=gpu-${{ matrix.target }},mode=min" in pull_request_workflow

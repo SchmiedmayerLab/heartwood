@@ -30,7 +30,7 @@ jobs:
   build:
     name: Build And Validate ${{ matrix.target }}
     needs: contract
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -39,10 +39,12 @@ jobs:
       matrix:
         include:
           - target: runtime-gpu-nvidia
+            runner: ubuntu-24.04
             commit_suffix: gpu-nvidia
             flatten: "false"
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true
           - target: terra-runtime-gpu-nvidia
+            runner: blacksmith-16vcpu-ubuntu-2404
             commit_suffix: terra-gpu-nvidia
             flatten: "true"
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false

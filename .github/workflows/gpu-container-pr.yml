@@ -31,11 +31,15 @@ jobs:
   build:
     name: Build GPU candidate ${{ matrix.target }}
     needs: contract
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [runtime-gpu-nvidia, terra-runtime-gpu-nvidia]
+        include:
+          - target: runtime-gpu-nvidia
+            runner: ubuntu-24.04
+          - target: terra-runtime-gpu-nvidia
+            runner: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

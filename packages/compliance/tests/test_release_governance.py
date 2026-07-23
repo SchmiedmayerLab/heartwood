@@ -284,7 +284,8 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "runtime.cache-from=type=gha,scope=${{ matrix.cache_scope }}" in smoke
     assert "runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=min" in smoke
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
-    assert "blacksmith-8vcpu-ubuntu-2404" in gpu
+    assert "runner: ubuntu-24.04" in gpu
+    assert "runner: blacksmith-16vcpu-ubuntu-2404" in gpu
     assert "blacksmith" not in capable
     assert "uses: docker/bake-action@v7" in capable
     assert "uses: docker/bake-action@v7" in gpu
@@ -293,7 +294,7 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
 
 
-def test_blacksmith_runners_are_reserved_for_gpu_image_builds() -> None:
+def test_blacksmith_runners_are_reserved_for_terra_gpu_image_builds() -> None:
     workflow_root = Path(".github/workflows")
     blacksmith_workflows = {
         path.name
@@ -304,8 +305,12 @@ def test_blacksmith_runners_are_reserved_for_gpu_image_builds() -> None:
     assert blacksmith_workflows == {"gpu-container-image.yml", "gpu-container-pr.yml"}
     for workflow_name in blacksmith_workflows:
         workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
-        assert "blacksmith-8vcpu-ubuntu-2404" in workflow
-        assert "blacksmith-16vcpu" not in workflow
+        assert workflow.count("blacksmith-16vcpu-ubuntu-2404") == 1
+        assert "target: runtime-gpu-nvidia\n            runner: ubuntu-24.04" in workflow
+        assert (
+            "target: terra-runtime-gpu-nvidia\n"
+            "            runner: blacksmith-16vcpu-ubuntu-2404"
+        ) in workflow
 
 
 def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
