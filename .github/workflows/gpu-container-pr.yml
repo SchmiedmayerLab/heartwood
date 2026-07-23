@@ -1,0 +1,91 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: GPU Container Pull Request
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-container-pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Validate GPU image contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+      - name: Validate build graph
+        run: >-
+          docker buildx bake --file docker-bake.hcl --print
+          runtime-gpu-nvidia terra-runtime-gpu-nvidia
+          > /tmp/gpu-build-graph.json
+      - name: Validate runtime lock and launcher
+        run: |
+          cp images/gpu/vllm-requirements.txt /tmp/vllm-requirements.expected
+          uv pip compile \
+            --python-version 3.12 \
+            --python-platform x86_64-manylinux_2_28 \
+            --generate-hashes \
+            --emit-index-url \
+            --exclude-newer 2026-07-20T00:00:00Z \
+            --override images/gpu/vllm-overrides.txt \
+            --exclude images/gpu/vllm-exclusions.txt \
+            --output-file images/gpu/vllm-requirements.txt \
+            images/gpu/vllm.in
+          cmp /tmp/vllm-requirements.expected images/gpu/vllm-requirements.txt
+          python3 deploy/verify_gpu_compatibility.py
+          python3 -m py_compile \
+            images/gpu/qualification_config.py \
+            images/gpu/verify_vllm.py \
+            images/generic/scripts/verify_coding_agent_e2e.py \
+            deploy/verify_gpu_compatibility.py
+          bash -n images/gpu/start_vllm.sh
+          bash -n images/gpu/heartwood-vllm
+          bash -n images/gpu/install_runtime.sh
+          bash -n images/gpu/coding_agent_e2e.sh
+          bash -n images/generic/scripts/coding_agent_e2e.sh
+  build:
+    name: Build GPU candidate ${{ matrix.target }}
+    needs: contract
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [runtime-gpu-nvidia, terra-runtime-gpu-nvidia]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build and validate candidate without image export
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          docker buildx bake --progress=plain --file docker-bake.hcl \
+            --set "${TARGET}.target=gpu-ci-validate" \
+            --set "${TARGET}.output=type=cacheonly" \
+            --set "${TARGET}.cache-from=type=gha,scope=gpu-${TARGET}" \
+            --set "${TARGET}.cache-to=type=gha,scope=gpu-${TARGET},mode=max" \
+            --set "${TARGET}.attest=type=sbom,disabled=true" \
+            --set "${TARGET}.attest=type=provenance,disabled=true" \
+            "${TARGET}"

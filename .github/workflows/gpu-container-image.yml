@@ -8,31 +8,6 @@ name: GPU Container Image
 
 on:
   workflow_call:
-  workflow_dispatch:
-    inputs:
-      publish_commit_candidate:
-        description: Publish validated immutable GPU tags for this commit without moving channel tags
-        required: true
-        default: false
-        type: boolean
-      run_gpu_qualification:
-        description: Run the coding-agent acceptance suite on a protected self-hosted GPU runner
-        required: true
-        default: false
-        type: boolean
-      qualification_configuration:
-        description: Optional compatibility-matrix row used only when GPU qualification is enabled
-        required: false
-        default: terra-2xt4-qwen3-coder-30b-awq
-        type: choice
-        options:
-          - terra-2xt4-qwen3-coder-30b-awq
-          - carina-l40s-qwen3-coder-30b-fp8
-      qualification_runner:
-        description: JSON array of protected self-hosted GPU runner labels
-        required: true
-        default: '["self-hosted","linux","x64","gpu"]'
-        type: string
 
 concurrency:
   group: gpu-container-image-${{ github.workflow }}-${{ github.ref }}
@@ -99,125 +74,10 @@ jobs:
           test -x images/gpu/coding_agent_e2e.sh
           test -x images/generic/scripts/coding_agent_e2e.sh
 
-  gpu-qualification:
-    name: GPU Coding-Agent Qualification
-    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu_qualification
-    needs: contract
-    runs-on: ${{ fromJSON(inputs.qualification_runner) }}
-    timeout-minutes: 180
-    environment: gpu-qualification
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver: docker
-      - name: Build the locked GPU runtime
-        run: >-
-          docker buildx bake --file docker-bake.hcl --load
-          --set runtime-gpu-nvidia.platform=linux/amd64
-          --set runtime-gpu-nvidia.tags=heartwood-gpu-qualification:local
-          runtime-gpu-nvidia
-      - name: Prepare isolated model and project storage
-        run: |
-          sudo mkdir -p "${RUNNER_TEMP}/heartwood-gpu-model" "${RUNNER_TEMP}/heartwood-gpu-project"
-          sudo chown -R 10001:10001 \
-            "${RUNNER_TEMP}/heartwood-gpu-model" "${RUNNER_TEMP}/heartwood-gpu-project"
-      - name: Resolve qualification model
-        id: model
-        env:
-          CONFIGURATION_ID: ${{ inputs.qualification_configuration }}
-        run: |
-          payload="$(python3 images/gpu/qualification_config.py "${CONFIGURATION_ID}")"
-          echo "snapshot=$(jq -r '.configuration.model_snapshot' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
-          echo "platform=$(jq -r '.configuration.platform' <<<"${payload}")" >> "${GITHUB_OUTPUT}"
-      - name: Download and verify the pinned model
-        env:
-          SNAPSHOT: ${{ steps.model.outputs.snapshot }}
-        run: >-
-          docker run --rm --gpus all
-          --volume "${RUNNER_TEMP}/heartwood-gpu-model:/workspace"
-          heartwood-gpu-qualification:local
-          heartwood models download "${SNAPSHOT}"
-      - name: Run GPU coding-agent qualification without network
-        env:
-          CONFIGURATION_ID: ${{ inputs.qualification_configuration }}
-          PLATFORM_ID: ${{ steps.model.outputs.platform }}
-          SNAPSHOT: ${{ steps.model.outputs.snapshot }}
-        run: >-
-          docker run --rm --gpus all --network none --read-only --shm-size=16g
-          --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 2048
-          --tmpfs /tmp:rw,nosuid,nodev,size=8g
-          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700
-          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
-          --volume "${RUNNER_TEMP}/heartwood-gpu-model/.heartwood/models/${SNAPSHOT}:/models/${SNAPSHOT}:ro"
-          --volume "${RUNNER_TEMP}/heartwood-gpu-project:/workspace"
-          --env HEARTWOOD_CAPABLE_PROJECT=/workspace
-          --env HEARTWOOD_GPU_CONFIGURATION_ID="${CONFIGURATION_ID}"
-          --env HEARTWOOD_LOCAL_MODEL_PATH="/models/${SNAPSHOT}"
-          --env HEARTWOOD_PLATFORM="${PLATFORM_ID}"
-          heartwood-gpu-qualification:local
-          bash /opt/heartwood/images/gpu/coding_agent_e2e.sh
-      - name: Prepare GPU qualification evidence
-        if: always()
-        run: >-
-          sudo chown -R "$(id -u):$(id -g)"
-          "${RUNNER_TEMP}/heartwood-gpu-project"
-      - name: Upload GPU qualification evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gpu-qualification-${{ inputs.qualification_configuration }}-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/heartwood-gpu-project/heartwood-qualification.json
-            ${{ runner.temp }}/heartwood-gpu-project/heartwood-replay.txt
-            ${{ runner.temp }}/heartwood-gpu-project/heartwood-transcript.txt
-          if-no-files-found: warn
-          retention-days: 30
-
-  pull-request-build:
-    name: Build GPU candidate ${{ matrix.target }}
-    if: github.event_name == 'pull_request'
-    needs: contract
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [runtime-gpu-nvidia, terra-runtime-gpu-nvidia]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Reclaim runner space for GPU build
-        run: deploy/reclaim-github-runner-space.sh
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-      - name: Build and validate candidate without image export
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          docker buildx bake --progress=plain --file docker-bake.hcl \
-            --set "${TARGET}.target=gpu-ci-validate" \
-            --set "${TARGET}.output=type=cacheonly" \
-            --set "${TARGET}.attest=type=sbom,disabled=true" \
-            --set "${TARGET}.attest=type=provenance,disabled=true" \
-            "${TARGET}"
-
   build:
     name: Build And Validate ${{ matrix.target }}
-    if: >-
-      github.ref == 'refs/heads/main'
-      || (github.event_name == 'workflow_dispatch' && inputs.publish_commit_candidate)
     needs: contract
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       contents: read
       packages: write
@@ -241,8 +101,6 @@ jobs:
       - name: Set image name
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
-      - name: Reclaim runner space for GPU build
-        run: deploy/reclaim-github-runner-space.sh
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry
@@ -262,15 +120,13 @@ jobs:
           docker buildx bake --file docker-bake.hcl \
             --set "${TARGET}.tags=${IMAGE_NAME}" \
             --set "${TARGET}.output=${MEDIA_OUTPUT},name=${IMAGE_NAME}" \
+            --set "${TARGET}.cache-from=type=gha,scope=gpu-${TARGET}" \
+            --set "${TARGET}.cache-to=type=gha,scope=gpu-${TARGET},mode=max" \
             --metadata-file /tmp/gpu-metadata.json \
             "${TARGET}"
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/gpu-metadata.json "${TARGET}")"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
-      - name: Reclaim candidate verification space
-        run: |
-          docker buildx prune --all --force
-          docker system df
       - name: Verify candidate contents
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}
@@ -377,7 +233,6 @@ jobs:
 
   promote:
     name: Promote GPU Channel Tags
-    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

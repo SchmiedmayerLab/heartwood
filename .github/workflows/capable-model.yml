@@ -1,0 +1,82 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Capable Model Acceptance
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: Capable Model OpenHands Acceptance (linux/amd64)
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build no-weight runtime image
+        run: >-
+          docker buildx bake --file docker-bake.hcl --load
+          --set runtime.platform=linux/amd64
+          --set runtime.tags=heartwood-capable:local
+          --set runtime.cache-from=type=gha,scope=runtime-amd64
+          --set runtime.cache-to=type=gha,scope=runtime-amd64,mode=max
+          --set runtime.attest=type=sbom,disabled=true
+          --set runtime.attest=type=provenance,disabled=true
+          runtime
+      - name: Prepare isolated model and project storage
+        run: |
+          sudo mkdir -p /tmp/heartwood-model-cache
+          sudo mkdir -p /tmp/heartwood-project
+          sudo chown 10001:10001 /tmp/heartwood-model-cache
+          sudo chown 10001:10001 /tmp/heartwood-project
+      - name: Download and verify reviewed agent model
+        run: >-
+          docker run --rm --platform linux/amd64
+          --workdir /model-cache
+          --volume /tmp/heartwood-model-cache:/model-cache
+          heartwood-capable:local
+          heartwood models download qwen25-7b-instruct-q4_k_m
+      - name: Run mounted capable model without network
+        run: >-
+          docker run --rm --platform linux/amd64 --network none --read-only
+          --volume /tmp/heartwood-project:/workspace
+          --tmpfs /tmp:rw,nosuid,nodev,size=4g
+          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
+          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+          --cap-drop ALL
+          --security-opt no-new-privileges:true
+          --pids-limit 512
+          --volume /tmp/heartwood-model-cache/.heartwood/models:/models:ro
+          --env HEARTWOOD_CAPABLE_PROJECT=/workspace
+          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+          heartwood-capable:local
+          bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
+      - name: Prepare coding-agent qualification evidence
+        if: always()
+        run: |
+          if [[ -d /tmp/heartwood-project ]]; then
+            sudo chown -R "$(id -u):$(id -g)" /tmp/heartwood-project
+          fi
+      - name: Upload coding-agent qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capable-model-qualification-${{ github.sha }}
+          path: |
+            /tmp/heartwood-project/heartwood-qualification.json
+            /tmp/heartwood-project/heartwood-replay.txt
+            /tmp/heartwood-project/heartwood-transcript.txt
+          if-no-files-found: warn
+          retention-days: 14

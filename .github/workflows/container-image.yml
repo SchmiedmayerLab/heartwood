@@ -23,17 +23,16 @@ concurrency:
 jobs:
   build:
     name: Stage and validate generic image (${{ matrix.platform }})
-    if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: blacksmith-16vcpu-ubuntu-2404
             suffix: amd64
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: blacksmith-16vcpu-ubuntu-2404-arm
             suffix: arm64
     steps:
       - name: Checkout repository
@@ -60,6 +59,8 @@ jobs:
           docker buildx bake --file docker-bake.hcl \
             --set runtime.platform="${DOCKER_PLATFORM}" \
             --set runtime.tags="${IMAGE_NAME}" \
+            --set "runtime.cache-from=type=gha,scope=runtime-${{ matrix.suffix }}" \
+            --set "runtime.cache-to=type=gha,scope=runtime-${{ matrix.suffix }},mode=max" \
             --set "runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" \
             --metadata-file /tmp/metadata.json \
             runtime
@@ -127,7 +128,6 @@ jobs:
 
   publish:
     name: Promote validated multi-platform generic image
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     needs: build
     steps:
@@ -248,8 +248,7 @@ jobs:
 
   build-terra:
     name: Stage, validate, and promote Terra image (linux/amd64)
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -274,6 +273,8 @@ jobs:
         run: |
           docker buildx bake --file docker-bake.hcl \
             --set terra-runtime.tags="${IMAGE_NAME}" \
+            --set terra-runtime.cache-from=type=gha,scope=terra-runtime-amd64 \
+            --set terra-runtime.cache-to=type=gha,scope=terra-runtime-amd64,mode=max \
             --set "terra-runtime.output=type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false" \
             --metadata-file /tmp/terra-metadata.json \
             terra-runtime

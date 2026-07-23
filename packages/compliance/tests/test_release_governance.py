@@ -216,11 +216,14 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
 
 def test_main_validation_owns_release_readiness_dependencies() -> None:
     workflow = Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8")
+    pull_request_workflow = Path(".github/workflows/pull-request-validation.yml").read_text(
+        encoding="utf-8"
+    )
     dependency_review = Path(".github/workflows/dependency-review.yml").read_text(encoding="utf-8")
     called_workflows = {
         "codeql": "codeql.yml",
+        "capable-model": "capable-model.yml",
         "containers": "container-image.yml",
-        "container-smoke": "container-smoke.yml",
         "documentation": "documentation.yml",
         "secrets": "gitleaks.yml",
         "gpu-containers": "gpu-container-image.yml",
@@ -242,16 +245,44 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "name: Release Candidate Ready" in readiness
     for job_id in called_workflows:
         assert f"      - {job_id}" in readiness
-    assert 'if $event == "pull_request" then' in readiness
-    assert '.containers.result == "skipped"' in readiness
     assert 'to_entries | all(.value.result == "success")' in readiness
     assert "group: main-validation-${{ github.ref }}" in workflow
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request' || "
-        "(github.ref_type == 'branch' && github.ref_name != 'main') }}" in workflow
-    )
+    assert "  pull_request:" not in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "  pull_request:" in pull_request_workflow
+    assert "  push:" not in pull_request_workflow
+    assert "name: Release Candidate Ready" in pull_request_workflow
+    assert "uses: ./.github/workflows/container-image.yml" not in pull_request_workflow
+    assert "uses: ./.github/workflows/capable-model.yml" not in pull_request_workflow
+    assert "uses: ./.github/workflows/gpu-container-pr.yml" in pull_request_workflow
+    assert 'to_entries | all(.value.result == "success")' in pull_request_workflow
+    assert '.result == "skipped"' not in pull_request_workflow
     assert "group: dependency-review-${{ github.ref }}" in dependency_review
     assert "cancel-in-progress: true" in dependency_review
+
+
+def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
+    pull_request = Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8")
+    smoke = Path(".github/workflows/container-smoke.yml").read_text(encoding="utf-8")
+    gpu = Path(".github/workflows/gpu-container-pr.yml").read_text(encoding="utf-8")
+    capable = Path(".github/workflows/capable-model.yml").read_text(encoding="utf-8")
+    dependabot = Path(".github/dependabot.yml").read_text(encoding="utf-8")
+
+    assert "Container Images" not in pull_request
+    assert "Capable Model Acceptance" not in pull_request
+    assert "GPU Coding-Agent Qualification" not in pull_request
+    assert "Promote GPU Channel Tags" not in pull_request
+    assert pull_request.count("    if:") == 1
+    assert "    if: ${{ always() }}" in pull_request
+    assert "\n    if:" not in smoke
+    assert "\n    if:" not in gpu
+    assert "blacksmith-8vcpu-ubuntu-2404" in smoke
+    assert "blacksmith-8vcpu-ubuntu-2404-arm" in smoke
+    assert "blacksmith-16vcpu-ubuntu-2404" in gpu
+    assert "blacksmith-16vcpu-ubuntu-2404" in capable
+    assert "cache-from=type=gha" in gpu
+    assert "cache-to=type=gha" in gpu
+    assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
 
 
 def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
