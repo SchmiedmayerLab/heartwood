@@ -105,7 +105,7 @@ class LocalModelChoice:
     license_id: str = "Unspecified"
     precision: str = "Unspecified"
     tier: ModelTier = "standard"
-    qualification: ModelQualification = "candidate"
+    qualification: ModelQualification = "unvalidated"
     minimum_gpu_count: int = 0
     minimum_gpu_memory_bytes: int = 0
     recommended_ram_bytes: int = 0
@@ -120,6 +120,9 @@ class LocalModelChoice:
     ignore_patterns: tuple[str, ...] = ()
     validated_platforms: tuple[str, ...] = ()
     qualification_test: str | None = None
+    qualification_date: str | None = None
+    qualification_evidence: str | None = None
+    recommended_cpu_count: int = 8
 
     def validate(self) -> None:
         """Validate source provenance and runtime-specific integrity metadata."""
@@ -144,7 +147,7 @@ class LocalModelChoice:
             raise ModelRepositoryError("managed model license and precision must not be empty")
         if self.tier not in {"standard", "powerful", "maximum"}:
             raise ModelRepositoryError(f"unsupported managed model tier: {self.tier}")
-        if self.qualification not in {"candidate", "qualified"}:
+        if self.qualification not in {"unvalidated", "qualified"}:
             raise ModelRepositoryError(
                 f"unsupported managed model qualification: {self.qualification}"
             )
@@ -163,6 +166,8 @@ class LocalModelChoice:
             raise ModelRepositoryError("managed model maximum context capacity is invalid")
         if self.recommended_ram_bytes <= 0 or self.recommended_disk_bytes < self.minimum_free_bytes:
             raise ModelRepositoryError("managed model RAM or disk recommendation is invalid")
+        if self.recommended_cpu_count <= 0:
+            raise ModelRepositoryError("managed model CPU recommendation is invalid")
         if self.runtime == "llama-cpp":
             if self.source_path is None or not self.source_path.casefold().endswith(".gguf"):
                 raise ModelRepositoryError("CPU models require one GGUF file")
@@ -197,9 +202,9 @@ class LocalModelChoice:
 
     def qualification_for(self, platform_id: str) -> ModelQualification:
         """Return qualification for one exact managed-platform configuration."""
-        if self.qualification == "qualified" and platform_id in self.validated_platforms:
-            return "qualified"
-        return "candidate"
+        if platform_id in self.validated_platforms:
+            return self.qualification
+        return "unvalidated"
 
     def download_model(self) -> ModelArtifact | ModelSnapshot:
         """Translate the normalized choice to the existing download implementation."""
@@ -254,9 +259,12 @@ class LocalModelChoice:
             ignore_patterns=self.ignore_patterns,
             validated_platforms=self.validated_platforms,
             qualification_test=self.qualification_test,
+            qualification_date=self.qualification_date,
+            qualification_evidence=self.qualification_evidence,
             context_window=self.context_window,
             minimum_resource_envelope=self.minimum_resource_envelope,
             recommended_resource_envelope=self.recommended_resource_envelope,
+            recommended_cpu_count=self.recommended_cpu_count,
             recommended=False,
         )
 
@@ -507,15 +515,17 @@ def catalog_model_choices(
             license_id=_license_id_from_posture(artifact.license_posture),
             precision=_gguf_precision(artifact.source_path),
             tier="standard",
-            qualification="qualified",
+            qualification=artifact.qualification,
             recommended_ram_bytes=max(16 * 1024**3, artifact.artifact_size_bytes * 4),
             recommended_disk_bytes=max(
                 artifact.minimum_free_bytes,
                 artifact.artifact_size_bytes * 3,
             ),
             maximum_context_window=artifact.context_window,
-            validated_platforms=("generic", "terra"),
-            qualification_test="heartwood.coding-agent-e2e.v1",
+            validated_platforms=artifact.validated_platforms,
+            qualification_test=artifact.qualification_test,
+            qualification_date=artifact.qualification_date,
+            qualification_evidence=artifact.qualification_evidence,
         )
         for artifact in artifacts
         if artifact.recommended or not recommended_only
@@ -555,6 +565,9 @@ def catalog_model_choices(
             ignore_patterns=snapshot.ignore_patterns,
             validated_platforms=snapshot.validated_platforms,
             qualification_test=snapshot.qualification_test,
+            qualification_date=snapshot.qualification_date,
+            qualification_evidence=snapshot.qualification_evidence,
+            recommended_cpu_count=snapshot.recommended_cpu_count,
         )
         for snapshot in snapshots
         if snapshot.recommended or not recommended_only

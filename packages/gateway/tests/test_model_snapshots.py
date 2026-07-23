@@ -39,35 +39,11 @@ from heartwood.gateway import (
     ),
     [
         (
-            "qwen25-coder-7b-instruct-awq-vllm",
-            "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
-            "8e8ed243bbe6f9a5aff549a0924562fc719b2b8a",
-            "standard",
-            1,
-            "hermes",
-        ),
-        (
-            "qwen25-coder-14b-instruct-awq-vllm",
-            "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
-            "eb3172f06a6d6b3a15f08947b0668d782e4d2d2c",
-            "powerful",
-            1,
-            "hermes",
-        ),
-        (
             "qwen3-coder-30b-a3b-instruct-fp8-vllm",
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
             "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
             "powerful",
             1,
-            "qwen3_coder",
-        ),
-        (
-            "qwen3-coder-next-fp8-vllm",
-            "Qwen/Qwen3-Coder-Next-FP8",
-            "da6e2ed27304dd39abadd9c82ef50e8de67bdd4c",
-            "maximum",
-            4,
             "qwen3_coder",
         ),
         (
@@ -77,22 +53,6 @@ from heartwood.gateway import (
             "powerful",
             2,
             "qwen3_coder",
-        ),
-        (
-            "gpt-oss-20b-vllm",
-            "openai/gpt-oss-20b",
-            "6cee5e81ee83917806bbde320786a8fb61efebee",
-            "powerful",
-            4,
-            "openai",
-        ),
-        (
-            "gpt-oss-120b-vllm",
-            "openai/gpt-oss-120b",
-            "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
-            "maximum",
-            2,
-            "openai",
         ),
     ],
 )
@@ -118,27 +78,15 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
     assert snapshot.recommended_disk_bytes >= snapshot.minimum_free_bytes
     assert snapshot.context_window <= snapshot.maximum_context_window
-    expected_qualification = (
-        "qualified"
-        if snapshot_id
-        in {
-            "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
-        }
-        else "candidate"
+    assert snapshot.qualification == "qualified"
+    expected_platform = (
+        "carina" if snapshot_id == "qwen3-coder-30b-a3b-instruct-fp8-vllm" else "terra"
     )
-    assert snapshot.qualification == expected_qualification
-    if expected_qualification == "qualified":
-        expected_platform = (
-            "carina" if snapshot_id == "qwen3-coder-30b-a3b-instruct-fp8-vllm" else "terra"
-        )
-        assert snapshot.validated_platforms == (expected_platform,)
-        assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
-        assert snapshot.recommended is True
-    else:
-        assert snapshot.validated_platforms == ()
-        assert snapshot.qualification_test is None
-        assert snapshot.recommended is False
+    assert snapshot.validated_platforms == (expected_platform,)
+    assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
+    assert snapshot.qualification_date is not None
+    assert snapshot.qualification_evidence is not None
+    assert snapshot.recommended is True
 
 
 @pytest.mark.parametrize(
@@ -160,10 +108,10 @@ def test_automatic_model_tier_is_shared_across_interfaces(
 @pytest.mark.parametrize(
     ("snapshot_id", "minimum_vram_gib"),
     [
-        ("qwen25-coder-7b-instruct-awq-vllm", 16),
+        ("qwen3-coder-30b-a3b-instruct-fp8-vllm", 48),
     ],
 )
-def test_snapshot_minimum_vram_supports_its_advertised_context(
+def test_snapshot_minimum_vram_supports_an_agent_context(
     snapshot_id: str,
     minimum_vram_gib: int,
 ) -> None:
@@ -179,7 +127,8 @@ def test_snapshot_minimum_vram_supports_its_advertised_context(
         available_memory_bytes=minimum_vram_gib * 1024**3,
     )
 
-    assert plan.effective_window == snapshot.context_window
+    assert plan.effective_window >= 18_432
+    assert plan.effective_window <= snapshot.context_window
     assert f"{minimum_vram_gib} GB VRAM" in str(snapshot.minimum_resource_envelope)
 
 
@@ -187,7 +136,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
     source = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
-    terra_candidate = source.snapshot("qwen25-coder-14b-instruct-awq-vllm")
+    terra_model = source.snapshot("qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm")
     powerful = replace(
         source.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm"),
         qualification="qualified",
@@ -197,7 +146,7 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
     )
     catalog = ModelSnapshotCatalog(
         source.schema_version,
-        (terra_candidate, powerful),
+        (terra_model, powerful),
     )
 
     assert (
@@ -442,7 +391,7 @@ def test_snapshot_metadata_rejects_floating_revisions() -> None:
             {"qualification": "qualified", "validated_platforms": ("terra",)},
             "require validated platforms",
         ),
-        ({"recommended": True}, "candidate models cannot be recommended"),
+        ({"recommended": True}, "only qualified models can be recommended"),
     ],
 )
 def test_snapshot_metadata_rejects_unsafe_values(changes: dict[str, object], message: str) -> None:
@@ -468,7 +417,7 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     missing_snapshots = tmp_path / "missing-snapshots.toml"
     missing_snapshots.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v2"\n',
+        'schema_version = "heartwood.model-snapshot-catalog.v3"\n',
         encoding="utf-8",
     )
     with pytest.raises(ModelSnapshotError, match="snapshots table"):
@@ -476,7 +425,7 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     missing_policies = tmp_path / "missing-policies.toml"
     missing_policies.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v2"\n[snapshots]\n',
+        'schema_version = "heartwood.model-snapshot-catalog.v3"\n[snapshots]\n',
         encoding="utf-8",
     )
     with pytest.raises(ModelSnapshotError, match="download policies"):
@@ -484,7 +433,7 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     invalid_policy = tmp_path / "invalid-policy.toml"
     invalid_policy.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v2"\n'
+        'schema_version = "heartwood.model-snapshot-catalog.v3"\n'
         '[download_policies]\ninvalid = "value"\n[snapshots]\n',
         encoding="utf-8",
     )
@@ -493,7 +442,7 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     invalid_entry = tmp_path / "entry.toml"
     invalid_entry.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v2"\n'
+        'schema_version = "heartwood.model-snapshot-catalog.v3"\n'
         "[download_policies.safe]\n"
         'allow_patterns = ["*.json"]\n'
         "[snapshots]\n"
@@ -505,7 +454,7 @@ def test_snapshot_catalog_reports_unknown_ids_and_invalid_documents(tmp_path: Pa
 
     invalid_fields = tmp_path / "fields.toml"
     invalid_fields.write_text(
-        'schema_version = "heartwood.model-snapshot-catalog.v2"\n'
+        'schema_version = "heartwood.model-snapshot-catalog.v3"\n'
         "[download_policies.safe]\n"
         'allow_patterns = ["*.json"]\n'
         "[snapshots.invalid]\n"
@@ -598,7 +547,7 @@ def _snapshot() -> ModelSnapshot:
         model_alias="Synthetic vLLM",
         precision="Synthetic",
         tier="standard",
-        qualification="candidate",
+        qualification="unvalidated",
         minimum_gpu_count=1,
         minimum_gpu_memory_bytes=1,
         recommended_ram_bytes=1,

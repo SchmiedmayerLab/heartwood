@@ -39,6 +39,7 @@ from heartwood.gateway._model_snapshots import (
 )
 
 type DownloadStatus = Literal["downloading", "error", "ready"]
+type ModelQualification = Literal["unvalidated", "qualified"]
 type ProgressCallback = Callable[[int, int], None]
 type DownloadReadyCallback = Callable[[str, Path, str], None]
 
@@ -119,6 +120,11 @@ class ModelArtifact:
     context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
+    qualification: ModelQualification = "unvalidated"
+    validated_platforms: tuple[str, ...] = ()
+    qualification_test: str | None = None
+    qualification_date: str | None = None
+    qualification_evidence: str | None = None
     recommended: bool = False
 
     def validate(self) -> None:
@@ -151,6 +157,29 @@ class ModelArtifact:
         ):
             msg = "artifact_sha256 must be a lowercase SHA-256 digest"
             raise ModelArtifactError(msg)
+        if self.qualification not in {"unvalidated", "qualified"}:
+            raise ModelArtifactError("unsupported model artifact qualification")
+        if len(self.validated_platforms) != len(set(self.validated_platforms)) or any(
+            platform not in {"carina", "generic", "terra"} for platform in self.validated_platforms
+        ):
+            raise ModelArtifactError("model artifact qualification platforms are invalid")
+        if (self.qualification_date is None) != (self.qualification_evidence is None):
+            raise ModelArtifactError("model artifact qualification evidence must be paired")
+        has_evidence = (
+            self.qualification_date is not None and self.qualification_evidence is not None
+        )
+        if self.qualification == "qualified" and (
+            not self.validated_platforms or self.qualification_test is None or not has_evidence
+        ):
+            raise ModelArtifactError(
+                "qualified model artifacts require platforms, a test, and dated evidence"
+            )
+        if self.qualification == "unvalidated" and (
+            self.validated_platforms or self.qualification_test is not None or has_evidence
+        ):
+            raise ModelArtifactError("unvalidated model artifacts cannot declare qualification")
+        if self.recommended and self.qualification != "qualified":
+            raise ModelArtifactError("only qualified model artifacts can be recommended")
 
     def safe_dict(self) -> dict[str, object]:
         """Return artifact metadata safe for APIs."""
@@ -473,6 +502,14 @@ def _load_artifact(path: Path) -> ModelArtifact:
         context_window=_positive_int(data, "context_window"),
         minimum_resource_envelope=_optional_string(data, "minimum_resource_envelope"),
         recommended_resource_envelope=_optional_string(data, "recommended_resource_envelope"),
+        qualification=cast(
+            ModelQualification,
+            _optional_string(data, "qualification") or "unvalidated",
+        ),
+        validated_platforms=_string_tuple(data, "validated_platforms"),
+        qualification_test=_optional_string(data, "qualification_test"),
+        qualification_date=_optional_string(data, "qualification_date"),
+        qualification_evidence=_optional_string(data, "qualification_evidence"),
         recommended=_optional_bool(data, "recommended", default=False),
     )
     artifact.validate()
@@ -528,6 +565,13 @@ def _optional_string(data: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     return _string(data, key)
+
+
+def _string_tuple(data: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = data.get(key, [])
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ModelArtifactError(f"{key} must be an array of non-empty strings")
+    return tuple(value)
 
 
 def _positive_int(data: dict[str, Any], key: str) -> int:

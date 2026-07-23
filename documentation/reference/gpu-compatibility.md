@@ -7,8 +7,8 @@ SPDX-License-Identifier: MIT
 # GPU Compatibility
 
 Heartwood keeps the NVIDIA inference runtime and its model configurations in a release-owned compatibility matrix.
-The matrix separates configurations that have completed the full coding-agent qualification from candidates that are still under evaluation.
-Heartwood exposes candidates in advanced model selection, but it does not label or automatically select them as recommendations.
+The matrix records platform-specific outcomes as Qualified, Inconclusive, or Unsupported.
+Heartwood recommends and automatically selects only Qualified configurations.
 
 ## Runtime
 
@@ -29,30 +29,42 @@ CUDA 13 is not qualified for Heartwood.
 The minimum driver is CUDA's compatibility floor, not evidence that every driver at or above that version has completed a Heartwood qualification.
 The exact driver used in a live qualification is recorded with its machine-readable result.
 
-## Model Configurations
+## Qualified Model Configurations
 
-| Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Status |
-|---|---|---|---|---|---:|---|---:|---|---|---|
-| Terra | Standard | 1 x T4, 16 GB | [Qwen2.5-Coder-7B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-AWQ/tree/8e8ed243bbe6f9a5aff549a0924562fc719b2b8a) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands native tools | Candidate |
-| Terra | Powerful | 1 x T4, 16 GB | [Qwen2.5-Coder-14B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct-AWQ/tree/eb3172f06a6d6b3a15f08947b0668d782e4d2d2c) | AWQ int4 | 18,432 | Eager | 1 | `hermes` | OpenHands native tools | Candidate |
-| Terra | Powerful | 2 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ](https://huggingface.co/YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ/tree/e69e73813144d9b715648d8384b3f2c035397411) | W4A16 AWQ | 18,432 | Eager | 2 | `qwen3_coder` | OpenHands native tools | Qualified |
-| Terra | Powerful | 4 x T4, 16 GB each | [Qwen2.5-Coder-32B-Instruct-AWQ](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ/tree/1ed0a6145da0ce550c628e8e8b678f51e695995d) | AWQ int4 | 32,768 | Eager | 4 | `hermes` | OpenHands native tools | Candidate |
-| Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | OpenHands native tools | Qualified |
-| Carina | Maximum capability | 4 x L40S, 48 GB each | [Qwen3-Coder-Next-FP8](https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8/tree/da6e2ed27304dd39abadd9c82ef50e8de67bdd4c) | FP8 | 65,536 | CUDA graphs | 4 | `qwen3_coder` | OpenHands native tools | Candidate |
-| Carina | Maximum capability alternative | 2 x L40S, 48 GB each | [GPT-OSS 120B](https://huggingface.co/openai/gpt-oss-120b/tree/b5c939de8f754692c1647ca79fbf85e8c1e70f8a) | MXFP4 | 65,536 | CUDA graphs | 2 | `openai` | OpenHands native tools | Candidate |
+| Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Outcome | Date |
+|---|---|---|---|---|---:|---|---:|---|---|---|---|
+| Terra | Powerful | 2 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ](https://huggingface.co/YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ/tree/e69e73813144d9b715648d8384b3f2c035397411) | W4A16 AWQ | 18,432 | Eager | 2 | `qwen3_coder` | OpenHands native tools | Qualified | 2026-07-22 |
+| Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | OpenHands native tools | Qualified | 2026-07-21 |
 
 All listed model repositories declare the Apache-2.0 license at the pinned revision.
 Confirm that a model's license and intended use remain suitable for the project before downloading it.
 
-The Qwen3 Coder 30B FP8 snapshot was also tested with four T4 GPUs and vLLM 0.25.1 on CUDA 12.9.
-That combination is unsupported because the FP8 Mixture-of-Experts kernel cannot load the model's quantization dimensions on T4 hardware.
-The GPT-OSS 20B MXFP4 snapshot was also tested with four T4 GPUs.
-That combination is unsupported because vLLM requires compute capability 8.0 or newer for GPT-OSS MXFP4 while T4 provides compute capability 7.5.
-Qwen3 Coder 30B W4A16 AWQ cannot use tensor parallelism 4 because its quantization group size crosses four-way tensor shards.
-The two-way eager configuration is qualified.
+## Unsupported Configurations
+
+| Platform | Configuration | Date | Result |
+|---|---|---|---|
+| Terra, 1 x T4 | Qwen2.5 Coder 7B AWQ | 2026-07-21 | Unsupported: direct inference worked, but the required OpenHands tool-use workflow did not pass. |
+| Terra, 1 x T4 | Qwen2.5 Coder 14B AWQ | 2026-07-21 | Unsupported: direct inference worked, but the required OpenHands tool-use workflow did not pass. |
+| Terra, 4 x T4 | Qwen3 Coder 30B FP8 | 2026-07-21 | Unsupported: the FP8 Mixture-of-Experts kernel cannot load this model's quantization dimensions on T4 hardware. |
+| Terra, 4 x T4 | GPT-OSS 20B MXFP4 | 2026-07-21 | Unsupported: vLLM requires compute capability 8.0 or newer, while T4 provides 7.5. |
+| Terra, 4 x T4 | GPT-OSS 120B MXFP4 | 2026-07-21 | Unsupported: the same MXFP4 runtime requires compute capability 8.0 or newer, while T4 provides 7.5. |
+| Terra, 4 x T4 | Qwen3 Coder 30B W4A16 AWQ with tensor parallelism 4 | 2026-07-21 | Unsupported: the quantization group size crosses four-way tensor shards. Use the qualified two-GPU configuration. |
+
+Unsupported configurations are retained only as compatibility evidence.
+They are not model choices and cannot be recommended or downloaded from the managed catalog.
+
+## Inconclusive Attempts
+
+| Platform | Configuration | Date | Result |
+|---|---|---|---|
+| Carina, 2 x L40S | GPT-OSS 120B MXFP4 | 2026-07-22 | The download was interrupted and the allocation attempt stopped before model startup because the platform detector reported no compatible two-GPU capacity. |
+| Carina, 2 x L40S | Qwen3 Coder Next FP8 | 2026-07-22 | vLLM reached distributed NCCL initialization but did not become ready or produce coding-agent qualification evidence. |
+
+Inconclusive does not mean the model is incompatible.
+It means the exact attempt did not produce enough evidence to qualify or reject the configuration.
+
+The two-way Qwen3 Coder 30B AWQ configuration is qualified.
 Its context is capped at 18,432 because a 32,768-token key/value cache leaves no cache blocks on two 16 GB T4 GPUs at the validated memory ceiling.
-The Qwen2.5 Coder 7B and 14B AWQ snapshots load and answer direct inference requests on one T4.
-Their coding-agent tool execution remains unqualified, so both stay candidates until the native Hermes path completes the full qualification below.
 
 ## Qualification Requirement
 
@@ -68,7 +80,8 @@ The acceptance test must establish all of the following:
 7. audit export validates event coverage, hash-chain integrity, and content scrubbing.
 
 The result records the GPU model, count, memory, driver, runtime versions, model revision, context size, tensor parallelism, server parser, and agent tool mode.
-A candidate remains visible for evaluation but cannot become an automatic recommendation until that result passes.
+Not-tested configurations are not added to the managed catalog.
+Unsupported and inconclusive attempts remain only in this evidence record so Heartwood does not offer or automatically retry them.
 
 ## Unsupported Hardware
 
@@ -77,4 +90,4 @@ Heartwood therefore stops before model startup on P4, P100, and V100 GPUs.
 Choose a T4 or newer GPU, use a hosted model route, or select the portable CPU runtime instead.
 
 Use `heartwood doctor` for the environment summary and `heartwood runtime start --dry-run` for the complete model and allocation plan.
-Do not bypass a compatibility failure by changing vLLM, PyTorch, CUDA, the model revision, tensor parallelism, or parser inside a released environment; that creates a new unqualified configuration.
+Do not bypass a compatibility failure by changing vLLM, PyTorch, CUDA, the model revision, tensor parallelism, or parser inside a released environment; that creates a custom configuration without qualification evidence.

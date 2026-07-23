@@ -40,7 +40,11 @@ def test_repository_catalog_contains_only_explicit_download_artifacts() -> None:
         "qwen25-coder-7b-instruct-q4_k_m",
     }
     assert all(artifact.source_revision not in {"main", "latest"} for artifact in catalog.artifacts)
-    assert catalog.artifact("qwen25-7b-instruct-q4_k_m").context_window == 32_768
+    qualified = catalog.artifact("qwen25-7b-instruct-q4_k_m")
+    assert qualified.context_window == 32_768
+    assert qualified.qualification == "qualified"
+    assert qualified.validated_platforms == ("generic",)
+    assert qualified.qualification_date == "2026-07-20"
 
 
 def test_artifact_download_verifies_size_and_checksum(tmp_path: Path) -> None:
@@ -60,6 +64,24 @@ def test_artifact_download_verifies_size_and_checksum(tmp_path: Path) -> None:
     )
 
     assert path.read_bytes() == content
+
+
+def test_recommended_artifact_requires_dated_platform_qualification() -> None:
+    artifact = replace(_artifact(b"model"), recommended=True)
+
+    with pytest.raises(ModelArtifactError, match="only qualified"):
+        artifact.validate()
+
+    qualified = replace(
+        artifact,
+        qualification="qualified",
+        validated_platforms=("generic",),
+        qualification_test="heartwood.coding-agent-e2e.v1",
+        qualification_date="2026-07-20",
+        qualification_evidence="https://example.test/qualification",
+    )
+
+    qualified.validate()
 
 
 def test_artifact_download_reports_transferred_bytes(tmp_path: Path) -> None:
@@ -313,7 +335,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
         model_alias="Test snapshot",
         precision="Synthetic",
         tier="standard",
-        qualification="candidate",
+        qualification="unvalidated",
         minimum_gpu_count=1,
         minimum_gpu_memory_bytes=1,
         recommended_ram_bytes=1,
@@ -349,7 +371,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
             artifacts=(),
         ),
         snapshot_catalog=ModelSnapshotCatalog(
-            schema_version="heartwood.model-snapshot-catalog.v2",
+            schema_version="heartwood.model-snapshot-catalog.v3",
             snapshots=(snapshot,),
         ),
         cache_dir=tmp_path / "models",
@@ -448,7 +470,7 @@ def test_catalog_loader_rejects_duplicate_artifact_ids(tmp_path: Path) -> None:
                 "[models.one]",
                 'artifact_manifest = "one.toml"',
                 "[models.ignored]",
-                'status = "candidate"',
+                'status = "unvalidated"',
                 "[models.two]",
                 'artifact_manifest = "two.toml"',
             )
@@ -564,7 +586,7 @@ def _artifact(content: bytes) -> ModelArtifact:
 
 def _empty_snapshot_catalog() -> ModelSnapshotCatalog:
     return ModelSnapshotCatalog(
-        schema_version="heartwood.model-snapshot-catalog.v2",
+        schema_version="heartwood.model-snapshot-catalog.v3",
         snapshots=(),
     )
 

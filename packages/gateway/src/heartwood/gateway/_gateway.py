@@ -35,7 +35,11 @@ from heartwood.gateway._action_settings import (
     ActionSettingsError,
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
-from heartwood.gateway._gpu_environment import GpuEnvironment, inspect_gpu_environment
+from heartwood.gateway._gpu_environment import (
+    GpuEnvironment,
+    inspect_gpu_environment,
+    minimum_compute_capability_for_model,
+)
 from heartwood.gateway._local_import import import_local_model
 from heartwood.gateway._local_model_contract import (
     MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
@@ -1339,6 +1343,7 @@ class SessionGateway:
             .selecting(profile.profile_id)
         )
         platform_id = self.config_store.load().platform_id
+        platform_qualification = choice.qualification_for(platform_id)
         self.config_store.select_local_model(
             artifact_id=model_id,
             path=path,
@@ -1360,11 +1365,12 @@ class SessionGateway:
             recommended_resource_envelope=choice.recommended_resource_envelope,
             precision=choice.precision,
             tier=choice.tier,
-            qualification=choice.qualification_for(platform_id),
+            qualification=platform_qualification,
             minimum_gpu_count=choice.minimum_gpu_count,
             minimum_gpu_memory_bytes=choice.minimum_gpu_memory_bytes,
             recommended_ram_bytes=choice.recommended_ram_bytes,
             recommended_disk_bytes=choice.recommended_disk_bytes,
+            recommended_cpu_count=choice.recommended_cpu_count,
             tool_call_parser=choice.tool_call_parser,
             tensor_parallel_size=choice.tensor_parallel_size,
             startup_seconds_min=choice.startup_seconds_min,
@@ -1374,6 +1380,12 @@ class SessionGateway:
             ignore_patterns=choice.ignore_patterns,
             validated_platforms=choice.validated_platforms,
             qualification_test=choice.qualification_test,
+            qualification_date=(
+                choice.qualification_date if platform_qualification != "unvalidated" else None
+            ),
+            qualification_evidence=(
+                choice.qualification_evidence if platform_qualification != "unvalidated" else None
+            ),
             catalog_source=choice.catalog_source,
             settings=settings,
         )
@@ -1424,9 +1436,13 @@ class SessionGateway:
             available, resource_reason = environment.assess(
                 gpu_count=choice.tensor_parallel_size,
                 gpu_memory_bytes=choice.minimum_gpu_memory_bytes,
+                minimum_compute_capability=minimum_compute_capability_for_model(
+                    model_id=choice.source_repository,
+                    precision=choice.precision,
+                ),
             )
-        if qualification == "candidate":
-            candidate_reason = "Evaluation candidate; not yet a recommended model"
+        if qualification != "qualified":
+            candidate_reason = "No completed Heartwood qualification exists for this platform"
             recommendation = (
                 f"{recommendation}; {candidate_reason.lower()}"
                 if recommendation
@@ -1588,6 +1604,7 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
         recommended_ram_bytes=selection.recommended_ram_bytes or selection.minimum_free_bytes,
         recommended_disk_bytes=selection.recommended_disk_bytes or selection.minimum_free_bytes,
+        recommended_cpu_count=selection.recommended_cpu_count,
         maximum_context_window=selection.maximum_context_window,
         tool_call_parser=cast(Any, selection.tool_call_parser),
         tensor_parallel_size=selection.tensor_parallel_size,

@@ -100,6 +100,41 @@ def test_context_planner_never_exceeds_a_non_tier_model_limit() -> None:
     assert plan.effective_window == 32_768
 
 
+def test_context_planner_honors_a_qualified_gpu_memory_requirement() -> None:
+    plan = plan_local_context_window(
+        model_limit=32_768,
+        model_size_bytes=31_195_099_643,
+        runtime="vllm",
+        available_memory_bytes=46_068 * 1024**2,
+        qualified_memory_bytes=42_000_000_000,
+    )
+
+    assert plan.effective_window == 32_768
+    assert plan.estimated_required_bytes == 42_000_000_000
+    assert "qualified" in plan.reason
+
+    unknown_inventory = plan_local_context_window(
+        model_limit=32_768,
+        model_size_bytes=31_195_099_643,
+        runtime="vllm",
+        available_memory_bytes=None,
+        qualified_memory_bytes=42_000_000_000,
+    )
+    assert unknown_inventory.effective_window == 32_768
+    assert unknown_inventory.available_bytes is None
+    assert unknown_inventory.estimated_required_bytes == 42_000_000_000
+    assert "verified after allocation" in unknown_inventory.reason
+
+    with pytest.raises(ValueError, match="cannot support the qualified 32,768-token"):
+        plan_local_context_window(
+            model_limit=32_768,
+            model_size_bytes=31_195_099_643,
+            runtime="vllm",
+            available_memory_bytes=40_000_000_000,
+            qualified_memory_bytes=42_000_000_000,
+        )
+
+
 def test_managed_model_budgets_reserve_output_inside_the_runtime_window() -> None:
     assert managed_model_token_budgets(18_432) == (16_384, 2_048)
     assert managed_model_token_budgets(32_768) == (28_672, 4_096)
@@ -484,16 +519,10 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert {choice.context_window for choice in choices} == {18_432, 32_768}
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
-    assert {
-        "qwen25-coder-7b-instruct-awq-vllm",
-        "qwen25-coder-14b-instruct-awq-vllm",
-        "qwen25-coder-32b-instruct-awq-vllm",
+    assert {choice.model_id for choice in downloadable if choice.runtime == "vllm"} == {
         "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
-        "gpt-oss-20b-vllm",
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-        "qwen3-coder-next-fp8-vllm",
-        "gpt-oss-120b-vllm",
-    } <= {choice.model_id for choice in downloadable}
+    }
     assert all(choice.catalog_source == "catalog" for choice in downloadable)
     gpu_choices = {choice.model_id: choice for choice in downloadable if choice.runtime == "vllm"}
     assert {
@@ -502,15 +531,6 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
         "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
     }
-    assert all(
-        choice.qualification == "candidate"
-        for model_id, choice in gpu_choices.items()
-        if model_id
-        not in {
-            "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
-        }
-    )
 
 
 def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
@@ -522,15 +542,6 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
         root / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
     cpu = catalog_model_choices(artifacts.artifacts, snapshots.snapshots)[0]
-    terra_gpu = next(
-        choice
-        for choice in catalog_model_choices(
-            artifacts.artifacts,
-            snapshots.snapshots,
-            recommended_only=False,
-        )
-        if choice.model_id == "qwen25-coder-14b-instruct-awq-vllm"
-    )
     qualified_terra_gpu = next(
         choice
         for choice in catalog_model_choices(
@@ -542,12 +553,10 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
     )
 
     assert cpu.qualification_for("generic") == "qualified"
-    assert cpu.qualification_for("terra") == "qualified"
-    assert cpu.qualification_for("carina") == "candidate"
-    assert terra_gpu.qualification_for("terra") == "candidate"
-    assert terra_gpu.qualification_for("carina") == "candidate"
+    assert cpu.qualification_for("terra") == "unvalidated"
+    assert cpu.qualification_for("carina") == "unvalidated"
     assert qualified_terra_gpu.qualification_for("terra") == "qualified"
-    assert qualified_terra_gpu.qualification_for("carina") == "candidate"
+    assert qualified_terra_gpu.qualification_for("carina") == "unvalidated"
 
 
 def _repository(

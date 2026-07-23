@@ -92,11 +92,12 @@ class LocalModelSelection:
     recommended_resource_envelope: str | None = None
     precision: str | None = None
     tier: str = "standard"
-    qualification: str = "candidate"
+    qualification: str = "unvalidated"
     minimum_gpu_count: int = 0
     minimum_gpu_memory_bytes: int = 0
     recommended_ram_bytes: int | None = None
     recommended_disk_bytes: int | None = None
+    recommended_cpu_count: int = 8
     tool_call_parser: str | None = None
     tensor_parallel_size: int = 1
     startup_seconds_min: int = 30
@@ -106,6 +107,8 @@ class LocalModelSelection:
     ignore_patterns: tuple[str, ...] = ()
     validated_platforms: tuple[str, ...] = ()
     qualification_test: str | None = None
+    qualification_date: str | None = None
+    qualification_evidence: str | None = None
     catalog_source: str = "catalog"
 
     def validate(self, project: ProjectContext) -> None:
@@ -118,8 +121,18 @@ class LocalModelSelection:
             raise ProjectConfigError("unsupported Heartwood-managed model catalog source")
         if self.tier not in {"standard", "powerful", "maximum"}:
             raise ProjectConfigError("unsupported Heartwood-managed model tier")
-        if self.qualification not in {"candidate", "qualified"}:
+        if self.qualification not in {"unvalidated", "qualified"}:
             raise ProjectConfigError("unsupported Heartwood-managed model qualification")
+        has_qualification_date = self.qualification_date is not None
+        has_qualification_evidence = self.qualification_evidence is not None
+        if has_qualification_date != has_qualification_evidence:
+            raise ProjectConfigError(
+                "Heartwood-managed qualification date and evidence must be provided together"
+            )
+        if self.qualification == "qualified" and not has_qualification_date:
+            raise ProjectConfigError("qualified model qualification requires dated evidence")
+        if self.qualification == "unvalidated" and has_qualification_date:
+            raise ProjectConfigError("not-tested models cannot declare qualification evidence")
         if self.display_name is not None and not self.display_name.strip():
             raise ProjectConfigError("Heartwood-managed model display_name must not be empty")
         if self.source_repository is not None and not is_hugging_face_model_id(
@@ -173,6 +186,8 @@ class LocalModelSelection:
         ):
             if value is not None and value <= 0:
                 raise ProjectConfigError(f"Heartwood-managed {field_name} must be positive")
+        if self.recommended_cpu_count <= 0:
+            raise ProjectConfigError("Heartwood-managed recommended_cpu_count must be positive")
         if self.tool_call_parser is not None and self.tool_call_parser not in {
             "hermes",
             "openai",
@@ -408,11 +423,12 @@ class ProjectConfigStore:
         recommended_resource_envelope: str | None = None,
         precision: str | None = None,
         tier: str = "standard",
-        qualification: str = "candidate",
+        qualification: str = "unvalidated",
         minimum_gpu_count: int = 0,
         minimum_gpu_memory_bytes: int = 0,
         recommended_ram_bytes: int | None = None,
         recommended_disk_bytes: int | None = None,
+        recommended_cpu_count: int = 8,
         tool_call_parser: str | None = None,
         tensor_parallel_size: int = 1,
         startup_seconds_min: int = 30,
@@ -422,6 +438,8 @@ class ProjectConfigStore:
         ignore_patterns: tuple[str, ...] = (),
         validated_platforms: tuple[str, ...] = (),
         qualification_test: str | None = None,
+        qualification_date: str | None = None,
+        qualification_evidence: str | None = None,
         catalog_source: str = "catalog",
         settings: ModelSettings | None = None,
     ) -> ProjectConfig:
@@ -455,6 +473,7 @@ class ProjectConfigStore:
             minimum_gpu_memory_bytes=minimum_gpu_memory_bytes,
             recommended_ram_bytes=recommended_ram_bytes,
             recommended_disk_bytes=recommended_disk_bytes,
+            recommended_cpu_count=recommended_cpu_count,
             tool_call_parser=tool_call_parser,
             tensor_parallel_size=tensor_parallel_size,
             startup_seconds_min=startup_seconds_min,
@@ -464,6 +483,8 @@ class ProjectConfigStore:
             ignore_patterns=ignore_patterns,
             validated_platforms=validated_platforms,
             qualification_test=qualification_test,
+            qualification_date=qualification_date,
+            qualification_evidence=qualification_evidence,
             catalog_source=catalog_source,
         )
 
@@ -627,6 +648,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "qualification",
             "qualification_test",
             "recommended_disk_bytes",
+            "recommended_cpu_count",
             "recommended_ram_bytes",
             "recommended_resource_envelope",
             "catalog_source",
@@ -642,6 +664,8 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "tier",
             "tool_call_parser",
             "validated_platforms",
+            "qualification_date",
+            "qualification_evidence",
         }
     )
     if unknown:
@@ -680,7 +704,9 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
         ),
         precision=_optional_string(value.get("precision"), "precision"),
         tier=_optional_string(value.get("tier"), "tier") or "standard",
-        qualification=_optional_string(value.get("qualification"), "qualification") or "candidate",
+        qualification=(
+            _optional_string(value.get("qualification"), "qualification") or "unvalidated"
+        ),
         minimum_gpu_count=_optional_nonnegative_int(
             value.get("minimum_gpu_count"), "minimum_gpu_count"
         ),
@@ -693,6 +719,10 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
         recommended_disk_bytes=_optional_positive_int(
             value.get("recommended_disk_bytes"), "recommended_disk_bytes"
         ),
+        recommended_cpu_count=_optional_positive_int(
+            value.get("recommended_cpu_count"), "recommended_cpu_count"
+        )
+        or 8,
         tool_call_parser=_optional_string(value.get("tool_call_parser"), "tool_call_parser"),
         tensor_parallel_size=_optional_positive_int(
             value.get("tensor_parallel_size"), "tensor_parallel_size"
@@ -713,6 +743,10 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             value.get("validated_platforms"), "validated_platforms"
         ),
         qualification_test=_optional_string(value.get("qualification_test"), "qualification_test"),
+        qualification_date=_optional_string(value.get("qualification_date"), "qualification_date"),
+        qualification_evidence=_optional_string(
+            value.get("qualification_evidence"), "qualification_evidence"
+        ),
         catalog_source=_optional_string(value.get("catalog_source"), "catalog_source") or "catalog",
     )
 

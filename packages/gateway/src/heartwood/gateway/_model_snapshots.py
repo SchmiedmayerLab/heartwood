@@ -41,12 +41,12 @@ _SIZE_TOLERANCE = 0.20
 
 type ProgressCallback = Callable[[int, int], None]
 type ModelTier = Literal["standard", "powerful", "maximum"]
-type ModelQualification = Literal["candidate", "qualified"]
+type ModelQualification = Literal["unvalidated", "qualified"]
 type ToolCallParser = Literal["hermes", "openai", "qwen3_coder"]
 
 _MODEL_TIERS = {"standard", "powerful", "maximum"}
 _MODEL_TIER_RANK: dict[str, int] = {"standard": 0, "powerful": 1, "maximum": 2}
-_MODEL_QUALIFICATIONS = {"candidate", "qualified"}
+_MODEL_QUALIFICATIONS = {"unvalidated", "qualified"}
 _TOOL_CALL_PARSERS = {"hermes", "openai", "qwen3_coder"}
 _VALIDATED_PLATFORMS = {"carina", "generic", "terra"}
 
@@ -111,9 +111,12 @@ class ModelSnapshot:
     ignore_patterns: tuple[str, ...]
     validated_platforms: tuple[str, ...] = ()
     qualification_test: str | None = None
+    qualification_date: str | None = None
+    qualification_evidence: str | None = None
     context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
+    recommended_cpu_count: int = 8
     recommended: bool = False
 
     def validate(self) -> None:
@@ -141,6 +144,8 @@ class ModelSnapshot:
             raise ModelSnapshotError("recommended_disk_bytes must cover minimum_free_bytes")
         if self.recommended_ram_bytes <= 0:
             raise ModelSnapshotError("recommended_ram_bytes must be positive")
+        if self.recommended_cpu_count <= 0:
+            raise ModelSnapshotError("recommended_cpu_count must be positive")
         if self.minimum_gpu_count <= 0 or self.minimum_gpu_memory_bytes <= 0:
             raise ModelSnapshotError("GPU resource metadata must be positive")
         if self.tensor_parallel_size < self.minimum_gpu_count:
@@ -174,15 +179,22 @@ class ModelSnapshot:
         if len(self.validated_platforms) != len(set(self.validated_platforms)):
             raise ModelSnapshotError("validated_platforms must not contain duplicates")
         if any(platform not in _VALIDATED_PLATFORMS for platform in self.validated_platforms):
-            raise ModelSnapshotError("validated_platforms contains an unsupported platform")
+            raise ModelSnapshotError("qualification platforms contain an unsupported platform")
         if self.qualification == "qualified" and (
             not self.validated_platforms or self.qualification_test is None
         ):
             raise ModelSnapshotError(
                 "qualified models require validated platforms and a qualification test"
             )
-        if self.qualification == "candidate" and self.recommended:
-            raise ModelSnapshotError("candidate models cannot be recommended")
+        if self.qualification == "unvalidated" and self.validated_platforms:
+            raise ModelSnapshotError("unvalidated models cannot declare validated platforms")
+        has_evidence = (
+            self.qualification_date is not None and self.qualification_evidence is not None
+        )
+        if (self.qualification != "unvalidated") != has_evidence:
+            raise ModelSnapshotError("qualified models require dated qualification evidence")
+        if self.qualification != "qualified" and self.recommended:
+            raise ModelSnapshotError("only qualified models can be recommended")
 
     def safe_dict(self) -> dict[str, object]:
         """Return non-secret catalog metadata."""
@@ -290,7 +302,7 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             f"unable to load model snapshot catalog {path}: {error}"
         ) from error
     schema_version = _string(data, "schema_version")
-    if schema_version != "heartwood.model-snapshot-catalog.v2":
+    if schema_version != "heartwood.model-snapshot-catalog.v3":
         raise ModelSnapshotError(f"unsupported model snapshot catalog schema: {schema_version}")
     raw_snapshots = data.get("snapshots")
     if not isinstance(raw_snapshots, dict):
@@ -336,6 +348,7 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             ),
             minimum_gpu_count=_positive_int(item, "minimum_gpu_count"),
             minimum_gpu_memory_bytes=_positive_int(item, "minimum_gpu_memory_bytes"),
+            recommended_cpu_count=_positive_int(item, "recommended_cpu_count"),
             recommended_ram_bytes=_positive_int(item, "recommended_ram_bytes"),
             recommended_disk_bytes=_positive_int(item, "recommended_disk_bytes"),
             maximum_context_window=_positive_int(item, "maximum_context_window"),
@@ -351,6 +364,8 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             ignore_patterns=ignore_patterns,
             validated_platforms=_string_tuple(item, "validated_platforms"),
             qualification_test=_optional_string(item, "qualification_test"),
+            qualification_date=_optional_string(item, "qualification_date"),
+            qualification_evidence=_optional_string(item, "qualification_evidence"),
             context_window=_positive_int(item, "context_window"),
             minimum_resource_envelope=_optional_string(item, "minimum_resource_envelope"),
             recommended_resource_envelope=_optional_string(item, "recommended_resource_envelope"),

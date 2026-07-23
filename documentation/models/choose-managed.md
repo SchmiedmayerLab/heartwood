@@ -28,8 +28,7 @@ The tier describes the intended agent workload, not scientific quality.
 | **Powerful** | Larger repositories, multi-step coding tasks, and longer sessions |
 | **Maximum capability** | Broad multi-file work on substantial multi-GPU compute |
 
-Within each tier, Heartwood automatically recommends only configurations that fit the detected environment and have completed the full coding-agent qualification.
-Models still under evaluation are labeled **Evaluation candidate** and are never selected automatically.
+The managed catalog contains only configurations that fit a supported environment and have completed the full coding-agent qualification.
 
 List the complete catalog from the terminal:
 
@@ -41,28 +40,25 @@ Technical fields such as precision, parser, context, tensor parallelism, and pin
 
 ## Resource Guide
 
-Download and startup values below are planning estimates.
+Download sizes and runtime startup values below are planning estimates.
 The selection screen uses the release catalog as its authoritative source and reports the exact values before making changes.
 
-| Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated First Start |
+| Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated Runtime Startup |
 |---|---|---:|---:|---:|---:|---:|---:|
-| Standard fallback | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
-| Standard Terra candidate | Qwen2.5 Coder 7B AWQ | 5.20 GiB | 1 x 16 GB | 32 GiB | 16 GiB | 18,432 on Terra | 2-8 minutes |
-| Powerful Terra candidate | Qwen2.5 Coder 14B AWQ | 9.31 GiB | 1 x 16 GB | 60 GiB | 32 GiB | 18,432 | 3-10 minutes |
+| Standard, qualified on generic Linux and containers | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
 | Powerful, qualified on Terra | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 96 GiB | 50 GiB | 18,432 | 4-15 minutes |
-| Powerful Terra candidate | Qwen2.5 Coder 32B AWQ | 18.00 GiB | 4 x 16 GB | 120 GiB | 48 GiB | 32,768 | 4-15 minutes |
 | Powerful, qualified on Carina | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
-| Maximum candidate | Qwen3 Coder Next FP8 | 74.88 GiB | 4 x 48 GB | 192 GiB | 128 GiB | 65,536 | 5-15 minutes |
-| Maximum alternative candidate | GPT-OSS 120B MXFP4 | 60.79 GiB | 2 x 48 GB | 160 GiB | 112 GiB | 65,536 | 5-15 minutes |
+
+Runtime startup begins after the model is available in the project cache.
+A first download depends on platform network conditions and Hugging Face rate limits and can take considerably longer than later starts.
+Later starts reuse the verified project-local snapshot.
 
 Model weights are only part of the memory requirement.
 The runtime also needs space for temporary downloads, key/value cache, request handling, and the project itself.
 Heartwood therefore uses conservative headroom and may choose a smaller context than the model's advertised maximum.
 
-Four T4 GPUs do not make the Qwen3 Coder 30B FP8 snapshot or GPT-OSS MXFP4 snapshots compatible with the current runtime.
-Heartwood rejects those combinations before startup when metadata or runtime evidence shows the selected quantization requires a newer GPU generation.
 For two T4 GPUs, use the qualified Qwen3 Coder 30B W4A16 AWQ recommendation with its conservative 18,432-token context.
-For four T4 GPUs, the Qwen2.5 Coder 32B AWQ profile remains an evaluation candidate; the Qwen3 W4A16 quantization cannot be sharded four ways.
+Previously rejected or incomplete platform trials are retained in the [GPU compatibility matrix](../reference/gpu-compatibility.md), not in the managed catalog.
 
 ## Other Hugging Face Models
 

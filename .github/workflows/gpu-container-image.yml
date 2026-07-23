@@ -23,16 +23,11 @@ on:
       qualification_configuration:
         description: Optional compatibility-matrix row used only when GPU qualification is enabled
         required: false
-        default: terra-t4-qwen25-coder-7b-awq
+        default: terra-2xt4-qwen3-coder-30b-awq
         type: choice
         options:
-          - terra-t4-qwen25-coder-7b-awq
-          - terra-t4-qwen25-coder-14b-awq
           - terra-2xt4-qwen3-coder-30b-awq
-          - terra-4xt4-qwen25-coder-32b-awq
           - carina-l40s-qwen3-coder-30b-fp8
-          - carina-4xl40s-qwen3-coder-next-fp8
-          - carina-2xl40s-gpt-oss-120b
       qualification_runner:
         description: JSON array of protected self-hosted GPU runner labels
         required: true

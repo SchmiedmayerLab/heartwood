@@ -509,10 +509,72 @@ def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
     assert (
         'heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"' in coding_agent
     )
-    assert 'heartwood_cli="${HEARTWOOD_CLI:-${runtime_root}/.venv/bin/heartwood}"' in coding_agent
+    assert (
+        'heartwood_cli="${HEARTWOOD_CLI:-$(dirname -- "${heartwood_python}")/heartwood}"'
+        in coding_agent
+    )
+    assert "${runtime_root}/.venv/bin/heartwood" not in coding_agent
     assert 'inference="${project}/qualification-inference.json"' in coding_agent
     assert 'mkdir -p "${project}/input"' in coding_agent
     assert system_python.search(coding_agent) is None
+
+
+def test_coding_agent_qualification_finds_cli_beside_selected_python(tmp_path: Path) -> None:
+    runtime_bin = tmp_path / "native-runtime" / "bin"
+    runtime_bin.mkdir(parents=True)
+    path_bin = tmp_path / "path-bin"
+    path_bin.mkdir()
+    python = runtime_bin / "python"
+    python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python.chmod(0o700)
+
+    marker = tmp_path / "heartwood-invocations.txt"
+    heartwood = runtime_bin / "heartwood"
+    heartwood.write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$HEARTWOOD_CLI_MARKER"\n',
+        encoding="utf-8",
+    )
+    heartwood.chmod(0o700)
+    decoy_marker = tmp_path / "decoy-heartwood-invoked"
+    decoy_heartwood = path_bin / "heartwood"
+    decoy_heartwood.write_text(
+        '#!/usr/bin/env bash\ntouch "$HEARTWOOD_DECOY_MARKER"\nexit 42\n',
+        encoding="utf-8",
+    )
+    decoy_heartwood.chmod(0o700)
+    timeout = path_bin / "timeout"
+    timeout.write_text('#!/usr/bin/env bash\nshift\nexec "$@"\n', encoding="utf-8")
+    timeout.chmod(0o700)
+
+    model = tmp_path / "model"
+    model.mkdir()
+    project = tmp_path / "qualification"
+    env = os.environ.copy()
+    env.pop("HEARTWOOD_CLI", None)
+    env.update(
+        {
+            "HEARTWOOD_CAPABLE_PROJECT": str(project),
+            "HEARTWOOD_CLI_MARKER": str(marker),
+            "HEARTWOOD_DECOY_MARKER": str(decoy_marker),
+            "HEARTWOOD_LOCAL_MODEL_PATH": str(model),
+            "HEARTWOOD_PYTHON": str(python),
+            "HEARTWOOD_RUNTIME_ROOT": str(_repo_root()),
+            "PATH": f"{path_bin}:{env['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(_repo_root() / "images/generic/scripts/coding_agent_e2e.sh")],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "models refresh heartwood" in marker.read_text(encoding="utf-8")
+    assert not decoy_marker.exists()
 
 
 def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:

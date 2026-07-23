@@ -49,7 +49,7 @@ Provider tokens are not accepted as setup command arguments.
 | `heartwood models connect CONNECTION MODEL` | Select a discovered model |
 | `heartwood models validate [PROFILE]` | Evaluate credential and route policy for a profile |
 | `heartwood models forget CONNECTION` | Remove a saved provider credential from the system credential store |
-| `heartwood models managed` | Show qualified recommendations, evaluation candidates, and user-selected models Heartwood can run |
+| `heartwood models managed` | Show qualified recommendations, not-tested configurations, and user-selected models Heartwood can run |
 | `heartwood models inspect OWNER/MODEL` | Inspect a public Hugging Face repository without downloading weights |
 | `heartwood models download MODEL` | Download and select a recommendation or `OWNER/MODEL` repository |
 | `heartwood models import PATH ...` | Copy and select an existing GGUF or vLLM snapshot with provenance |

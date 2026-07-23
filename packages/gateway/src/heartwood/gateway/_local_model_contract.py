@@ -51,6 +51,7 @@ def plan_local_context_window(
     model_size_bytes: int | None,
     runtime: LocalRuntimeKind,
     available_memory_bytes: int | None,
+    qualified_memory_bytes: int | None = None,
 ) -> LocalContextPlan:
     """Choose a stable context tier bounded by model capacity and available memory."""
     if not MINIMUM_LOCAL_CONTEXT_WINDOW <= model_limit <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
@@ -66,6 +67,28 @@ def plan_local_context_window(
         )
     resource: Literal["RAM", "GPU memory"] = "GPU memory" if runtime == "vllm" else "RAM"
     fallback = MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW
+    if qualified_memory_bytes is not None:
+        if runtime != "vllm" or qualified_memory_bytes <= 0:
+            raise ValueError("qualified runtime memory must describe a positive vLLM requirement")
+        if available_memory_bytes is not None and available_memory_bytes < qualified_memory_bytes:
+            raise ValueError(
+                f"available gpu memory cannot support the qualified {model_limit:,}-token "
+                f"configuration; {qualified_memory_bytes / _GIB:.1f} GiB is required and "
+                f"{available_memory_bytes / _GIB:.1f} GiB is available"
+            )
+        availability = (
+            "the validated GPU memory requirement is available"
+            if available_memory_bytes is not None
+            else "live GPU inventory will be verified after allocation"
+        )
+        return LocalContextPlan(
+            model_limit=model_limit,
+            effective_window=model_limit,
+            resource=resource,
+            available_bytes=available_memory_bytes,
+            estimated_required_bytes=qualified_memory_bytes,
+            reason=f"Selected the qualified {model_limit:,}-token context because {availability}.",
+        )
     if model_size_bytes is None or model_size_bytes <= 0 or available_memory_bytes is None:
         return LocalContextPlan(
             model_limit=model_limit,

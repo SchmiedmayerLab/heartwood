@@ -69,7 +69,7 @@ docker run --rm -it \
 
 Choose **Run with Heartwood** and a vLLM-compatible model.
 Heartwood inspects the GPU model, memory, driver, and catalog qualification, selects a conservative context tier, and starts the isolated CUDA 12.9 vLLM runtime after the model is ready.
-Review the [GPU compatibility matrix](../reference/gpu-compatibility.md) before using a catalog candidate on hardware that has not completed qualification.
+Review the [GPU compatibility matrix](../reference/gpu-compatibility.md) before explicitly evaluating a configuration that has not completed qualification.
 
 ## Image Tags
 

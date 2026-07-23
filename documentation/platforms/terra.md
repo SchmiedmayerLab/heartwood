@@ -42,23 +42,16 @@ Use one of these combinations:
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
 | Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
-| Lower-cost GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 16 CPUs, 60 GB RAM, one T4 with 16 GB GPU memory, 100 GB persistent disk |
 | Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
-| Four-GPU model evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, four T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
-CPU inference is portable but can be too slow for an interactive coding workflow.
 
 These are starting points rather than universal requirements.
 Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
 The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
-The GPU paths expose one release-pinned Terra recommendation and additional evaluation candidates.
-The one-T4 candidates are Qwen2.5 Coder 7B and 14B AWQ.
+The GPU path exposes one release-pinned Terra recommendation.
 The qualified two-T4 recommendation is Qwen3 Coder 30B W4A16 AWQ with a conservative 18,432-token context.
-The four-T4 candidate is Qwen2.5 Coder 32B AWQ; the Qwen3 W4A16 quantization cannot be sharded four ways.
-Four T4 GPUs do not make the catalog's Qwen3 Coder 30B FP8 or GPT-OSS MXFP4 snapshots compatible, so Heartwood rejects those combinations before startup.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
 It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
 For the first model download and startup, set auto-pause to at least 120 minutes; image creation, model verification, and inference startup can each take several minutes without terminal output from the model itself.
@@ -119,14 +112,10 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
 For qualified managed coding-agent inference, start with the **Powerful** Qwen3 Coder 30B W4A16 AWQ recommendation on two T4 GPUs.
-The Qwen2.5 Coder 7B and 14B AWQ profiles fit one T4 and support direct inference, but remain evaluation candidates until their native Hermes tool path completes the full Heartwood qualification.
-Use them only when evaluating a lower-cost configuration, not as the default coding-agent route.
 You can instead choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
-The pinned 14B AWQ evaluation snapshot downloads about 9.3 GiB; allow at least 32 GiB of free project storage and retain a 100 GB Terra persistent disk for the image, model cache, notebooks, and results.
 The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 16.8 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
-The pinned Qwen2.5 Coder 32B AWQ snapshot downloads about 18.0 GiB and remains an evaluation candidate until its tool-calling path passes end-to-end.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
 Depending on the model and persistent-disk throughput, the first verification and inference startup is planned for approximately 2-15 minutes while Heartwood verifies the snapshot and vLLM prepares GPU memory.

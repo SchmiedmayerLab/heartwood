@@ -1414,7 +1414,7 @@ def _format_model_artifacts(catalog: dict[str, object]) -> str:
                 if item.get("recommended") is True:
                     review = "Recommended"
                 elif item.get("catalog_source") == "catalog":
-                    review = "Evaluation candidate"
+                    review = "Not tested"
                 else:
                     review = "User selected"
                 lines.append(f"  {item.get('model_id')}  {runtime}  {size_gib:.2f} GiB  {review}")

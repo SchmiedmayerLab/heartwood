@@ -21,7 +21,7 @@ The image contains no model weights, provider credentials, generated model profi
 
 `images/generic/scripts/coding_agent_e2e.sh` is the shared coding-agent acceptance contract. It requires direct model inference, a native OpenHands terminal proposal, a displayed grouped approval, successful execution after explicit approval, exact synthetic file content, fresh-process replay, and hash-chain-verified audit export. `images/generic/scripts/capable_model_e2e.sh` applies that contract to an explicitly downloaded, read-only GGUF mount while container networking is disabled. The GPU wrapper applies the same contract to one immutable safetensors snapshot and records the runtime, GPU, driver, context, tensor parallelism, and parser in its qualification report.
 
-The recommended Qwen2.5 7B Instruct GGUF artifact remains the portable CPU tool-use demonstration. CUDA catalog entries remain evaluation candidates until the complete acceptance contract passes on the named GPU platform.
+The recommended Qwen2.5 7B Instruct GGUF artifact remains the portable CPU tool-use demonstration. CUDA configurations are recommended only after the complete acceptance contract passes on the named GPU platform.
 
 Run `heartwood --interface web --host 0.0.0.0` for the browser interface. Heartwood uses the configured hosted or managed connection directly, or starts the selected downloaded model before opening the same interface. `heartwood runtime start` and `heartwood gateway serve` remain operator commands; the lower-level runtime scripts are test fixtures, not a separate researcher setup contract.
 

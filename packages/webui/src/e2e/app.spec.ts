@@ -482,7 +482,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   await page.route("**/settings/models/artifacts", (route) =>
     json(route, {
       schema_version: "heartwood.local-model-catalog.v2",
-      snapshot_schema_version: "heartwood.model-snapshot-catalog.v2",
+      snapshot_schema_version: "heartwood.model-snapshot-catalog.v3",
       artifacts: [],
       snapshots: [],
       models: [],

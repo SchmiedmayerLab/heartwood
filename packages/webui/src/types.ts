@@ -362,6 +362,11 @@ export interface ModelArtifact {
   context_window: number;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
+  qualification: LocalModelQualification;
+  validated_platforms: string[];
+  qualification_test: string | null;
+  qualification_date: string | null;
+  qualification_evidence: string | null;
   recommended: boolean;
 }
 
@@ -376,7 +381,7 @@ export interface ModelDownload {
 
 export type LocalModelRuntime = "llama-cpp" | "vllm";
 export type LocalModelTier = "standard" | "powerful" | "maximum";
-export type LocalModelQualification = "candidate" | "qualified";
+export type LocalModelQualification = "unvalidated" | "qualified";
 export type ToolCallParser = "hermes" | "openai" | "qwen3_coder";
 
 export interface LocalModelChoice {
@@ -399,6 +404,7 @@ export interface LocalModelChoice {
   qualification: LocalModelQualification;
   minimum_gpu_count: number;
   minimum_gpu_memory_bytes: number;
+  recommended_cpu_count: number;
   recommended_ram_bytes: number;
   recommended_disk_bytes: number;
   tool_call_parser: ToolCallParser | null;
@@ -410,6 +416,8 @@ export interface LocalModelChoice {
   ignore_patterns: string[];
   validated_platforms: string[];
   qualification_test: string | null;
+  qualification_date: string | null;
+  qualification_evidence: string | null;
   artifact_sha256: string | null;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
@@ -474,6 +482,7 @@ export interface ModelSnapshot {
   qualification: LocalModelQualification;
   minimum_gpu_count: number;
   minimum_gpu_memory_bytes: number;
+  recommended_cpu_count: number;
   recommended_ram_bytes: number;
   recommended_disk_bytes: number;
   context_window: number;
@@ -487,6 +496,8 @@ export interface ModelSnapshot {
   ignore_patterns: string[];
   validated_platforms: string[];
   qualification_test: string | null;
+  qualification_date: string | null;
+  qualification_evidence: string | null;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
   recommended: boolean;
@@ -494,7 +505,7 @@ export interface ModelSnapshot {
 
 export interface ModelArtifacts {
   schema_version: "heartwood.local-model-catalog.v2";
-  snapshot_schema_version: "heartwood.model-snapshot-catalog.v2";
+  snapshot_schema_version: "heartwood.model-snapshot-catalog.v3";
   artifacts: ModelArtifact[];
   snapshots: ModelSnapshot[];
   models: LocalModelChoice[];

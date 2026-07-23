@@ -301,6 +301,14 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
             LocalModelSelection(
                 artifact_id="model",
                 path=".heartwood/models/model",
+                qualification="qualified",
+            ),
+            "qualified model qualification requires dated evidence",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
                 display_name=" ",
             ),
             "display_name must not be empty",

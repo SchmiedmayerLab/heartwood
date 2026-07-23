@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 import re
 import tomllib
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-_SCHEMA = "heartwood.gpu-compatibility.v1"
-_CATALOG_SCHEMA = "heartwood.model-snapshot-catalog.v2"
+_SCHEMA = "heartwood.gpu-compatibility.v2"
+_CATALOG_SCHEMA = "heartwood.model-snapshot-catalog.v3"
 _QUALIFICATION_TEST = "heartwood.coding-agent-e2e.v1"
 _MINIMUM_AGENT_CONTEXT_WINDOW = 18_432
 _CONFIGURATION_FIELDS = {
@@ -74,6 +75,8 @@ def verify_repository(root: Path) -> None:
     seen_ids: set[str] = set()
     covered_snapshots: set[str] = set()
     qualified_platforms: dict[str, set[str]] = {}
+    qualification_statuses: dict[str, str] = {}
+    configurations_by_snapshot: dict[str, dict[str, Any]] = {}
     for configuration in configurations:
         if not isinstance(configuration, dict):
             raise CompatibilityError("GPU compatibility configurations must be tables")
@@ -87,19 +90,31 @@ def verify_repository(root: Path) -> None:
             raise CompatibilityError(f"duplicate GPU configuration: {configuration_id}")
         seen_ids.add(configuration_id)
         status = _string(configuration, "status")
-        if status not in {"candidate", "qualified"}:
-            raise CompatibilityError(f"invalid GPU qualification status: {status}")
+        if status != "qualified":
+            raise CompatibilityError(
+                f"managed GPU configurations must be qualified: {configuration_id}"
+            )
         snapshot_id = _string(configuration, "model_snapshot")
         snapshot = snapshots.get(snapshot_id)
         if not isinstance(snapshot, dict):
             raise CompatibilityError(f"unknown model snapshot in GPU matrix: {snapshot_id}")
         covered_snapshots.add(snapshot_id)
+        if snapshot_id in configurations_by_snapshot:
+            raise CompatibilityError(
+                f"model snapshot has multiple selectable GPU configurations: {snapshot_id}"
+            )
+        configurations_by_snapshot[snapshot_id] = configuration
         _verify_configuration(configuration, snapshot, runtime)
         if status == "qualified":
-            for field in ("validated_at", "validated_driver_version", "evidence"):
+            for field in ("evaluated_at", "observed_driver_version", "evidence"):
                 _string(configuration, field)
             qualified_platforms.setdefault(snapshot_id, set()).add(
                 _string(configuration, "platform")
+            )
+        previous_status = qualification_statuses.setdefault(snapshot_id, status)
+        if previous_status != status:
+            raise CompatibilityError(
+                f"model snapshot has conflicting qualification statuses: {snapshot_id}"
             )
 
     for unsupported in matrix.get("unsupported_configurations", ()):
@@ -116,6 +131,17 @@ def verify_repository(root: Path) -> None:
             )
         covered_snapshots.add(snapshot_id)
 
+    _verify_nonselectable_configurations(
+        matrix.get("unsupported_configurations", ()),
+        label="unsupported",
+        seen_ids=seen_ids,
+    )
+    _verify_nonselectable_configurations(
+        matrix.get("inconclusive_configurations", ()),
+        label="inconclusive",
+        seen_ids=seen_ids,
+    )
+
     if covered_snapshots != set(snapshots):
         missing = sorted(set(snapshots) - covered_snapshots)
         raise CompatibilityError(
@@ -124,9 +150,14 @@ def verify_repository(root: Path) -> None:
     for snapshot_id, snapshot in snapshots.items():
         if not isinstance(snapshot, dict):
             raise CompatibilityError(f"invalid model snapshot: {snapshot_id}")
-        qualified = snapshot.get("qualification") == "qualified"
+        configuration = configurations_by_snapshot.get(snapshot_id)
+        if configuration is None:
+            raise CompatibilityError(
+                f"model snapshot has no selectable GPU configuration: {snapshot_id}"
+            )
+        qualification = snapshot.get("qualification")
         platforms = set(_string_list(snapshot, "validated_platforms"))
-        if qualified != bool(qualified_platforms.get(snapshot_id)):
+        if qualification != qualification_statuses.get(snapshot_id):
             raise CompatibilityError(
                 f"model qualification and compatibility evidence disagree: {snapshot_id}"
             )
@@ -134,10 +165,65 @@ def verify_repository(root: Path) -> None:
             raise CompatibilityError(
                 f"validated platforms disagree with compatibility evidence: {snapshot_id}"
             )
-        if snapshot.get("recommended", False) and not qualified:
+        expected_date = configuration.get("evaluated_at")
+        expected_evidence = configuration.get("evidence")
+        if snapshot.get("qualification_date") != expected_date:
+            raise CompatibilityError(
+                f"qualification date disagrees with compatibility evidence: {snapshot_id}"
+            )
+        if snapshot.get("qualification_evidence") != expected_evidence:
+            raise CompatibilityError(
+                f"qualification source disagrees with compatibility evidence: {snapshot_id}"
+            )
+        if snapshot.get("recommended", False) and qualification != "qualified":
             raise CompatibilityError(
                 f"only qualified catalog models may be recommended: {snapshot_id}"
             )
+
+
+def _verify_nonselectable_configurations(
+    values: object,
+    *,
+    label: str,
+    seen_ids: set[str],
+) -> None:
+    if not isinstance(values, list):
+        raise CompatibilityError(f"GPU compatibility {label} entries must be tables")
+    for value in values:
+        if not isinstance(value, dict):
+            raise CompatibilityError(f"GPU compatibility {label} entries must be tables")
+        configuration_id = _string(value, "configuration_id")
+        if configuration_id in seen_ids:
+            raise CompatibilityError(f"duplicate GPU configuration: {configuration_id}")
+        seen_ids.add(configuration_id)
+        for field in (
+            "platform",
+            "gpu_model",
+            "model_repository",
+            "model_revision",
+            "vllm_version",
+            "evaluated_at",
+            "evidence",
+            "reason",
+        ):
+            _string(value, field)
+        revision = _string(value, "model_revision")
+        if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise CompatibilityError(
+                f"GPU compatibility {label} model_revision must be an immutable commit"
+            )
+        evaluated_at = _string(value, "evaluated_at")
+        try:
+            parsed_date = date.fromisoformat(evaluated_at)
+        except ValueError as error:
+            raise CompatibilityError(
+                f"GPU compatibility {label} evaluated_at must be an ISO date"
+            ) from error
+        if parsed_date.isoformat() != evaluated_at:
+            raise CompatibilityError(f"GPU compatibility {label} evaluated_at must be an ISO date")
+        gpu_count = value.get("gpu_count")
+        if not isinstance(gpu_count, int) or isinstance(gpu_count, bool) or gpu_count <= 0:
+            raise CompatibilityError(f"GPU compatibility {label} gpu_count must be positive")
 
 
 def _verify_runtime_lock(root: Path, runtime: dict[str, Any]) -> None:
