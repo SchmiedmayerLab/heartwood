@@ -31,9 +31,10 @@ Open the workspace's Jupyter Cloud Environment settings and configure the enviro
 
 1. Select **Customize**, then choose **Custom Environment** under application configuration.
 2. Select the CPU and memory combination from the table below.
-3. Enter the corresponding container image.
-4. Enable the GPU, when required, and verify the GPU type and count.
-5. Set auto-pause and review every value before selecting **Create**.
+3. Enable the GPU, when required, and verify the GPU type and count.
+4. Set the persistent-disk size and auto-pause interval.
+5. Enter the corresponding container image last.
+6. Review every value before selecting **Create**.
 
 Terra can reset the image or GPU selection when the CPU choice changes, so set compute resources first and verify the complete form before creation.
 
@@ -41,8 +42,8 @@ Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.9-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.9-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
@@ -63,6 +64,10 @@ Larger GPU memory can enable context capacities above 32K when the model support
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for download and resource estimates and [GPU Compatibility](../reference/gpu-compatibility.md) for exact runtime combinations.
 
 Retain the persistent disk when replacing compute and copy valuable results to workspace storage.
+Before downloading a managed model, open a terminal and run `df -h /home/jupyter`.
+The disk needs the model's recommended free space in addition to existing notebooks, project files, and `.heartwood/` state.
+If the retained disk is too small, preserve important files, delete only the Cloud Environment, and recreate it with a larger persistent disk.
+For an existing project that already contains model files or other analyses, 250 GB is a safer managed-inference starting point than the 200 GB fresh-project minimum.
 See [Starting and Customizing Your Jupyter App](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app).
 
 ## Create and Verify the Environment
@@ -173,6 +178,7 @@ Deleting the persistent disk removes `.heartwood/` and project files stored only
 - If a Heartwood browser URL returns **401** or **404**, use the terminal or notebook interface; browser access is not supported on Terra.
 - If `import heartwood` fails in a notebook, switch the notebook kernel to **Python 3 (Heartwood)** and restart the kernel.
 - If a model download stops, rerun Heartwood from the same project; verified files in `.heartwood/models/` are reused.
+- If Heartwood reports insufficient persistent storage, run `df -h /home/jupyter`, retain needed files, and recreate only the Cloud Environment with a larger disk.
 - If model startup is slow or fails, compare the printed model plan with attached RAM, GPU memory, and persistent-disk space, then inspect `.heartwood/logs/local-model.log` from the same project.
 - If Heartwood reports an unsupported P4, P100, or V100, delete and recreate the Cloud Environment with a T4 while retaining the persistent disk; do not replace the released vLLM or PyTorch packages in place.
 - If the GPU is not detected, confirm that the GPU image and GPU were selected together, then run `nvidia-smi` and `heartwood doctor` from the project terminal.

@@ -28,7 +28,7 @@ Qualification profiles select external model weights and runtime arguments again
 An optional protected self-hosted GPU job runs the same model qualification used on managed platforms when an eligible runner is configured.
 Without GPU hardware, CI does not claim successful CUDA initialization or GPU model loading.
 
-The shared coding-agent acceptance test performs direct model inference and then drives the real Heartwood gateway and OpenHands adapter through a structured terminal proposal, grouped approval, synthetic file modification, independent file verification, fresh-process replay, and hash-chain-verified audit export.
+The shared coding-agent acceptance test performs direct model inference and then drives the real Heartwood gateway and OpenHands adapter through structured terminal proposals, grouped approval and rejection, synthetic file modification, byte-exact independent verification, proof that the rejected action did not execute, fresh-process replay, and hash-chain-verified audit export.
 It emits a machine-readable qualification record containing the exact runtime, model revision, GPU, driver, context, tensor parallelism, server parser, and agent tool mode.
 The CPU capable-model job and GPU qualification wrapper use this same acceptance contract instead of maintaining separate agent scenarios.
 

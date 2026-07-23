@@ -45,6 +45,10 @@ inference="${project}/qualification-inference.json"
 command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-900}"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 cohort_path="${project}/cohort-summary.json"
+exact_path="${project}/heartwood-exact-output.txt"
+rejected_path="${project}/heartwood-rejected-output.txt"
+exact_name="$(basename -- "${exact_path}")"
+rejected_name="$(basename -- "${rejected_path}")"
 events_path="${workspace}/${session_id}/events.jsonl"
 audit_path="${state_root}/audit-export.jsonl"
 
@@ -67,7 +71,13 @@ export OPENHANDS_SUPPRESS_BANNER=1
 
 rm -rf "${project}/input" "${state_root}"
 mkdir -p "${project}/input"
-rm -f "${cohort_path}" "${transcript}" "${replay}" "${report}"
+rm -f \
+  "${cohort_path}" \
+  "${exact_path}" \
+  "${rejected_path}" \
+  "${transcript}" \
+  "${replay}" \
+  "${report}"
 cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv "${project}/input/"
 cd "${project}"
 
@@ -106,16 +116,8 @@ run_heartwood() {
   timeout "${command_timeout}" "${heartwood_cli}" "$@"
 }
 
-run_heartwood models refresh heartwood | tee -a "${transcript}"
-run_heartwood models connect heartwood heartwood-managed-runtime | tee -a "${transcript}"
-run_heartwood models validate heartwood | tee -a "${transcript}"
-run_heartwood actions set ask-every-time | tee -a "${transcript}"
-run_heartwood --session-id "${session_id}" \
-  --prompt "Call the terminal tool to execute this exact command: ${heartwood_python} ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
-  | tee -a "${transcript}"
-
-for _ in 1 2 3 4; do
-  pending_id="$("${heartwood_python}" - "${events_path}" <<'PY'
+pending_action_id() {
+  "${heartwood_python}" - "${events_path}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -134,12 +136,34 @@ pending = [
 ]
 print(pending[-1] if pending else "")
 PY
-)"
+}
+
+run_heartwood models refresh heartwood | tee -a "${transcript}"
+run_heartwood models connect heartwood heartwood-managed-runtime | tee -a "${transcript}"
+run_heartwood models validate heartwood | tee -a "${transcript}"
+run_heartwood actions set ask-every-time | tee -a "${transcript}"
+run_heartwood --session-id "${session_id}" \
+  --prompt "Call the terminal tool to execute this exact command: ${heartwood_python} ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && printf 'heartwood-agent-exact-ok\\n' > ${exact_name} && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
+  | tee -a "${transcript}"
+
+for _ in 1 2 3 4; do
+  pending_id="$(pending_action_id)"
   if [[ -z "${pending_id}" ]]; then
     break
   fi
   run_heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
 done
+
+run_heartwood --session-id "${session_id}" \
+  --prompt "Call the terminal tool once to execute exactly: printf 'this-action-must-remain-rejected\\n' > ${rejected_name}. Do not call another tool." \
+  | tee -a "${transcript}"
+
+pending_id="$(pending_action_id)"
+if [[ -z "${pending_id}" ]]; then
+  echo "coding-agent rejection check did not produce a pending action" >&2
+  exit 1
+fi
+run_heartwood --session-id "${session_id}" reject | tee -a "${transcript}"
 
 run_heartwood --session-id "${session_id}" replay | tee "${replay}"
 run_heartwood --session-id "${session_id}" audit export \

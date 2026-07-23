@@ -72,7 +72,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0-beta.9"
+__version__ = "0.2.0-beta.10"
 
 _PROG = "heartwood"
 
@@ -99,9 +99,12 @@ _MODEL_SOURCE_ARGUMENTS = {
     "stanford-ai-api-gateway": "stanford-ai-api-gateway",
 }
 _MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
-    label="Downloading and verifying the model",
-    waiting_label="Still downloading and verifying the model",
-    guidance="Large models can take several minutes. Keep this process running.",
+    label="Preparing and verifying the model",
+    waiting_label="Still preparing and verifying the model",
+    guidance=(
+        "Large downloads and full verification of existing model files can take several minutes. "
+        "Keep this process running."
+    ),
 )
 _STARTUP_ACTIVITY = InteractionActivity(
     label="Checking the project and environment",

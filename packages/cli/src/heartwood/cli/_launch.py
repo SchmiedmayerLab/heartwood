@@ -119,6 +119,7 @@ class LaunchPlan:
     startup_seconds_max: int | None = None
     environment_notes: tuple[str, ...] = ()
     download_required: bool = False
+    model_selected: bool = True
 
     def format(self) -> str:
         """Render the launch proposal without secrets."""
@@ -132,6 +133,11 @@ class LaunchPlan:
             (
                 "Catalog model: "
                 f"{self.artifact_id if self.artifact_id is not None else 'not selected'}"
+            ),
+            (
+                "Model status: selected for this project"
+                if self.model_selected
+                else "Model status: recommendation only; complete setup before startup"
             ),
             f"Runtime: {self.runtime if self.runtime is not None else 'not selected'}",
             (
@@ -341,6 +347,7 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
     """Build a platform-specific launch plan without changing external state."""
     platform_id = select_platform_adapter(env).adapter_id
     selection = _local_model_selection(options.project, env)
+    model_selected = selection is not None
     if selection is None:
         recommendation = _recommend_model(options, env, platform_id=platform_id)
         if recommendation is not None:
@@ -404,6 +411,7 @@ def build_launch_plan(options: LaunchOptions, env: Mapping[str, str]) -> LaunchP
             and selection.catalog_source == "catalog"
             and not selection.model_root.exists()
         ),
+        model_selected=model_selected,
     )
 
 
@@ -441,6 +449,13 @@ def run_launch(
             print(
                 "\nNo qualified Heartwood-managed model matches the detected resources. "
                 "Run `heartwood models managed` for lower-resource and advanced options."
+            )
+            return 64
+        if not plan.model_selected:
+            print(
+                "\nThis plan is a resource recommendation, not a selected model. "
+                "Run `heartwood` to choose Run with Heartwood, or use `heartwood setup` "
+                "before requesting a download or GPU allocation."
             )
             return 64
         if plan.download_required:

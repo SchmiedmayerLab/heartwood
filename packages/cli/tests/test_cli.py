@@ -18,6 +18,7 @@ import pytest
 
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
+    _MODEL_DOWNLOAD_ACTIVITY,
     __version__,
     _consume_prompt,
     _float_payload,
@@ -133,6 +134,15 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert error.value.code == 0
     assert f"heartwood {__version__}" in capsys.readouterr().out
+
+
+def test_model_preparation_progress_explains_long_running_work() -> None:
+    assert _MODEL_DOWNLOAD_ACTIVITY.label == "Preparing and verifying the model"
+    assert _MODEL_DOWNLOAD_ACTIVITY.waiting_label == "Still preparing and verifying the model"
+    assert _MODEL_DOWNLOAD_ACTIVITY.guidance == (
+        "Large downloads and full verification of existing model files can take several minutes. "
+        "Keep this process running."
+    )
 
 
 def test_line_mode_reports_elapsed_progress_for_a_slow_turn(
@@ -1327,7 +1337,7 @@ def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
     assert "Heartwood model plan" in output
     assert "Runtime: CPU" in output
     assert "Recommended: 8 CPU cores" in output
-    assert "Downloading and verifying the model" in captured.err
+    assert "Preparing and verifying the model" in captured.err
     assert "Model files are ready:" in output
     assert "Run `heartwood` to continue setup or open Heartwood." in output
     assert calls == [

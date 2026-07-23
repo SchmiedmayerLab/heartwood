@@ -478,7 +478,8 @@ fi
 replace_symlink "${current_target}" "${root}/current"
 installation_succeeded="true"
 
+cleanup
+trap - EXIT
 stage "Installation complete"
-rm -rf "${installer_state}"
 printf 'Installed %s in %d seconds.\n' "${release_version}" "${SECONDS}"
 printf 'Add %s to PATH, then run: heartwood doctor\n' "${root}/bin"

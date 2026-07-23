@@ -41,7 +41,7 @@ Do not use a shared project root itself as the Heartwood project.
 ```bash
 cd heartwood-installation
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.9/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.2.0-beta.10/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"
@@ -81,6 +81,8 @@ Those current Stanford terms, not Heartwood platform detection, determine data e
 
 Choose **Run with Heartwood**, select a catalog model or another public Hugging Face repository, and review the download and resource plan.
 Model files are stored under the project's `.heartwood/models/`, not the installation directory.
+Model setup verifies every file before it persists the selection.
+On project storage, verification of a large existing cache can take several minutes even when no network download is needed.
 
 When you start Heartwood with a selected Heartwood-managed model, it inspects the GPU-capable Slurm partitions, available L40S count, GPU memory, CPU and RAM limits, existing model cache, and requested capability tier.
 It then prints the strongest compatible qualified model, expected download and startup range, and complete `srun` request.
@@ -121,11 +123,16 @@ Preview a particular capability tier without downloading or allocating:
 heartwood runtime start --task-profile powerful --dry-run
 ```
 
+This preview is a recommendation only.
+It does not select or download the model.
+Run `heartwood` and complete model setup before using `heartwood runtime start` without `--dry-run`; Heartwood otherwise stops before requesting an allocation.
+
 `auto` prefers **Powerful** on Carina and falls back to the strongest qualified configuration that fits one available allocation.
 Use `--task-profile standard`, `powerful`, or `maximum` when the task has a known resource envelope.
 The `--gpus` option is an advanced constraint and must match a catalog configuration that was qualified at that tensor-parallel size.
 
 Heartwood scopes model caches to the project, waits up to ten minutes by default, and reports the current stage and elapsed startup time every 15 seconds.
+The installer reports completion only after temporary installation state and locks have been removed.
 For scripted deployment, `--yes-download` and `--yes-request-allocation` are separate explicit approvals; normal interactive use should retain both prompts.
 
 ## Review, Exit, and Return

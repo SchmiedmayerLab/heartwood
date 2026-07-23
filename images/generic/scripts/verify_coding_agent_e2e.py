@@ -78,8 +78,11 @@ def verify_run(
         for event in events
         if event.kind == "confirmation.resolved"
     }
-    if decisions != {"approved"}:
-        raise ValueError(f"coding-agent actions were not approved: {sorted(decisions)}")
+    if decisions != {"approved", "denied"}:
+        raise ValueError(
+            "coding-agent qualification must record one approved and one denied action set: "
+            f"{sorted(decisions)}"
+        )
 
     tool_executions = [event for event in events if event.kind == "tool.execution.recorded"]
     terminal_executions = [
@@ -140,14 +143,26 @@ def verify_run(
         raise ValueError("coding-agent artifact contains row-level output")
     if cohort["export_guard"].get("exportable") is not True:
         raise ValueError("coding-agent artifact unexpectedly failed its count floor")
+    if not artifact_path.read_bytes().endswith(b"\n"):
+        raise ValueError("coding-agent artifact does not end with a newline")
+    exact_path = artifact_path.with_name("heartwood-exact-output.txt")
+    if not exact_path.is_file() or exact_path.read_bytes() != b"heartwood-agent-exact-ok\n":
+        raise ValueError("coding-agent exact-content artifact is incorrect")
+    rejected_path = artifact_path.with_name("heartwood-rejected-output.txt")
+    if rejected_path.exists():
+        raise ValueError("coding-agent rejected action modified the project")
 
     inference = json.loads(inference_path.read_text(encoding="utf-8"))
     if inference.get("content_nonempty") is not True:
         raise ValueError("direct model inference did not return content")
 
     replay = replay_path.read_text(encoding="utf-8")
-    if "Tool terminal exit=0" not in replay or "Action set approved" not in replay:
-        raise ValueError("fresh-process replay is missing the approved tool execution")
+    if (
+        "Tool terminal exit=0" not in replay
+        or "Action set approved" not in replay
+        or "Action set denied" not in replay
+    ):
+        raise ValueError("fresh-process replay is missing the approved or denied action set")
 
     audit = AuditLog(audit_path)
     audit_events = audit.read()
@@ -161,6 +176,8 @@ def verify_run(
         str(artifact_path.resolve().parent),
         "target-condition-concept-id",
         "Call the terminal tool",
+        "heartwood-agent-exact-ok",
+        "this-action-must-remain-rejected",
     ):
         if sensitive_value in audit_text:
             raise ValueError("audit export contains unsanitized task content")
@@ -173,7 +190,9 @@ def verify_run(
             "model_loaded_and_inferred": True,
             "tool_call_proposed": True,
             "grouped_approval_recorded": True,
+            "grouped_rejection_recorded": True,
             "file_modified_and_verified": True,
+            "exact_content_verified": True,
             "fresh_process_replay_verified": True,
             "audit_export_verified": True,
         },
