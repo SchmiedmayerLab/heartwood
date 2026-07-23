@@ -65,7 +65,7 @@ jobs:
             --set "runtime.attest=type=sbom,disabled=true" \
             --set "runtime.attest=type=provenance,disabled=true" \
             runtime
-          docker compose -f images/generic/compose.yaml run --rm --no-build heartwood
+          docker compose -f images/generic/compose.yaml run --rm heartwood
       - name: Verify named-volume persistence
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
