@@ -308,8 +308,7 @@ def test_blacksmith_runners_are_reserved_for_terra_gpu_image_builds() -> None:
         assert workflow.count("blacksmith-16vcpu-ubuntu-2404") == 1
         assert "target: runtime-gpu-nvidia\n            runner: ubuntu-24.04" in workflow
         assert (
-            "target: terra-runtime-gpu-nvidia\n"
-            "            runner: blacksmith-16vcpu-ubuntu-2404"
+            "target: terra-runtime-gpu-nvidia\n            runner: blacksmith-16vcpu-ubuntu-2404"
         ) in workflow
 
 
