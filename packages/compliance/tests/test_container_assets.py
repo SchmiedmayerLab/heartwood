@@ -775,8 +775,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in pull_request_workflow
     assert 'target=gpu-ci-validate"' in pull_request_workflow
-    assert "bash -n images/gpu/install_runtime.sh" in workflow
-    assert "test -x images/gpu/install_runtime.sh" in workflow
+    contract_action = _read(".github/actions/validate-gpu-contract/action.yml")
+    assert workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
+    assert pull_request_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
+    assert "bash -n images/gpu/install_runtime.sh" in contract_action
+    assert "test -x images/gpu/install_runtime.sh" in contract_action
     assert 'output=type=cacheonly"' in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
@@ -792,6 +795,8 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "workflow_dispatch:" not in workflow
     assert "qualification_configuration:" in qualification
     assert "inputs.qualification_configuration" in qualification
+    assert "qualification_runner" not in qualification
+    assert "runs-on: [self-hosted, linux, x64, gpu]" in qualification
     assert "inputs.qualification_configuration" not in pull_request_workflow
     assert "inputs.qualification_configuration" not in main_build
     assert "if:" not in pull_request_workflow
@@ -826,7 +831,7 @@ def test_gpu_qualification_workflow_offers_every_candidate_configuration() -> No
     matrix = _toml("images/gpu/compatibility.toml")
     configuration_input = workflow.split("      qualification_configuration:\n", maxsplit=1)[
         1
-    ].split("      qualification_runner:\n", maxsplit=1)[0]
+    ].split("\npermissions:\n", maxsplit=1)[0]
     options = {
         line.removeprefix("- ")
         for line in (item.strip() for item in configuration_input.splitlines())

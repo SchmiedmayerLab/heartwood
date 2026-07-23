@@ -17,11 +17,6 @@ on:
         options:
           - terra-2xt4-qwen3-coder-30b-awq
           - carina-l40s-qwen3-coder-30b-fp8
-      qualification_runner:
-        description: JSON array of protected self-hosted GPU runner labels
-        required: true
-        default: '["self-hosted","linux","x64","gpu"]'
-        type: string
 
 permissions:
   contents: read
@@ -33,7 +28,7 @@ concurrency:
 jobs:
   qualification:
     name: GPU Coding-Agent Qualification
-    runs-on: ${{ fromJSON(inputs.qualification_runner) }}
+    runs-on: [self-hosted, linux, x64, gpu]
     timeout-minutes: 180
     environment: gpu-qualification
     steps:
