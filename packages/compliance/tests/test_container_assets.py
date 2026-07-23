@@ -1124,7 +1124,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "Generic OpenHands smoke" in smoke
     assert "platform: linux/amd64" in smoke
     assert "platform: linux/arm64" in smoke
-    assert "runner: blacksmith-8vcpu-ubuntu-2404-arm" in smoke
+    assert "runner: ubuntu-24.04-arm" in smoke
     assert "runtime runtime-gpu-nvidia" in smoke
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
