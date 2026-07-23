@@ -60,5 +60,3 @@ jobs:
           set: |
             ${{ matrix.target }}.target=gpu-ci-validate
             ${{ matrix.target }}.output=type=cacheonly
-            ${{ matrix.target }}.cache-from=type=gha,scope=gpu-${{ matrix.target }}
-            ${{ matrix.target }}.cache-to=type=gha,scope=gpu-${{ matrix.target }},mode=min

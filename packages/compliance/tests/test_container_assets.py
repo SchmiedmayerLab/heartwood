@@ -253,6 +253,7 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     bake = _read("docker-bake.hcl")
 
     assert _target_names(bake) == {
+        "_runtime_common",
         "runtime",
         "runtime-gpu-nvidia",
         "_terra_common",
@@ -266,8 +267,9 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia"' in bake
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia"' in bake
     assert bake.count('HEARTWOOD_GPU_RUNTIME = "vllm"') == 2
-    assert "type=gha,scope=runtime-gpu-nvidia,mode=min" in bake
-    assert "type=gha,scope=terra-runtime-gpu-nvidia,mode=min" in bake
+    assert 'inherits = ["_runtime_common"]' in bake
+    assert "type=gha,scope=runtime-gpu-nvidia" not in bake
+    assert "type=gha,scope=terra-runtime-gpu-nvidia" not in bake
     assert 'output = ["type=registry,oci-mediatypes=false"]' in bake
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in bake
     assert "coder-7b" not in bake
@@ -787,11 +789,13 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "runner: ubuntu-24.04" in pull_request_workflow
     assert "runner: blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
     assert "uses: docker/bake-action@v7" in pull_request_workflow
-    assert "cache-from=type=gha,scope=gpu-${{ matrix.target }}" in pull_request_workflow
-    assert "cache-to=type=gha,scope=gpu-${{ matrix.target }},mode=min" in pull_request_workflow
+    assert "cache-from=type=gha" not in pull_request_workflow
+    assert "cache-to=type=gha" not in pull_request_workflow
     assert "uses: docker/bake-action@v7" in workflow
     assert "mode=max" not in pull_request_workflow
     assert "mode=max" not in main_build
+    assert "cache-from=type=gha" not in main_build
+    assert "cache-to=type=gha" not in main_build
     assert "deploy/reclaim-github-runner-space.sh" not in pull_request_workflow
     assert "/usr/local/lib/android" in runner_cleanup
     assert "/usr/share/dotnet" in runner_cleanup

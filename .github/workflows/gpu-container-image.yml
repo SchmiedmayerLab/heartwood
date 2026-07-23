@@ -77,8 +77,6 @@ jobs:
           set: |
             ${{ matrix.target }}.tags=${{ steps.image.outputs.name }}
             ${{ matrix.target }}.output=${{ matrix.media_output }}
-            ${{ matrix.target }}.cache-from=type=gha,scope=gpu-${{ matrix.target }}
-            ${{ matrix.target }}.cache-to=type=gha,scope=gpu-${{ matrix.target }},mode=min
       - name: Record candidate digest
         id: candidate
         env:
