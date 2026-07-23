@@ -282,7 +282,7 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "cache_scope: runtime-arm64" in smoke
     assert "uses: docker/bake-action@v7" in smoke
     assert "runtime.cache-from=type=gha,scope=${{ matrix.cache_scope }}" in smoke
-    assert "runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=max" in smoke
+    assert "runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=min" in smoke
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "blacksmith-16vcpu-ubuntu-2404" in gpu
     assert "blacksmith-16vcpu-ubuntu-2404" in capable
