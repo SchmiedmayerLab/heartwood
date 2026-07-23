@@ -89,6 +89,8 @@ jobs:
           persist-credentials: false
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
       - name: Check platform Dockerfile
         run: >-
           docker buildx bake --file docker-bake.hcl --call=check
@@ -101,8 +103,6 @@ jobs:
       - name: Build Terra-compatible CI base
         run: >-
           docker buildx build --load --platform linux/amd64
-          --cache-from type=gha,scope=terra-ci-base-amd64
-          --cache-to type=gha,scope=terra-ci-base-amd64,mode=max
           --tag heartwood-terra-ci-base:local
           --file images/platform/terra-ci-base.Dockerfile
           images/platform
@@ -110,8 +110,6 @@ jobs:
         run: >-
           docker buildx bake --file docker-bake.hcl --load
           --set terra-ci.platform=linux/amd64
-          --set terra-ci.cache-from=type=gha,scope=terra-ci-amd64
-          --set terra-ci.cache-to=type=gha,scope=terra-ci-amd64,mode=max
           terra-ci
       - name: Run Terra Jupyter contract smoke
         run: >-
