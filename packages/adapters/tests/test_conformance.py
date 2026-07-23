@@ -119,7 +119,7 @@ class FakeRegistryAdapter:
     def verify_skill(self, reference: SkillReference) -> RegistryVerification:
         """Verify the synthetic skill reference."""
         return RegistryVerification(
-            verified=reference.version == "0.2.0-beta.8",
+            verified=reference.version == "0.2.0-beta.9",
             reason="synthetic fixture registry result",
         )
 
