@@ -21,7 +21,7 @@ dependencies = [
     "heartwood-schemas",
     "heartwood-session",
     "heartwood-skills",
-    "huggingface-hub==1.23.0",
+    "huggingface-hub==1.24.0",
     "keyring==25.7.0",
     "openhands-sdk==1.36.1",
     "openhands-tools==1.36.1",
