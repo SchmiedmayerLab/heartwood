@@ -82,7 +82,30 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
             "tool.execution.recorded",
             {"tool_name": "finish", "exit_code": 0},
         ),
-        _event(6, "audit.export.recorded", {"scrubbed": True}),
+        _event(
+            6,
+            "model_call.decision.recorded",
+            {
+                "decision": {"decision": "allow"},
+                "model_profile": {"action_confirmation_mode": "always-confirm"},
+            },
+        ),
+        _event(
+            7,
+            "tool_call.proposed",
+            {"tool_call_id": "tool-2", "tool_name": "terminal"},
+        ),
+        _event(
+            8,
+            "confirmation.requested",
+            {"request": {"tool_call_id": "tool-2"}},
+        ),
+        _event(
+            9,
+            "confirmation.resolved",
+            {"tool_call_id": "tool-2", "decision": "denied"},
+        ),
+        _event(10, "audit.export.recorded", {"scrubbed": True}),
     )
     events_path = tmp_path / "events.jsonl"
     events_path.write_text(
@@ -111,12 +134,14 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
                 "quality_checks": {"aggregate_only_output": True},
                 "export_guard": {"exportable": True},
             }
-        ),
+        )
+        + "\n",
         encoding="utf-8",
     )
+    (tmp_path / "heartwood-exact-output.txt").write_bytes(b"heartwood-agent-exact-ok\n")
     replay_path = tmp_path / "replay.txt"
     replay_path.write_text(
-        "Action set approved (1 action)\nTool terminal exit=0\n",
+        "Action set approved (1 action)\nTool terminal exit=0\nAction set denied (1 action)\n",
         encoding="utf-8",
     )
     inference_path = tmp_path / "inference.json"
@@ -144,6 +169,44 @@ def test_coding_agent_qualification_verifies_complete_acceptance_evidence(
 
     assert summary["tool_execution_count"] == 2
     assert cast(dict[str, bool], summary["checks"])["audit_export_verified"] is True
+    assert cast(dict[str, bool], summary["checks"])["exact_content_verified"] is True
+    assert cast(dict[str, bool], summary["checks"])["grouped_rejection_recorded"] is True
+
+
+def test_coding_agent_qualification_rejects_inexact_or_rejected_output(
+    tmp_path: Path,
+) -> None:
+    module = _module(
+        "verify_coding_agent_e2e_exact_content",
+        _root() / "images/generic/scripts/verify_coding_agent_e2e.py",
+    )
+    verify = cast(Callable[..., dict[str, object]], module.verify_run)
+    events, audit, artifact, replay, inference = _acceptance_files(tmp_path)
+    exact = tmp_path / "heartwood-exact-output.txt"
+
+    exact.write_bytes(b"heartwood-agent-exact-ok")
+    with pytest.raises(ValueError, match="exact-content artifact"):
+        verify(
+            events_path=events,
+            audit_path=audit,
+            artifact_path=artifact,
+            replay_path=replay,
+            inference_path=inference,
+        )
+
+    exact.write_bytes(b"heartwood-agent-exact-ok\n")
+    (tmp_path / "heartwood-rejected-output.txt").write_text(
+        "this-action-must-remain-rejected\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="rejected action modified"):
+        verify(
+            events_path=events,
+            audit_path=audit,
+            artifact_path=artifact,
+            replay_path=replay,
+            inference_path=inference,
+        )
 
 
 def test_coding_agent_qualification_requires_successful_completion(

@@ -75,9 +75,10 @@ The acceptance test must establish all of the following:
 2. OpenHands uses the catalog-qualified tool mode: native structured tools for supported parsers or its prompt-conversion path for models that do not reliably emit native calls;
 3. Heartwood presents the complete action set for approval;
 4. approval executes the proposed operation and modifies only the synthetic project;
-5. an independent check verifies the exact file result;
-6. a fresh process replays the session; and
-7. audit export validates event coverage, hash-chain integrity, and content scrubbing.
+5. a second proposed action set is rejected and does not modify the project;
+6. an independent check verifies the exact file bytes;
+7. a fresh process replays both decisions and the approved result; and
+8. audit export validates event coverage, hash-chain integrity, and content scrubbing.
 
 The result records the GPU model, count, memory, driver, runtime versions, model revision, context size, tensor parallelism, server parser, and agent tool mode.
 Not-tested configurations are not added to the managed catalog.

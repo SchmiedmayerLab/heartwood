@@ -219,7 +219,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0-beta.9"' in bake
+    assert 'default = "0.2.0-beta.10"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
 
 
@@ -529,7 +529,15 @@ def test_coding_agent_qualification_finds_cli_beside_selected_python(tmp_path: P
     path_bin = tmp_path / "path-bin"
     path_bin.mkdir()
     python = runtime_bin / "python"
-    python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    python.write_text(
+        """#!/usr/bin/env bash
+if [[ "${1:-}" == "-" && "${2:-}" == */events.jsonl ]]; then
+  printf 'synthetic-pending-action\n'
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
     python.chmod(0o700)
 
     marker = tmp_path / "heartwood-invocations.txt"

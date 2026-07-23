@@ -1327,7 +1327,7 @@ def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
     assert "Heartwood model plan" in output
     assert "Runtime: CPU" in output
     assert "Recommended: 8 CPU cores" in output
-    assert "Downloading and verifying the model" in captured.err
+    assert "Preparing and verifying the model" in captured.err
     assert "Model files are ready:" in output
     assert "Run `heartwood` to continue setup or open Heartwood." in output
     assert calls == [

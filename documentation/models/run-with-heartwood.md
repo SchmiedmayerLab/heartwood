@@ -8,6 +8,7 @@ SPDX-License-Identifier: MIT
 
 Heartwood images and the generic Linux package include managed inference software but no model weights.
 After a supported model is selected and downloaded or imported, the normal `heartwood` command verifies the files, plans context against available memory, starts the runtime, waits for readiness, and then opens the requested interface.
+Downloading and verification are separate costs: a cached model avoids network transfer but Heartwood still verifies its immutable source and file hashes before use.
 
 ## Download and Start
 
@@ -62,6 +63,8 @@ heartwood runtime start --task-profile powerful --partition dev --time 01:00:00
 On Carina, Heartwood prints the complete Slurm request and asks before allocating a GPU.
 On provisioned Terra compute, it uses the attached resources without submitting a scheduler request.
 Model download and scheduler allocation require separate confirmation.
+An advanced `runtime start --dry-run` may show a compatible recommendation when the project has no selected model, but it never persists that recommendation.
+Complete the normal `heartwood` setup flow before starting or allocating the runtime.
 
 ## Stop the Runtime
 

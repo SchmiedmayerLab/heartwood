@@ -45,7 +45,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.9 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10 \
   heartwood --interface web --host 0.0.0.0
 ```
 
