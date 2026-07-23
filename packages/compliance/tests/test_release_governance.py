@@ -221,7 +221,6 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     )
     dependency_review = Path(".github/workflows/dependency-review.yml").read_text(encoding="utf-8")
     called_workflows = {
-        "codeql": "codeql.yml",
         "capable-model": "capable-model.yml",
         "containers": "container-image.yml",
         "documentation": "documentation.yml",
@@ -252,6 +251,7 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "  pull_request:" in pull_request_workflow
     assert "  push:" not in pull_request_workflow
     assert "name: Release Candidate Ready" in pull_request_workflow
+    assert "uses: ./.github/workflows/codeql.yml" not in pull_request_workflow
     assert "uses: ./.github/workflows/container-image.yml" not in pull_request_workflow
     assert "uses: ./.github/workflows/capable-model.yml" not in pull_request_workflow
     assert "uses: ./.github/workflows/gpu-container-pr.yml" in pull_request_workflow
@@ -289,6 +289,8 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
     workflow = Path(".github/workflows/create-release.yml").read_text(encoding="utf-8")
     validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
     assert "--required-check 'Release Candidate Ready'" in workflow
+    assert "--required-check 'Analyze (python)'" in workflow
+    assert "--required-check 'Analyze (javascript-typescript)'" in workflow
     assert "python3 deploy/verify_model_sources.py --source-root ." in workflow
     assert (
         "python3 deploy/verify_model_sources.py --source-root . --allow-unavailable" in validation

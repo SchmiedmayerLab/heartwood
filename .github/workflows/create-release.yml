@@ -81,7 +81,9 @@ jobs:
             --version "${RELEASE_VERSION}" \
             --source-root . \
             --checks /tmp/check-runs.json \
-            --required-check 'Release Candidate Ready'
+            --required-check 'Release Candidate Ready' \
+            --required-check 'Analyze (python)' \
+            --required-check 'Analyze (javascript-typescript)'
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Log in to GitHub Container Registry

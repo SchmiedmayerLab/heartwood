@@ -18,12 +18,8 @@ concurrency:
 permissions:
   contents: read
   packages: write
-  security-events: write
 
 jobs:
-  codeql:
-    name: CodeQL
-    uses: ./.github/workflows/codeql.yml
   containers:
     name: Container Images
     uses: ./.github/workflows/container-image.yml
@@ -55,7 +51,6 @@ jobs:
     name: Release Candidate Ready
     if: ${{ always() }}
     needs:
-      - codeql
       - capable-model
       - containers
       - documentation
