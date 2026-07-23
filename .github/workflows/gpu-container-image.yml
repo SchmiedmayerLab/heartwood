@@ -30,7 +30,7 @@ jobs:
   build:
     name: Build And Validate ${{ matrix.target }}
     needs: contract
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -39,10 +39,12 @@ jobs:
       matrix:
         include:
           - target: runtime-gpu-nvidia
+            runner: ubuntu-24.04
             commit_suffix: gpu-nvidia
             flatten: "false"
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true
           - target: terra-runtime-gpu-nvidia
+            runner: blacksmith-16vcpu-ubuntu-2404
             commit_suffix: terra-gpu-nvidia
             flatten: "true"
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
@@ -63,20 +65,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build candidate by digest
-        id: candidate
+        id: build
+        uses: docker/bake-action@v7
         env:
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          source: .
+          targets: ${{ matrix.target }}
+          set: |
+            ${{ matrix.target }}.tags=${{ steps.image.outputs.name }}
+            ${{ matrix.target }}.output=${{ matrix.media_output }}
+      - name: Record candidate digest
+        id: candidate
+        env:
+          BUILD_METADATA: ${{ steps.build.outputs.metadata }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
           TARGET: ${{ matrix.target }}
-          MEDIA_OUTPUT: ${{ matrix.media_output }}
         run: |
-          docker buildx bake --file docker-bake.hcl \
-            --set "${TARGET}.tags=${IMAGE_NAME}" \
-            --set "${TARGET}.output=${MEDIA_OUTPUT},name=${IMAGE_NAME}" \
-            --set "${TARGET}.cache-from=type=gha,scope=gpu-${TARGET}" \
-            --set "${TARGET}.cache-to=type=gha,scope=gpu-${TARGET},mode=max" \
-            --metadata-file /tmp/gpu-metadata.json \
-            "${TARGET}"
+          printf '%s\n' "${BUILD_METADATA}" > /tmp/gpu-metadata.json
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/gpu-metadata.json "${TARGET}")"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"

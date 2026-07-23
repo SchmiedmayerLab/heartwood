@@ -28,9 +28,11 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: ubuntu-24.04
+            cache_scope: runtime-amd64
           - platform: linux/arm64
-            runner: blacksmith-8vcpu-ubuntu-2404-arm
+            runner: ubuntu-24.04-arm
+            cache_scope: runtime-arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -49,10 +51,26 @@ jobs:
         run: >-
           docker buildx bake --file docker-bake.hcl --print
           runtime runtime-gpu-nvidia
-      - name: Build the no-weight image and run the isolated OpenHands stack
+      - name: Build the no-weight image
+        uses: docker/bake-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          load: true
+          provenance: false
+          sbom: false
+          source: .
+          targets: runtime
+          set: |
+            runtime.platform=${{ matrix.platform }}
+            runtime.tags=heartwood-runtime-smoke:local
+            runtime.cache-from=type=gha,scope=${{ matrix.cache_scope }}
+            runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=min
+      - name: Run the isolated OpenHands stack
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
-        run: docker compose -f images/generic/compose.yaml run --rm --build heartwood
+        run: docker compose -f images/generic/compose.yaml run --rm heartwood
       - name: Verify named-volume persistence
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
@@ -81,7 +99,7 @@ jobs:
 
   terra-smoke:
     name: Terra image smoke test (linux/amd64)
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

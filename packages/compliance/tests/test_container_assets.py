@@ -191,7 +191,8 @@ def test_container_smoke_uses_bake_as_the_heartwood_build_contract() -> None:
     capable_workflow = _read(".github/workflows/capable-model.yml")
 
     assert workflow.count("docker buildx bake --file docker-bake.hcl --call=check") == 2
-    assert "--set runtime.tags=heartwood-capable:local" in capable_workflow
+    assert "runtime.tags=heartwood-capable:local" in capable_workflow
+    assert "uses: docker/bake-action@v7" in capable_workflow
     assert "--build-arg HEARTWOOD_" not in workflow
     assert "--file images/Dockerfile" not in workflow
 
@@ -252,6 +253,7 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     bake = _read("docker-bake.hcl")
 
     assert _target_names(bake) == {
+        "_runtime_common",
         "runtime",
         "runtime-gpu-nvidia",
         "_terra_common",
@@ -265,8 +267,9 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-gpu-nvidia"' in bake
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra-gpu-nvidia"' in bake
     assert bake.count('HEARTWOOD_GPU_RUNTIME = "vllm"') == 2
-    assert "type=gha,scope=runtime-gpu-nvidia,mode=min" in bake
-    assert "type=gha,scope=terra-runtime-gpu-nvidia,mode=min" in bake
+    assert 'inherits = ["_runtime_common"]' in bake
+    assert "type=gha,scope=runtime-gpu-nvidia" not in bake
+    assert "type=gha,scope=terra-runtime-gpu-nvidia" not in bake
     assert 'output = ["type=registry,oci-mediatypes=false"]' in bake
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in bake
     assert "coder-7b" not in bake
@@ -774,23 +777,30 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in pull_request_workflow
-    assert 'target=gpu-ci-validate"' in pull_request_workflow
+    assert ".target=gpu-ci-validate" in pull_request_workflow
     contract_action = _read(".github/actions/validate-gpu-contract/action.yml")
     assert workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
     assert pull_request_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
     assert "bash -n images/gpu/install_runtime.sh" in contract_action
     assert "test -x images/gpu/install_runtime.sh" in contract_action
-    assert 'output=type=cacheonly"' in pull_request_workflow
+    assert ".output=type=cacheonly" in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
-    assert "blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
-    assert "cache-from=type=gha,scope=gpu-${TARGET}" in pull_request_workflow
-    assert "cache-to=type=gha,scope=gpu-${TARGET},mode=max" in pull_request_workflow
+    assert "runner: ubuntu-24.04" in pull_request_workflow
+    assert "runner: blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
+    assert "uses: docker/bake-action@v7" in pull_request_workflow
+    assert "cache-from=type=gha" not in pull_request_workflow
+    assert "cache-to=type=gha" not in pull_request_workflow
+    assert "uses: docker/bake-action@v7" in workflow
+    assert "mode=max" not in pull_request_workflow
+    assert "mode=max" not in main_build
+    assert "cache-from=type=gha" not in main_build
+    assert "cache-to=type=gha" not in main_build
     assert "deploy/reclaim-github-runner-space.sh" not in pull_request_workflow
     assert "/usr/local/lib/android" in runner_cleanup
     assert "/usr/share/dotnet" in runner_cleanup
-    assert "attest=type=sbom,disabled=true" in pull_request_workflow
-    assert "attest=type=provenance,disabled=true" in pull_request_workflow
+    assert "sbom: false" in pull_request_workflow
+    assert "provenance: false" in pull_request_workflow
     assert "Promote GPU Channel Tags" in workflow
     assert "workflow_dispatch:" not in workflow
     assert "qualification_configuration:" in qualification
@@ -1067,10 +1077,12 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
     assert publish.count("^sha256:[0-9a-f]{64}$") == 2
     assert "if: github.ref == 'refs/heads/main'" not in publish
-    assert "blacksmith-16vcpu-ubuntu-2404" in publish
-    assert "blacksmith-16vcpu-ubuntu-2404-arm" in publish
+    assert "runner: ubuntu-24.04" in publish
+    assert "runner: ubuntu-24.04-arm" in publish
     assert "cache-from=type=gha" in publish
     assert "cache-to=type=gha" in publish
+    assert publish.count("uses: docker/bake-action@v7") == 2
+    assert "mode=max" not in publish
     assert "immutable generic commit tag already exists with a different manifest" in publish
     assert "newly created generic commit tag does not match validated candidate manifest" in publish
     assert "immutable Terra commit tag already exists with a different digest" in publish
@@ -1117,7 +1129,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "Generic OpenHands smoke" in smoke
     assert "platform: linux/amd64" in smoke
     assert "platform: linux/arm64" in smoke
-    assert "runner: blacksmith-8vcpu-ubuntu-2404-arm" in smoke
+    assert "runner: ubuntu-24.04-arm" in smoke
     assert "runtime runtime-gpu-nvidia" in smoke
     assert "terra-runtime terra-runtime-gpu-nvidia terra-ci" in smoke
     assert "edge-terra-ci" in smoke
