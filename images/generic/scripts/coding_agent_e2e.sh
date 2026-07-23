@@ -47,6 +47,8 @@ runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 cohort_path="${project}/cohort-summary.json"
 exact_path="${project}/heartwood-exact-output.txt"
 rejected_path="${project}/heartwood-rejected-output.txt"
+exact_name="$(basename -- "${exact_path}")"
+rejected_name="$(basename -- "${rejected_path}")"
 events_path="${workspace}/${session_id}/events.jsonl"
 audit_path="${state_root}/audit-export.jsonl"
 
@@ -141,7 +143,7 @@ run_heartwood models connect heartwood heartwood-managed-runtime | tee -a "${tra
 run_heartwood models validate heartwood | tee -a "${transcript}"
 run_heartwood actions set ask-every-time | tee -a "${transcript}"
 run_heartwood --session-id "${session_id}" \
-  --prompt "Call the terminal tool to execute this exact command: ${heartwood_python} ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && printf 'heartwood-agent-exact-ok\\n' > heartwood-exact-output.txt && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
+  --prompt "Call the terminal tool to execute this exact command: ${heartwood_python} ${runtime_root}/skills/verified/omop-cohort-summary/scripts/run.py --data-root input --target-condition-concept-id 201826 --minimum-age 18 --aggregate-count-floor 20 --output cohort-summary.json && printf 'heartwood-agent-exact-ok\\n' > ${exact_name} && cat cohort-summary.json. Do not describe the command as text and do not call another tool after it completes. Wait for the terminal result, then report the aggregate cohort result." \
   | tee -a "${transcript}"
 
 for _ in 1 2 3 4; do
@@ -153,7 +155,7 @@ for _ in 1 2 3 4; do
 done
 
 run_heartwood --session-id "${session_id}" \
-  --prompt "Call the terminal tool once to execute exactly: printf 'this-action-must-remain-rejected\\n' > heartwood-rejected-output.txt. Do not call another tool." \
+  --prompt "Call the terminal tool once to execute exactly: printf 'this-action-must-remain-rejected\\n' > ${rejected_name}. Do not call another tool." \
   | tee -a "${transcript}"
 
 pending_id="$(pending_action_id)"

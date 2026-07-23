@@ -499,6 +499,47 @@ def test_recommended_model_cannot_download_or_allocate_before_setup(
     assert not plan.model_root.exists()
 
 
+def test_real_launch_plan_cannot_download_a_recommendation_before_setup(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "heartwood.gateway._gpu_environment.discover_visible_gpus",
+        lambda _env: tuple(
+            GpuDevice(
+                index=index,
+                name="Tesla T4",
+                total_memory_bytes=16 * 1024**3,
+                free_memory_bytes=15 * 1024**3,
+                driver_version="570.86.15",
+                compute_capability=(7, 5),
+            )
+            for index in range(2)
+        ),
+    )
+    options = _options(
+        tmp_path,
+        selected=False,
+        gpus=None,
+        yes_download=True,
+        yes_request_allocation=True,
+    )
+    runner_called = False
+
+    def runner(_command: Sequence[str]) -> int:
+        nonlocal runner_called
+        runner_called = True
+        return 0
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "terra"}, run_fn=runner) == 64
+    output = capsys.readouterr().out
+    assert "Model status: recommendation only" in output
+    assert "Run `heartwood` to choose Run with Heartwood" in output
+    assert not runner_called
+    assert not any(options.project.models_dir.iterdir())
+
+
 def test_launch_rejects_short_context_before_starting_runtime(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
