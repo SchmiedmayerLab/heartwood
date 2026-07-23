@@ -45,12 +45,12 @@ The selection screen uses the release catalog as its authoritative source and re
 
 | Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated Runtime Startup |
 |---|---|---:|---:|---:|---:|---:|---:|
-| Standard fallback | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
+| Standard, qualified on generic Linux and containers | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
 | Powerful, qualified on Terra | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 96 GiB | 50 GiB | 18,432 | 4-15 minutes |
 | Powerful, qualified on Carina | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
 
 Runtime startup begins after the model is available in the project cache.
-A first download depends on the platform network and Hugging Face rate limits and can take tens of minutes; budget 30-60 minutes for a 29 GiB snapshot on shared research infrastructure when no approved Hugging Face token is available.
+A first download depends on platform network conditions and Hugging Face rate limits and can take considerably longer than later starts.
 Later starts reuse the verified project-local snapshot.
 
 Model weights are only part of the memory requirement.

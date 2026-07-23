@@ -419,6 +419,31 @@ def test_gpu_compatibility_rejects_ambiguous_attempt_evidence(
         )
 
 
+def test_gpu_compatibility_rejects_snapshot_without_selectable_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _module(
+        "gpu_compatibility_missing_configuration",
+        _root() / "deploy/verify_gpu_compatibility.py",
+    )
+    with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
+        matrix = tomllib.load(file)
+    with (_root() / "images/generic/local-runtime/snapshots.toml").open("rb") as file:
+        catalog = tomllib.load(file)
+    removed = matrix["configurations"].pop()
+    matrix["unsupported_configurations"][0]["model_snapshot"] = removed["model_snapshot"]
+
+    monkeypatch.setattr(verifier, "_verify_runtime_lock", lambda _root, _runtime: None)
+    monkeypatch.setattr(
+        verifier,
+        "_toml",
+        lambda path: matrix if path.name == "compatibility.toml" else catalog,
+    )
+
+    with pytest.raises(verifier.CompatibilityError, match="no selectable GPU configuration"):
+        verifier.verify_repository(_root())
+
+
 def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
     verifier = _module(
         "gpu_compatibility_verifier",

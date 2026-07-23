@@ -515,15 +515,17 @@ def catalog_model_choices(
             license_id=_license_id_from_posture(artifact.license_posture),
             precision=_gguf_precision(artifact.source_path),
             tier="standard",
-            qualification="qualified",
+            qualification=artifact.qualification,
             recommended_ram_bytes=max(16 * 1024**3, artifact.artifact_size_bytes * 4),
             recommended_disk_bytes=max(
                 artifact.minimum_free_bytes,
                 artifact.artifact_size_bytes * 3,
             ),
             maximum_context_window=artifact.context_window,
-            validated_platforms=("generic", "terra"),
-            qualification_test="heartwood.coding-agent-e2e.v1",
+            validated_platforms=artifact.validated_platforms,
+            qualification_test=artifact.qualification_test,
+            qualification_date=artifact.qualification_date,
+            qualification_evidence=artifact.qualification_evidence,
         )
         for artifact in artifacts
         if artifact.recommended or not recommended_only

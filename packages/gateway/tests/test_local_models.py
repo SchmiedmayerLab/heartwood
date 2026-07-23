@@ -553,7 +553,7 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
     )
 
     assert cpu.qualification_for("generic") == "qualified"
-    assert cpu.qualification_for("terra") == "qualified"
+    assert cpu.qualification_for("terra") == "unvalidated"
     assert cpu.qualification_for("carina") == "unvalidated"
     assert qualified_terra_gpu.qualification_for("terra") == "qualified"
     assert qualified_terra_gpu.qualification_for("carina") == "unvalidated"

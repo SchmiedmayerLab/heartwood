@@ -362,6 +362,11 @@ export interface ModelArtifact {
   context_window: number;
   minimum_resource_envelope: string | null;
   recommended_resource_envelope: string | null;
+  qualification: LocalModelQualification;
+  validated_platforms: string[];
+  qualification_test: string | null;
+  qualification_date: string | null;
+  qualification_evidence: string | null;
   recommended: boolean;
 }
 
@@ -399,6 +404,7 @@ export interface LocalModelChoice {
   qualification: LocalModelQualification;
   minimum_gpu_count: number;
   minimum_gpu_memory_bytes: number;
+  recommended_cpu_count: number;
   recommended_ram_bytes: number;
   recommended_disk_bytes: number;
   tool_call_parser: ToolCallParser | null;
@@ -476,6 +482,7 @@ export interface ModelSnapshot {
   qualification: LocalModelQualification;
   minimum_gpu_count: number;
   minimum_gpu_memory_bytes: number;
+  recommended_cpu_count: number;
   recommended_ram_bytes: number;
   recommended_disk_bytes: number;
   context_window: number;

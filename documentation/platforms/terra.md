@@ -42,12 +42,10 @@ Use one of these combinations:
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
 | Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Heartwood-managed CPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra` | 16 CPUs, 60 GB RAM, 75 GB persistent disk |
 | Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.7-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
-CPU inference is portable but can be too slow for an interactive coding workflow.
 
 These are starting points rather than universal requirements.
 Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.

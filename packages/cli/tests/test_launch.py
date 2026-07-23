@@ -23,6 +23,7 @@ from heartwood.cli._launch import (
     LaunchConfigurationError,
     LaunchOptions,
     LocalRuntimeSelection,
+    _allocation_resources,
     _available_gpu_memory_bytes,
     _available_system_memory_bytes,
     _catalog_contains_model,
@@ -80,6 +81,9 @@ def _options(
     project = ProjectContext(tmp_path)
     project.initialize()
     if selected:
+        if qualification == "qualified":
+            qualification_date = qualification_date or "2026-07-22"
+            qualification_evidence = qualification_evidence or "https://example.test/qualification"
         adapter = select_platform_adapter({"HEARTWOOD_PLATFORM": "generic"})
         store = ProjectConfigStore(
             project,
@@ -215,6 +219,24 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert "OPENAI_API_KEY" not in export
     assert "--workspace" not in plan.allocation_command
     assert "--model-root" not in plan.allocation_command
+
+
+def test_user_selected_model_scales_default_cpus_with_gpu_count(tmp_path: Path) -> None:
+    options = _options(tmp_path, cpus=None, gpus=4)
+    selection = _local_model_selection(options.project, {"HEARTWOOD_PLATFORM": "generic"})
+    assert selection is not None
+    selection = replace(
+        selection,
+        catalog_source="user-selected",
+        minimum_gpu_count=4,
+        tensor_parallel_size=4,
+        recommended_cpu_count=8,
+    )
+
+    gpus, cpus, _memory = _allocation_resources(options, selection)
+
+    assert gpus == 4
+    assert cpus == 32
 
 
 def test_qualified_context_requires_catalog_memory_for_every_gpu(

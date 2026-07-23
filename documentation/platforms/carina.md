@@ -99,7 +99,7 @@ The following release-pinned configuration has completed the tool, approval, edi
 
 The qualified model downloads about 29.1 GiB.
 Runtime startup estimates apply after the model is available in `.heartwood/models/`.
-For the 29.1 GiB recommendation, budget 30-60 minutes for a first anonymous download on shared infrastructure; an approved `HF_TOKEN` can improve Hugging Face rate limits and is used only by the download process.
+An approved `HF_TOKEN` can improve Hugging Face rate limits during the first download and is used only by the download process.
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
 
 For a short interactive session, normal `heartwood` startup selects Slurm's default compatible GPU partition.

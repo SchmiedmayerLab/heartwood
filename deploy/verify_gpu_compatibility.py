@@ -76,6 +76,7 @@ def verify_repository(root: Path) -> None:
     covered_snapshots: set[str] = set()
     qualified_platforms: dict[str, set[str]] = {}
     qualification_statuses: dict[str, str] = {}
+    configurations_by_snapshot: dict[str, dict[str, Any]] = {}
     for configuration in configurations:
         if not isinstance(configuration, dict):
             raise CompatibilityError("GPU compatibility configurations must be tables")
@@ -98,6 +99,11 @@ def verify_repository(root: Path) -> None:
         if not isinstance(snapshot, dict):
             raise CompatibilityError(f"unknown model snapshot in GPU matrix: {snapshot_id}")
         covered_snapshots.add(snapshot_id)
+        if snapshot_id in configurations_by_snapshot:
+            raise CompatibilityError(
+                f"model snapshot has multiple selectable GPU configurations: {snapshot_id}"
+            )
+        configurations_by_snapshot[snapshot_id] = configuration
         _verify_configuration(configuration, snapshot, runtime)
         if status == "qualified":
             for field in ("evaluated_at", "observed_driver_version", "evidence"):
@@ -144,6 +150,11 @@ def verify_repository(root: Path) -> None:
     for snapshot_id, snapshot in snapshots.items():
         if not isinstance(snapshot, dict):
             raise CompatibilityError(f"invalid model snapshot: {snapshot_id}")
+        configuration = configurations_by_snapshot.get(snapshot_id)
+        if configuration is None:
+            raise CompatibilityError(
+                f"model snapshot has no selectable GPU configuration: {snapshot_id}"
+            )
         qualification = snapshot.get("qualification")
         platforms = set(_string_list(snapshot, "validated_platforms"))
         if qualification != qualification_statuses.get(snapshot_id):
@@ -154,9 +165,6 @@ def verify_repository(root: Path) -> None:
             raise CompatibilityError(
                 f"validated platforms disagree with compatibility evidence: {snapshot_id}"
             )
-        configuration = next(
-            item for item in configurations if item.get("model_snapshot") == snapshot_id
-        )
         expected_date = configuration.get("evaluated_at")
         expected_evidence = configuration.get("evidence")
         if snapshot.get("qualification_date") != expected_date:

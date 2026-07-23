@@ -129,6 +129,8 @@ class LocalModelSelection:
             raise ProjectConfigError(
                 "Heartwood-managed qualification date and evidence must be provided together"
             )
+        if self.qualification == "qualified" and not has_qualification_date:
+            raise ProjectConfigError("qualified model qualification requires dated evidence")
         if self.qualification == "unvalidated" and has_qualification_date:
             raise ProjectConfigError("not-tested models cannot declare qualification evidence")
         if self.display_name is not None and not self.display_name.strip():

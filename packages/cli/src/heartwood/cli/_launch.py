@@ -225,9 +225,12 @@ def _allocation_resources(
             raise LaunchConfigurationError(
                 f"{selection.model_id} requires at least {selection.minimum_gpu_count} GPU(s)"
             )
-    cpus = options.cpus or (
-        selection.recommended_cpu_count if selection is not None else max(8, gpus * 8)
-    )
+    default_cpus = max(8, gpus * 8)
+    if selection is not None and selection.catalog_source == "catalog":
+        default_cpus = selection.recommended_cpu_count
+    elif selection is not None:
+        default_cpus = max(default_cpus, selection.recommended_cpu_count)
+    cpus = options.cpus or default_cpus
     recommended_memory = selection.recommended_ram_bytes if selection is not None else None
     memory = options.memory or (
         f"{_ceil_gib(recommended_memory)}G" if recommended_memory is not None else "64G"
