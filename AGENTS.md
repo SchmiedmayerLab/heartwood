@@ -30,6 +30,7 @@ When project direction changes, update the relevant architecture or operations p
 | Project boundary, persistence, and `.heartwood/` layout | [documentation/start/project.md](documentation/start/project.md) |
 | Research-environment, hosted, compatible-service, and Heartwood-managed model workflows | [documentation/models/index.md](documentation/models/index.md) |
 | Deployment responsibilities and platform extension contract | [documentation/operate/index.md](documentation/operate/index.md) |
+| Release support, compatibility, and deprecation policy | [documentation/operate/support.md](documentation/operate/support.md) |
 | Browser workflow | [documentation/use/browser.md](documentation/use/browser.md) |
 | Command reference | [documentation/reference/cli.md](documentation/reference/cli.md) |
 | Readiness states, stable diagnostics, and recovery steps | [documentation/reference/troubleshooting.md](documentation/reference/troubleshooting.md) |

@@ -26,6 +26,13 @@ The platform policy can deny unlisted endpoints, but infrastructure egress contr
 
 Confirm data eligibility for the exact endpoint, account, model, and deployment before use.
 
+### Runtime Caches
+
+The supported GPU launcher disables vLLM's optional on-disk outlines cache because its entries are deserialized by the inference process.
+Other runtime and model caches are private to the runtime user and separate from the agent workspace.
+
+Do not enable the outlines disk cache, share runtime caches between users or trust domains, or place cache directories inside an agent-writable project.
+
 ### Credentials
 
 Raw credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs, and audit exports by design.

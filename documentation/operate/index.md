@@ -7,6 +7,8 @@ SPDX-License-Identifier: MIT
 # Deploy Heartwood
 
 This section is for platform operators and security reviewers.
+
+Read [Support and Compatibility](support.md) before selecting a release for a maintained deployment.
 A Heartwood deployment combines a versioned application artifact with platform storage, identity, network, secret, compute, model-route, logging, and data-governance controls.
 
 ## Deployment Responsibilities

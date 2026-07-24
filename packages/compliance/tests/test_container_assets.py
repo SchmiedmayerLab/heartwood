@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -143,7 +144,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert "HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR}" in dockerfile
     assert "HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM}" in dockerfile
     assert "HEARTWOOD_PLATFORM_HOME=${HEARTWOOD_RUNTIME_HOME}" in dockerfile
-    assert "install -d --mode=0755 \\" in dockerfile
+    assert "install -d --mode=0700 \\" in dockerfile
     assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/flashinfer"' in dockerfile
     assert 'dockerfile = "images/Dockerfile"' in bake
     assert 'target = "runtime-image"' in bake
@@ -219,7 +220,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0-beta.10"' in bake
+    assert 'default = "0.2.0"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
 
 
@@ -867,11 +868,20 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     lock = root / "images/gpu/vllm-requirements.txt"
     input_file = root / "images/gpu/vllm.in"
     gpu_dependencies = {lock, input_file}
+    tracked_files = subprocess.run(
+        ["git", "ls-files"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
     dependency_files = {
-        root / "uv.lock",
-        *root.rglob("pyproject.toml"),
-        *root.rglob("*requirements*.txt"),
-        *root.rglob("*.in"),
+        root / path
+        for path in tracked_files
+        if path == "uv.lock"
+        or Path(path).name == "pyproject.toml"
+        or "requirements" in Path(path).name
+        or Path(path).suffix == ".in"
     }
     declaration = re.compile(
         r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(diskcache|torch|vllm)(?:["\'\s<>=!~@\[])'
@@ -891,6 +901,41 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in (
         input_file.read_text(encoding="utf-8")
     )
+    wrapper = _read("images/gpu/heartwood-vllm")
+    verifier = _read("images/gpu/verify_vllm.py")
+    dockerfile = _read("images/Dockerfile")
+    carina = _read("deploy/carina/bootstrap.sh")
+
+    assert "export VLLM_V1_USE_OUTLINES_CACHE=0" in wrapper
+    assert "vllm_envs.VLLM_V1_USE_OUTLINES_CACHE" in verifier
+    assert "_torchscript_calls" in verifier
+    assert "torch.jit.script" in verifier
+    assert "install -d --mode=0700 \\\n" in dockerfile
+    assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/vllm";' in dockerfile
+    assert 'chmod 700 "${installer_directories[@]}"' in carina
+    assert 'XDG_CACHE_HOME="${installer_state}/cache/xdg"' in carina
+
+
+def test_vllm_verifier_detects_aliased_torchscript_import(tmp_path: Path) -> None:
+    verifier_path = _repo_root() / "images/gpu/verify_vllm.py"
+    source = verifier_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    helper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_torchscript_calls"
+    )
+    namespace: dict[str, Any] = {"ast": ast, "Path": Path}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), verifier_path, "exec"), namespace)
+
+    package_root = tmp_path / "vllm"
+    package_root.mkdir()
+    (package_root / "aliased.py").write_text(
+        "import torch.jit as jit\njit.script(lambda value: value)\n",
+        encoding="utf-8",
+    )
+
+    assert namespace["_torchscript_calls"](package_root) == ["aliased.py:2"]
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:

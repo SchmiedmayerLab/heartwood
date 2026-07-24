@@ -87,7 +87,7 @@ RUN set -eux; \
     fi; \
     runtime_group="$(id -gn "${HEARTWOOD_RUNTIME_USER}")"; \
     mkdir -p /opt/heartwood /opt/heartwood-vllm /opt/llama.cpp "${HEARTWOOD_WORKDIR}"; \
-    install -d --mode=0755 \
+    install -d --mode=0700 \
       --owner="${HEARTWOOD_RUNTIME_USER}" --group="${runtime_group}" \
       "${HEARTWOOD_RUNTIME_HOME}/.cache" \
       "${HEARTWOOD_RUNTIME_HOME}/.cache/flashinfer" \

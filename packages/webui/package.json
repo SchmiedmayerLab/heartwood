@@ -1,6 +1,6 @@
 {
   "name": "@heartwood/webui",
-  "version": "0.2.0-beta.10",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Researcher web UI for Heartwood sessions.",
@@ -33,7 +33,7 @@
   "overrides": {
     "esbuild": "0.28.1",
     "next": "16.2.11",
-    "postcss": "8.5.10",
+    "postcss": "8.5.19",
     "sharp": "0.35.3"
   },
   "devDependencies": {

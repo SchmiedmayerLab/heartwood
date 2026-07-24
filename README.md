@@ -45,13 +45,14 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
   heartwood --interface web --host 0.0.0.0
 ```
 
 Open [http://127.0.0.1:8767/](http://127.0.0.1:8767/), confirm the project, and choose an authorized model connection. Heartwood treats the mounted host directory as the project and keeps private state in `.heartwood/` inside it.
 
-For the interactive terminal, replace the final command with `heartwood`. The [prerelease documentation](https://schmiedmayerlab.github.io/heartwood/preview/) provides the complete first task and action-review workflow for this prerelease.
+For the interactive terminal, replace the final command with `heartwood`.
+The [stable documentation](https://schmiedmayerlab.github.io/heartwood/) provides the complete first task and action-review workflow for this release.
 
 ## Choose a Setup
 

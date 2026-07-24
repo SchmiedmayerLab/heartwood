@@ -27,7 +27,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
   heartwood
 ```
 
@@ -44,7 +44,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10 \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
   heartwood --interface web --host 0.0.0.0
 ```
 
@@ -63,7 +63,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10-gpu-nvidia \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0-gpu-nvidia \
   heartwood
 ```
 
@@ -75,10 +75,10 @@ Review the [GPU compatibility matrix](../reference/gpu-compatibility.md) before 
 
 Use immutable release tags for research work:
 
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10` — standard AMD64/ARM64 image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10-gpu-nvidia` — NVIDIA GPU image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10-terra` — Terra CPU image; and
-- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-beta.10-terra-gpu-nvidia` — Terra NVIDIA image.
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0` — standard AMD64/ARM64 image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-gpu-nvidia` — NVIDIA GPU image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra` — Terra CPU image; and
+- `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia` — Terra NVIDIA image.
 
 The moving `edge` tags represent current `main` and are intended for development, not reproducible analyses.
 Release publication verifies candidate digests and manifest shape before creating version tags.

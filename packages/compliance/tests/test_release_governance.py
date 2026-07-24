@@ -130,6 +130,21 @@ def test_current_release_guides_match_declared_version() -> None:
     assert _release_verifier().source_version_errors(Path.cwd(), _declared_version()) == []
 
 
+def test_support_and_security_policies_define_current_ownership() -> None:
+    security = Path("SECURITY.md").read_text(encoding="utf-8")
+    support = Path("documentation/operate/support.md").read_text(encoding="utf-8")
+    releases = Path("documentation/contribute/releases.md").read_text(encoding="utf-8")
+    navigation = Path("zensical.toml").read_text(encoding="utf-8")
+
+    assert "GitHub private vulnerability reporting" in security
+    assert "latest stable release is the maintained release line" in support
+    assert "Before `1.0.0`" in support
+    assert "Repository `CODEOWNERS` identifies the current maintainer" in support
+    assert "configured `release` environment requires explicit maintainer approval" in support
+    assert "protected `release` environment is the release-authority boundary" in releases
+    assert '"Support and Compatibility" = "operate/support.md"' in navigation
+
+
 def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
     tmp_path: Path,
 ) -> None:
@@ -189,9 +204,9 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
 
-    skill_metadata.write_text('{"heartwood.version": "0.2.0-beta.10"}\n', encoding="utf-8")
+    skill_metadata.write_text('{"heartwood.version": "0.2.0"}\n', encoding="utf-8")
     assert (
-        "skills/verified/example/metadata.json: 0.2.0-beta.10"
+        "skills/verified/example/metadata.json: 0.2.0"
         in _release_verifier().source_version_errors(tmp_path, version)
     )
 
