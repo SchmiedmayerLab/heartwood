@@ -104,9 +104,11 @@ def _torchscript_calls(package_root: Path) -> list[str]:
         script_names: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                torch_names.update(
-                    alias.asname or alias.name for alias in node.names if alias.name == "torch"
-                )
+                for alias in node.names:
+                    if alias.name == "torch":
+                        torch_names.add(alias.asname or alias.name)
+                    elif alias.name == "torch.jit" and alias.asname:
+                        jit_names.add(alias.asname)
             elif isinstance(node, ast.ImportFrom) and node.module == "torch":
                 jit_names.update(
                     alias.asname or alias.name for alias in node.names if alias.name == "jit"

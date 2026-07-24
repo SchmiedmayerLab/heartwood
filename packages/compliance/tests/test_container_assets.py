@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -913,6 +914,28 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     assert '"${HEARTWOOD_RUNTIME_HOME}/.cache/vllm";' in dockerfile
     assert 'chmod 700 "${installer_directories[@]}"' in carina
     assert 'XDG_CACHE_HOME="${installer_state}/cache/xdg"' in carina
+
+
+def test_vllm_verifier_detects_aliased_torchscript_import(tmp_path: Path) -> None:
+    verifier_path = _repo_root() / "images/gpu/verify_vllm.py"
+    source = verifier_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    helper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_torchscript_calls"
+    )
+    namespace: dict[str, Any] = {"ast": ast, "Path": Path}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), verifier_path, "exec"), namespace)
+
+    package_root = tmp_path / "vllm"
+    package_root.mkdir()
+    (package_root / "aliased.py").write_text(
+        "import torch.jit as jit\njit.script(lambda value: value)\n",
+        encoding="utf-8",
+    )
+
+    assert namespace["_torchscript_calls"](package_root) == ["aliased.py:2"]
 
 
 def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
