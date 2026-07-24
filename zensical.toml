@@ -45,6 +45,7 @@ nav = [
     ] },
     { "Operate Heartwood" = [
         { "Deployment Responsibilities" = "operate/index.md" },
+        { "Support and Compatibility" = "operate/support.md" },
         { "Security and Controlled Data" = "operate/security.md" },
         { "Add a Platform" = "operate/platform-integration.md" },
     ] },

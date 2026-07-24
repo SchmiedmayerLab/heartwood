@@ -20,10 +20,14 @@ Release versions use strict Semantic Versioning without a `v` prefix.
 
 The workflow verifies immutable container candidates, builds and tests native assets, creates a draft with GitHub-generated notes, waits for approval, publishes immutable image tags and the GitHub Release, then publishes versioned documentation.
 
+`CODEOWNERS` identifies the current release maintainer.
+The protected `release` environment is the release-authority boundary and requires explicit approval after the candidate has passed the exact-commit gate.
+Repository administrators may recover interrupted workflows, but they must not replace or retarget an existing immutable release.
+
 ## Stable and Preview Documentation
 
-A stable version updates the `stable` alias and the documentation root.
-A prerelease such as `0.2.0-beta.10` updates the `preview` alias without replacing the stable root.
+A stable version such as `0.2.0` updates the `stable` alias and the documentation root.
+A prerelease such as `0.3.0-beta.1` updates the `preview` alias without replacing the stable root.
 
 The version store is deployed to GitHub Pages and retains immutable version paths.
 Publishing the same version with different content is rejected.
@@ -39,3 +43,5 @@ Each release includes:
 - versioned documentation.
 
 The release workflow marks prerelease versions as GitHub prereleases and never moves a `latest` release designation to them.
+
+See [Support and Compatibility](../operate/support.md) for the maintained release line and pre-1.0 change policy.

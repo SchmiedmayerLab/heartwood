@@ -72,7 +72,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0-beta.10"
+__version__ = "0.2.0"
 
 _PROG = "heartwood"
 

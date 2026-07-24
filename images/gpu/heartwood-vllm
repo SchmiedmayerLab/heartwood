@@ -9,6 +9,11 @@ set -euo pipefail
 
 runtime_bin="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# vLLM's optional outlines disk cache deserializes local cache entries.
+# Heartwood keeps structured-output compilation in memory until upstream
+# provides a cache format that is safe across trust boundaries.
+export VLLM_V1_USE_OUTLINES_CACHE=0
+
 if [[ "$#" -eq 1 && "$1" == "__heartwood_verify_runtime__" ]]; then
   exec "${runtime_bin}/python" "${runtime_bin}/verify_vllm.py"
 fi
