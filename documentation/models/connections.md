@@ -51,9 +51,8 @@ The gateway is an institution-managed service, but using it does not by itself a
 Stanford's current eligibility, data classification, Data Risk Assessment, and project approval requirements remain authoritative.
 See the [Stanford AI API Gateway service page](https://uit.stanford.edu/service/ai-api-gateway).
 
-OpenAI models that OpenHands routes through the Responses API are currently marked unavailable on the Stanford connection.
-The gateway currently accepts the initial tool proposal but rejects the subsequent `function_call_output` continuation by call ID.
-Use another authorized connection for Responses-dependent models until Stanford confirms support for this tool workflow.
+Heartwood follows OpenHands' model-capability registry to select the Stanford gateway's Chat Completions or Responses route.
+Run a synthetic tool task before using a newly enabled model or gateway configuration with research data.
 
 ## OpenAI API or Anthropic API
 

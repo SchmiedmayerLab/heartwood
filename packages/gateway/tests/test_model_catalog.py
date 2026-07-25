@@ -990,9 +990,8 @@ def test_compatibility_uses_openhands_and_litellm_metadata(
     assert os.environ["OPENHANDS_SUPPRESS_BANNER"] == "1"
 
 
-@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.5", "gpt-5.6"])
-def test_stanford_gateway_rejects_responses_models_with_broken_tool_continuations(
-    model_id: str,
+def test_stanford_gateway_uses_openhands_model_compatibility_and_request_path(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = ModelConnection(
         connection_id="stanford-ai-api-gateway",
@@ -1006,16 +1005,23 @@ def test_stanford_gateway_rejects_responses_models_with_broken_tool_continuation
         catalog_endpoint="https://aiapi-prod.stanford.edu/v1/models",
         policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
     )
+    monkeypatch.setattr(
+        "heartwood.gateway._model_catalog._verified_openhands_models",
+        lambda _connection: {"openai/gpt-5.4"},
+    )
 
     availability, reason, context_window, supports_tools = _model_compatibility(
         connection,
-        f"openai/{model_id}",
+        "openai/gpt-5.4",
     )
 
-    assert availability == "unsupported"
-    assert "tool continuations" in reason
+    assert availability == "available"
+    assert reason == "Verified by the pinned OpenHands SDK"
     assert context_window is None
-    assert supports_tools is False
+    assert supports_tools is True
+    assert connection.request_endpoint("openai/gpt-5.4") == (
+        "https://aiapi-prod.stanford.edu/v1/responses"
+    )
 
 
 def test_request_endpoint_uses_openhands_model_capabilities() -> None:

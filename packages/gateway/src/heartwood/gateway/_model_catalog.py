@@ -21,7 +21,6 @@ from urllib.parse import urlsplit
 from heartwood.gateway._model_settings import CredentialKind
 from heartwood.gateway._openhands_models import (
     OpenHandsModelError,
-    model_uses_responses_api,
     prepare_openhands_import,
     request_endpoint_for_model,
 )
@@ -721,16 +720,6 @@ def _model_compatibility(
     model_name = connection.provider_model_id(execution_model)
     if connection.protocol == "subscription":
         return "available", "Provided by the pinned OpenHands subscription registry", None, True
-    if connection.connection_id == "stanford-ai-api-gateway" and model_uses_responses_api(
-        execution_model
-    ):
-        return (
-            "unsupported",
-            "The Stanford gateway route is not currently qualified for OpenHands "
-            "Responses API tool continuations",
-            None,
-            False,
-        )
     if execution_model in verified or model_name in verified:
         return "available", "Verified by the pinned OpenHands SDK", None, True
     try:
