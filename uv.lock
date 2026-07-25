@@ -1539,6 +1539,7 @@ name = "heartwood-core-adapter"
 version = "0.2.0"
 source = { editable = "packages/core-adapter" }
 dependencies = [
+    { name = "filelock" },
     { name = "heartwood-adapters" },
     { name = "heartwood-audit" },
     { name = "heartwood-model-policy" },
@@ -1548,6 +1549,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "filelock", specifier = "==3.32.0" },
     { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-audit", editable = "packages/audit" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },

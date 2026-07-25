@@ -16,6 +16,11 @@ from urllib.parse import parse_qs, urlsplit
 
 from pydantic import ValidationError
 
+from heartwood.core_adapter import (
+    CommandConflictError,
+    SessionOwnershipError,
+    SessionRecoveryError,
+)
 from heartwood.gateway._action_settings import ActionSettingsError
 from heartwood.gateway._credentials import CredentialStoreError
 from heartwood.gateway._gateway import SessionGateway
@@ -232,7 +237,13 @@ class RestGateway:
                 after = _optional_int(query.get("after", [None])[0])
             except ValueError:
                 return _error(400, "after query parameter must be an integer")
-            events = self.gateway.replay_events(session_id=session_id, after_sequence=after)
+            try:
+                events = self.gateway.replay_events(
+                    session_id=session_id,
+                    after_sequence=after,
+                )
+            except (SessionOwnershipError, SessionRecoveryError) as error:
+                return _error(409, error)
             return RestResponse(
                 status_code=200,
                 body={"events": [event.model_dump(mode="json") for event in events]},
@@ -281,7 +292,10 @@ class RestGateway:
             return _error(422, error.errors()[0]["msg"])
         if command.session_id != session_id:
             return _error(409, "command session does not match route session")
-        result = self.gateway.handle(command)
+        try:
+            result = self.gateway.handle(command)
+        except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
+            return _error(409, error)
         return RestResponse(
             status_code=200,
             body={"events": [event.model_dump(mode="json") for event in result.events]},

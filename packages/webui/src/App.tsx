@@ -478,7 +478,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     setRequestStatus("busy");
     setError(null);
     try {
-      const command = createCommand(sessionId, kind, events.length, payload);
+      const command = createCommand(sessionId, kind, payload);
       const submittedPrompt = promptContent(payload);
       if (kind === "chat" && submittedPrompt) {
         setLocalConversation((current) => [

@@ -1423,6 +1423,52 @@ def test_audit_export_uses_project_sessions(
     assert "Audit export" in capsys.readouterr().out
 
 
+def test_cli_reports_active_browser_session_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    project.mkdir()
+    _install_deterministic_gateway(monkeypatch)
+    browser_gateway = RealSessionGateway(
+        project=ProjectContext(project),
+        env={},
+        backend_id="deterministic",
+    )
+    browser = RestGateway(browser_gateway)
+    command = json.dumps(
+        {
+            "schema_version": "heartwood.session-command.v1",
+            "command_id": "browser-pause",
+            "session_id": "review",
+            "kind": "pause",
+            "actor_id": "browser",
+            "created_at": "2026-01-01T00:00:00Z",
+            "payload": {},
+        }
+    )
+    assert (
+        browser.handle(
+            RestRequest(
+                method="POST",
+                path="/sessions/review/commands",
+                body=command,
+            )
+        ).status_code
+        == 200
+    )
+
+    assert _run(project, monkeypatch, ["--session-id", "review", "resume"]) == 75
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Session unavailable: session review is active in another Heartwood process" in (
+        captured.err
+    )
+    browser_gateway.stop()
+
+
 def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit, match="web UI assets not found"):
         _run(

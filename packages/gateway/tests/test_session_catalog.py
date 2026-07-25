@@ -57,6 +57,7 @@ def test_catalog_creates_lists_and_renames_private_session_metadata(tmp_path: Pa
 
 def test_catalog_discovers_legacy_event_stores_and_derives_waiting_state(tmp_path: Path) -> None:
     store = FileSessionStore(tmp_path, "legacy-session")
+    store.acquire_writer()
     store.append_event(_event(0, EventKind.COMMAND_RECEIVED, command_id="command-0"))
     store.append_event(
         _event(
@@ -78,6 +79,7 @@ def test_catalog_discovers_legacy_event_stores_and_derives_waiting_state(tmp_pat
 
 def test_catalog_derives_pause_error_and_recovery_states(tmp_path: Path) -> None:
     store = FileSessionStore(tmp_path, "legacy-session")
+    store.acquire_writer()
     catalog = SessionCatalog(tmp_path)
     store.append_event(_event(0, EventKind.SESSION_PAUSED))
     assert catalog.get("legacy-session").status == "paused"

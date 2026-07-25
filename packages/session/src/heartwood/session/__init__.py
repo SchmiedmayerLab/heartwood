@@ -22,6 +22,8 @@ from heartwood.session._contracts import (
     JsonValue,
     SessionCommand,
     SessionEvent,
+    compute_session_event_hash,
+    new_command_id,
     validate_session_id,
 )
 
@@ -32,6 +34,8 @@ __all__ = [
     "SessionCommand",
     "SessionEvent",
     "__version__",
+    "compute_session_event_hash",
+    "new_command_id",
     "validate_session_id",
 ]
 

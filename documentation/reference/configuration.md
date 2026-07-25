@@ -53,4 +53,6 @@ Do not add these to shell history or documentation with real secret values.
 ## Concurrency
 
 Configuration updates are serialized across concurrent Heartwood processes.
-Session event files assume one writer process per session; use separate session identifiers or one owning gateway when multiple interfaces are needed.
+Each active session also has an enforced writer lease.
+Stop the process that owns a session before continuing it from another interface, or use separate session identifiers for simultaneous work.
+Do not delete internal lock, command-receipt, or recovery-journal files.

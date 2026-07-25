@@ -40,6 +40,7 @@ from heartwood.gateway import (
     DEFAULT_SESSION_ID,
     MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
+    CommandConflictError,
     CredentialStoreError,
     DeploymentReadiness,
     GatewayAsgiApp,
@@ -55,6 +56,8 @@ from heartwood.gateway import (
     ProjectContext,
     ProjectStateError,
     SessionGateway,
+    SessionOwnershipError,
+    SessionRecoveryError,
     SkillSettingsError,
     StartupPlan,
     custom_model_connection_requires_token,
@@ -67,6 +70,7 @@ from heartwood.session import (
     JsonValue,
     SessionCommand,
     SessionEvent,
+    new_command_id,
     validate_session_id,
 )
 
@@ -391,6 +395,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run ``heartwood`` and return a process exit code."""
     try:
         return _main(argv)
+    except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
+        print(f"Session unavailable: {error}", file=sys.stderr)
+        return 75
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         return 130
@@ -1552,7 +1559,6 @@ def _submit_task(
     kind: CommandKind = CommandKind.CHAT,
 ) -> int:
     command = _command(
-        gateway,
         session_id=session_id,
         kind=kind,
         payload={"prompt": prompt},
@@ -1566,7 +1572,7 @@ def _submit_task(
 
 
 def _submit_simple(gateway: SessionGateway, *, session_id: str, kind: CommandKind) -> int:
-    events = gateway.handle(_command(gateway, session_id=session_id, kind=kind)).events
+    events = gateway.handle(_command(session_id=session_id, kind=kind)).events
     print(_format_transcript(events))
     return _event_exit_code(events)
 
@@ -1808,9 +1814,7 @@ def _handle_audit_export(
     session_id: str,
     output: Path | None,
 ) -> int:
-    events = gateway.handle(
-        _command(gateway, session_id=session_id, kind=CommandKind.AUDIT_EXPORT)
-    ).events
+    events = gateway.handle(_command(session_id=session_id, kind=CommandKind.AUDIT_EXPORT)).events
     if output is not None:
         export_path = Path(str(events[-1].payload["path"]))
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -1840,15 +1844,13 @@ def _handle_serve(
 
 
 def _command(
-    gateway: SessionGateway,
     *,
     session_id: str,
     kind: CommandKind,
     payload: dict[str, JsonValue] | None = None,
 ) -> SessionCommand:
-    sequence = len(gateway.replay_events(session_id=session_id))
     return SessionCommand(
-        command_id=f"{session_id}-{kind.value}-{sequence:06d}",
+        command_id=new_command_id(session_id, kind),
         session_id=session_id,
         kind=kind,
         actor_id="human",

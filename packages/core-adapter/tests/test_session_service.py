@@ -8,23 +8,37 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from heartwood.audit import AuditIntegrityError
+import heartwood.core_adapter._state as session_state
+from heartwood.audit import AuditIntegrityError, compute_event_hash
 from heartwood.core_adapter import (
     BackendEvent,
     BackendEventKind,
+    CommandConflictError,
     DeterministicAgentBackend,
     FileSessionStore,
     LocalWorkspaceAgentBackend,
     ProposedToolCall,
+    SessionOwnershipError,
+    SessionRecoveryError,
     SessionService,
     SessionStoreBoundaryError,
 )
-from heartwood.schemas import PolicyProfile
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
+from heartwood.schemas import AuditEvent, PolicyProfile
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    JsonValue,
+    SessionCommand,
+    SessionEvent,
+    compute_session_event_hash,
+)
 
 
 def test_pause_persists_replayable_events(tmp_path: Path) -> None:
@@ -37,6 +51,461 @@ def test_pause_persists_replayable_events(tmp_path: Path) -> None:
         EventKind.SESSION_PAUSED.value,
     ]
     assert service.replay_events() == result.events
+
+
+def test_completed_command_retry_returns_exact_events_without_backend_reexecution(
+    tmp_path: Path,
+) -> None:
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message="done"),),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    command = _command(CommandKind.CHAT, prompt="summarize").model_copy(
+        update={"session_id": "session-main"}
+    )
+
+    first = service.handle(command)
+    retried = service.handle(command)
+
+    assert retried.replayed
+    assert retried.events == first.events
+    assert backend.prompts == ["summarize"]
+    assert service.replay_events() == first.events
+
+
+def test_completed_command_retry_survives_gateway_restart(tmp_path: Path) -> None:
+    first_backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message="done"),),
+    )
+    first_service = SessionService.local_default(
+        tmp_path,
+        backend=first_backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    command = _command(CommandKind.CHAT, prompt="summarize").model_copy(
+        update={"session_id": "session-main"}
+    )
+    first = first_service.handle(command)
+    first_service.close()
+    restarted_backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions"
+    )
+    restarted_service = SessionService.local_default(
+        tmp_path,
+        backend=restarted_backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    retried = restarted_service.handle(command)
+
+    assert retried.events == first.events
+    assert retried.replayed
+    assert restarted_backend.prompts == []
+    assert restarted_service.replay_events() == first.events
+
+
+def test_command_identifier_reuse_with_different_content_is_rejected(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.PAUSE))
+
+    with pytest.raises(CommandConflictError, match="different content"):
+        service.handle(
+            _command(CommandKind.PAUSE).model_copy(update={"created_at": "2026-01-01T00:00:01Z"})
+        )
+
+    assert len(service.replay_events()) == 2
+
+
+def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path) -> None:
+    tool_call = ProposedToolCall(
+        tool_call_id="session-main-action",
+        tool_name="file_editor",
+        risk="medium",
+        summary="write one file",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=tool_call),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(
+        _command(CommandKind.CHAT, prompt="write").model_copy(update={"session_id": "session-main"})
+    )
+    approval = _command(
+        CommandKind.APPROVE,
+        target_type="tool-call",
+        target_id=tool_call.tool_call_id,
+    ).model_copy(update={"session_id": "session-main"})
+
+    first = service.handle(approval)
+    retried = service.handle(approval)
+
+    assert retried.replayed
+    assert retried.events == first.events
+    assert backend.resolutions == [(tool_call.tool_call_id, True)]
+
+
+def test_second_writer_cannot_mutate_until_owner_closes(tmp_path: Path) -> None:
+    first = SessionService.synthetic_default(tmp_path)
+    second = SessionService.synthetic_default(tmp_path)
+    first.handle(_command(CommandKind.PAUSE))
+
+    with pytest.raises(SessionOwnershipError, match="active in another Heartwood process"):
+        second.handle(_command(CommandKind.RESUME))
+
+    first.close()
+    result = second.handle(_command(CommandKind.RESUME))
+    assert result.events[-1].kind == EventKind.SESSION_RESUMED.value
+
+
+def test_writer_lease_excludes_another_process(tmp_path: Path) -> None:
+    owner = SessionService.synthetic_default(tmp_path)
+    owner.handle(_command(CommandKind.PAUSE))
+    child_script = """
+import sys
+from pathlib import Path
+from heartwood.core_adapter import SessionOwnershipError, SessionService
+from heartwood.session import CommandKind, SessionCommand
+
+service = SessionService.synthetic_default(Path(sys.argv[1]))
+command = SessionCommand(
+    command_id="child-resume",
+    session_id="session-synthetic-001",
+    kind=CommandKind.RESUME,
+    actor_id="child",
+    created_at="2026-01-01T00:00:00Z",
+)
+try:
+    service.handle(command)
+except SessionOwnershipError:
+    raise SystemExit(23)
+service.close()
+"""
+
+    blocked = subprocess.run(
+        [sys.executable, "-c", child_script, str(tmp_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    owner.close()
+    handed_off = subprocess.run(
+        [sys.executable, "-c", child_script, str(tmp_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert blocked.returncode == 23, blocked.stderr
+    assert handed_off.returncode == 0, handed_off.stderr
+
+
+def test_distinct_sessions_can_mutate_independently(tmp_path: Path) -> None:
+    first = SessionService.synthetic_default(tmp_path, session_id="session-one")
+    second = SessionService.synthetic_default(tmp_path, session_id="session-two")
+    first_command = _command(CommandKind.PAUSE).model_copy(
+        update={"command_id": "pause-one", "session_id": "session-one"}
+    )
+    second_command = _command(CommandKind.PAUSE).model_copy(
+        update={"command_id": "pause-two", "session_id": "session-two"}
+    )
+
+    first_result = first.handle(first_command)
+    second_result = second.handle(second_command)
+
+    assert first_result.events[-1].kind == EventKind.SESSION_PAUSED.value
+    assert second_result.events[-1].kind == EventKind.SESSION_PAUSED.value
+
+
+def test_stale_writer_metadata_is_detected_and_reclaimed(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.session_dir.mkdir(mode=0o700, parents=True)
+    store.writer_metadata_path.write_text(
+        '{"host":"stale-host","pid":123,"token":"stale"}\n',
+        encoding="utf-8",
+    )
+    service = SessionService.synthetic_default(tmp_path)
+
+    service.handle(_command(CommandKind.PAUSE))
+
+    assert service.store.recovered_stale_writer
+    assert service.store.writer_metadata_path.is_file()
+    service.close()
+    assert not service.store.writer_metadata_path.exists()
+
+
+def test_writer_lease_recovers_after_process_is_killed(tmp_path: Path) -> None:
+    ready_path = tmp_path / "writer-ready"
+    child_script = """
+import sys
+import time
+from pathlib import Path
+from heartwood.core_adapter import SessionService
+from heartwood.session import CommandKind, SessionCommand
+
+root = Path(sys.argv[1])
+service = SessionService.synthetic_default(root)
+service.handle(
+    SessionCommand(
+        command_id="killed-pause",
+        session_id="session-synthetic-001",
+        kind=CommandKind.PAUSE,
+        actor_id="child",
+        created_at="2026-01-01T00:00:00Z",
+    )
+)
+(root / "writer-ready").write_text("ready", encoding="utf-8")
+time.sleep(30)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", child_script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(100):
+            if ready_path.exists() or process.poll() is not None:
+                break
+            time.sleep(0.05)
+        detail = (
+            process.stderr.read()
+            if process.poll() is not None and process.stderr is not None
+            else "child writer did not become ready"
+        )
+        assert ready_path.is_file(), detail
+        process.kill()
+        process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
+
+    restarted = SessionService.synthetic_default(tmp_path)
+    result = restarted.handle(_command(CommandKind.RESUME, command_id="restarted-resume"))
+
+    assert restarted.store.recovered_stale_writer
+    assert result.events[-1].kind == EventKind.SESSION_RESUMED.value
+    assert len(restarted.replay_events()) == 4
+
+
+def test_interrupted_audit_first_commit_recovers_without_duplicate_records(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_append = session_state._append_private_json_line
+    append_count = 0
+
+    def interrupt_second_append(path: Path, content: str) -> None:
+        nonlocal append_count
+        append_count += 1
+        if append_count == 2:
+            raise OSError("simulated process interruption")
+        original_append(path, content)
+
+    monkeypatch.setattr(session_state, "_append_private_json_line", interrupt_second_append)
+    service = SessionService.synthetic_default(tmp_path)
+    command = _command(CommandKind.PAUSE)
+    with pytest.raises(OSError, match="simulated process interruption"):
+        service.handle(command)
+    service.store.events_path.write_bytes(b'{"partial"')
+    service.close()
+
+    restarted = SessionService.synthetic_default(tmp_path)
+    replayed = restarted.replay_events()
+    with pytest.raises(SessionRecoveryError, match="interrupted after acceptance"):
+        restarted.handle(command)
+
+    assert not restarted.store.pending_commit_path.exists()
+    assert len(restarted.audit_log.read()) == 1
+    assert len(replayed) == 1
+    assert replayed[0].kind == EventKind.COMMAND_RECEIVED.value
+
+
+def test_tampered_pending_commit_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def interrupt_append(_path: Path, _content: str) -> None:
+        raise OSError("simulated process interruption")
+
+    monkeypatch.setattr(session_state, "_append_private_json_line", interrupt_append)
+    service = SessionService.synthetic_default(tmp_path)
+    with pytest.raises(OSError, match="simulated process interruption"):
+        service.handle(_command(CommandKind.PAUSE))
+    pending = json.loads(service.store.pending_commit_path.read_text(encoding="utf-8"))
+    pending["session_event"]["payload"]["command_id"] = "tampered"
+    service.store.pending_commit_path.write_text(json.dumps(pending), encoding="utf-8")
+    service.close()
+    recovered = FileSessionStore(tmp_path, "session-synthetic-001")
+    recovered.acquire_writer()
+
+    with pytest.raises(SessionRecoveryError, match="do not correspond"):
+        recovered.recover_pending_commit()
+
+
+def test_recovery_does_not_mutate_corrupt_committed_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_append = session_state._append_private_json_line
+    append_count = 0
+
+    def interrupt_second_append(path: Path, content: str) -> None:
+        nonlocal append_count
+        append_count += 1
+        if append_count == 2:
+            raise OSError("simulated process interruption")
+        original_append(path, content)
+
+    monkeypatch.setattr(session_state, "_append_private_json_line", interrupt_second_append)
+    service = SessionService.synthetic_default(tmp_path)
+    with pytest.raises(OSError, match="simulated process interruption"):
+        service.handle(_command(CommandKind.PAUSE))
+    service.store.events_path.write_bytes(b'{"partial"')
+    audit_record = json.loads(service.store.audit_path.read_text(encoding="utf-8"))
+    audit_record["event_type"] = EventKind.SESSION_RESUMED.value
+    service.store.audit_path.write_text(json.dumps(audit_record) + "\n", encoding="utf-8")
+    audit_before = service.store.audit_path.read_bytes()
+    events_before = service.store.events_path.read_bytes()
+    service.close()
+    recovered = FileSessionStore(tmp_path, "session-synthetic-001")
+    recovered.acquire_writer()
+
+    with pytest.raises(SessionRecoveryError, match="existing audit prefix is invalid"):
+        recovered.recover_pending_commit()
+
+    assert recovered.audit_path.read_bytes() == audit_before
+    assert recovered.events_path.read_bytes() == events_before
+
+
+def test_command_remains_uncertain_if_completion_receipt_write_is_interrupted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_write = session_state._write_private_json_atomic
+
+    def interrupt_completion(path: Path, payload: dict[str, object]) -> None:
+        if path.parent.name == ".commands" and payload.get("state") == "completed":
+            raise OSError("simulated receipt interruption")
+        original_write(path, payload)
+
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", interrupt_completion)
+    service = SessionService.synthetic_default(tmp_path)
+    command = _command(CommandKind.PAUSE)
+    with pytest.raises(OSError, match="simulated receipt interruption"):
+        service.handle(command)
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
+
+    with pytest.raises(SessionRecoveryError, match="will not be executed again automatically"):
+        service.handle(command)
+
+    assert [event.kind for event in service.replay_events()] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.SESSION_PAUSED.value,
+    ]
+
+
+def test_uncertain_approval_blocks_new_commands_and_cannot_repeat_tool_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_call = ProposedToolCall(
+        tool_call_id="session-main-action",
+        tool_name="file_editor",
+        risk="medium",
+        summary="write one file",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
+            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=tool_call),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(
+        _command(CommandKind.CHAT, prompt="write").model_copy(update={"session_id": "session-main"})
+    )
+    original_write = session_state._write_private_json_atomic
+
+    def interrupt_approval_completion(path: Path, payload: dict[str, object]) -> None:
+        if (
+            path.parent.name == ".commands"
+            and payload.get("command_id") == "command-approve"
+            and payload.get("state") == "completed"
+        ):
+            raise OSError("simulated approval receipt interruption")
+        original_write(path, payload)
+
+    monkeypatch.setattr(
+        session_state,
+        "_write_private_json_atomic",
+        interrupt_approval_completion,
+    )
+    approval = _command(
+        CommandKind.APPROVE,
+        target_type="tool-call",
+        target_id=tool_call.tool_call_id,
+    ).model_copy(update={"session_id": "session-main"})
+    with pytest.raises(OSError, match="simulated approval receipt interruption"):
+        service.handle(approval)
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
+
+    with pytest.raises(SessionRecoveryError, match="cannot accept more work"):
+        service.handle(
+            _command(
+                CommandKind.APPROVE,
+                command_id="command-approve-retry",
+                target_type="tool-call",
+                target_id=tool_call.tool_call_id,
+            ).model_copy(update={"session_id": "session-main"})
+        )
+
+    assert backend.resolutions == [(tool_call.tool_call_id, True)]
+
+
+def test_session_control_files_are_private(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.handle(_command(CommandKind.PAUSE))
+    receipt_paths = tuple(service.store.commands_dir.iterdir())
+
+    assert stat.S_IMODE(service.store.writer_lock_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(service.store.writer_metadata_path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(service.store.commands_dir.stat().st_mode) == 0o700
+    assert len(receipt_paths) == 1
+    assert stat.S_IMODE(receipt_paths[0].stat().st_mode) == 0o600
+
+
+def test_command_receipts_cannot_follow_symbolic_link(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.session_dir.mkdir(mode=0o700, parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store.commands_dir.symlink_to(outside, target_is_directory=True)
+    service = SessionService.synthetic_default(tmp_path)
+
+    with pytest.raises(SessionStoreBoundaryError, match="receipt path"):
+        service.handle(_command(CommandKind.PAUSE))
+
+    assert tuple(outside.iterdir()) == ()
 
 
 def test_replay_rejects_tampered_session_event_payload(tmp_path: Path) -> None:
@@ -89,6 +558,353 @@ def test_file_store_rejects_symbolic_link_session_alias(tmp_path: Path) -> None:
 
     with pytest.raises(SessionStoreBoundaryError, match="symbolic link"):
         FileSessionStore(sessions, "linked-session")
+
+
+def test_session_store_mutations_require_writer_ownership(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    event, audit_event = _event_pair()
+    store.session_dir.mkdir(mode=0o700, parents=True)
+    store.pending_commit_path.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(SessionOwnershipError):
+        store.append_event(event)
+    with pytest.raises(SessionOwnershipError):
+        store.commit_event(event, audit_event)
+    with pytest.raises(SessionRecoveryError, match="writer-owned"):
+        store.recover_pending_commit()
+    with pytest.raises(SessionOwnershipError):
+        store.accept_command(command_id="command", command_hash="sha256:value", first_sequence=0)
+    with pytest.raises(SessionOwnershipError):
+        store.complete_command(
+            command_id="command",
+            command_hash="sha256:value",
+            first_sequence=0,
+            last_sequence=0,
+        )
+    with pytest.raises(SessionOwnershipError):
+        store.record_completed_legacy_command(
+            command_id="command",
+            command_hash="sha256:value",
+            first_sequence=0,
+            last_sequence=0,
+        )
+    with pytest.raises(SessionOwnershipError):
+        store.write_audit_export("synthetic\n")
+    store.release_writer()
+
+
+def test_session_store_rejects_mismatched_commit_identity_and_sequence(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    event, audit_event = _event_pair()
+
+    with pytest.raises(SessionRecoveryError, match="session does not match"):
+        store.commit_event(
+            event,
+            audit_event.model_copy(update={"session_id": "session-other"}),
+        )
+    with pytest.raises(SessionRecoveryError, match="sequences do not match"):
+        store.commit_event(
+            event,
+            audit_event.model_copy(update={"sequence": 1}),
+        )
+
+
+def test_session_store_rejects_symbolic_link_writer_lock(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.session_dir.mkdir(mode=0o700, parents=True)
+    target = tmp_path / "outside-lock"
+    target.touch()
+    store.writer_lock_path.symlink_to(target)
+
+    with pytest.raises(SessionStoreBoundaryError, match="writer lock"):
+        store.acquire_writer()
+
+
+def test_writer_setup_failure_releases_operating_system_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_write = session_state._write_private_json_atomic
+
+    def fail_metadata(path: Path, payload: dict[str, object]) -> None:
+        if path.name == ".writer.json":
+            raise OSError("metadata write failed")
+        original_write(path, payload)
+
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", fail_metadata)
+    first = FileSessionStore(tmp_path, "session-synthetic-001")
+    with pytest.raises(OSError, match="metadata write failed"):
+        first.acquire_writer()
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
+    second = FileSessionStore(tmp_path, "session-synthetic-001")
+
+    second.acquire_writer()
+
+    assert second.owns_writer
+
+
+def test_command_receipt_state_machine_rejects_invalid_transitions(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    store.accept_command(
+        command_id="command-one",
+        command_hash="sha256:one",
+        first_sequence=0,
+    )
+
+    assert store.unresolved_command_ids() == ("command-one",)
+    with pytest.raises(SessionRecoveryError, match="already exists"):
+        store.accept_command(
+            command_id="command-one",
+            command_hash="sha256:one",
+            first_sequence=0,
+        )
+    with pytest.raises(SessionRecoveryError, match="sequence is invalid"):
+        store.complete_command(
+            command_id="command-one",
+            command_hash="sha256:one",
+            first_sequence=1,
+            last_sequence=0,
+        )
+    with pytest.raises(SessionRecoveryError, match="receipt changed"):
+        store.complete_command(
+            command_id="command-one",
+            command_hash="sha256:different",
+            first_sequence=0,
+            last_sequence=0,
+        )
+
+    store.complete_command(
+        command_id="command-one",
+        command_hash="sha256:one",
+        first_sequence=0,
+        last_sequence=0,
+    )
+    store.record_completed_legacy_command(
+        command_id="command-one",
+        command_hash="sha256:one",
+        first_sequence=0,
+        last_sequence=0,
+    )
+    assert store.unresolved_command_ids() == ()
+
+
+def test_pending_commit_recovery_rejects_malformed_and_mismatched_state(
+    tmp_path: Path,
+) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    store.pending_commit_path.write_text(
+        '{"schema_version":"unsupported"}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(SessionRecoveryError, match="unsupported"):
+        store.recover_pending_commit()
+
+    store.pending_commit_path.write_text("{", encoding="utf-8")
+    with pytest.raises(SessionRecoveryError, match="malformed"):
+        store.recover_pending_commit()
+
+    other_event, other_audit = _event_pair(session_id="session-other")
+    _write_pending_commit(store, other_event, other_audit)
+    with pytest.raises(SessionRecoveryError, match="identity does not match"):
+        store.recover_pending_commit()
+
+    event, audit_event = _event_pair()
+    _write_pending_commit(
+        store,
+        event,
+        audit_event.model_copy(update={"event_hash": "sha256:" + "0" * 64}),
+    )
+    with pytest.raises(SessionRecoveryError, match="audit event hash"):
+        store.recover_pending_commit()
+
+
+def test_pending_commit_recovery_rejects_invalid_chain_and_position(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    first_event, first_audit = _event_pair()
+    store.commit_event(first_event, first_audit)
+
+    wrong_position_event, wrong_position_audit = _event_pair(kind=EventKind.SESSION_RESUMED)
+    _write_pending_commit(store, wrong_position_event, wrong_position_audit)
+    with pytest.raises(SessionRecoveryError, match="does not match the pending commit"):
+        store.recover_pending_commit()
+
+    bad_previous = "sha256:" + "f" * 64
+    next_event, next_audit = _event_pair(sequence=1, previous_event_hash=bad_previous)
+    _write_pending_commit(store, next_event, next_audit)
+    with pytest.raises(SessionRecoveryError, match="previous hash does not match"):
+        store.recover_pending_commit()
+
+
+def test_pending_first_commit_rejects_previous_hash(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    event, audit_event = _event_pair(previous_event_hash="sha256:" + "f" * 64)
+    _write_pending_commit(store, event, audit_event)
+
+    with pytest.raises(SessionRecoveryError, match="first pending commit"):
+        store.recover_pending_commit()
+
+
+def test_pending_second_commit_recovers_with_valid_previous_hash(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    first_event, first_audit = _event_pair()
+    store.commit_event(first_event, first_audit)
+    second_event, second_audit = _event_pair(
+        sequence=1,
+        kind=EventKind.SESSION_RESUMED,
+        previous_event_hash=first_audit.event_hash,
+    )
+    _write_pending_commit(store, second_event, second_audit)
+
+    assert store.recover_pending_commit()
+    assert [event.kind for event in store.read_events()] == [
+        EventKind.SESSION_PAUSED.value,
+        EventKind.SESSION_RESUMED.value,
+    ]
+    assert not store.recover_pending_commit()
+
+
+def test_pending_commit_recovers_partial_audit_tail(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    event, audit_event = _event_pair()
+    _write_pending_commit(store, event, audit_event)
+    store.audit_path.write_bytes(b'{"partial"')
+
+    assert store.recover_pending_commit()
+    assert store.audit_path.read_text(encoding="utf-8").endswith("\n")
+    assert len(store.read_events()) == 1
+
+
+def test_command_record_validation_rejects_malformed_receipts(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    store.acquire_writer()
+    store.commands_dir.mkdir(mode=0o700)
+    path = store._command_path("command")
+
+    path.write_text("[]\n", encoding="utf-8")
+    with pytest.raises(SessionRecoveryError, match="malformed"):
+        store.command_record("command")
+
+    invalid_receipts = (
+        {
+            "schema_version": "heartwood.session-command-receipt.v1",
+            "session_id": store.session_id,
+            "command_id": "command",
+            "command_hash": "sha256:value",
+            "state": "accepted",
+            "first_sequence": -1,
+            "last_sequence": None,
+        },
+        {
+            "schema_version": "heartwood.session-command-receipt.v1",
+            "session_id": store.session_id,
+            "command_id": "command",
+            "command_hash": "sha256:value",
+            "state": "completed",
+            "first_sequence": 0,
+            "last_sequence": None,
+        },
+        {
+            "schema_version": "heartwood.session-command-receipt.v1",
+            "session_id": store.session_id,
+            "command_id": "command",
+            "command_hash": "sha256:value",
+            "state": "accepted",
+            "first_sequence": 0,
+            "last_sequence": 0,
+        },
+    )
+    for receipt in invalid_receipts:
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+        with pytest.raises(SessionRecoveryError, match="receipt"):
+            store.command_record("command")
+
+    other_session = {
+        **invalid_receipts[0],
+        "session_id": "session-other",
+        "first_sequence": 0,
+    }
+    path.write_text(json.dumps(other_session), encoding="utf-8")
+    with pytest.raises(SessionRecoveryError, match="another session"):
+        store.command_record("command")
+
+
+def test_unresolved_receipt_scan_rejects_invalid_storage(tmp_path: Path) -> None:
+    symlink_store = FileSessionStore(tmp_path / "symlink", "session-synthetic-001")
+    symlink_store.session_dir.mkdir(mode=0o700, parents=True)
+    outside = tmp_path / "outside-receipts"
+    outside.mkdir()
+    symlink_store.commands_dir.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(SessionStoreBoundaryError, match="symbolic link"):
+        symlink_store.unresolved_command_ids()
+
+    file_store = FileSessionStore(tmp_path / "file", "session-synthetic-001")
+    file_store.session_dir.mkdir(mode=0o700, parents=True)
+    file_store.commands_dir.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(SessionStoreBoundaryError, match="must be a directory"):
+        file_store.unresolved_command_ids()
+
+    malformed_store = FileSessionStore(tmp_path / "malformed", "session-synthetic-001")
+    malformed_store.commands_dir.mkdir(mode=0o700, parents=True)
+    (malformed_store.commands_dir / "receipt.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(SessionRecoveryError, match="malformed"):
+        malformed_store.unresolved_command_ids()
+    receipt_path = malformed_store.commands_dir / "receipt.json"
+    receipt_path.write_text('{"command_id":7}', encoding="utf-8")
+    with pytest.raises(SessionRecoveryError, match="invalid"):
+        malformed_store.unresolved_command_ids()
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "heartwood.session-command-receipt.v1",
+                "session_id": "session-other",
+                "command_id": "command",
+                "command_hash": "sha256:value",
+                "state": "accepted",
+                "first_sequence": 0,
+                "last_sequence": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(SessionRecoveryError, match="another session"):
+        malformed_store.unresolved_command_ids()
+
+
+def test_legacy_command_events_gain_completed_receipt_on_retry(tmp_path: Path) -> None:
+    first = SessionService.synthetic_default(tmp_path)
+    command = _command(CommandKind.PAUSE)
+    original = first.handle(command)
+    first.close()
+    for receipt in first.store.commands_dir.iterdir():
+        receipt.unlink()
+    first.store.commands_dir.rmdir()
+    restarted = SessionService.synthetic_default(tmp_path)
+
+    replayed = restarted.handle(command)
+
+    assert replayed.events == original.events
+    assert replayed.replayed
+    assert restarted.store.command_record(command.command_id) is not None
+
+
+def test_completed_receipt_must_match_persisted_event_range(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    command = _command(CommandKind.PAUSE)
+    service.handle(command)
+    receipt_path = service.store._command_path(command.command_id)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["last_sequence"] = 10
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(SessionRecoveryError, match="events do not match"):
+        service.handle(command)
 
 
 def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path: Path) -> None:
@@ -216,7 +1032,9 @@ def test_second_task_requires_pending_action_resolution(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
     service.handle(_command(CommandKind.CHAT, prompt="first task"))
 
-    result = service.handle(_command(CommandKind.CHAT, prompt="second task"))
+    result = service.handle(
+        _command(CommandKind.CHAT, command_id="command-chat-2", prompt="second task")
+    )
 
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
@@ -352,6 +1170,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
             update={"session_id": "session-main"}
         )
     )
+    initial_service.close()
 
     restored_backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
     restored_service = SessionService.local_default(
@@ -359,7 +1178,6 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
         backend=restored_backend,
         clock=lambda: "2026-01-01T00:00:00Z",
     )
-    restored_ids = [action.tool_call_id for action in restored_backend.restored_pending]
 
     result = restored_service.handle(
         _command(
@@ -368,6 +1186,7 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
             target_id=first.tool_call_id,
         ).model_copy(update={"session_id": "session-main"})
     )
+    restored_ids = [action.tool_call_id for action in restored_backend.restored_pending]
 
     assert restored_ids == [first.tool_call_id, second.tool_call_id]
     assert restored_backend.restored_pending[0].arguments == {"command": "python first.py"}
@@ -601,9 +1420,60 @@ class _RecordingBackend:
         return None
 
 
-def _command(kind: CommandKind, **payload: JsonValue) -> SessionCommand:
+def _event_pair(
+    *,
+    session_id: str = "session-synthetic-001",
+    sequence: int = 0,
+    kind: EventKind = EventKind.SESSION_PAUSED,
+    previous_event_hash: str | None = None,
+) -> tuple[SessionEvent, AuditEvent]:
+    event = SessionEvent(
+        event_id=f"{session_id}-event-{sequence:06d}",
+        session_id=session_id,
+        sequence=sequence,
+        kind=kind,
+        occurred_at="2026-01-01T00:00:00Z",
+        payload={"command_id": "synthetic"},
+        previous_event_hash=previous_event_hash,
+    )
+    audit_event = AuditEvent(
+        event_id=f"{session_id}-audit-{sequence:06d}",
+        session_id=session_id,
+        sequence=sequence,
+        event_type=kind.value,
+        occurred_at=event.occurred_at,
+        payload={"session_event_hash": compute_session_event_hash(event)},
+        previous_event_hash=previous_event_hash,
+        event_hash=None,
+    )
+    return event, audit_event.model_copy(update={"event_hash": compute_event_hash(audit_event)})
+
+
+def _write_pending_commit(
+    store: FileSessionStore,
+    event: SessionEvent,
+    audit_event: AuditEvent,
+) -> None:
+    store.pending_commit_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "heartwood.session-commit.v1",
+                "session_event": event.model_dump(mode="json"),
+                "audit_event": audit_event.model_dump(mode="json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _command(
+    kind: CommandKind,
+    *,
+    command_id: str | None = None,
+    **payload: JsonValue,
+) -> SessionCommand:
     return SessionCommand(
-        command_id=f"command-{kind.value.replace('.', '-')}",
+        command_id=command_id or f"command-{kind.value.replace('.', '-')}",
         session_id="session-synthetic-001",
         kind=kind,
         actor_id="human",

@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import Literal, cast
 
 from heartwood.adapters import PlatformAdapter
@@ -28,10 +29,16 @@ from heartwood.core_adapter._facade import (
     ProposedToolCall,
     ToolExecution,
 )
-from heartwood.core_adapter._state import FileSessionStore
+from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import AuditEvent, ConfirmationRequest, JsonValue, PolicyProfile
-from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    SessionCommand,
+    SessionEvent,
+    compute_session_event_hash,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +46,11 @@ class SessionResult:
     """Events emitted while handling one command."""
 
     events: tuple[SessionEvent, ...]
+    replayed: bool = False
+
+
+class CommandConflictError(ValueError):
+    """Raised when a command identifier is reused with different content."""
 
 
 class SessionService:
@@ -62,7 +74,7 @@ class SessionService:
         self.policy = ModelPolicyEngine(self.policy_profile)
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
-        self.backend.restore_pending(_pending_tool_calls(self.replay_events()))
+        self._command_lock = RLock()
 
     @classmethod
     def synthetic_default(
@@ -115,6 +127,48 @@ class SessionService:
                 f"store session {self.store.session_id}"
             )
             raise ValueError(msg)
+        with self._command_lock:
+            self.store.acquire_writer()
+            self.store.recover_pending_commit()
+            persisted = self.replay_events()
+            self.backend.restore_pending(_pending_tool_calls(persisted))
+            command_hash = _command_hash(command)
+            record = self.store.command_record(command.command_id)
+            if record is not None:
+                return _command_result_from_receipt(persisted, command, command_hash, record)
+            unresolved = self.store.unresolved_command_ids()
+            if unresolved:
+                raise SessionRecoveryError(
+                    f"session {self.store.session_id} has an interrupted command "
+                    f"({unresolved[0]}) and cannot accept more work; replay and verify the "
+                    "session, then continue in a new session"
+                )
+            duplicate = _legacy_duplicate_command_result(persisted, command, command_hash)
+            if duplicate is not None:
+                self.store.record_completed_legacy_command(
+                    command_id=command.command_id,
+                    command_hash=command_hash,
+                    first_sequence=duplicate.events[0].sequence,
+                    last_sequence=duplicate.events[-1].sequence,
+                )
+                return duplicate
+            first_sequence = self.store.next_sequence()
+            self.store.accept_command(
+                command_id=command.command_id,
+                command_hash=command_hash,
+                first_sequence=first_sequence,
+            )
+            result = self._handle_new_command(command)
+            self.store.complete_command(
+                command_id=command.command_id,
+                command_hash=command_hash,
+                first_sequence=first_sequence,
+                last_sequence=result.events[-1].sequence,
+            )
+            return result
+
+    def _handle_new_command(self, command: SessionCommand) -> SessionResult:
+        """Execute a command that has not previously been accepted."""
         command_kind = _kind_value(command.kind)
         events = [
             self._record_event(
@@ -122,6 +176,7 @@ class SessionService:
                 {
                     "actor_id": command.actor_id,
                     "command_id": command.command_id,
+                    "command_hash": _command_hash(command),
                     "command_kind": command_kind,
                 },
             )
@@ -181,6 +236,10 @@ class SessionService:
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         """Return events after verifying their one-to-one audit correspondence."""
+        if self.store.pending_commit_path.exists():
+            if not self.store.owns_writer:
+                self.store.acquire_writer()
+            self.store.recover_pending_commit()
         audit_events = self.audit_log.read()
         self.audit_log.verify(audit_events)
         events = self.store.read_events()
@@ -189,7 +248,10 @@ class SessionService:
 
     def close(self) -> None:
         """Release backend resources."""
-        self.backend.close()
+        try:
+            self.backend.close()
+        finally:
+            self.store.release_writer()
 
     def _handle_task(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
         prompt_value = command.payload.get("prompt")
@@ -447,9 +509,9 @@ class SessionService:
         )
         audit_payload = {
             **_audit_payload(kind, payload),
-            "session_event_hash": _session_event_hash(event),
+            "session_event_hash": compute_session_event_hash(event),
         }
-        audit_event = self.audit_log.append(
+        audit_event = self.audit_log.prepare(
             session_id=self.store.session_id,
             event_type=kind.value,
             occurred_at=occurred_at,
@@ -460,7 +522,7 @@ class SessionService:
             or audit_event.previous_event_hash != previous_event_hash
         ):
             raise AuditIntegrityError("audit log changed during session event append")
-        self.store.append_event(event)
+        self.store.commit_event(event, audit_event)
         return event
 
 
@@ -469,17 +531,6 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
     if kind != EventKind.ERROR_RECORDED:
         return payload
     return {key: "[scrubbed]" if key == "reason" else value for key, value in payload.items()}
-
-
-def _session_event_hash(event: SessionEvent) -> str:
-    """Bind the complete replay event to its content-minimized audit record."""
-    canonical = json.dumps(
-        event.model_dump(mode="json"),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
-    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def _verify_event_correspondence(
@@ -505,7 +556,7 @@ def _verify_event_correspondence(
                 f"session event does not match audit record at {event.event_id}"
             )
         recorded_hash = audit_event.payload.get("session_event_hash")
-        if recorded_hash != _session_event_hash(event):
+        if recorded_hash != compute_session_event_hash(event):
             raise AuditIntegrityError(f"session event hash mismatch at {event.event_id}")
 
 
@@ -529,6 +580,73 @@ def _utc_now() -> str:
 
 def _kind_value(kind: CommandKind | str) -> str:
     return kind.value if isinstance(kind, CommandKind) else kind
+
+
+def _command_hash(command: SessionCommand) -> str:
+    canonical = json.dumps(
+        command.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _legacy_duplicate_command_result(
+    events: tuple[SessionEvent, ...],
+    command: SessionCommand,
+    expected_hash: str,
+) -> SessionResult | None:
+    for index, event in enumerate(events):
+        if event.kind != EventKind.COMMAND_RECEIVED:
+            continue
+        if event.payload.get("command_id") != command.command_id:
+            continue
+        if event.payload.get("command_hash") != expected_hash:
+            raise CommandConflictError(
+                f"command id {command.command_id} was already used with different content"
+            )
+        end = len(events)
+        for candidate_index in range(index + 1, len(events)):
+            if events[candidate_index].kind == EventKind.COMMAND_RECEIVED:
+                end = candidate_index
+                break
+        return SessionResult(events=events[index:end], replayed=True)
+    return None
+
+
+def _command_result_from_receipt(
+    events: tuple[SessionEvent, ...],
+    command: SessionCommand,
+    expected_hash: str,
+    record: dict[str, object],
+) -> SessionResult:
+    if record.get("command_hash") != expected_hash:
+        raise CommandConflictError(
+            f"command id {command.command_id} was already used with different content"
+        )
+    if record.get("state") != "completed":
+        raise SessionRecoveryError(
+            f"command {command.command_id} was interrupted after acceptance and will not be "
+            "executed again automatically; inspect session replay, then continue in a new session"
+        )
+    first_sequence = record.get("first_sequence")
+    last_sequence = record.get("last_sequence")
+    if not isinstance(first_sequence, int) or not isinstance(last_sequence, int):
+        raise SessionRecoveryError(f"completed command receipt is invalid for {command.command_id}")
+    selected = tuple(event for event in events if first_sequence <= event.sequence <= last_sequence)
+    expected_count = last_sequence - first_sequence + 1
+    if (
+        len(selected) != expected_count
+        or not selected
+        or selected[0].kind != EventKind.COMMAND_RECEIVED
+        or selected[0].payload.get("command_id") != command.command_id
+        or selected[0].payload.get("command_hash") != expected_hash
+    ):
+        raise SessionRecoveryError(
+            f"completed command events do not match the receipt for {command.command_id}"
+        )
+    return SessionResult(events=selected, replayed=True)
 
 
 def _pending_tool_calls(events: tuple[SessionEvent, ...]) -> tuple[ProposedToolCall, ...]:

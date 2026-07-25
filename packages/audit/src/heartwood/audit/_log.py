@@ -41,11 +41,20 @@ class AuditLog:
 
     def read(self) -> tuple[AuditEvent, ...]:
         """Read all events from disk."""
-        if not self.path.exists():
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(self.path, flags)
+        except FileNotFoundError:
             return ()
+        try:
+            content = bytearray()
+            while chunk := os.read(descriptor, 64 * 1024):
+                content.extend(chunk)
+        finally:
+            os.close(descriptor)
         return tuple(
             AuditEvent.model_validate_json(line)
-            for line in self.path.read_text(encoding="utf-8").splitlines()
+            for line in content.decode("utf-8").splitlines()
             if line
         )
 
@@ -58,6 +67,38 @@ class AuditLog:
         payload: dict[str, JsonValue] | None = None,
     ) -> AuditEvent:
         """Append a scrubbed event and return the persisted record."""
+        event = self.prepare(
+            session_id=session_id,
+            event_type=event_type,
+            occurred_at=occurred_at,
+            payload=payload,
+        )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(self.path, flags, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            content = (event.model_dump_json() + "\n").encode("utf-8")
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:  # pragma: no cover - operating-system invariant
+                    raise OSError("audit append made no progress")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return event
+
+    def prepare(
+        self,
+        *,
+        session_id: str,
+        event_type: str,
+        occurred_at: str,
+        payload: dict[str, JsonValue] | None = None,
+    ) -> AuditEvent:
+        """Build the next verified audit record without persisting it."""
         events = self.read()
         if events:
             self.verify(events)
@@ -77,12 +118,6 @@ class AuditLog:
             event_hash=None,
         )
         event = event.model_copy(update={"event_hash": compute_event_hash(event)})
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(self.path, flags, 0o600)
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "a", encoding="utf-8") as file:
-            file.write(event.model_dump_json() + "\n")
         return event
 
     def verify(self, events: tuple[AuditEvent, ...] | None = None) -> None:

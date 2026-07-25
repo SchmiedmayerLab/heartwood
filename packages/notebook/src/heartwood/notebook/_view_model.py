@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Literal, cast
 
 from heartwood.gateway import DEFAULT_SESSION_ID, ModelProfile, ProjectContext, SessionGateway
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    JsonValue,
+    SessionCommand,
+    SessionEvent,
+    new_command_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +127,7 @@ class NotebookSession:
             raise ValueError("notebook project must match the injected gateway project")
         self.session_id = session_id
         self.gateway = SessionGateway(project=self.project) if gateway is None else gateway
-        self._next_command_sequence = len(self.gateway.replay_events(session_id=session_id))
+        self.gateway.replay_events(session_id=session_id)
 
     def chat(self, prompt: str) -> NotebookViewModel:
         """Run one chat turn and return the notebook view model."""
@@ -322,7 +329,6 @@ class NotebookSession:
     def replay(self) -> NotebookViewModel:
         """Replay persisted events as a notebook view model."""
         events = self.gateway.replay_events(session_id=self.session_id)
-        self._next_command_sequence = max(self._next_command_sequence, len(events))
         return build_view_model(events)
 
     def _handle(
@@ -339,10 +345,8 @@ class NotebookSession:
         kind: CommandKind,
         payload: dict[str, JsonValue] | None,
     ) -> SessionCommand:
-        sequence = self._next_command_sequence
-        self._next_command_sequence += 1
         return SessionCommand(
-            command_id=f"{self.session_id}-{kind.value}-{sequence:06d}",
+            command_id=new_command_id(self.session_id, kind),
             session_id=self.session_id,
             kind=kind,
             actor_id="human",
