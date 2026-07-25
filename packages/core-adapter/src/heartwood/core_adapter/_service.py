@@ -31,7 +31,7 @@ from heartwood.core_adapter._facade import (
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import AuditEvent, ConfirmationRequest, JsonValue, PolicyProfile
+from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -236,19 +236,7 @@ class SessionService:
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         """Return events after verifying their one-to-one audit correspondence."""
-        if not self.store.session_dir.exists():
-            return ()
-        while True:
-            with self.store.snapshot():
-                if not self.store.pending_commit_path.exists():
-                    audit_events = self.audit_log.read()
-                    self.audit_log.verify(audit_events)
-                    events = self.store.read_events()
-                    _verify_event_correspondence(audit_events, events)
-                    return events
-            if not self.store.owns_writer:
-                self.store.acquire_writer()
-            self.store.recover_pending_commit()
+        return self.store.replay_events()
 
     def close(self) -> None:
         """Release backend resources."""
@@ -535,33 +523,6 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
     if kind != EventKind.ERROR_RECORDED:
         return payload
     return {key: "[scrubbed]" if key == "reason" else value for key, value in payload.items()}
-
-
-def _verify_event_correspondence(
-    audit_events: tuple[AuditEvent, ...],
-    events: tuple[SessionEvent, ...],
-) -> None:
-    """Reject tampered, truncated, or partially persisted replay streams."""
-    if len(audit_events) != len(events):
-        raise AuditIntegrityError("session event and audit logs have different lengths")
-    for expected_sequence, (audit_event, event) in enumerate(
-        zip(audit_events, events, strict=True)
-    ):
-        if event.sequence != expected_sequence:
-            raise AuditIntegrityError(f"session event sequence gap at {event.event_id}")
-        if (
-            audit_event.sequence != event.sequence
-            or audit_event.session_id != event.session_id
-            or audit_event.event_type != _kind_value(event.kind)
-            or audit_event.occurred_at != event.occurred_at
-            or audit_event.previous_event_hash != event.previous_event_hash
-        ):
-            raise AuditIntegrityError(
-                f"session event does not match audit record at {event.event_id}"
-            )
-        recorded_hash = audit_event.payload.get("session_event_hash")
-        if recorded_hash != compute_session_event_hash(event):
-            raise AuditIntegrityError(f"session event hash mismatch at {event.event_id}")
 
 
 def _require_tool_call(event: BackendEvent) -> ProposedToolCall:

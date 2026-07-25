@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import stat
 import subprocess
@@ -29,6 +30,7 @@ from heartwood.core_adapter import (
     SessionOwnershipError,
     SessionRecoveryError,
     SessionService,
+    SessionStorageCapabilityError,
     SessionStoreBoundaryError,
 )
 from heartwood.schemas import AuditEvent, PolicyProfile
@@ -731,8 +733,6 @@ def test_session_store_mutations_require_writer_ownership(tmp_path: Path) -> Non
     store.pending_commit_path.write_text("{}\n", encoding="utf-8")
 
     with pytest.raises(SessionOwnershipError):
-        store.append_event(event)
-    with pytest.raises(SessionOwnershipError):
         store.commit_event(event, audit_event)
     with pytest.raises(SessionRecoveryError, match="writer-owned"):
         store.recover_pending_commit()
@@ -806,6 +806,28 @@ def test_writer_setup_failure_releases_operating_system_lock(
     second.acquire_writer()
 
     assert second.owns_writer
+
+
+def test_session_locks_fail_closed_when_native_locking_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def native_lock_unavailable(_descriptor: int) -> bool:
+        raise OSError(errno.ENOSYS, "synthetic unsupported filesystem")
+
+    monkeypatch.setattr("filelock._unix._lock_fd_nonblocking", native_lock_unavailable)
+
+    writer_store = FileSessionStore(tmp_path / "writer", "session-synthetic-001")
+    with pytest.raises(SessionStorageCapabilityError, match="required process locks"):
+        writer_store.acquire_writer()
+    assert not writer_store.owns_writer
+
+    snapshot_store = FileSessionStore(tmp_path / "snapshot", "session-synthetic-001")
+    with (
+        pytest.raises(SessionStorageCapabilityError, match="required process locks"),
+        snapshot_store.snapshot(),
+    ):
+        pytest.fail("snapshot unexpectedly acquired a soft lock")
 
 
 def test_command_receipt_state_machine_rejects_invalid_transitions(tmp_path: Path) -> None:

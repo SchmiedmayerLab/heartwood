@@ -169,6 +169,8 @@ Do not work around a proxy failure by binding the gateway publicly without authe
 
 If Heartwood reports that a session is active in another process, stop the terminal, browser server, or notebook kernel that owns it and try again.
 Do not remove `.writer.lock` or `.writer.json`; the operating-system lock determines ownership, and Heartwood reclaims stale metadata after the prior process has exited.
+If Heartwood reports that the project storage does not support required process locks, move the complete project to a native local, attached persistent, or qualified project filesystem.
+Do not move only `.heartwood/`, and do not use an object-store mount as session storage.
 
 A completed request can be retried with the same command identifier and content without repeating model or tool work.
 If Heartwood reports that a command was interrupted after acceptance, replay the session and verify the project files and audit records before continuing.

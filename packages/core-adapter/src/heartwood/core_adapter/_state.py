@@ -23,7 +23,7 @@ from typing import Any, TextIO
 from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
 
-from heartwood.audit import compute_event_hash
+from heartwood.audit import AuditIntegrityError, AuditLog, compute_event_hash
 from heartwood.schemas import AuditEvent
 from heartwood.session import SessionEvent, compute_session_event_hash, validate_session_id
 
@@ -38,6 +38,10 @@ class SessionOwnershipError(RuntimeError):
 
 class SessionRecoveryError(ValueError):
     """Raised when an interrupted session commit cannot be recovered safely."""
+
+
+class SessionStorageCapabilityError(SessionRecoveryError):
+    """Raised when session storage cannot provide required durability semantics."""
 
 
 class FileSessionStore:
@@ -69,7 +73,11 @@ class FileSessionStore:
         self.commands_dir = self.session_dir / ".commands"
         self._next_sequence: int | None = None
         self._writer_lock: FileLock | None = None
-        self._snapshot_lock = FileLock(self.snapshot_lock_path, mode=0o600)
+        self._snapshot_lock = FileLock(
+            self.snapshot_lock_path,
+            mode=0o600,
+            fallback_to_soft=False,
+        )
         self._writer_token: str | None = None
         self.recovered_stale_writer = False
 
@@ -86,7 +94,12 @@ class FileSessionStore:
         if self.writer_lock_path.is_symlink():
             msg = f"session writer lock must not be a symbolic link: {self.session_id}"
             raise SessionStoreBoundaryError(msg)
-        lock = FileLock(self.writer_lock_path, timeout=0, mode=0o600)
+        lock = FileLock(
+            self.writer_lock_path,
+            timeout=0,
+            mode=0o600,
+            fallback_to_soft=False,
+        )
         try:
             lock.acquire()
         except FileLockTimeout as error:
@@ -94,6 +107,10 @@ class FileSessionStore:
             raise SessionOwnershipError(
                 f"session {self.session_id} is active in another Heartwood process{owner}; "
                 "stop that process before continuing"
+            ) from error
+        except OSError as error:
+            raise SessionStorageCapabilityError(
+                f"session storage does not support required process locks: {self.session_id}"
             ) from error
         try:
             self.recovered_stale_writer = self.writer_metadata_path.exists()
@@ -140,18 +157,15 @@ class FileSessionStore:
             raise SessionStoreBoundaryError(
                 f"session snapshot lock must not be a symbolic link: {self.session_id}"
             )
-        with self._snapshot_lock.acquire(timeout=-1):
+        try:
+            lock = self._snapshot_lock.acquire(timeout=-1)
+        except OSError as error:
+            raise SessionStorageCapabilityError(
+                f"session storage does not support required process locks: {self.session_id}"
+            ) from error
+        with lock:
             self.snapshot_lock_path.chmod(0o600)
             yield
-
-    def append_event(self, event: SessionEvent) -> None:
-        """Persist one legacy session event envelope under the writer lease."""
-        if not self.owns_writer:
-            raise SessionOwnershipError("legacy session event appends require the writer lease")
-        self._prepare_session_dir()
-        _append_private_json_line(self.events_path, event.model_dump_json())
-        if self._next_sequence is not None:
-            self._next_sequence = max(self._next_sequence, event.sequence + 1)
 
     def commit_event(self, event: SessionEvent, audit_event: AuditEvent) -> None:
         """Commit one session event and its audit record through a recovery journal."""
@@ -381,6 +395,36 @@ class FileSessionStore:
             return ()
         return tuple(SessionEvent.model_validate_json(line) for line in lines if line)
 
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        """Recover if needed, then return one verified event-and-audit snapshot."""
+        if not self.session_dir.exists():
+            return ()
+        acquired_writer = False
+        try:
+            while True:
+                with self.snapshot():
+                    if not self.pending_commit_path.exists():
+                        try:
+                            audit_log = AuditLog(self.audit_path)
+                            audit_events = audit_log.read()
+                            audit_log.verify(audit_events)
+                            events = self.read_events()
+                        except (OSError, UnicodeDecodeError, ValueError) as error:
+                            if isinstance(error, AuditIntegrityError):
+                                raise
+                            raise SessionRecoveryError(
+                                f"session {self.session_id} records are malformed"
+                            ) from error
+                        _verify_event_correspondence(audit_events, events)
+                        return events
+                if not self.owns_writer:
+                    self.acquire_writer()
+                    acquired_writer = True
+                self.recover_pending_commit()
+        finally:
+            if acquired_writer:
+                self.release_writer()
+
     def next_sequence(self) -> int:
         """Return the next sequence without advancing until the event is durable."""
         if self._next_sequence is None:
@@ -580,6 +624,33 @@ def _verify_pending_pair(event: SessionEvent, audit_event: AuditEvent) -> None:
         or audit_event.payload.get("session_event_hash") != compute_session_event_hash(event)
     ):
         raise SessionRecoveryError("pending event and audit record do not correspond")
+
+
+def _verify_event_correspondence(
+    audit_events: tuple[AuditEvent, ...],
+    events: tuple[SessionEvent, ...],
+) -> None:
+    """Reject tampered, truncated, or partially persisted replay streams."""
+    if len(audit_events) != len(events):
+        raise AuditIntegrityError("session event and audit logs have different lengths")
+    for expected_sequence, (audit_event, event) in enumerate(
+        zip(audit_events, events, strict=True)
+    ):
+        if event.sequence != expected_sequence:
+            raise AuditIntegrityError(f"session event sequence gap at {event.event_id}")
+        if (
+            audit_event.sequence != event.sequence
+            or audit_event.session_id != event.session_id
+            or audit_event.event_type != str(event.kind)
+            or audit_event.occurred_at != event.occurred_at
+            or audit_event.previous_event_hash != event.previous_event_hash
+        ):
+            raise AuditIntegrityError(
+                f"session event does not match audit record at {event.event_id}"
+            )
+        recorded_hash = audit_event.payload.get("session_event_hash")
+        if recorded_hash != compute_session_event_hash(event):
+            raise AuditIntegrityError(f"session event hash mismatch at {event.event_id}")
 
 
 def _validate_command_record(payload: dict[str, Any], command_id: str) -> None:

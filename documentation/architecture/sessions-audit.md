@@ -43,6 +43,12 @@ The first mutating command registers the session and creates private state.
 The gateway acquires an interprocess writer lease before mutating a session and retains it until that gateway closes the session service.
 Another process may replay the completed event stream, but it cannot append commands to the same session until the owner exits.
 Distinct sessions have independent leases.
+Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
+This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
+
+Session state must reside on storage that implements process-shared native advisory locks.
+Heartwood disables existence-lock fallback because it cannot provide the same automatic release after process termination.
+Local disks, attached persistent disks, and qualified project filesystems are the intended locations; object-store and file-transfer mounts are not session stores unless their native-lock behavior has been qualified.
 
 Every command has an opaque identifier and a durable receipt.
 An exact retry of a completed command returns its original event range without repeating a model call, confirmation callback, or tool action.

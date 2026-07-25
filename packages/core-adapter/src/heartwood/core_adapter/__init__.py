@@ -22,6 +22,7 @@ from heartwood.core_adapter._state import (
     FileSessionStore,
     SessionOwnershipError,
     SessionRecoveryError,
+    SessionStorageCapabilityError,
     SessionStoreBoundaryError,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "SessionRecoveryError",
     "SessionResult",
     "SessionService",
+    "SessionStorageCapabilityError",
     "SessionStoreBoundaryError",
     "ToolExecution",
     "__version__",

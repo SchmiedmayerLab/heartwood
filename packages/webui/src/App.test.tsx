@@ -1495,6 +1495,24 @@ describe("App", () => {
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
   });
 
+  it("surfaces sessions that require persistence recovery", async () => {
+    const client = new FakeClient();
+    client.currentSessions = [
+      {
+        ...sessionSummary("session-recovery"),
+        status: "recovery-required",
+      },
+    ];
+
+    render(<App client={client} initialSessionId="session-recovery" />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: /Synthetic analysis, Recovery required/u,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("supports secondary activity, settings, rejection, and pause controls", async () => {
     const client = new PendingClient();
     client.currentSettings = {

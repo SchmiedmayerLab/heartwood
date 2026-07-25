@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from collections.abc import Mapping
@@ -294,6 +295,30 @@ def test_rest_command_routes_through_session_service_and_streams_events(tmp_path
         EventKind.COMMAND_RECEIVED.value,
         EventKind.SESSION_PAUSED.value,
     ]
+
+
+def test_rest_reports_unsupported_session_storage_without_server_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def native_lock_unavailable(_descriptor: int) -> bool:
+        raise OSError(errno.ENOSYS, "synthetic unsupported filesystem")
+
+    monkeypatch.setattr("filelock._unix._lock_fd_nonblocking", native_lock_unavailable)
+    rest = RestGateway(_gateway(tmp_path))
+
+    response = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.PAUSE),
+        )
+    )
+
+    assert response.status_code == 409
+    assert response.body == {
+        "error": "session storage does not support required process locks: session-1"
+    }
 
 
 def test_rest_command_retry_is_not_published_twice(tmp_path: Path) -> None:

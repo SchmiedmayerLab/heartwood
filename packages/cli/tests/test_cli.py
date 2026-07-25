@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
@@ -1467,6 +1468,29 @@ def test_cli_reports_active_browser_session_without_traceback(
         captured.err
     )
     browser_gateway.stop()
+
+
+def test_cli_reports_unsupported_session_storage_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def native_lock_unavailable(_descriptor: int) -> bool:
+        raise OSError(errno.ENOSYS, "synthetic unsupported filesystem")
+
+    project = tmp_path / "analysis"
+    project.mkdir()
+    _install_deterministic_gateway(monkeypatch)
+    monkeypatch.setattr("filelock._unix._lock_fd_nonblocking", native_lock_unavailable)
+
+    assert _run(project, monkeypatch, ["--session-id", "review", "pause"]) == 75
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        "Session unavailable: session storage does not support required process locks: review"
+        in captured.err
+    )
 
 
 def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

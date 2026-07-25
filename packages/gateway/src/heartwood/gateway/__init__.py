@@ -12,6 +12,7 @@ from heartwood.core_adapter import (
     CommandConflictError,
     SessionOwnershipError,
     SessionRecoveryError,
+    SessionStorageCapabilityError,
 )
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -208,6 +209,7 @@ __all__ = [
     "SessionNotFoundError",
     "SessionOwnershipError",
     "SessionRecoveryError",
+    "SessionStorageCapabilityError",
     "SessionSummary",
     "SetupPhase",
     "SkillManager",
