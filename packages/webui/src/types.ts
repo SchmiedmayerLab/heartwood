@@ -50,7 +50,8 @@ export interface SessionEvent {
   previous_event_hash: string | null;
 }
 
-export type SessionStatus = "empty" | "idle" | "waiting" | "paused" | "error";
+export type SessionStatus =
+  "empty" | "idle" | "waiting" | "paused" | "error" | "recovery-required";
 
 export interface SessionSummary {
   session_id: string;

@@ -152,7 +152,8 @@ const formatRelativeDate = (date: Date): string => {
 const sessionStatus = (
   status: SessionSummary["status"],
 ): "default" | "destructive" | "primary" | "success" | "warning" => {
-  if (status === "error") return "destructive";
+  if (status === "error" || status === "recovery-required")
+    return "destructive";
   if (status === "idle") return "success";
   if (status === "paused") return "primary";
   if (status === "waiting") return "warning";
@@ -161,6 +162,7 @@ const sessionStatus = (
 
 const sessionStatusLabel = (status: SessionSummary["status"]): string => {
   if (status === "error") return "Needs attention";
+  if (status === "recovery-required") return "Recovery required";
   if (status === "paused") return "Paused";
   if (status === "waiting") return "Approval needed";
   return "Ready";

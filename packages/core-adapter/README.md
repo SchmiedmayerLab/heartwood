@@ -13,3 +13,5 @@ SPDX-License-Identifier: MIT
 Core harness orchestration for Heartwood sessions.
 
 This package defines the stable event-streaming execution facade used by the session service. The deterministic backend keeps tests and replay offline, while runtime packages can inject local or OpenHands-backed implementations behind the same assistant-message, tool-proposal, confirmation, and tool-execution event contract.
+
+The file-backed session service enforces one interprocess writer per session, persists idempotent command receipts, and commits each event with its audit record through a deterministic recovery journal.

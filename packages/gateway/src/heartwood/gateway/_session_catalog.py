@@ -18,7 +18,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
-from heartwood.core_adapter import FileSessionStore, SessionStoreBoundaryError
+from heartwood.audit import AuditIntegrityError
+from heartwood.core_adapter import (
+    FileSessionStore,
+    SessionOwnershipError,
+    SessionRecoveryError,
+    SessionStoreBoundaryError,
+)
 from heartwood.session import EventKind, SessionEvent
 
 _SCHEMA_VERSION = "heartwood.session-metadata.v1"
@@ -90,11 +96,11 @@ class SessionCatalog:
         store = _session_store(self.workspace, session_id)
         store.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         store.session_dir.chmod(0o700)
+        events, recovery_required = _catalog_events(store)
         metadata_path = store.session_dir / "metadata.json"
         if metadata_path.exists():
             metadata = _read_metadata(metadata_path)
         else:
-            events = store.read_events()
             now = _utc_timestamp()
             metadata = _SessionMetadata(
                 title=_validate_title(title or session_id),
@@ -102,10 +108,15 @@ class SessionCatalog:
                 updated_at=events[-1].occurred_at if events else now,
             )
             _write_metadata(metadata_path, metadata)
-        return _summary(store, metadata)
+        return _summary(
+            store,
+            metadata,
+            events=events,
+            recovery_required=recovery_required,
+        )
 
     def get(self, session_id: str) -> SessionSummary:
-        """Return one session, registering a legacy event store if needed."""
+        """Return one session, registering persisted state if needed."""
         store = _session_store(self.workspace, session_id)
         if not store.session_dir.is_dir() or store.session_dir.is_symlink():
             msg = f"unknown session: {session_id}"
@@ -146,21 +157,39 @@ class SessionCatalog:
             updated_at=_utc_timestamp(),
         )
         _write_metadata(store.session_dir / "metadata.json", metadata)
-        return _summary(store, metadata)
+        events, recovery_required = _catalog_events(store)
+        return _summary(
+            store,
+            metadata,
+            events=events,
+            recovery_required=recovery_required,
+        )
 
 
-def _summary(store: FileSessionStore, metadata: _SessionMetadata) -> SessionSummary:
-    events = store.read_events()
+def _summary(
+    store: FileSessionStore,
+    metadata: _SessionMetadata,
+    *,
+    events: tuple[SessionEvent, ...],
+    recovery_required: bool,
+) -> SessionSummary:
     created_at = events[0].occurred_at if events else metadata.created_at
     updated_at = _latest_timestamp(metadata.updated_at, events)
     return SessionSummary(
         session_id=store.session_id,
         title=metadata.title,
-        status=_session_status(events),
+        status="recovery-required" if recovery_required else _session_status(events),
         created_at=created_at,
         updated_at=updated_at,
         event_count=len(events),
     )
+
+
+def _catalog_events(store: FileSessionStore) -> tuple[tuple[SessionEvent, ...], bool]:
+    try:
+        return store.replay_events(), False
+    except (AuditIntegrityError, SessionOwnershipError, SessionRecoveryError):
+        return (), True
 
 
 def _session_store(workspace: Path, session_id: str) -> FileSessionStore:

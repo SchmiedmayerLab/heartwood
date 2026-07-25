@@ -8,9 +8,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from enum import StrEnum
 from typing import ClassVar, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -20,6 +23,8 @@ __all__ = [
     "JsonValue",
     "SessionCommand",
     "SessionEvent",
+    "compute_session_event_hash",
+    "new_command_id",
     "validate_session_id",
 ]
 
@@ -47,6 +52,13 @@ class CommandKind(StrEnum):
     RESUME = "resume"
     REPLAY = "replay"
     AUDIT_EXPORT = "audit.export"
+
+
+def new_command_id(session_id: str, kind: CommandKind | str) -> str:
+    """Return an opaque command identifier suitable for retries and persistence."""
+    validate_session_id(session_id)
+    kind_value = kind.value if isinstance(kind, CommandKind) else kind
+    return f"{session_id}-{kind_value}-{uuid4().hex}"
 
 
 class EventKind(StrEnum):
@@ -115,3 +127,14 @@ class SessionEvent(_SessionRecord):
     occurred_at: str = Field(min_length=1)
     payload: dict[str, JsonValue] = Field(default_factory=dict)
     previous_event_hash: str | None = None
+
+
+def compute_session_event_hash(event: SessionEvent) -> str:
+    """Return the deterministic SHA-256 hash of a complete session event."""
+    canonical = json.dumps(
+        event.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"

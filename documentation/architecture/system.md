@@ -62,8 +62,13 @@ Generic, Terra, and Carina behavior differs only through these boundaries and st
 
 ## Process Ownership
 
-One Heartwood process should write a given session at a time.
-Project configuration uses a scoped interprocess lock, but session event stores do not provide a general multi-process writer lock.
+Project configuration writes use a project-scoped interprocess lock.
+Session mutation uses a separate interprocess lease for each session, owned by the gateway process that first handles a command.
+The lease remains active until that session service closes.
 
-The browser gateway owns its sessions while running.
-Do not open the same session for concurrent mutation from another process.
+Command receipts make completed requests idempotent across retries and restarts.
+A paired event-and-audit recovery journal completes verified interrupted appends without duplicating either record.
+Writer metadata left by a stopped process is treated as stale only after the operating-system lock can be acquired; the new owner then validates recovery state before continuing.
+
+The browser, terminal, and notebook interfaces therefore cannot fork one session by writing from separate processes.
+They may continue the session sequentially after the current owner stops, or use distinct session identifiers concurrently.

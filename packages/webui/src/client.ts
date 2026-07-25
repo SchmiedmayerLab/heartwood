@@ -104,11 +104,10 @@ export interface HeartwoodClient {
 export const createCommand = (
   sessionId: string,
   kind: CommandKind,
-  sequence: number,
   payload: Record<string, JsonValue> = {},
 ): SessionCommand => ({
   schema_version: "heartwood.session-command.v1",
-  command_id: `${sessionId}-${kind}-${String(sequence).padStart(6, "0")}`,
+  command_id: `${sessionId}-${kind}-${crypto.randomUUID().replaceAll("-", "")}`,
   session_id: sessionId,
   kind,
   actor_id: "human",

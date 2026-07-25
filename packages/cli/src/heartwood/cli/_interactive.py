@@ -16,7 +16,14 @@ from datetime import UTC, datetime
 from typing import cast
 
 from heartwood.gateway import ModelSettingsError, SessionGateway
-from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
+from heartwood.session import (
+    CommandKind,
+    EventKind,
+    JsonValue,
+    SessionCommand,
+    SessionEvent,
+    new_command_id,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,9 +190,8 @@ class InteractiveSession:
         kind: CommandKind,
         payload: dict[str, JsonValue] | None = None,
     ) -> tuple[SessionEvent, ...]:
-        sequence = len(self.gateway.replay_events(session_id=self.session_id))
         command = SessionCommand(
-            command_id=f"{self.session_id}-{kind.value}-{sequence:06d}",
+            command_id=new_command_id(self.session_id, kind),
             session_id=self.session_id,
             kind=kind,
             actor_id="human",

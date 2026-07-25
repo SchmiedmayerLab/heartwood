@@ -8,6 +8,12 @@
 
 from __future__ import annotations
 
+from heartwood.core_adapter import (
+    CommandConflictError,
+    SessionOwnershipError,
+    SessionRecoveryError,
+    SessionStorageCapabilityError,
+)
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
     ActionModeOption,
@@ -148,6 +154,7 @@ __all__ = [
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",
+    "CommandConflictError",
     "CredentialBindingStatus",
     "CredentialStore",
     "CredentialStoreAvailability",
@@ -205,6 +212,9 @@ __all__ = [
     "SessionCatalogError",
     "SessionGateway",
     "SessionNotFoundError",
+    "SessionOwnershipError",
+    "SessionRecoveryError",
+    "SessionStorageCapabilityError",
     "SessionSummary",
     "SetupPhase",
     "SkillManager",

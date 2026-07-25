@@ -112,7 +112,7 @@ def test_documentation_describes_current_product_boundaries() -> None:
     assert "does not fork the OpenHands agent loop" in product
     assert "process current directory" in architecture
     assert "one decision" in sessions
-    assert "One Heartwood process should write a given session at a time" in architecture
+    assert "Session mutation uses a separate interprocess lease for each session" in architecture
     assert "does not confer institutional approval" in security
 
 

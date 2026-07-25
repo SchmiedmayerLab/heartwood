@@ -78,18 +78,18 @@ afterEach(() => {
 
 describe("createCommand", () => {
   it("builds the shared session command envelope", () => {
-    const command = createCommand("session-test", "chat", 7, {
+    const command = createCommand("session-test", "chat", {
       prompt: "synthetic",
     });
 
     expect(command).toMatchObject({
       actor_id: "human",
-      command_id: "session-test-chat-000007",
       kind: "chat",
       payload: { prompt: "synthetic" },
       schema_version: "heartwood.session-command.v1",
       session_id: "session-test",
     });
+    expect(command.command_id).toMatch(/^session-test-chat-[0-9a-f]{32}$/);
   });
 });
 
@@ -192,7 +192,7 @@ describe("GatewayClient", () => {
 
     const client = new GatewayClient("/proxy/8767");
     const response = await client.postCommand(
-      createCommand("session-test", "pause", 0),
+      createCommand("session-test", "pause"),
     );
 
     expect(response.events).toHaveLength(1);

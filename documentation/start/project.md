@@ -52,6 +52,8 @@ ChatGPT account credentials remain in OpenHands' private user-level credential s
 | Stanford Carina | A dedicated writable directory in approved project storage |
 
 Job scratch, temporary container filesystems, and `/tmp` are not durable project locations.
+The project location must also support native process-shared advisory file locks so an interrupted process releases session ownership automatically.
+Use the attached Terra persistent disk or approved Carina project storage rather than an object-store mount for `.heartwood/`.
 
 ## Back Up and Share Carefully
 
