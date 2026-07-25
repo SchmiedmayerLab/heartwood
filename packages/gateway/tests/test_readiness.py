@@ -354,6 +354,7 @@ def test_terra_baseline_persists_builtin_hosted_provider_routes(tmp_path: Path) 
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "STANFORD_AI_API_KEY",
+        "subscription:openai",
     )
     assert catalog["models"]
     decision = validation["policy_decision"]
@@ -502,10 +503,11 @@ def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> No
         env=platform_env,
     )
 
-    settings = SessionGateway(
+    gateway = SessionGateway(
         project=project,
         env={**platform_env, "STANFORD_AI_API_KEY": "external-secret"},
-    ).model_settings()
+    )
+    settings = gateway.model_settings()
     connections = settings["connections"]
     assert isinstance(connections, list)
     connection = next(
@@ -517,6 +519,14 @@ def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> No
     assert connection["catalog_endpoint"] == "https://aiapi-prod.stanford.edu/v1/models"
     assert connection["policy_endpoint"] == "https://aiapi-prod.stanford.edu/v1/chat/completions"
     assert connection["credential_status"] == "available"
+    assert (
+        "https://aiapi-prod.stanford.edu/v1/responses"
+        in (gateway_policy := gateway.config_store.load().policy).allowed_model_endpoints
+    )
+    assert gateway_policy.allowed_model_endpoints == (
+        "https://aiapi-prod.stanford.edu/v1/chat/completions",
+        "https://aiapi-prod.stanford.edu/v1/responses",
+    )
     assert "external-secret" not in project.config_path.read_text(encoding="utf-8")
     assert "external-secret" not in json.dumps(settings)
 

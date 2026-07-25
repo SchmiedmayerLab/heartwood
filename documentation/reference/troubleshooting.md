@@ -86,6 +86,8 @@ For Heartwood-managed inference, download or import the model before starting th
 
 Reopen setup and enter the provider API key, or ask the platform operator how its secret binding is supplied.
 An operating-system keyring entry is project-scoped, so another project may correctly ask again.
+For **Sign in with ChatGPT**, repeat the one-time-code flow.
+If the account should no longer be used, run `heartwood models forget openai-subscription` before signing in with another account.
 
 ### `HW-MODEL-002` — Heartwood-Managed Model Files Are Unavailable
 

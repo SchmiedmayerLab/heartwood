@@ -9,6 +9,33 @@ SPDX-License-Identifier: MIT
 Heartwood asks a model service for its available models instead of maintaining a duplicate list of provider model identifiers.
 The setup flow presents compatible results returned by the service and keeps manual identifiers as an advanced fallback for compatible endpoints that cannot enumerate models.
 
+## Sign In With ChatGPT
+
+Choose **Sign in with ChatGPT** to use supported Codex models through a ChatGPT Plus or Pro subscription.
+This route is separate from the OpenAI API and does not use OpenAI API credits or an API key.
+
+1. Start `heartwood` or open browser settings where the browser interface is supported.
+2. Choose **Sign in with ChatGPT**.
+3. Review OpenAI's terms and continue.
+4. Open the displayed sign-in page and enter the one-time code.
+5. Choose a model from the list maintained by the pinned OpenHands SDK.
+
+OpenHands owns the OAuth flow, supported-model registry, credential storage, token refresh, and Codex Responses API transport.
+Heartwood stores only the selected connection and model in the project.
+OAuth tokens do not enter `.heartwood/config.toml`, browser storage, session events, logs, or audit exports.
+
+This connection is available on workstations, in the generic container, and on Terra.
+Carina exposes only the model routes declared by its platform policy.
+OpenAI's account terms and the research environment's data-use rules remain authoritative; a successful sign-in does not authorize controlled data.
+
+Sign out from browser settings or run:
+
+```bash
+heartwood models forget openai-subscription
+```
+
+See the [OpenHands subscription authentication guide](https://docs.openhands.dev/sdk/guides/llm-subscriptions) for the upstream authentication behavior.
+
 ## Stanford AI API Gateway
 
 Stanford users with an eligible AI API Gateway key can select **Stanford AI API Gateway** on a workstation, in a Heartwood container, on Terra, or on Carina.
@@ -24,25 +51,34 @@ The gateway is an institution-managed service, but using it does not by itself a
 Stanford's current eligibility, data classification, Data Risk Assessment, and project approval requirements remain authoritative.
 See the [Stanford AI API Gateway service page](https://uit.stanford.edu/service/ai-api-gateway).
 
-## OpenAI or Anthropic
+OpenAI models that OpenHands routes through the Responses API are currently marked unavailable on the Stanford connection.
+The gateway currently accepts the initial tool proposal but rejects the subsequent `function_call_output` continuation by call ID.
+Use another authorized connection for Responses-dependent models until Stanford confirms support for this tool workflow.
+
+## OpenAI API or Anthropic API
 
 1. Start `heartwood` or open browser settings.
-2. Choose **OpenAI** or **Anthropic**.
+2. Choose **OpenAI API** or **Anthropic**.
 3. Enter the provider API key when prompted.
 4. Choose a model returned by the provider API.
 5. Review the route and action-confirmation setting.
 
 Heartwood validates that the credential binding, route, model profile, and platform policy agree before enabling requests.
-An OpenAI API key is separate from a ChatGPT subscription, and an Anthropic API key is separate from a Claude subscription.
-Heartwood currently uses provider API credentials for these two connections.
+An OpenAI API key is separate from **Sign in with ChatGPT**.
+OpenHands does not currently provide a supported Claude subscription login, so Anthropic uses an API key.
+
+For OpenAI models that support the Responses API, Heartwood follows OpenHands' model-capability registry and authorizes `/v1/responses`.
+Models that do not support Responses retain the Chat Completions path.
+The selected request path is automatic and shared by every Heartwood interface.
 
 ## Other Compatible Services
 
-Choose **Other compatible service** for an explicitly authorized endpoint that implements the OpenAI models and chat-completions API shapes.
+Choose **Other compatible service** for an explicitly authorized endpoint that implements the OpenAI-compatible request shapes required by the selected model.
 Enter the base URL, select or enter a model, and provide an API key only when the service requires one.
 
 Custom URLs are available on the workstation/container and Terra adapters when the active deployment policy permits them.
 Heartwood records the selected catalog and completion endpoints in the project policy before making requests.
+When OpenHands identifies a model as Responses-capable, the service must implement `/responses` as well as model discovery.
 Stanford Carina exposes only its declared Heartwood-managed and Stanford AI API Gateway routes.
 
 ### Connect to an Existing Model Server
@@ -58,9 +94,9 @@ The built-in **Run with Heartwood** route is different: Heartwood downloads or i
 
 ## Credentials
 
-Heartwood never accepts provider API keys as normal command-line arguments and never writes raw values to project configuration, session events, logs, browser storage, or audit exports.
+Heartwood never accepts provider API keys as normal command-line arguments and never writes API keys or subscription tokens to project configuration, session events, logs, browser storage, or audit exports.
 
-Credential resolution follows this order:
+API-key resolution follows this order:
 
 1. a value entered for the running Heartwood process;
 2. an operator-provided environment or mounted-file binding;
@@ -70,12 +106,17 @@ Credential resolution follows this order:
 When the system credential store is available, setup offers **Remember securely for this project**.
 The saved account is scoped to the project and provider binding; `.heartwood/config.toml` retains only non-secret model configuration.
 
+ChatGPT sign-in is different.
+OpenHands keeps the OAuth credential in its private user-level credential store so it can refresh and reuse the account across Heartwood projects.
+Signing out removes that OpenHands credential.
+
 Forget a stored credential from the browser or terminal:
 
 ```bash
 heartwood models forget openai
 heartwood models forget anthropic
 heartwood models forget stanford-ai-api-gateway
+heartwood models forget openai-subscription
 ```
 
 API keys for **Other compatible service** remain process-only because changing the service URL changes the trust boundary.
@@ -83,6 +124,7 @@ API keys for **Other compatible service** remain process-only because changing t
 ## Command-Line Catalog Operations
 
 ```bash
+heartwood models refresh openai-subscription
 heartwood models refresh openai
 heartwood models connect openai MODEL_ID
 heartwood models validate

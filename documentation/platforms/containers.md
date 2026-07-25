@@ -36,6 +36,27 @@ The container is temporary, but the mounted project and `.heartwood/` persist on
 The terminal flow continues automatically after a Heartwood-managed model finishes downloading.
 If the container was interrupted during setup, repeat the same `docker run` command; the project state and verified download are reused.
 
+### Keep a ChatGPT Sign-In
+
+The basic command uses a temporary home directory, so a ChatGPT sign-in lasts only until that container stops.
+To reuse the sign-in without placing credentials in the project, create a private host directory and mount only OpenHands' credential directory:
+
+```bash
+mkdir -p "$HOME/.local/share/heartwood/openhands-auth"
+chmod 700 "$HOME/.local/share/heartwood/openhands-auth"
+
+docker run --rm -it \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp \
+  -v "$PWD:/workspace" \
+  -v "$HOME/.local/share/heartwood/openhands-auth:/tmp/.openhands/auth" \
+  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  heartwood
+```
+
+OpenHands applies owner-only permissions to the credential directory and token file.
+Treat the mounted directory as a secret and do not place it in a repository, shared project folder, or container image.
+
 ## Start the Browser
 
 ```bash

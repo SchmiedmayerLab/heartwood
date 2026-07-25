@@ -93,6 +93,7 @@ _ACTION_MODE_ARGUMENTS = {
 }
 _MODEL_SOURCE_ARGUMENTS = {
     "heartwood": "heartwood",
+    "openai-subscription": "openai-subscription",
     "openai": "openai",
     "anthropic": "anthropic",
     "custom": "custom",
@@ -868,7 +869,7 @@ def _configure_setup(
                 raise ModelCatalogError("service URL entry was cancelled") from error
         if source == "custom" and not base_url:
             raise ModelCatalogError("other compatible services require --base-url")
-        requires_token = True
+        requires_token = source != "openai-subscription"
         if source == "custom":
             assert isinstance(base_url, str)
             requires_token = custom_model_connection_requires_token(base_url)
@@ -933,6 +934,22 @@ def _configure_setup(
                 model_id = str(available[int(selected) - 1])
             else:
                 model_id = selected
+        if source == "openai-subscription":
+            catalog_connection = catalog.get("connection", {})
+            credential_status = (
+                catalog_connection.get("credential_status")
+                if isinstance(catalog_connection, dict)
+                else "missing"
+            )
+            if credential_status != "available":
+                print("\nSign in with ChatGPT")
+                print("OpenHands will show OpenAI's terms, then provide a URL and one-time code.")
+                gateway.login_subscription(
+                    connection_id,
+                    model_id=model_id,
+                    open_browser=False,
+                    auth_method="device_code",
+                )
         gateway.connect_model(connection_id, model_id, base_url=base_url)
     except (
         ActionSettingsError,

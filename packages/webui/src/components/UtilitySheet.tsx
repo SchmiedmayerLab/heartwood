@@ -53,7 +53,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
@@ -79,6 +79,7 @@ import type {
   SkillSettings,
   SkillSummary,
   StartupPlan,
+  SubscriptionDeviceLogin,
 } from "../types";
 import { buildViewModel } from "../viewModel";
 import type { UtilityPanel } from "./SessionRail";
@@ -102,6 +103,10 @@ interface UtilitySheetProps {
   onConfigureModelSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscoverModels: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
   onForgetCredential: (connectionId: string) => Promise<void>;
+  onPollSubscriptionLogin: (
+    connectionId: string,
+    loginId: string,
+  ) => Promise<SubscriptionDeviceLogin>;
   onDownload: (modelId: string) => void;
   onDownloadCustom: (request: CustomLocalModelDownloadRequest) => Promise<void>;
   onExportAudit: () => void;
@@ -123,6 +128,9 @@ interface UtilitySheetProps {
   onSelectProfile: (profileId: string) => void;
   onSetSkillApproved: (approved: boolean) => void;
   onSetSkillSource: (source: string) => void;
+  onStartSubscriptionLogin: (
+    connectionId: string,
+  ) => Promise<SubscriptionDeviceLogin>;
   onValidateProfile: (profileId?: string) => void;
 }
 
@@ -309,12 +317,14 @@ const SettingsContent = (props: UtilitySheetProps) => {
     onInspectModelRepository,
     onImportLocalModel,
     onInitializeProject,
+    onPollSubscriptionLogin,
     onProfileDraft,
     onRefreshSettings,
     onRemoveProfile,
     onSaveProfile,
     onSelectActionMode,
     onSelectProfile,
+    onStartSubscriptionLogin,
     onValidateProfile,
   } = props;
   const [settingsView, setSettingsView] = useState<"models" | "approvals">(
@@ -338,6 +348,8 @@ const SettingsContent = (props: UtilitySheetProps) => {
       base_url: preset.base_url,
       policy_endpoint: preset.policy_endpoint ?? profileDraft.policy_endpoint,
       credential_kind: preset.credential_kind,
+      auth_type: "api_key",
+      subscription_vendor: null,
       api_key_env: preset.api_key_env,
       api_key_file: null,
       description: preset.description,
@@ -583,6 +595,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
             onConfigureSource={onConfigureModelSource}
             onDiscover={onDiscoverModels}
             onForgetCredential={onForgetCredential}
+            onPollSubscriptionLogin={onPollSubscriptionLogin}
+            onStartSubscriptionLogin={onStartSubscriptionLogin}
+            onSubscriptionComplete={onRefreshSettings}
           />
 
           <ModelDownloadConfirmation
@@ -1109,12 +1124,23 @@ const ModelConnectionSetup = ({
   onConfigureSource,
   onDiscover,
   onForgetCredential,
+  onPollSubscriptionLogin,
+  onStartSubscriptionLogin,
+  onSubscriptionComplete,
 }: {
   settings: ModelSettings | null;
   onConnect: (request: ModelConnectRequest) => Promise<void>;
   onConfigureSource: (sourceId: ModelSource) => Promise<ModelSettings>;
   onDiscover: (request: ModelCatalogRequest) => Promise<ModelCatalog>;
   onForgetCredential: (connectionId: string) => Promise<void>;
+  onPollSubscriptionLogin: (
+    connectionId: string,
+    loginId: string,
+  ) => Promise<SubscriptionDeviceLogin>;
+  onStartSubscriptionLogin: (
+    connectionId: string,
+  ) => Promise<SubscriptionDeviceLogin>;
+  onSubscriptionComplete: () => void;
 }) => {
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -1123,6 +1149,8 @@ const ModelConnectionSetup = ({
   const [baseUrl, setBaseUrl] = useState("");
   const [manualModel, setManualModel] = useState("");
   const [remember, setRemember] = useState(false);
+  const [subscriptionLogin, setSubscriptionLogin] =
+    useState<SubscriptionDeviceLogin | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -1143,6 +1171,33 @@ const ModelConnectionSetup = ({
         ),
     ) ?? [];
 
+  useEffect(() => {
+    if (subscriptionLogin?.status !== "pending") return;
+    let polling = false;
+    const interval = window.setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void onPollSubscriptionLogin(
+        subscriptionLogin.connection_id,
+        subscriptionLogin.login_id,
+      )
+        .then((updated) => {
+          setSubscriptionLogin(updated);
+          if (updated.status === "complete") {
+            onSubscriptionComplete();
+          }
+        })
+        .catch((caught: unknown) => {
+          setError(errorMessage(caught));
+          setSubscriptionLogin(null);
+        })
+        .finally(() => {
+          polling = false;
+        });
+    }, subscriptionLogin.poll_interval_seconds * 1000);
+    return () => window.clearInterval(interval);
+  }, [onPollSubscriptionLogin, onSubscriptionComplete, subscriptionLogin]);
+
   const selectConnection = (next: ModelConnection) => {
     setConnectionId(next.connection_id);
     setCatalog(null);
@@ -1151,6 +1206,7 @@ const ModelConnectionSetup = ({
     setBaseUrl(next.base_url ?? "");
     setManualModel("");
     setRemember(false);
+    setSubscriptionLogin(null);
     setError(null);
     setSourceError(null);
   };
@@ -1200,6 +1256,21 @@ const ModelConnectionSetup = ({
         (model) => model.availability !== "unsupported",
       );
       setSelectedModel(first?.model_id ?? "");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const startSubscriptionLogin = async () => {
+    if (!connection?.supports_login) return;
+    setPending(true);
+    setError(null);
+    try {
+      setSubscriptionLogin(
+        await onStartSubscriptionLogin(connection.connection_id),
+      );
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -1297,6 +1368,11 @@ const ModelConnectionSetup = ({
                     >
                       {(
                         item.credential_status === "missing" &&
+                        item.supports_login
+                      ) ?
+                        "Sign in"
+                      : (
+                        item.credential_status === "missing" &&
                         item.accepts_token
                       ) ?
                         "Connect"
@@ -1315,6 +1391,7 @@ const ModelConnectionSetup = ({
                         selectedModel={selectedModel}
                         token={token}
                         remember={remember}
+                        subscriptionLogin={subscriptionLogin}
                         rememberAvailable={
                           settings?.credential_store.persistence_available ===
                             true && connection.connection_id !== "custom-api"
@@ -1325,9 +1402,12 @@ const ModelConnectionSetup = ({
                         onManualModel={setManualModel}
                         onRemember={setRemember}
                         onSelectedModel={setSelectedModel}
+                        onStartSubscriptionLogin={startSubscriptionLogin}
                         onToken={setToken}
                       />
                       {(
+                        (item.supports_login &&
+                          item.credential_status === "available") ||
                         settings?.credential_bindings.some(
                           (binding) =>
                             binding.binding_id === item.api_key_env &&
@@ -1343,7 +1423,7 @@ const ModelConnectionSetup = ({
                             void onForgetCredential(item.connection_id)
                           }
                         >
-                          Forget API key
+                          {item.supports_login ? "Sign out" : "Forget API key"}
                         </Button>
                       : null}
                     </>
@@ -1366,6 +1446,7 @@ interface ModelConnectionFormProps {
   manualModel: string;
   pending: boolean;
   selectedModel: string;
+  subscriptionLogin: SubscriptionDeviceLogin | null;
   token: string;
   remember: boolean;
   rememberAvailable: boolean;
@@ -1374,6 +1455,7 @@ interface ModelConnectionFormProps {
   onDiscover: () => Promise<void>;
   onManualModel: (value: string) => void;
   onSelectedModel: (value: string) => void;
+  onStartSubscriptionLogin: () => Promise<void>;
   onToken: (value: string) => void;
   onRemember: (value: boolean) => void;
 }
@@ -1386,6 +1468,7 @@ const ModelConnectionForm = ({
   manualModel,
   pending,
   selectedModel,
+  subscriptionLogin,
   token,
   remember,
   rememberAvailable,
@@ -1394,6 +1477,7 @@ const ModelConnectionForm = ({
   onDiscover,
   onManualModel,
   onSelectedModel,
+  onStartSubscriptionLogin,
   onToken,
   onRemember,
 }: ModelConnectionFormProps) => (
@@ -1439,9 +1523,56 @@ const ModelConnectionForm = ({
         />
       </label>
     : null}
+    {connection.supports_login && connection.credential_status === "missing" ?
+      <div className="subscription-login">
+        <p>
+          Sign in with a ChatGPT Plus or Pro account. OpenHands manages the
+          login, credential cache, and token refresh.
+        </p>
+        <p>
+          By continuing, you agree to{" "}
+          <a
+            href="https://openai.com/policies/terms-of-use/"
+            rel="noreferrer"
+            target="_blank"
+          >
+            OpenAI&apos;s Terms of Use
+          </a>
+          .
+        </p>
+        {subscriptionLogin ?
+          <div role="status">
+            <a
+              href={subscriptionLogin.verification_url}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Open ChatGPT sign-in
+            </a>
+            <span>
+              One-time code: <code>{subscriptionLogin.user_code}</code>
+            </span>
+            <span>
+              {subscriptionLogin.status === "pending" ?
+                "Waiting for sign-in..."
+              : "Signed in"}
+            </span>
+          </div>
+        : <Button
+            disabled={pending}
+            isPending={pending}
+            onClick={() => void onStartSubscriptionLogin()}
+          >
+            Sign in with ChatGPT
+          </Button>
+        }
+      </div>
+    : null}
     <Button
       disabled={
         pending ||
+        (connection.supports_login &&
+          connection.credential_status === "missing") ||
         (connection.connection_id === "custom-api" && !baseUrl.trim()) ||
         (connection.accepts_token &&
           connection.credential_status === "missing" &&
@@ -1591,6 +1722,11 @@ const ConnectionIcon = ({ connection }: { connection: ModelConnection }) => {
 };
 
 const connectionStatus = (connection: ModelConnection): string => {
+  if (connection.supports_login) {
+    return connection.credential_status === "missing" ?
+        "ChatGPT sign-in required"
+      : "Signed in with ChatGPT";
+  }
   if (connection.source === "platform") {
     return connection.credential_status === "missing" ?
         "Setup required"

@@ -24,6 +24,9 @@ SPDX-License-Identifier: MIT
 **Carina**
 : Stanford's research-computing platform using project storage and Slurm-managed compute.
 
+**ChatGPT subscription connection**
+: Account-based access to supported Codex models through OpenHands, separate from OpenAI API billing and API keys.
+
 **Container**
 : A packaged Linux filesystem and process environment run by software such as Docker.
 

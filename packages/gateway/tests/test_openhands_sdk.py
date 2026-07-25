@@ -335,6 +335,56 @@ def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> No
     assert backend.configuration_error == "active model profile credential reference is unavailable"
 
 
+def test_openhands_backend_rejects_a_stale_chat_route_for_responses_model(
+    tmp_path: Path,
+) -> None:
+    profile = ModelProfile(
+        profile_id="openai",
+        model="openai/gpt-5.4",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+    backend = OpenHandsSdkBackend(
+        profile=profile,
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="responses-route-test",
+        env={"OPENAI_API_KEY": "test-key"},
+        conversation_factory=cast(ConversationFactory, lambda _callback: _FakeConversation()),
+    )
+
+    assert backend.configuration_error == (
+        "The active model profile request path does not match OpenHands"
+    )
+
+
+def test_openhands_backend_rejects_a_stale_responses_route_for_chat_model(
+    tmp_path: Path,
+) -> None:
+    profile = ModelProfile(
+        profile_id="openai",
+        model="openai/gpt-4.1",
+        policy_endpoint="https://api.openai.com/v1/responses",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+    backend = OpenHandsSdkBackend(
+        profile=profile,
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="chat-route-test",
+        env={"OPENAI_API_KEY": "test-key"},
+        conversation_factory=cast(ConversationFactory, lambda _callback: _FakeConversation()),
+    )
+
+    assert backend.configuration_error == (
+        "The active model profile request path does not match OpenHands"
+    )
+
+
 def test_openhands_translation_reports_ensemble_risk_and_fails_closed() -> None:
     tool_call = _tool_call(
         ActionEvent(),

@@ -37,6 +37,7 @@ def test_generic_platform_adapter_conforms() -> None:
     assert capabilities.model_sources == (
         "heartwood",
         "stanford-ai-api-gateway",
+        "openai-subscription",
         "openai",
         "anthropic",
         "custom",
@@ -45,8 +46,11 @@ def test_generic_platform_adapter_conforms() -> None:
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "STANFORD_AI_API_KEY",
+        "subscription:openai",
     )
     assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
+    assert "https://api.openai.com/v1/responses" in policy.allowed_model_endpoints
+    assert "https://chatgpt.com/backend-api/codex/responses" in policy.allowed_model_endpoints
     assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
 
 
@@ -82,14 +86,18 @@ def test_terra_platform_adapter_conforms_and_uses_provisioned_compute() -> None:
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "STANFORD_AI_API_KEY",
+        "subscription:openai",
     )
     assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
+    assert "https://api.openai.com/v1/responses" in policy.allowed_model_endpoints
+    assert "https://chatgpt.com/backend-api/codex/responses" in policy.allowed_model_endpoints
     assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
     assert capabilities.interfaces == ("terminal", "notebook")
     assert capabilities.browser_route == "unavailable"
     assert capabilities.model_sources == (
         "heartwood",
         "stanford-ai-api-gateway",
+        "openai-subscription",
         "openai",
         "anthropic",
         "custom",

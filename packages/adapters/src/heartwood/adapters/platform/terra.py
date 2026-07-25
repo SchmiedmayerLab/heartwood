@@ -49,6 +49,7 @@ class TerraPlatformAdapter:
             model_sources=(
                 "heartwood",
                 "stanford-ai-api-gateway",
+                "openai-subscription",
                 "openai",
                 "anthropic",
                 "custom",
@@ -63,7 +64,12 @@ class TerraPlatformAdapter:
 
     def credential_allowlist(self) -> tuple[str, ...]:
         """Return credentials for the built-in hosted-provider connections."""
-        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "STANFORD_AI_API_KEY")
+        return (
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "STANFORD_AI_API_KEY",
+            "subscription:openai",
+        )
 
     def default_policy_profile(self) -> PolicyProfile:
         """Return the conservative built-in model-route policy for Terra."""
@@ -75,6 +81,8 @@ class TerraPlatformAdapter:
                 "http://127.0.0.1:8765/v1/chat/completions",
                 "https://api.anthropic.com/v1/messages",
                 "https://api.openai.com/v1/chat/completions",
+                "https://api.openai.com/v1/responses",
+                "https://chatgpt.com/backend-api/codex/responses",
             ),
             allowed_model_catalog_endpoints=(
                 "http://127.0.0.1:8765/v1/models",

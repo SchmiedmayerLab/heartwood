@@ -20,6 +20,7 @@ type ModelSourceId = Literal[
     "custom",
     "heartwood",
     "openai",
+    "openai-subscription",
     "stanford-ai-api-gateway",
 ]
 

@@ -21,6 +21,7 @@ from heartwood.gateway import (
     model_profile_from_preset,
     model_settings_from_mapping,
 )
+from heartwood.gateway._model_settings import align_model_profile_request_endpoint
 
 
 def test_local_profile_needs_no_secret_and_reports_configured() -> None:
@@ -120,6 +121,66 @@ def test_profile_accepts_bracketed_ipv6_loopback_without_credentials() -> None:
     assert profile.is_local is True
 
 
+def test_subscription_profile_persists_only_non_secret_openhands_metadata() -> None:
+    profile = ModelProfile(
+        profile_id="openai-subscription",
+        model="openai/gpt-current",
+        policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+        credential_kind="managed-identity",
+        auth_type="subscription",
+        subscription_vendor="openai",
+    )
+
+    profile.validate()
+    assert profile.resolve_api_key({}) is None
+    assert profile.credential_reference == "subscription:openai"
+    assert profile.safe_dict()["subscription_vendor"] == "openai"
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        ModelProfile(
+            profile_id="missing-vendor",
+            model="openai/gpt-current",
+            policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+            credential_kind="managed-identity",
+            auth_type="subscription",
+        ),
+        ModelProfile(
+            profile_id="wrong-credential-kind",
+            model="openai/gpt-current",
+            policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+            credential_kind="environment",
+            auth_type="subscription",
+            subscription_vendor="openai",
+            api_key_env="OPENAI_API_KEY",
+        ),
+        ModelProfile(
+            profile_id="wrong-provider",
+            model="anthropic/claude-current",
+            policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+            credential_kind="managed-identity",
+            auth_type="subscription",
+            subscription_vendor="openai",
+        ),
+        ModelProfile(
+            profile_id="wrong-endpoint",
+            model="openai/gpt-current",
+            policy_endpoint="https://api.openai.com/v1/responses",
+            credential_kind="managed-identity",
+            auth_type="subscription",
+            subscription_vendor="openai",
+        ),
+    ],
+)
+def test_subscription_profile_rejects_incoherent_authentication(
+    profile: ModelProfile,
+) -> None:
+    with pytest.raises(ModelSettingsError):
+        profile.validate()
+
+
 def test_settings_add_select_and_remove_profiles() -> None:
     settings = ModelSettings().with_profile(_local_profile()).selecting("heartwood")
 
@@ -168,6 +229,41 @@ def test_provider_preset_builds_a_selected_profile_without_secret_values() -> No
     assert openai.credential_status({}) == "missing"
 
 
+def test_openai_preset_uses_responses_when_openhands_supports_it() -> None:
+    profile = model_profile_from_preset("openai", "gpt-5.4")
+
+    assert profile.model == "openai/gpt-5.4"
+    assert profile.policy_endpoint == "https://api.openai.com/v1/responses"
+
+
+def test_profile_alignment_replaces_chat_policy_for_a_responses_model() -> None:
+    profile = ModelProfile(
+        profile_id="openai",
+        model="openai/gpt-5.4",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    aligned = align_model_profile_request_endpoint(profile)
+
+    assert aligned.policy_endpoint == "https://api.openai.com/v1/responses"
+
+
+def test_profile_alignment_replaces_responses_policy_for_a_chat_model() -> None:
+    profile = ModelProfile(
+        profile_id="openai",
+        model="openai/gpt-4.1",
+        policy_endpoint="https://api.openai.com/v1/responses",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    aligned = align_model_profile_request_endpoint(profile)
+
+    assert aligned.policy_endpoint == "https://api.openai.com/v1/chat/completions"
+
+
 @pytest.mark.parametrize(
     ("preset_id", "model_name", "message"),
     [
@@ -206,6 +302,8 @@ def test_managed_identity_has_one_stable_policy_reference() -> None:
         ({"model": "model-without-provider"}, "LiteLLM model id"),
         ({"capability_tier": "unsupported"}, "capability tier"),
         ({"credential_kind": "inline"}, "credential kind"),
+        ({"auth_type": "unsupported"}, "authentication type"),
+        ({"subscription_vendor": "openai"}, "subscription_vendor"),
         ({"policy_endpoint": "not-a-url"}, "invalid policy_endpoint"),
         (
             {"policy_endpoint": "http://LOCALHOST:8765/v1/chat/completions"},

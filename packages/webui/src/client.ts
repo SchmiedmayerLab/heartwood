@@ -35,6 +35,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  SubscriptionDeviceLogin,
 } from "./types";
 
 const noopCleanup = (): void => undefined;
@@ -69,6 +70,13 @@ export interface HeartwoodClient {
   ): Promise<ActionSettings>;
   getModelSettings(): Promise<ModelSettings>;
   forgetCredential(connectionId: string): Promise<CredentialSettings>;
+  startSubscriptionDeviceLogin(
+    connectionId: string,
+  ): Promise<SubscriptionDeviceLogin>;
+  pollSubscriptionDeviceLogin(
+    connectionId: string,
+    loginId: string,
+  ): Promise<SubscriptionDeviceLogin>;
   configureModelSource(sourceId: ModelSource): Promise<ModelSettings>;
   discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog>;
   connectModel(request: ModelConnectRequest): Promise<ModelSettings>;
@@ -229,6 +237,37 @@ export class GatewayClient implements HeartwoodClient {
         this.url(`/settings/credentials/${encodeURIComponent(connectionId)}`),
         { method: "DELETE" },
       ),
+    );
+  }
+
+  async startSubscriptionDeviceLogin(
+    connectionId: string,
+  ): Promise<SubscriptionDeviceLogin> {
+    return parseJsonResponse<SubscriptionDeviceLogin>(
+      await fetch(this.url("/settings/models/subscription/device"), {
+        body: JSON.stringify({
+          connection_id: connectionId,
+          terms_accepted: true,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async pollSubscriptionDeviceLogin(
+    connectionId: string,
+    loginId: string,
+  ): Promise<SubscriptionDeviceLogin> {
+    return parseJsonResponse<SubscriptionDeviceLogin>(
+      await fetch(this.url("/settings/models/subscription/device/poll"), {
+        body: JSON.stringify({
+          connection_id: connectionId,
+          login_id: loginId,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
     );
   }
 

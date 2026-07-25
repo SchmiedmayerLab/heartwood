@@ -205,6 +205,8 @@ export interface ModelProfile {
   capability_tier: "autonomous" | "experimental" | "supervised";
   base_url: string | null;
   credential_kind: CredentialKind;
+  auth_type: "api_key" | "subscription";
+  subscription_vendor: string | null;
   api_key_env: string | null;
   api_key_file: string | null;
   api_version: string | null;
@@ -217,7 +219,7 @@ export interface ModelProfile {
 }
 
 export type ModelConnectionProtocol =
-  "anthropic" | "openai" | "openai-compatible" | "static";
+  "anthropic" | "openai" | "openai-compatible" | "static" | "subscription";
 
 export type ModelConnectionSource = "built-in" | "platform" | "user";
 export type ModelConnectionGroup =
@@ -243,9 +245,12 @@ export interface ModelConnection {
   aws_profile_name: string | null;
   description: string;
   static_models: string[];
+  subscription_vendor: string | null;
   group: ModelConnectionGroup;
   group_label: string;
   accepts_token: boolean;
+  supports_login: boolean;
+  auth_type: "api_key" | "subscription";
   credential_status: CredentialStatus;
 }
 
@@ -283,6 +288,16 @@ export interface ModelConnectRequest {
   remember?: boolean;
 }
 
+export interface SubscriptionDeviceLogin {
+  schema_version: "heartwood.subscription-login.v1";
+  login_id: string;
+  connection_id: string;
+  verification_url: string;
+  user_code: string;
+  poll_interval_seconds: number;
+  status: "pending" | "complete";
+}
+
 export interface CredentialStoreAvailability {
   backends: Array<"process" | "keyring">;
   default_backend: "process" | "keyring";
@@ -314,7 +329,12 @@ export interface ModelPreset {
 }
 
 export type ModelSource =
-  "anthropic" | "custom" | "heartwood" | "openai" | "stanford-ai-api-gateway";
+  | "anthropic"
+  | "custom"
+  | "heartwood"
+  | "openai"
+  | "openai-subscription"
+  | "stanford-ai-api-gateway";
 
 export interface ModelSourceOption {
   source_id: ModelSource;

@@ -20,7 +20,7 @@ The manifest prevents the terminal, browser, and notebook from advertising route
 | Compute model | Current host | Provisioned Terra compute | Slurm allocation |
 | Durable storage | Project directory | Dedicated directory below `/home/jupyter` | Approved project storage |
 | Credential backends | Process, system keyring, mounted file | Process, mounted file, managed identity | Process, mounted file |
-| Model sources | Heartwood-managed, Stanford AI API Gateway, OpenAI, Anthropic, other compatible service | Heartwood-managed, Stanford AI API Gateway, OpenAI, Anthropic, other compatible service | Heartwood-managed, Stanford AI API Gateway |
+| Model sources | Heartwood-managed, Stanford AI API Gateway, ChatGPT sign-in, OpenAI API, Anthropic, other compatible service | Heartwood-managed, Stanford AI API Gateway, ChatGPT sign-in, OpenAI API, Anthropic, other compatible service | Heartwood-managed, Stanford AI API Gateway |
 | Built-in institution-managed connection | Stanford AI API Gateway | Stanford AI API Gateway | Stanford AI API Gateway |
 
 ## Startup Projection

@@ -16,7 +16,7 @@ from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Any, Concatenate, Protocol, cast
+from typing import Any, Concatenate, Literal, Protocol, cast
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.core_adapter import (
@@ -80,6 +80,7 @@ from heartwood.gateway._model_settings import (
     ModelProfile,
     ModelSettings,
     ModelSettingsError,
+    align_model_profile_request_endpoint,
     model_profile_from_preset,
 )
 from heartwood.gateway._model_snapshots import (
@@ -118,6 +119,11 @@ from heartwood.gateway._session_catalog import (
 from heartwood.gateway._skill_settings import SkillManager
 from heartwood.gateway._startup import InterfaceKind, StartupPlan, plan_startup
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
+from heartwood.gateway._subscriptions import (
+    OpenHandsOpenAISubscription,
+    SubscriptionError,
+    SubscriptionProvider,
+)
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
 from heartwood.session import SessionCommand, SessionEvent
@@ -263,6 +269,7 @@ class SessionGateway:
         model_catalog_service: ModelCatalogService | None = None,
         model_repository: HuggingFaceModelRepository | None = None,
         credential_store: CredentialStore | None = None,
+        subscription_provider: SubscriptionProvider | None = None,
         backend_id: str = "auto",
     ) -> None:
         self.project = ProjectContext.current() if project is None else project
@@ -297,6 +304,7 @@ class SessionGateway:
             env=self.env,
             use_system_keyring=env is None,
         )
+        self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
         self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
         repository_root = _repository_root()
         catalog_path = (
@@ -458,15 +466,21 @@ class SessionGateway:
         config = self.config_store.load()
         credential_env = self._credential_environment(strict=False)
         credential_bindings = sorted(self._credential_binding_ids())
+        safe_settings = settings.safe_dict(credential_env)
+        profiles = safe_settings.get("profiles", [])
+        if isinstance(profiles, list):
+            for profile in profiles:
+                if isinstance(profile, dict) and profile.get("auth_type") == "subscription":
+                    profile["credential_status"] = self._subscription_credential_status()
         return {
-            **settings.safe_dict(credential_env),
+            **safe_settings,
             "model_source": config.model_source,
             "source_options": [
                 option.safe_dict(selected=option.source_id == config.model_source)
                 for option in model_source_options(self.env)
             ],
             "connections": [
-                connection.safe_dict(credential_env)
+                self._safe_connection(connection, credential_env)
                 for connection in sorted(
                     self._model_connections.values(),
                     key=lambda connection: connection.presentation_order,
@@ -493,10 +507,63 @@ class SessionGateway:
         connection = self._model_connections.get(connection_id)
         if connection is None:
             raise ModelCatalogError(f"unknown model connection: {connection_id}")
+        if connection.protocol == "subscription":
+            try:
+                self.subscription_provider.logout()
+            except SubscriptionError as error:
+                raise ModelCatalogError(str(error)) from error
+            self._reset_services()
+            return self.credential_settings()
         if connection.credential_kind != "environment" or connection.api_key_env is None:
             raise ModelCatalogError("this model connection has no forgettable credential")
         self.credential_store.forget(connection.api_key_env)
         return self.credential_settings()
+
+    def login_subscription(
+        self,
+        connection_id: str,
+        *,
+        model_id: str,
+        force_login: bool = False,
+        open_browser: bool = True,
+        auth_method: Literal["browser", "device_code"] = "browser",
+    ) -> dict[str, object]:
+        """Run the OpenHands interactive subscription login flow."""
+        connection = self._subscription_connection(connection_id)
+        if auth_method not in {"browser", "device_code"}:
+            raise ModelCatalogError("unsupported subscription login method")
+        try:
+            self.subscription_provider.login(
+                model=connection.provider_model_id(model_id),
+                force_login=force_login,
+                open_browser=open_browser,
+                auth_method=auth_method,
+            )
+        except SubscriptionError as error:
+            raise ModelCatalogError(str(error)) from error
+        return self.model_settings()
+
+    @_serialized_state
+    def start_subscription_device_login(self, connection_id: str) -> dict[str, object]:
+        """Start an OpenHands device-code flow for browser and remote clients."""
+        self._subscription_connection(connection_id)
+        try:
+            return self.subscription_provider.start_device_login().safe_dict()
+        except SubscriptionError as error:
+            raise ModelCatalogError(str(error)) from error
+
+    @_serialized_state
+    def poll_subscription_device_login(
+        self,
+        connection_id: str,
+        login_id: str,
+    ) -> dict[str, object]:
+        """Poll one OpenHands device-code flow."""
+        self._subscription_connection(connection_id)
+        try:
+            return self.subscription_provider.poll_device_login(login_id).safe_dict()
+        except SubscriptionError as error:
+            raise ModelCatalogError(str(error)) from error
 
     def deployment_readiness(self) -> DeploymentReadiness:
         """Inspect the project with every resolvable credential binding."""
@@ -573,7 +640,7 @@ class SessionGateway:
             token=token,
             base_url=base_url,
         )
-        if connection.protocol != "static":
+        if connection.protocol not in {"static", "subscription"}:
             self._authorize_model_catalog(connection)
         if token is not None:
             self._remember_runtime_credential(connection, token, remember=remember)
@@ -592,7 +659,12 @@ class SessionGateway:
             api_key=api_key,
             refresh=refresh,
         )
-        return catalog.safe_dict(credential_env)
+        payload = catalog.safe_dict(credential_env)
+        if connection.protocol == "subscription":
+            safe_connection = payload.get("connection")
+            if isinstance(safe_connection, dict):
+                safe_connection["credential_status"] = self._subscription_credential_status()
+        return payload
 
     def connect_model(
         self,
@@ -639,17 +711,18 @@ class SessionGateway:
         entry = _catalog_entry(catalog, model_id)
         if entry.availability == "unsupported":
             raise ModelCatalogError(f"model is unavailable for OpenHands: {entry.reason}")
-        if connection.policy_endpoint is None:
-            raise ModelCatalogError("model connection does not define a completion endpoint")
+        request_endpoint = connection.request_endpoint(entry.execution_model)
         profile = ModelProfile(
             profile_id=connection.connection_id,
             model=entry.execution_model,
-            policy_endpoint=connection.policy_endpoint,
+            policy_endpoint=request_endpoint,
             capability_tier=(
                 "experimental" if entry.availability == "experimental" else "supervised"
             ),
             base_url=connection.base_url,
             credential_kind=connection.credential_kind,
+            auth_type=("subscription" if connection.protocol == "subscription" else "api_key"),
+            subscription_vendor=connection.subscription_vendor,
             api_key_env=connection.api_key_env,
             api_key_file=connection.api_key_file,
             api_version=connection.api_version,
@@ -693,6 +766,7 @@ class SessionGateway:
     @_serialized_state
     def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
         """Add or replace a non-secret profile and reset active services."""
+        profile = align_model_profile_request_endpoint(profile)
         if profile.profile_id in _RESERVED_MODEL_PROFILE_IDS:
             raise ModelSettingsError(
                 f"model profile id is reserved by Heartwood: {profile.profile_id}"
@@ -741,7 +815,11 @@ class SessionGateway:
         )
         return {
             "profile": profile.safe_dict(),
-            "credential_status": profile.credential_status(self._credential_environment()),
+            "credential_status": (
+                self._subscription_credential_status()
+                if profile.auth_type == "subscription"
+                else profile.credential_status(self._credential_environment())
+            ),
             "action_confirmation_mode": action_settings.confirmation_mode,
             "policy_decision": decision.model_dump(mode="json"),
         }
@@ -1163,6 +1241,33 @@ class SessionGateway:
             self.model_catalog_service.invalidate(connection_id)
         return dynamic
 
+    def _subscription_connection(self, connection_id: str) -> ModelConnection:
+        connection = self._model_connections.get(connection_id)
+        if connection is None:
+            raise ModelCatalogError(f"unknown model connection: {connection_id}")
+        if (
+            connection.protocol != "subscription"
+            or connection.connection_id != self.subscription_provider.connection_id
+        ):
+            raise ModelCatalogError("this model connection does not support account sign-in")
+        return connection
+
+    def _subscription_credential_status(self) -> str:
+        try:
+            return "available" if self.subscription_provider.credential_available() else "missing"
+        except SubscriptionError:
+            return "missing"
+
+    def _safe_connection(
+        self,
+        connection: ModelConnection,
+        credential_env: Mapping[str, str],
+    ) -> dict[str, object]:
+        payload = connection.safe_dict(credential_env)
+        if connection.protocol == "subscription":
+            payload["credential_status"] = self._subscription_credential_status()
+        return payload
+
     def _configure_custom_policy(self, connection: ModelConnection) -> None:
         if connection.catalog_endpoint is None or connection.policy_endpoint is None:
             raise ModelCatalogError("Custom API requires catalog and completion endpoints")
@@ -1179,9 +1284,15 @@ class SessionGateway:
         policy = default_policy.model_copy(
             update={
                 "policy_id": f"{adapter.adapter_id}-custom-api",
-                "allowed_model_endpoints": (
-                    *default_policy.allowed_model_endpoints,
-                    connection.policy_endpoint,
+                "allowed_model_endpoints": tuple(
+                    dict.fromkeys(
+                        (
+                            *default_policy.allowed_model_endpoints,
+                            connection.policy_endpoint,
+                            connection.policy_endpoint.removesuffix("/chat/completions")
+                            + "/responses",
+                        )
+                    )
                 ),
                 "allowed_model_catalog_endpoints": (
                     *default_policy.allowed_model_catalog_endpoints,
@@ -1310,6 +1421,12 @@ class SessionGateway:
             return "heartwood"
         for connection in self._model_connections.values():
             if connection.policy_endpoint == profile.policy_endpoint:
+                return self._model_source_for_connection(connection)
+            try:
+                request_endpoint = connection.request_endpoint(profile.model)
+            except ModelCatalogError:
+                continue
+            if request_endpoint == profile.policy_endpoint:
                 return self._model_source_for_connection(connection)
         source = self.config_store.load().model_source
         return "custom" if source is None else source

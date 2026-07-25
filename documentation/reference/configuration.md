@@ -42,6 +42,15 @@ The name identifies a secret source; it is not the secret.
 On a supported workstation, an explicitly remembered value is stored by the operating-system keyring under a project-scoped account.
 Containers and managed platforms normally use process entry, a mounted secret file, or managed identity.
 
+## ChatGPT Account State
+
+The **Sign in with ChatGPT** connection delegates OAuth, token storage, refresh, supported-model discovery, and request transport to OpenHands.
+OpenHands stores that account credential in its private user-level credential store, outside `.heartwood/`, so the account can be reused across projects for the same operating-system user.
+Heartwood project state retains only the connection identifier and selected model.
+Disposable containers require an explicit private credential-directory mount to retain this state after the container exits.
+
+Run `heartwood models forget openai-subscription` or use **Sign out** in browser settings to remove the OpenHands credential.
+
 ## Deployment Environment
 
 Environment variables remain valid at platform boundaries for detection, provider-secret injection, Jupyter routing, scheduler identity, GPU visibility, and packaged runtime wiring.

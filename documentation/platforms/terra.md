@@ -113,7 +113,8 @@ heartwood
 The first-use flow confirms the project and asks where the model runs.
 
 - Choose **Stanford AI API Gateway** when the route is approved for the Terra project.
-- Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
+- Choose **Sign in with ChatGPT** for an eligible Plus or Pro account only when the ChatGPT service is authorized for the intended data.
+- Choose **OpenAI API**, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
 For qualified managed coding-agent inference, start with the **Powerful** Qwen3 Coder 30B W4A16 AWQ recommendation on two T4 GPUs.
