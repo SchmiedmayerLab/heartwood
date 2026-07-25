@@ -10,6 +10,7 @@ import json
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -296,6 +297,84 @@ service.close()
     assert writer.returncode == 0, f"{writer_stdout}\n{writer_stderr}"
     assert reader.returncode == 0, reader_stderr
     assert reader_stdout.strip() in {"1", "2"}
+
+
+def test_command_waits_for_snapshot_contention_without_stranding_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder_script = """
+import sys
+import time
+from pathlib import Path
+from heartwood.core_adapter import FileSessionStore
+
+root = Path(sys.argv[1])
+store = FileSessionStore(root, "session-synthetic-001")
+while not (root / "acquire-snapshot").exists():
+    time.sleep(0.01)
+with store.snapshot():
+    (root / "snapshot-held").write_text("ready", encoding="utf-8")
+    while not (root / "release-snapshot").exists():
+        time.sleep(0.01)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    service = SessionService.synthetic_default(tmp_path)
+    command = _command(CommandKind.PAUSE, command_id="contended-pause")
+    results: list[object] = []
+    errors: list[BaseException] = []
+    original_accept = service.store.accept_command
+
+    def accept_then_contend(
+        *,
+        command_id: str,
+        command_hash: str,
+        first_sequence: int,
+    ) -> None:
+        original_accept(
+            command_id=command_id,
+            command_hash=command_hash,
+            first_sequence=first_sequence,
+        )
+        (tmp_path / "acquire-snapshot").write_text("ready", encoding="utf-8")
+        while not (tmp_path / "snapshot-held").exists():
+            time.sleep(0.01)
+
+    monkeypatch.setattr(service.store, "accept_command", accept_then_contend)
+
+    def handle_command() -> None:
+        try:
+            results.append(service.handle(command))
+        except BaseException as error:  # pragma: no cover - asserted through errors
+            errors.append(error)
+
+    worker = threading.Thread(target=handle_command)
+    try:
+        worker.start()
+        _wait_for_process_marker(holder, tmp_path / "snapshot-held")
+        assert service.store.command_record(command.command_id) is not None
+        assert worker.is_alive()
+
+        (tmp_path / "release-snapshot").write_text("continue", encoding="utf-8")
+        holder_stdout, holder_stderr = holder.communicate(timeout=5)
+        worker.join(timeout=5)
+    finally:
+        (tmp_path / "release-snapshot").touch()
+        if holder.poll() is None:
+            holder.kill()
+            holder.communicate(timeout=5)
+        worker.join(timeout=5)
+
+    assert holder.returncode == 0, f"{holder_stdout}\n{holder_stderr}"
+    assert not worker.is_alive()
+    assert errors == []
+    assert len(results) == 1
+    assert service.store.unresolved_command_ids() == ()
 
 
 def test_distinct_sessions_can_mutate_independently(tmp_path: Path) -> None:

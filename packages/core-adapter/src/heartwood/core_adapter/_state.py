@@ -69,7 +69,7 @@ class FileSessionStore:
         self.commands_dir = self.session_dir / ".commands"
         self._next_sequence: int | None = None
         self._writer_lock: FileLock | None = None
-        self._snapshot_lock = FileLock(self.snapshot_lock_path, timeout=10, mode=0o600)
+        self._snapshot_lock = FileLock(self.snapshot_lock_path, mode=0o600)
         self._writer_token: str | None = None
         self.recovered_stale_writer = False
 
@@ -140,14 +140,9 @@ class FileSessionStore:
             raise SessionStoreBoundaryError(
                 f"session snapshot lock must not be a symbolic link: {self.session_id}"
             )
-        try:
-            with self._snapshot_lock:
-                self.snapshot_lock_path.chmod(0o600)
-                yield
-        except FileLockTimeout as error:
-            raise SessionRecoveryError(
-                f"session {self.session_id} did not provide a stable persistence snapshot"
-            ) from error
+        with self._snapshot_lock.acquire(timeout=-1):
+            self.snapshot_lock_path.chmod(0o600)
+            yield
 
     def append_event(self, event: SessionEvent) -> None:
         """Persist one legacy session event envelope under the writer lease."""
