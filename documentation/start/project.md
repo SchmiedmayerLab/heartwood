@@ -38,8 +38,8 @@ project/
 The folder has restrictive filesystem permissions and contains an internal `.gitignore` that ignores everything below it.
 It stores non-secret configuration, sessions, downloaded or imported model files, installed Skills, runtime state, logs, caches, and audit artifacts.
 
-Raw provider tokens are not written to `config.toml`, session events, logs, browser storage, or audit exports.
-On supported workstations, Heartwood can store a token in the operating-system credential store after explicit confirmation; otherwise it keeps an entered token only for the running process or uses a deployment-provided secret binding.
+Raw provider API keys are not written to `config.toml`, session events, logs, browser storage, or audit exports.
+On supported workstations, Heartwood can store an API key in the operating-system credential store after explicit confirmation; otherwise it keeps an entered key only for the running process or uses a deployment-provided secret binding.
 
 ## Persistence by Environment
 

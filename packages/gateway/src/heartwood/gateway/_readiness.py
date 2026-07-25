@@ -89,28 +89,28 @@ MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
         description=("Let Heartwood download or import a model and run it in this environment."),
     ),
     ModelSourceOption(
+        source_id="stanford-ai-api-gateway",
+        connection_id="stanford-ai-api-gateway",
+        label="Stanford AI API Gateway",
+        description="Use the models available to a Stanford AI API Gateway key.",
+    ),
+    ModelSourceOption(
         source_id="openai",
         connection_id="openai",
         label="OpenAI",
-        description="Use the models available to an OpenAI token.",
+        description="Use the models available to an OpenAI API key.",
     ),
     ModelSourceOption(
         source_id="anthropic",
         connection_id="anthropic",
         label="Anthropic",
-        description="Use the models available to an Anthropic token.",
+        description="Use the models available to an Anthropic API key.",
     ),
     ModelSourceOption(
         source_id="custom",
         connection_id="custom-api",
         label="Other compatible service",
         description="Connect to an approved service that implements the OpenAI API format.",
-    ),
-    ModelSourceOption(
-        source_id="stanford-ai-api-gateway",
-        connection_id="stanford-ai-api-gateway",
-        label="Research environment",
-        description="Use a model connection already provided by this research environment.",
     ),
 )
 

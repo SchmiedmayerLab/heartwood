@@ -42,7 +42,7 @@ Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Research environment or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Stanford AI API Gateway or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
 | Qualified managed GPU inference | `ghcr.io/schmiedmayerlab/heartwood:0.2.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
@@ -112,7 +112,7 @@ heartwood
 
 The first-use flow confirms the project and asks where the model runs.
 
-- Choose a research-environment connection when the Terra deployment supplies an approved service.
+- Choose **Stanford AI API Gateway** when the route is approved for the Terra project.
 - Choose OpenAI, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 

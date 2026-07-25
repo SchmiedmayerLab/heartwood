@@ -748,7 +748,7 @@ describe("App", () => {
     fireEvent.click(
       within(stanford as HTMLElement).getByRole("button", { name: "Set up" }),
     );
-    fireEvent.change(await screen.findByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "runtime-only-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
@@ -1103,7 +1103,7 @@ describe("App", () => {
         name: "Connect",
       }),
     );
-    fireEvent.change(await screen.findByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "runtime-only-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
@@ -1122,7 +1122,7 @@ describe("App", () => {
       token: "runtime-only-token",
       refresh: true,
     });
-    expect(screen.getByLabelText("API token")).toHaveValue("");
+    expect(screen.getByLabelText("API key")).toHaveValue("");
     expect(JSON.stringify(client.currentSettings)).not.toContain(
       "runtime-only-token",
     );
@@ -1152,7 +1152,7 @@ describe("App", () => {
         name: "Connect",
       }),
     );
-    fireEvent.change(await screen.findByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "remembered-token" },
     });
     fireEvent.click(
@@ -1170,7 +1170,7 @@ describe("App", () => {
         remember: true,
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Forget token" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forget API key" }));
     await waitFor(() =>
       expect(client.currentSettings.credential_bindings).toHaveLength(0),
     );
@@ -1391,7 +1391,7 @@ describe("App", () => {
       target: { value: "https://models.example/v1" },
     });
     fireEvent.change(
-      screen.getByLabelText("Token (optional for loopback services)"),
+      screen.getByLabelText("API key (optional for loopback services)"),
       {
         target: { value: "runtime-only-token" },
       },
@@ -1719,7 +1719,7 @@ const modelConnection = (
     : "hosted-provider";
   const groupLabel =
     group === "heartwood-managed" ? "Run with Heartwood"
-    : group === "research-environment" ? "Research environment"
+    : group === "research-environment" ? "Institution-managed providers"
     : group === "compatible-service" ? "Other compatible services"
     : "Hosted providers";
   return {

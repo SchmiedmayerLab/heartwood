@@ -94,7 +94,7 @@ test("supports the researcher conversation and session workflow", async ({
     has: page.getByText("OpenAI", { exact: true }),
   });
   await hostedConnection.getByRole("button", { name: "Connect" }).click();
-  await page.getByLabel("API token").fill("synthetic-runtime-token");
+  await page.getByLabel("API key").fill("synthetic-runtime-token");
   const loadModels = page.getByRole("button", { name: "Load models" });
   await expect(loadModels).toBeVisible();
   await loadModels.click();
@@ -300,14 +300,14 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         source_id: "openai",
         connection_id: "openai",
         label: "OpenAI",
-        description: "Use the models available to an OpenAI token.",
+        description: "Use the models available to an OpenAI API key.",
         selected: false,
       },
       {
         source_id: "anthropic",
         connection_id: "anthropic",
         label: "Anthropic",
-        description: "Use the models available to an Anthropic token.",
+        description: "Use the models available to an Anthropic API key.",
         selected: false,
       },
       {

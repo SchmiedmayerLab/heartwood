@@ -38,7 +38,7 @@ heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT]
 
 For unattended setup, use `heartwood setup --non-interactive --yes` with explicit model-source and model identifiers.
 Use `--model-source heartwood` when Heartwood should download or import the model and supervise its runtime in the current environment.
-Provider tokens are not accepted as setup command arguments.
+Provider API keys are not accepted as setup command arguments.
 
 ## Models
 

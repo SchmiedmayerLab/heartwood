@@ -1343,7 +1343,7 @@ const ModelConnectionSetup = ({
                             void onForgetCredential(item.connection_id)
                           }
                         >
-                          Forget token
+                          Forget API key
                         </Button>
                       : null}
                     </>
@@ -1429,8 +1429,8 @@ const ModelConnectionForm = ({
     ) ?
       <label>
         {connection.connection_id === "custom-api" ?
-          "Token (optional for loopback services)"
-        : "API token"}
+          "API key (optional for loopback services)"
+        : "API key"}
         <Input
           autoComplete="off"
           type="password"

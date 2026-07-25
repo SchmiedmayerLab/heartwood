@@ -1229,9 +1229,9 @@ class SessionGateway:
         remember: bool,
     ) -> None:
         if connection.credential_kind != "environment" or connection.api_key_env is None:
-            raise ModelCatalogError("this model connection does not accept an API token")
+            raise ModelCatalogError("this model connection does not accept an API key")
         if not token.strip():
-            raise ModelCatalogError("API token must not be empty")
+            raise ModelCatalogError("API key must not be empty")
         if remember and connection.connection_id == "custom-api":
             raise ModelCatalogError(
                 "Custom service tokens are process-only because they are tied to a server URL"

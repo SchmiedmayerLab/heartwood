@@ -834,3 +834,28 @@ def test_compatibility_uses_openhands_and_litellm_metadata(
     assert experimental[3] is None
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
     assert os.environ["OPENHANDS_SUPPRESS_BANNER"] == "1"
+
+
+def test_stanford_gateway_rejects_a_model_with_broken_tool_continuations() -> None:
+    connection = ModelConnection(
+        connection_id="stanford-ai-api-gateway",
+        label="Stanford AI API Gateway",
+        protocol="openai-compatible",
+        model_prefix="openai/",
+        source="platform",
+        credential_kind="environment",
+        api_key_env="STANFORD_AI_API_KEY",
+        base_url="https://aiapi-prod.stanford.edu/v1",
+        catalog_endpoint="https://aiapi-prod.stanford.edu/v1/models",
+        policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
+    )
+
+    availability, reason, context_window, supports_tools = _model_compatibility(
+        connection,
+        "openai/gpt-5.4",
+    )
+
+    assert availability == "unsupported"
+    assert "tool continuations" in reason
+    assert context_window is None
+    assert supports_tools is False

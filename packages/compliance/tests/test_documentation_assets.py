@@ -147,7 +147,7 @@ def test_model_guides_cover_simple_and_advanced_routes() -> None:
     combined = "\n".join((overview, connections, choices, runtime, offline))
 
     for phrase in (
-        "Research environment",
+        "Stanford AI API Gateway",
         "OpenAI",
         "Anthropic",
         "Other compatible service",

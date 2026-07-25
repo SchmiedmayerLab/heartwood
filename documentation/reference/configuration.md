@@ -36,7 +36,7 @@ It must never contain raw credential values.
 
 ## Credential Binding Names
 
-Built-in provider profiles use environment-style names such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and a platform-defined Stanford gateway binding.
+Built-in provider profiles use environment-style names such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `STANFORD_AI_API_KEY`.
 The name identifies a secret source; it is not the secret.
 
 On a supported workstation, an explicitly remembered value is stored by the operating-system keyring under a project-scoped account.

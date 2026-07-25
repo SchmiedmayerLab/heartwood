@@ -53,8 +53,14 @@ class GenericPlatformAdapter:
             scheduler="none",
             persistent_storage="The project directory",
             credential_backends=("process", "keyring", "mounted-file"),
-            model_sources=("heartwood", "openai", "anthropic", "custom"),
-            managed_model_connections=(),
+            model_sources=(
+                "heartwood",
+                "stanford-ai-api-gateway",
+                "openai",
+                "anthropic",
+                "custom",
+            ),
+            managed_model_connections=("Stanford AI API Gateway",),
             validation_level="ci",
         )
 
@@ -64,7 +70,7 @@ class GenericPlatformAdapter:
 
     def credential_allowlist(self) -> tuple[str, ...]:
         """Return the generic credential allowlist."""
-        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "STANFORD_AI_API_KEY")
 
     def default_policy_profile(self) -> PolicyProfile:
         """Return the default deny-egress policy for generic local execution."""

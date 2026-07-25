@@ -162,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     setup.add_argument(
         "--remember-credential",
         action="store_true",
-        help="Store the provider token in the system credential store when available.",
+        help="Store the provider API key in the system credential store when available.",
     )
     setup.add_argument(
         "--non-interactive",
@@ -713,7 +713,7 @@ def _handle_setup(
         gateway.stop()
     if code == 0:
         if process_only_credentials:
-            print("Configuration saved, but the provider token was not stored.")
+            print("Configuration saved, but the provider API key was not stored.")
             print(
                 "Export the provider credential in this shell or rerun setup with "
                 "--remember-credential before starting a new Heartwood process."
@@ -829,7 +829,7 @@ def _configure_setup(
         if non_interactive:
             parser.error("--yes is required with --non-interactive")
         try:
-            confirmed = input("Apply this non-secret configuration? [y/N]: ").strip().lower() == "y"
+            confirmed = input("Continue with this model setup? [y/N]: ").strip().lower() == "y"
         except EOFError:
             print("\nSetup cancelled because input closed.")
             return 1, None
@@ -890,7 +890,7 @@ def _configure_setup(
             ):
                 try:
                     remember_credential = (
-                        input("Remember this token in the system credential store? [y/N]: ")
+                        input("Remember this API key in the system credential store? [y/N]: ")
                         .strip()
                         .lower()
                         == "y"
@@ -898,7 +898,7 @@ def _configure_setup(
                 except EOFError as error:
                     raise ModelCatalogError("credential storage choice was cancelled") from error
             elif source != "custom":
-                print("The token will be kept only until this Heartwood command exits.")
+                print("The API key will be kept only until this Heartwood command exits.")
         catalog = _run_with_progress(
             lambda: gateway.discover_models(
                 connection_id,
@@ -1145,7 +1145,7 @@ def _prompt_for_provider_token(
     except EOFError as error:
         raise ModelCatalogError("credential entry was cancelled because input closed") from error
     if not token.strip():
-        raise ModelCatalogError("provider token must not be empty")
+        raise ModelCatalogError("provider API key must not be empty")
     return token
 
 

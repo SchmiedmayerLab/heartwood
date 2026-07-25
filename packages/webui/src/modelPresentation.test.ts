@@ -71,7 +71,7 @@ const settings: ModelSettings = {
       description: "",
       static_models: [],
       group: "research-environment",
-      group_label: "Research environment",
+      group_label: "Institution-managed providers",
       accepts_token: false,
       credential_status: "configured",
     },

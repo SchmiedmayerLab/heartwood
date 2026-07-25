@@ -663,6 +663,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     source_options = cast(list[dict[str, JsonValue]], initial.body["source_options"])
     assert [option["source_id"] for option in source_options] == [
         "heartwood",
+        "stanford-ai-api-gateway",
         "openai",
         "anthropic",
         "custom",

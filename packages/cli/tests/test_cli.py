@@ -391,7 +391,7 @@ def test_bare_command_configures_session_token_and_opens_conversation(
         def isatty(self) -> bool:
             return True
 
-    inputs = iter(["1", "2", "y", "1"])
+    inputs = iter(["1", "3", "y", "1"])
     monkeypatch.setattr("sys.stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
     monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
@@ -453,7 +453,7 @@ def test_setup_does_not_claim_a_process_only_credential_is_durable(
     assert code == 2
     output = capsys.readouterr().out
     assert "Configuration saved" in output
-    assert "provider token was not stored" in output
+    assert "provider API key was not stored" in output
     assert "Setup complete" not in output
     assert "session-secret" not in output
     assert 'model_source = "openai"' in project.joinpath(".heartwood/config.toml").read_text()

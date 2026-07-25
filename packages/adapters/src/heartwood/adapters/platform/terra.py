@@ -46,8 +46,14 @@ class TerraPlatformAdapter:
             scheduler="provisioned",
             persistent_storage="A dedicated project under /home/jupyter",
             credential_backends=("process", "mounted-file", "managed-identity"),
-            model_sources=("heartwood", "openai", "anthropic", "custom"),
-            managed_model_connections=(),
+            model_sources=(
+                "heartwood",
+                "stanford-ai-api-gateway",
+                "openai",
+                "anthropic",
+                "custom",
+            ),
+            managed_model_connections=("Stanford AI API Gateway",),
             validation_level="ci",
         )
 
@@ -57,7 +63,7 @@ class TerraPlatformAdapter:
 
     def credential_allowlist(self) -> tuple[str, ...]:
         """Return credentials for the built-in hosted-provider connections."""
-        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+        return ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "STANFORD_AI_API_KEY")
 
     def default_policy_profile(self) -> PolicyProfile:
         """Return the conservative built-in model-route policy for Terra."""

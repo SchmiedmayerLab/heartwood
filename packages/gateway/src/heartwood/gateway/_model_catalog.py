@@ -33,7 +33,7 @@ _CONNECTION_PROTOCOLS = {"anthropic", "openai", "openai-compatible", "static"}
 _CONNECTION_SOURCES = {"built-in", "platform", "user"}
 _CONNECTION_GROUP_LABELS: dict[ConnectionGroup, str] = {
     "heartwood-managed": "Run with Heartwood",
-    "research-environment": "Research environment",
+    "research-environment": "Institution-managed providers",
     "hosted-provider": "Hosted providers",
     "compatible-service": "Other compatible services",
 }
@@ -67,6 +67,21 @@ _CONNECTION_FIELDS = {
     "static_models",
 }
 _SECRET_FIELD_MARKERS = ("api_key", "apikey", "password", "secret", "token")
+_CONNECTION_MODEL_OVERRIDES: dict[
+    tuple[str, str],
+    tuple[ModelAvailability, str, int | None, bool | None],
+] = {
+    (
+        "stanford-ai-api-gateway",
+        "gpt-5.4",
+    ): (
+        "unsupported",
+        "The Stanford gateway does not currently preserve OpenHands tool "
+        "continuations for this model",
+        None,
+        False,
+    ),
+}
 
 
 class ModelCatalogError(ValueError):
@@ -644,6 +659,9 @@ def _model_compatibility(
     os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
     verified = _verified_openhands_models(connection)
     model_name = connection.provider_model_id(execution_model)
+    override = _CONNECTION_MODEL_OVERRIDES.get((connection.connection_id, model_name))
+    if override is not None:
+        return override
     if execution_model in verified or model_name in verified:
         return "available", "Verified by the pinned OpenHands SDK", None, True
     try:

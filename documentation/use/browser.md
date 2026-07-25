@@ -29,12 +29,12 @@ Opening the page is read-only until you select **Use this project**.
 The setup panel then presents model sources available in the detected environment, models returned by the selected service, and credential handling supported by the platform.
 
 The project, model selection, and action-confirmation setting are shared with the terminal and notebook bridge.
-Provider tokens are never stored in browser storage.
+Provider API keys are never stored in browser storage.
 
 If you download or import a model for Heartwood to run, wait for **Downloaded. Restart Heartwood to load this model.**
 Stop the launching command with `Ctrl-C`, then run `heartwood --interface web` again from the same project.
 Heartwood starts and supervises the selected model before reopening the page.
-Hosted and research-environment connections do not require this restart.
+Hosted and Stanford AI API Gateway connections do not require this restart.
 
 ## Work With a Session
 
