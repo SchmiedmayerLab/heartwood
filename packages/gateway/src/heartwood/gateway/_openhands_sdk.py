@@ -105,6 +105,7 @@ _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN = 4
 _AGENT_CONDENSER_INPUT_FRACTION = 0.75
 _AGENT_CONDENSER_MAX_EVENTS = 240
 _AGENT_CONDENSER_KEEP_FIRST = 2
+_OPENHANDS_FINISH_TOOL_NAME = "finish"
 
 
 def prepare_openhands_sdk(env: Mapping[str, str] | None = None) -> OpenHandsModules:
@@ -418,6 +419,13 @@ class OpenHandsSdkBackend:
                         BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message=message)
                     )
             elif event_name == "ActionEvent":
+                if str(getattr(event, "tool_name", "")) == _OPENHANDS_FINISH_TOOL_NAME:
+                    message = _finish_message(event)
+                    if message:
+                        translated.append(
+                            BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message=message)
+                        )
+                    continue
                 tool_call = _tool_call(
                     event,
                     session_id=session_id,
@@ -430,6 +438,8 @@ class OpenHandsSdkBackend:
                     BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call)
                 )
             elif event_name == "ObservationEvent":
+                if str(getattr(event, "tool_name", "")) == _OPENHANDS_FINISH_TOOL_NAME:
+                    continue
                 tool_call_id = str(getattr(event, "tool_call_id", ""))
                 if tool_call_id:
                     observed.add(tool_call_id)
@@ -471,6 +481,14 @@ def _message_text(event: object) -> str:
     return "\n".join(
         text for item in content if isinstance((text := getattr(item, "text", None)), str) and text
     )
+
+
+def _finish_message(event: object) -> str:
+    action = getattr(event, "action", None)
+    message = (
+        action.get("message") if isinstance(action, Mapping) else getattr(action, "message", None)
+    )
+    return message if isinstance(message, str) else ""
 
 
 def _tool_call(

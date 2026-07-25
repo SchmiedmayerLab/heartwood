@@ -433,6 +433,27 @@ def test_openhands_backend_allows_one_pending_action_and_continues(tmp_path: Pat
     assert conversation.rejection_reasons == []
 
 
+def test_openhands_backend_maps_finish_lifecycle_to_agent_message(tmp_path: Path) -> None:
+    conversation = _FinishConversation()
+    backend = _backend(tmp_path, conversation)
+    pending = backend.submit_turn(session_id="session-1", prompt="create a file")
+    tool_call = pending[1].tool_call
+    assert tool_call is not None
+
+    events = backend.resolve_confirmation(
+        session_id="session-1",
+        tool_call_id=tool_call.tool_call_id,
+        approved=True,
+    )
+
+    assert [event.kind for event in events] == [
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.TOOL_EXECUTION,
+        BackendEventKind.AGENT_MESSAGE,
+    ]
+    assert events[2].message == "The requested file was created."
+
+
 def test_openhands_backend_rejects_pending_action_without_model_continuation(
     tmp_path: Path,
 ) -> None:
@@ -653,18 +674,32 @@ class MessageEvent:
 
 
 class ActionEvent:
-    def __init__(self, tool_call_id: str = "call-1", command: str = "pwd") -> None:
+    def __init__(
+        self,
+        tool_call_id: str = "call-1",
+        command: str = "pwd",
+        *,
+        tool_name: str = "terminal",
+        message: str | None = None,
+    ) -> None:
         self.tool_call_id = tool_call_id
-        self.tool_name = "terminal"
+        self.tool_name = tool_name
         self.security_risk = SimpleNamespace(value="LOW")
-        self.summary = "inspect the workspace"
-        self.action = {"command": command}
+        self.summary = "finish the task" if tool_name == "finish" else "inspect the workspace"
+        self.action = (
+            SimpleNamespace(message=message) if tool_name == "finish" else {"command": command}
+        )
 
 
 class ObservationEvent:
-    def __init__(self, tool_call_id: str = "call-1") -> None:
+    def __init__(
+        self,
+        tool_call_id: str = "call-1",
+        *,
+        tool_name: str = "terminal",
+    ) -> None:
         self.tool_call_id = tool_call_id
-        self.tool_name = "terminal"
+        self.tool_name = tool_name
         self.observation = SimpleNamespace(exit_code=0, is_error=False)
 
 
@@ -752,6 +787,27 @@ class _ParallelConversation(_FakeConversation):
             callback(ObservationEvent("call-1"))
             callback(ObservationEvent("call-2"))
             callback(MessageEvent("Both workspace actions completed."))
+            self.state.execution_status.value = "finished"
+
+
+class _FinishConversation(_FakeConversation):
+    def run(self) -> None:
+        callback = self.callback
+        assert callback is not None
+        self.run_count += 1
+        if self.run_count == 1:
+            callback(ActionEvent())
+            self.state.execution_status.value = "waiting_for_confirmation"
+        else:
+            callback(ObservationEvent())
+            callback(
+                ActionEvent(
+                    "finish-call",
+                    tool_name="finish",
+                    message="The requested file was created.",
+                )
+            )
+            callback(ObservationEvent("finish-call", tool_name="finish"))
             self.state.execution_status.value = "finished"
 
 
