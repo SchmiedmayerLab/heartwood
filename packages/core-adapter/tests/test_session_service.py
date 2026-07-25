@@ -350,7 +350,7 @@ with store.snapshot():
     def handle_command() -> None:
         try:
             results.append(service.handle(command))
-        except BaseException as error:  # pragma: no cover - asserted through errors
+        except Exception as error:  # pragma: no cover - asserted through errors
             errors.append(error)
 
     worker = threading.Thread(target=handle_command)

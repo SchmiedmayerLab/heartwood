@@ -1670,6 +1670,16 @@ class RejectingClient extends FakeClient {
   }
 }
 
+class LostResponseClient extends FakeClient {
+  override postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+    this.commands.push(command);
+    if (this.commands.length === 1) {
+      return Promise.reject(new Error("connection lost after submission"));
+    }
+    return Promise.resolve({ events: [] });
+  }
+}
+
 describe("App error handling", () => {
   it("renders gateway command errors", async () => {
     render(
@@ -1680,6 +1690,35 @@ describe("App error handling", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
 
     expect(await screen.findByText("synthetic gateway failure")).toBeVisible();
+  });
+
+  it("retries an uncertain command with the original command identifier", async () => {
+    const client = new LostResponseClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    fireEvent.change(screen.getByLabelText("Task"), {
+      target: { value: "Inspect the synthetic cohort" },
+    });
+    fireEvent.click(screen.getByLabelText("Send task"));
+    expect(
+      await screen.findByText("connection lost after submission"),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry request" }));
+    await waitFor(() => expect(client.commands).toHaveLength(2));
+
+    expect(client.commands[1]).toEqual(client.commands[0]);
+    expect(
+      within(
+        screen.getByRole("log", { name: "Conversation transcript" }),
+      ).getAllByText("Inspect the synthetic cohort"),
+    ).toHaveLength(1);
   });
 });
 
