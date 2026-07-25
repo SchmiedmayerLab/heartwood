@@ -13,7 +13,7 @@ import json
 import shutil
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -49,6 +49,7 @@ from heartwood.gateway import (
     ProviderModel,
     RestGateway,
     RestRequest,
+    SubscriptionDeviceLogin,
 )
 from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
@@ -72,6 +73,7 @@ def _install_deterministic_gateway(
     model_catalog_service: ModelCatalogService | None = None,
     env: dict[str, str] | None = None,
     model_repository: object | None = None,
+    subscription_provider: object | None = None,
 ) -> None:
     def factory(**kwargs: object) -> RealSessionGateway:
         project = kwargs.get("project")
@@ -82,6 +84,7 @@ def _install_deterministic_gateway(
             backend_id="deterministic",
             model_catalog_service=model_catalog_service,
             model_repository=cast(Any, model_repository),
+            subscription_provider=cast(Any, subscription_provider),
         )
 
     monkeypatch.setattr("heartwood.cli.SessionGateway", factory)
@@ -392,7 +395,7 @@ def test_bare_command_configures_session_token_and_opens_conversation(
         def isatty(self) -> bool:
             return True
 
-    inputs = iter(["1", "2", "y", "1"])
+    inputs = iter(["1", "4", "y", "1"])
     monkeypatch.setattr("sys.stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
     monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
@@ -426,6 +429,86 @@ def test_bare_command_configures_session_token_and_opens_conversation(
     assert "session-secret" not in output
 
 
+def test_bare_command_signs_in_with_chatgpt_through_openhands(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SubscriptionProvider:
+        connection_id = "openai-subscription"
+        vendor = "openai"
+
+        def __init__(self) -> None:
+            self.available = False
+            self.login_model: str | None = None
+
+        def models(self) -> tuple[str, ...]:
+            return ("gpt-subscription",)
+
+        def credential_available(self) -> bool:
+            return self.available
+
+        def login(
+            self,
+            *,
+            model: str,
+            force_login: bool,  # noqa: ARG002
+            open_browser: bool,
+            auth_method: Literal["browser", "device_code"],
+        ) -> None:
+            assert not open_browser
+            assert auth_method == "device_code"
+            self.login_model = model
+            self.available = True
+
+        def start_device_login(self) -> SubscriptionDeviceLogin:
+            raise AssertionError("CLI setup should use OpenHands' interactive login")
+
+        def poll_device_login(self, login_id: str) -> SubscriptionDeviceLogin:
+            raise AssertionError(f"unexpected device poll: {login_id}")
+
+        def logout(self) -> bool:
+            self.available = False
+            return True
+
+    provider = SubscriptionProvider()
+    service = ModelCatalogService(
+        subscription_lister=lambda _connection, _token: (
+            ProviderModel(model_id="gpt-subscription"),
+        ),
+    )
+    _install_deterministic_gateway(
+        monkeypatch,
+        model_catalog_service=service,
+        subscription_provider=provider,
+    )
+
+    class InteractiveInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    inputs = iter(["1", "3", "y", "1"])
+    monkeypatch.setattr("sys.stdin", InteractiveInput())
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+    opened: list[dict[str, object]] = []
+
+    def open_chat(
+        gateway: RealSessionGateway,
+        *,
+        session_id: str,  # noqa: ARG001
+        plain: bool,  # noqa: ARG001
+    ) -> int:
+        opened.append(gateway.validate_model_profile())
+        return 0
+
+    monkeypatch.setattr("heartwood.cli._interactive_chat", open_chat)
+
+    assert _run(tmp_path / "analysis", monkeypatch, []) == 0
+    assert provider.login_model == "gpt-subscription"
+    assert opened[0]["credential_status"] == "available"
+    assert "Sign in with ChatGPT" in capsys.readouterr().out
+
+
 def test_setup_does_not_claim_a_process_only_credential_is_durable(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -454,7 +537,7 @@ def test_setup_does_not_claim_a_process_only_credential_is_durable(
     assert code == 2
     output = capsys.readouterr().out
     assert "Configuration saved" in output
-    assert "provider token was not stored" in output
+    assert "provider API key was not stored" in output
     assert "Setup complete" not in output
     assert "session-secret" not in output
     assert 'model_source = "openai"' in project.joinpath(".heartwood/config.toml").read_text()

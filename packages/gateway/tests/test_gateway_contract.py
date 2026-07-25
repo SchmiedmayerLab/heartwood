@@ -835,6 +835,8 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     source_options = cast(list[dict[str, JsonValue]], initial.body["source_options"])
     assert [option["source_id"] for option in source_options] == [
         "heartwood",
+        "stanford-ai-api-gateway",
+        "openai-subscription",
         "openai",
         "anthropic",
         "custom",
@@ -842,6 +844,7 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
     connections = cast(list[dict[str, JsonValue]], initial.body["connections"])
     assert [connection["connection_id"] for connection in connections] == [
         "heartwood",
+        "openai-subscription",
         "openai",
         "anthropic",
         "custom-api",
@@ -866,6 +869,161 @@ def test_rest_manages_model_profiles_and_artifact_metadata(tmp_path: Path) -> No
         "qwen25-7b-instruct-q4_k_m",
         "qwen25-coder-7b-instruct-q4_k_m",
     }
+
+
+def test_rest_coordinates_browser_subscription_login(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+    start_calls: list[str] = []
+
+    def start_login(connection_id: str) -> dict[str, JsonValue]:
+        start_calls.append(connection_id)
+        return {
+            "schema_version": "heartwood.subscription-login.v1",
+            "login_id": "login-1",
+            "connection_id": connection_id,
+            "verification_url": "https://auth.example/device",
+            "user_code": "TEST-CODE",
+            "poll_interval_seconds": 5,
+            "status": "pending",
+        }
+
+    monkeypatch.setattr(
+        gateway,
+        "start_subscription_device_login",
+        start_login,
+    )
+    monkeypatch.setattr(
+        gateway,
+        "poll_subscription_device_login",
+        lambda connection_id, login_id: {
+            "schema_version": "heartwood.subscription-login.v1",
+            "login_id": login_id,
+            "connection_id": connection_id,
+            "verification_url": "https://auth.example/device",
+            "user_code": "TEST-CODE",
+            "poll_interval_seconds": 5,
+            "status": "complete",
+        },
+    )
+
+    rejected = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/subscription/device",
+            body=json.dumps(
+                {
+                    "connection_id": "openai-subscription",
+                    "terms_accepted": False,
+                }
+            ),
+        )
+    )
+    assert start_calls == []
+
+    started = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/subscription/device",
+            body=json.dumps(
+                {
+                    "connection_id": "openai-subscription",
+                    "terms_accepted": True,
+                }
+            ),
+        )
+    )
+    completed = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/models/subscription/device/poll",
+            body=json.dumps(
+                {
+                    "connection_id": "openai-subscription",
+                    "login_id": "login-1",
+                }
+            ),
+        )
+    )
+
+    assert rejected.status_code == 422
+    assert start_calls == ["openai-subscription"]
+    assert started.status_code == 201
+    assert started.body["status"] == "pending"
+    assert completed.status_code == 200
+    assert completed.body["status"] == "complete"
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "message"),
+    [
+        (
+            "/settings/models/subscription/device",
+            "{",
+            "valid JSON",
+        ),
+        (
+            "/settings/models/subscription/device",
+            "[]",
+            "must be an object",
+        ),
+        (
+            "/settings/models/subscription/device",
+            json.dumps({"connection_id": "openai-subscription"}),
+            "unsupported fields",
+        ),
+        (
+            "/settings/models/subscription/device",
+            json.dumps({"connection_id": 7, "terms_accepted": True}),
+            "connection_id must be a string",
+        ),
+        (
+            "/settings/models/subscription/device",
+            json.dumps({"connection_id": "missing", "terms_accepted": True}),
+            "unknown model connection",
+        ),
+        (
+            "/settings/models/subscription/device/poll",
+            "{",
+            "valid JSON",
+        ),
+        (
+            "/settings/models/subscription/device/poll",
+            "[]",
+            "must be an object",
+        ),
+        (
+            "/settings/models/subscription/device/poll",
+            json.dumps({"connection_id": "openai-subscription"}),
+            "unsupported fields",
+        ),
+        (
+            "/settings/models/subscription/device/poll",
+            json.dumps({"connection_id": 7, "login_id": "login-1"}),
+            "must be strings",
+        ),
+        (
+            "/settings/models/subscription/device/poll",
+            json.dumps({"connection_id": "missing", "login_id": "login-1"}),
+            "unknown model connection",
+        ),
+    ],
+)
+def test_rest_subscription_login_rejects_malformed_or_unknown_requests(
+    tmp_path: Path,
+    path: str,
+    body: str,
+    message: str,
+) -> None:
+    response = RestGateway(_gateway(tmp_path)).handle(
+        RestRequest(method="POST", path=path, body=body)
+    )
+
+    assert response.status_code in {400, 422}
+    assert message in cast(str, response.body["error"])
 
 
 def test_rest_reserves_the_heartwood_managed_profile(tmp_path: Path) -> None:

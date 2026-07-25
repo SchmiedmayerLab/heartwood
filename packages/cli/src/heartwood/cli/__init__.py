@@ -97,6 +97,7 @@ _ACTION_MODE_ARGUMENTS = {
 }
 _MODEL_SOURCE_ARGUMENTS = {
     "heartwood": "heartwood",
+    "openai-subscription": "openai-subscription",
     "openai": "openai",
     "anthropic": "anthropic",
     "custom": "custom",
@@ -166,7 +167,7 @@ def _build_parser() -> argparse.ArgumentParser:
     setup.add_argument(
         "--remember-credential",
         action="store_true",
-        help="Store the provider token in the system credential store when available.",
+        help="Store the provider API key in the system credential store when available.",
     )
     setup.add_argument(
         "--non-interactive",
@@ -720,7 +721,7 @@ def _handle_setup(
         gateway.stop()
     if code == 0:
         if process_only_credentials:
-            print("Configuration saved, but the provider token was not stored.")
+            print("Configuration saved, but the provider API key was not stored.")
             print(
                 "Export the provider credential in this shell or rerun setup with "
                 "--remember-credential before starting a new Heartwood process."
@@ -836,7 +837,7 @@ def _configure_setup(
         if non_interactive:
             parser.error("--yes is required with --non-interactive")
         try:
-            confirmed = input("Apply this non-secret configuration? [y/N]: ").strip().lower() == "y"
+            confirmed = input("Continue with this model setup? [y/N]: ").strip().lower() == "y"
         except EOFError:
             print("\nSetup cancelled because input closed.")
             return 1, None
@@ -875,7 +876,7 @@ def _configure_setup(
                 raise ModelCatalogError("service URL entry was cancelled") from error
         if source == "custom" and not base_url:
             raise ModelCatalogError("other compatible services require --base-url")
-        requires_token = True
+        requires_token = source != "openai-subscription"
         if source == "custom":
             assert isinstance(base_url, str)
             requires_token = custom_model_connection_requires_token(base_url)
@@ -897,7 +898,7 @@ def _configure_setup(
             ):
                 try:
                     remember_credential = (
-                        input("Remember this token in the system credential store? [y/N]: ")
+                        input("Remember this API key in the system credential store? [y/N]: ")
                         .strip()
                         .lower()
                         == "y"
@@ -905,7 +906,7 @@ def _configure_setup(
                 except EOFError as error:
                     raise ModelCatalogError("credential storage choice was cancelled") from error
             elif source != "custom":
-                print("The token will be kept only until this Heartwood command exits.")
+                print("The API key will be kept only until this Heartwood command exits.")
         catalog = _run_with_progress(
             lambda: gateway.discover_models(
                 connection_id,
@@ -940,6 +941,22 @@ def _configure_setup(
                 model_id = str(available[int(selected) - 1])
             else:
                 model_id = selected
+        if source == "openai-subscription":
+            catalog_connection = catalog.get("connection", {})
+            credential_status = (
+                catalog_connection.get("credential_status")
+                if isinstance(catalog_connection, dict)
+                else "missing"
+            )
+            if credential_status != "available":
+                print("\nSign in with ChatGPT")
+                print("OpenHands will show OpenAI's terms, then provide a URL and one-time code.")
+                gateway.login_subscription(
+                    connection_id,
+                    model_id=model_id,
+                    open_browser=False,
+                    auth_method="device_code",
+                )
         gateway.connect_model(connection_id, model_id, base_url=base_url)
     except (
         ActionSettingsError,
@@ -1148,11 +1165,11 @@ def _prompt_for_provider_token(
     if non_interactive:
         return None
     try:
-        token = getpass.getpass(f"{connection.get('label', 'Provider')} token: ")
+        token = getpass.getpass(f"{connection.get('label', 'Provider')} API key: ")
     except EOFError as error:
         raise ModelCatalogError("credential entry was cancelled because input closed") from error
     if not token.strip():
-        raise ModelCatalogError("provider token must not be empty")
+        raise ModelCatalogError("provider API key must not be empty")
     return token
 
 

@@ -24,6 +24,12 @@ SPDX-License-Identifier: MIT
 **Carina**
 : Stanford's research-computing platform using project storage and Slurm-managed compute.
 
+**ChatGPT subscription connection**
+: Account-based access to supported Codex models through OpenHands, separate from OpenAI API billing and API keys.
+
+**Codex Responses API**
+: The Responses API transport used by OpenHands for supported models reached through a ChatGPT subscription connection.
+
 **Container**
 : A packaged Linux filesystem and process environment run by software such as Docker.
 
@@ -35,6 +41,9 @@ SPDX-License-Identifier: MIT
 
 **CUDA**
 : NVIDIA's software platform and application binary interface for GPU computing.
+
+**Device-code sign-in**
+: An OAuth flow in which one interface displays a short-lived code that the user enters on a separate provider sign-in page.
 
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
@@ -51,11 +60,17 @@ SPDX-License-Identifier: MIT
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.
 
-**OpenHands**
-: The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
+**OAuth**
+: A standard authorization protocol that lets a user grant account access without giving Heartwood the account password.
+
+**One-time code**
+: The short-lived code displayed during device-code sign-in and entered on the provider's verification page.
 
 **OpenAI-compatible service**
 : A model endpoint implementing the relevant OpenAI API request and response shapes; compatibility does not imply operation by OpenAI.
+
+**OpenHands**
+: The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
 
 **Protected health information (PHI)**
 : Individually identifiable health information protected under applicable policy or law.
@@ -71,6 +86,9 @@ SPDX-License-Identifier: MIT
 
 **Research Skill**
 : A versioned instruction package with declared tools, metadata, and workflow guidance available to the OpenHands agent.
+
+**Responses API**
+: OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 
 **Slurm**
 : A scheduler that allocates compute resources for jobs on platforms such as Stanford Carina.

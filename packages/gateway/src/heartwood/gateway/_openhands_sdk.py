@@ -23,6 +23,15 @@ from heartwood.core_adapter import (
     ToolExecution,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
+from heartwood.gateway._openhands_models import (
+    OpenHandsModelError,
+    request_endpoint_for_model,
+)
+from heartwood.gateway._subscriptions import (
+    OpenHandsOpenAISubscription,
+    SubscriptionError,
+    create_openai_subscription_llm,
+)
 from heartwood.schemas import ActionConfirmationMode, JsonValue
 
 
@@ -96,6 +105,7 @@ _AGENT_LLM_ESTIMATED_CHARS_PER_TOKEN = 4
 _AGENT_CONDENSER_INPUT_FRACTION = 0.75
 _AGENT_CONDENSER_MAX_EVENTS = 240
 _AGENT_CONDENSER_KEEP_FIRST = 2
+_OPENHANDS_FINISH_TOOL_NAME = "finish"
 
 
 def prepare_openhands_sdk(env: Mapping[str, str] | None = None) -> OpenHandsModules:
@@ -162,6 +172,22 @@ class OpenHandsSdkBackend:
     @property
     def configuration_error(self) -> str | None:
         """Return a safe preflight error before recording a route decision."""
+        try:
+            request_endpoint = request_endpoint_for_model(
+                self.profile.model,
+                self.profile.policy_endpoint,
+            )
+        except OpenHandsModelError:
+            return "OpenHands could not inspect the active model request path"
+        if request_endpoint != self.profile.policy_endpoint:
+            return "The active model profile request path does not match OpenHands"
+        if self.profile.auth_type == "subscription":
+            try:
+                if not OpenHandsOpenAISubscription().credential_available():
+                    return "ChatGPT sign-in is required for the active model profile"
+            except SubscriptionError:
+                return "OpenHands could not inspect the active ChatGPT sign-in"
+            return None
         try:
             self.profile.resolve_api_key(self.env)
         except ModelSettingsError:
@@ -316,15 +342,28 @@ class OpenHandsSdkBackend:
                 continue
             repository, knowledge, agent_skills = skill_module.load_skills_from_dir(skills_dir)
             skills.extend((*repository.values(), *knowledge.values(), *agent_skills.values()))
-        api_key = self.profile.resolve_api_key(self.env)
-        llm = sdk.LLM(
-            **_llm_options(
-                self.profile,
-                api_key=api_key,
-                extra_body=self._llm_extra_body,
-                native_tool_calling=self._native_tool_calling,
-            )
+        options = _llm_options(
+            self.profile,
+            api_key=self.profile.resolve_api_key(self.env),
+            extra_body=self._llm_extra_body,
+            native_tool_calling=self._native_tool_calling,
         )
+        if self.profile.auth_type == "subscription":
+            for key in (
+                "api_key",
+                "base_url",
+                "max_output_tokens",
+                "model",
+                "stream",
+                "temperature",
+            ):
+                options.pop(key, None)
+            llm = create_openai_subscription_llm(
+                model=self.profile.model,
+                options=options,
+            )
+        else:
+            llm = sdk.LLM(**options)
         context = _agent_context(sdk, skills)
         agent = sdk.Agent(
             llm=llm,
@@ -380,6 +419,13 @@ class OpenHandsSdkBackend:
                         BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message=message)
                     )
             elif event_name == "ActionEvent":
+                if str(getattr(event, "tool_name", "")) == _OPENHANDS_FINISH_TOOL_NAME:
+                    message = _finish_message(event)
+                    if message:
+                        translated.append(
+                            BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message=message)
+                        )
+                    continue
                 tool_call = _tool_call(
                     event,
                     session_id=session_id,
@@ -392,6 +438,8 @@ class OpenHandsSdkBackend:
                     BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call)
                 )
             elif event_name == "ObservationEvent":
+                if str(getattr(event, "tool_name", "")) == _OPENHANDS_FINISH_TOOL_NAME:
+                    continue
                 tool_call_id = str(getattr(event, "tool_call_id", ""))
                 if tool_call_id:
                     observed.add(tool_call_id)
@@ -433,6 +481,14 @@ def _message_text(event: object) -> str:
     return "\n".join(
         text for item in content if isinstance((text := getattr(item, "text", None)), str) and text
     )
+
+
+def _finish_message(event: object) -> str:
+    action = getattr(event, "action", None)
+    message = (
+        action.get("message") if isinstance(action, Mapping) else getattr(action, "message", None)
+    )
+    return message if isinstance(message, str) else ""
 
 
 def _tool_call(

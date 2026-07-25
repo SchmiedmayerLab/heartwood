@@ -38,7 +38,8 @@ heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT]
 
 For unattended setup, use `heartwood setup --non-interactive --yes` with explicit model-source and model identifiers.
 Use `--model-source heartwood` when Heartwood should download or import the model and supervise its runtime in the current environment.
-Provider tokens are not accepted as setup command arguments.
+Provider API keys are not accepted as setup command arguments.
+Use `--model-source openai-subscription` for ChatGPT account access; the first setup remains interactive because OpenHands must display consent and complete account sign-in.
 
 ## Models
 
@@ -48,7 +49,7 @@ Provider tokens are not accepted as setup command arguments.
 | `heartwood models refresh CONNECTION` | Refresh models exposed by a connection |
 | `heartwood models connect CONNECTION MODEL` | Select a discovered model |
 | `heartwood models validate [PROFILE]` | Evaluate credential and route policy for a profile |
-| `heartwood models forget CONNECTION` | Remove a saved provider credential from the system credential store |
+| `heartwood models forget CONNECTION` | Remove a saved API key or OpenHands subscription credential |
 | `heartwood models managed` | Show qualified recommendations, not-tested configurations, and user-selected models Heartwood can run |
 | `heartwood models inspect OWNER/MODEL` | Inspect a public Hugging Face repository without downloading weights |
 | `heartwood models download MODEL` | Download and select a recommendation or `OWNER/MODEL` repository |
@@ -56,6 +57,9 @@ Provider tokens are not accepted as setup command arguments.
 
 `models add`, `models select`, and `models remove` manage advanced non-secret LiteLLM-compatible profiles.
 Use guided setup for normal provider and managed connections.
+
+`heartwood models forget openai-subscription` signs out of ChatGPT for the current operating-system user.
+The selected non-secret model profile remains in the project until another connection is selected.
 
 ## Skills
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from typing import Literal, cast
 
 import pytest
 
-from heartwood.core_adapter import BackendEventKind
+from heartwood.core_adapter import BackendEventKind, SessionService
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend
 from heartwood.gateway._openhands_sdk import (
     ConversationFactory,
@@ -32,6 +33,7 @@ from heartwood.gateway._openhands_sdk import (
     _tool_call,
     _tool_observation,
 )
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
 def test_verified_skills_load_through_openhands_native_loader() -> None:
@@ -335,6 +337,56 @@ def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> No
     assert backend.configuration_error == "active model profile credential reference is unavailable"
 
 
+def test_openhands_backend_rejects_a_stale_chat_route_for_responses_model(
+    tmp_path: Path,
+) -> None:
+    profile = ModelProfile(
+        profile_id="openai",
+        model="openai/gpt-5.4",
+        policy_endpoint="https://api.openai.com/v1/chat/completions",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+    backend = OpenHandsSdkBackend(
+        profile=profile,
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="responses-route-test",
+        env={"OPENAI_API_KEY": "test-key"},
+        conversation_factory=cast(ConversationFactory, lambda _callback: _FakeConversation()),
+    )
+
+    assert backend.configuration_error == (
+        "The active model profile request path does not match OpenHands"
+    )
+
+
+def test_openhands_backend_rejects_a_stale_responses_route_for_chat_model(
+    tmp_path: Path,
+) -> None:
+    profile = ModelProfile(
+        profile_id="openai",
+        model="openai/gpt-4.1",
+        policy_endpoint="https://api.openai.com/v1/responses",
+        credential_kind="environment",
+        api_key_env="OPENAI_API_KEY",
+    )
+    backend = OpenHandsSdkBackend(
+        profile=profile,
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="chat-route-test",
+        env={"OPENAI_API_KEY": "test-key"},
+        conversation_factory=cast(ConversationFactory, lambda _callback: _FakeConversation()),
+    )
+
+    assert backend.configuration_error == (
+        "The active model profile request path does not match OpenHands"
+    )
+
+
 def test_openhands_translation_reports_ensemble_risk_and_fails_closed() -> None:
     tool_call = _tool_call(
         ActionEvent(),
@@ -381,6 +433,132 @@ def test_openhands_backend_allows_one_pending_action_and_continues(tmp_path: Pat
     assert events[1].tool_execution is not None
     assert events[1].tool_execution.exit_code == 0
     assert conversation.rejection_reasons == []
+
+
+def test_openhands_backend_maps_finish_lifecycle_to_agent_message(tmp_path: Path) -> None:
+    conversation = _FinishConversation()
+    backend = _backend(tmp_path, conversation)
+    pending = backend.submit_turn(session_id="session-1", prompt="create a file")
+    tool_call = pending[1].tool_call
+    assert tool_call is not None
+
+    events = backend.resolve_confirmation(
+        session_id="session-1",
+        tool_call_id=tool_call.tool_call_id,
+        approved=True,
+    )
+
+    assert [event.kind for event in events] == [
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.TOOL_EXECUTION,
+        BackendEventKind.AGENT_MESSAGE,
+    ]
+    assert events[2].message == "The requested file was created."
+
+
+def test_openhands_backend_maps_upstream_finish_contract_to_agent_message(
+    tmp_path: Path,
+) -> None:
+    event_module = import_module("openhands.sdk.event")
+    llm_module = import_module("openhands.sdk.llm")
+    finish_module = import_module("openhands.sdk.tool.builtins.finish")
+    finish_action = finish_module.FinishAction(message="The requested file was created.")
+    action = event_module.ActionEvent(
+        thought=(),
+        action=finish_action,
+        tool_name=finish_module.FinishTool.name,
+        tool_call_id="finish-call",
+        tool_call=llm_module.MessageToolCall(
+            id="finish-call",
+            name=finish_module.FinishTool.name,
+            arguments='{"message":"The requested file was created."}',
+            origin="completion",
+        ),
+        llm_response_id="response-1",
+        summary="report completion",
+    )
+    observation = event_module.ObservationEvent(
+        tool_name=finish_module.FinishTool.name,
+        tool_call_id="finish-call",
+        observation=finish_module.FinishObservation(),
+        action_id=action.id,
+    )
+    conversation = _CompletedEventConversation((action, observation))
+    backend = _backend(tmp_path, conversation)
+
+    events = backend.submit_turn(session_id="session-1", prompt="create a file")
+
+    assert [event.kind for event in events] == [BackendEventKind.AGENT_MESSAGE]
+    assert events[0].message == "The requested file was created."
+    assert conversation.messages == [("create a file", "heartwood-user")]
+
+
+def test_openhands_finish_lifecycle_is_not_persisted_as_tool_activity(
+    tmp_path: Path,
+) -> None:
+    session_id = "session-1"
+    backend = _backend(tmp_path, _FinishConversation())
+    service = SessionService.local_default(
+        tmp_path / "sessions",
+        session_id=session_id,
+        backend=backend,
+        env={},
+        clock=lambda: "2026-07-25T00:00:00Z",
+    )
+    try:
+        first = service.handle(
+            _session_command(
+                command_id="chat",
+                session_id=session_id,
+                kind=CommandKind.CHAT,
+                prompt="create a file",
+            )
+        )
+        confirmation = next(
+            event for event in first.events if event.kind == EventKind.CONFIRMATION_REQUESTED.value
+        )
+        request = confirmation.payload["request"]
+        assert isinstance(request, dict)
+
+        service.handle(
+            _session_command(
+                command_id="approve",
+                session_id=session_id,
+                kind=CommandKind.APPROVE,
+                target_type="tool-call",
+                target_id=str(request["tool_call_id"]),
+            )
+        )
+        service.handle(
+            _session_command(
+                command_id="audit",
+                session_id=session_id,
+                kind=CommandKind.AUDIT_EXPORT,
+            )
+        )
+
+        replayed = service.replay_events()
+        tool_proposals = [
+            event for event in replayed if event.kind == EventKind.TOOL_CALL_PROPOSED.value
+        ]
+        tool_executions = [
+            event for event in replayed if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+        ]
+        agent_messages = [
+            event for event in replayed if event.kind == EventKind.AGENT_MESSAGE_EMITTED.value
+        ]
+
+        assert [event.payload["tool_name"] for event in tool_proposals] == ["terminal"]
+        assert [event.payload["tool_name"] for event in tool_executions] == ["terminal"]
+        assert [event.payload["content"] for event in agent_messages] == [
+            "The requested file was created."
+        ]
+        audit_events = [
+            json.loads(line) for line in service.store.read_audit_export().splitlines() if line
+        ]
+        assert all(event.get("payload", {}).get("tool_name") != "finish" for event in audit_events)
+    finally:
+        service.close()
 
 
 def test_openhands_backend_rejects_pending_action_without_model_continuation(
@@ -603,18 +781,32 @@ class MessageEvent:
 
 
 class ActionEvent:
-    def __init__(self, tool_call_id: str = "call-1", command: str = "pwd") -> None:
+    def __init__(
+        self,
+        tool_call_id: str = "call-1",
+        command: str = "pwd",
+        *,
+        tool_name: str = "terminal",
+        message: str | None = None,
+    ) -> None:
         self.tool_call_id = tool_call_id
-        self.tool_name = "terminal"
+        self.tool_name = tool_name
         self.security_risk = SimpleNamespace(value="LOW")
-        self.summary = "inspect the workspace"
-        self.action = {"command": command}
+        self.summary = "finish the task" if tool_name == "finish" else "inspect the workspace"
+        self.action = (
+            SimpleNamespace(message=message) if tool_name == "finish" else {"command": command}
+        )
 
 
 class ObservationEvent:
-    def __init__(self, tool_call_id: str = "call-1") -> None:
+    def __init__(
+        self,
+        tool_call_id: str = "call-1",
+        *,
+        tool_name: str = "terminal",
+    ) -> None:
         self.tool_call_id = tool_call_id
-        self.tool_name = "terminal"
+        self.tool_name = tool_name
         self.observation = SimpleNamespace(exit_code=0, is_error=False)
 
 
@@ -705,6 +897,41 @@ class _ParallelConversation(_FakeConversation):
             self.state.execution_status.value = "finished"
 
 
+class _CompletedEventConversation(_FakeConversation):
+    def __init__(self, events: tuple[object, ...]) -> None:
+        super().__init__()
+        self.events = events
+
+    def run(self) -> None:
+        callback = self.callback
+        assert callback is not None
+        self.run_count += 1
+        for event in self.events:
+            callback(event)
+        self.state.execution_status.value = "finished"
+
+
+class _FinishConversation(_FakeConversation):
+    def run(self) -> None:
+        callback = self.callback
+        assert callback is not None
+        self.run_count += 1
+        if self.run_count == 1:
+            callback(ActionEvent())
+            self.state.execution_status.value = "waiting_for_confirmation"
+        else:
+            callback(ObservationEvent())
+            callback(
+                ActionEvent(
+                    "finish-call",
+                    tool_name="finish",
+                    message="The requested file was created.",
+                )
+            )
+            callback(ObservationEvent("finish-call", tool_name="finish"))
+            self.state.execution_status.value = "finished"
+
+
 class _InvalidThenCorrectedConversation(_FakeConversation):
     def run(self) -> None:
         callback = self.callback
@@ -727,6 +954,23 @@ class _ErrorConversation(_FakeConversation):
         callback(observation)
         callback(AgentErrorEvent())
         self.state.execution_status.value = "finished"
+
+
+def _session_command(
+    *,
+    command_id: str,
+    session_id: str,
+    kind: CommandKind,
+    **payload: JsonValue,
+) -> SessionCommand:
+    return SessionCommand(
+        command_id=command_id,
+        session_id=session_id,
+        kind=kind,
+        actor_id="test-user",
+        created_at="2026-07-25T00:00:00Z",
+        payload=payload,
+    )
 
 
 def _backend(

@@ -40,6 +40,8 @@ Heartwood resolves process values, operator bindings, optional system-keyring en
 
 Project-scoped keyring persistence is explicit and available only where a functional system credential store exists.
 Custom compatible-service tokens remain process-only.
+For **Sign in with ChatGPT**, OpenHands owns the user-level OAuth credential, refresh, and Codex transport; Heartwood stores only a non-secret subscription reference in project policy.
+Signing in does not make a ChatGPT account suitable for controlled data.
 
 ### Skills and Instructions
 

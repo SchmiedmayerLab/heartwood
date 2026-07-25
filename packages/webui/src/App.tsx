@@ -75,6 +75,8 @@ const emptyProfile = (): ModelProfile => ({
   capability_tier: "supervised",
   base_url: "http://127.0.0.1:8765/v1",
   credential_kind: "none",
+  auth_type: "api_key",
+  subscription_vendor: null,
   api_key_env: null,
   api_key_file: null,
   api_version: null,
@@ -169,6 +171,24 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     setProjectReadiness(startup.readiness);
     return startup.readiness;
   }, [resolvedClient]);
+
+  const startSubscriptionLogin = useCallback(
+    (connectionId: string) =>
+      resolvedClient.startSubscriptionDeviceLogin(connectionId),
+    [resolvedClient],
+  );
+
+  const pollSubscriptionLogin = useCallback(
+    (connectionId: string, loginId: string) =>
+      resolvedClient.pollSubscriptionDeviceLogin(connectionId, loginId),
+    [resolvedClient],
+  );
+
+  const refreshSettings = useCallback(() => {
+    void refreshProjectState().catch((caught: unknown) =>
+      setError(errorMessage(caught)),
+    );
+  }, [refreshProjectState]);
 
   useEffect(() => {
     let active = true;
@@ -811,6 +831,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           onConfigureModelSource={configureModelSource}
           onDiscoverModels={discoverModels}
           onForgetCredential={forgetCredential}
+          onPollSubscriptionLogin={pollSubscriptionLogin}
+          onStartSubscriptionLogin={startSubscriptionLogin}
           onDownload={(modelId) =>
             void resolvedClient
               .downloadLocalModel(modelId)
@@ -890,11 +912,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 .catch((caught: unknown) => setError(errorMessage(caught)))
             )
           }
-          onRefreshSettings={() =>
-            void refreshProjectState().catch((caught: unknown) =>
-              setError(errorMessage(caught)),
-            )
-          }
+          onRefreshSettings={refreshSettings}
           onRestoreFocus={() => utilityTriggerRef.current?.focus()}
           onRemoveProfile={(profileId) =>
             void resolvedClient

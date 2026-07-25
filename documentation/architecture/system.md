@@ -47,8 +47,13 @@ The terminal, browser, and notebook bridge may render these differently, but the
 
 ### OpenHands Adapter
 
-The adapter creates an OpenHands conversation with the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and action-confirmation callback.
+The adapter creates an OpenHands conversation with the selected model profile, project workspace, Skills, persistence directory, and action-confirmation callback.
+Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
+ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 Heartwood translates OpenHands messages, tool proposals, decisions, and results into its stable event contract rather than duplicating the agent loop.
+
+The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
+The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.
 
 ### Platform Adapter
 

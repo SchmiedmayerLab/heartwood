@@ -16,13 +16,21 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
+from heartwood.gateway._openhands_models import (
+    OpenHandsModelError,
+    request_endpoint_for_model,
+)
+from heartwood.gateway._subscriptions import OPENAI_SUBSCRIPTION_ENDPOINT
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
 type CredentialKind = Literal["environment", "file", "managed-identity", "none"]
 type CapabilityTier = Literal["autonomous", "experimental", "supervised"]
+type AuthenticationType = Literal["api_key", "subscription"]
 
 _CREDENTIAL_KINDS = {"environment", "file", "managed-identity", "none"}
 _CAPABILITY_TIERS = {"autonomous", "experimental", "supervised"}
+_AUTHENTICATION_TYPES = {"api_key", "subscription"}
+_SUBSCRIPTION_VENDORS = {"openai"}
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MODEL_SETTINGS_FIELDS = {"active_profile", "profiles", "schema_version"}
@@ -30,6 +38,7 @@ _MODEL_PROFILE_FIELDS = {
     "api_key_env",
     "api_key_file",
     "api_version",
+    "auth_type",
     "aws_profile_name",
     "aws_region_name",
     "base_url",
@@ -42,6 +51,7 @@ _MODEL_PROFILE_FIELDS = {
     "model",
     "policy_endpoint",
     "profile_id",
+    "subscription_vendor",
 }
 
 
@@ -59,6 +69,8 @@ class ModelProfile:
     capability_tier: CapabilityTier = "supervised"
     base_url: str | None = None
     credential_kind: CredentialKind = "environment"
+    auth_type: AuthenticationType = "api_key"
+    subscription_vendor: str | None = None
     api_key_env: str | None = None
     api_key_file: str | None = None
     api_version: str | None = None
@@ -90,6 +102,26 @@ class ModelProfile:
                 raise ModelSettingsError(f"{name} must be a positive integer")
         if self.credential_kind not in _CREDENTIAL_KINDS:
             msg = f"unsupported credential kind: {self.credential_kind}"
+            raise ModelSettingsError(msg)
+        if self.auth_type not in _AUTHENTICATION_TYPES:
+            msg = f"unsupported authentication type: {self.auth_type}"
+            raise ModelSettingsError(msg)
+        if self.auth_type == "subscription":
+            if self.subscription_vendor not in _SUBSCRIPTION_VENDORS:
+                msg = "subscription authentication requires a supported subscription_vendor"
+                raise ModelSettingsError(msg)
+            if self.credential_kind != "managed-identity":
+                msg = "subscription authentication requires dependency-managed credentials"
+                raise ModelSettingsError(msg)
+            if self.subscription_vendor == "openai":
+                if not self.model.startswith("openai/"):
+                    msg = "OpenAI subscription authentication requires an OpenAI model"
+                    raise ModelSettingsError(msg)
+                if self.policy_endpoint != OPENAI_SUBSCRIPTION_ENDPOINT:
+                    msg = "OpenAI subscription authentication requires the OpenHands Codex endpoint"
+                    raise ModelSettingsError(msg)
+        elif self.subscription_vendor is not None:
+            msg = "subscription_vendor is allowed only for subscription authentication"
             raise ModelSettingsError(msg)
         try:
             normalized = normalize_endpoint(self.policy_endpoint)
@@ -138,6 +170,12 @@ class ModelProfile:
     @property
     def credential_reference(self) -> str | None:
         """Return the non-secret reference evaluated by deployment policy."""
+        if self.auth_type == "subscription":
+            return (
+                None
+                if self.subscription_vendor is None
+                else f"subscription:{self.subscription_vendor}"
+            )
         if self.credential_kind == "environment":
             return self.api_key_env
         if self.credential_kind == "file":
@@ -159,6 +197,8 @@ class ModelProfile:
 
     def resolve_api_key(self, env: Mapping[str, str] | None = None) -> str | None:
         """Resolve an API key at runtime without persisting it."""
+        if self.auth_type == "subscription":
+            return None
         active_env = os.environ if env is None else env
         if self.credential_kind in {"managed-identity", "none"}:
             return None
@@ -343,10 +383,15 @@ def model_profile_from_preset(preset_id: str, model_name: str) -> ModelProfile:
         if normalized_name.startswith(preset.model_prefix)
         else f"{preset.model_prefix}{normalized_name}"
     )
+    policy_endpoint = preset.policy_endpoint
+    try:
+        policy_endpoint = request_endpoint_for_model(model, policy_endpoint)
+    except OpenHandsModelError as error:
+        raise ModelSettingsError(str(error)) from error
     profile = ModelProfile(
         profile_id=preset.preset_id,
         model=model,
-        policy_endpoint=preset.policy_endpoint,
+        policy_endpoint=policy_endpoint,
         base_url=preset.base_url,
         credential_kind=preset.credential_kind,
         api_key_env=preset.api_key_env,
@@ -354,6 +399,21 @@ def model_profile_from_preset(preset_id: str, model_name: str) -> ModelProfile:
     )
     profile.validate()
     return profile
+
+
+def align_model_profile_request_endpoint(profile: ModelProfile) -> ModelProfile:
+    """Return a profile whose policy endpoint matches OpenHands' request path."""
+    if profile.auth_type == "subscription":
+        return profile
+    try:
+        policy_endpoint = request_endpoint_for_model(profile.model, profile.policy_endpoint)
+    except OpenHandsModelError as error:
+        raise ModelSettingsError(str(error)) from error
+    return (
+        profile
+        if policy_endpoint == profile.policy_endpoint
+        else replace(profile, policy_endpoint=policy_endpoint)
+    )
 
 
 def model_settings_from_mapping(value: object) -> ModelSettings:
@@ -392,6 +452,14 @@ def model_profile_from_mapping(value: object) -> ModelProfile:
         capability_tier=cast(CapabilityTier, capability or "supervised"),
         base_url=_optional_string(value.get("base_url"), "base_url"),
         credential_kind=cast(CredentialKind, credential or "environment"),
+        auth_type=cast(
+            AuthenticationType,
+            _optional_string(value.get("auth_type"), "auth_type") or "api_key",
+        ),
+        subscription_vendor=_optional_string(
+            value.get("subscription_vendor"),
+            "subscription_vendor",
+        ),
         api_key_env=_optional_string(value.get("api_key_env"), "api_key_env"),
         api_key_file=_optional_string(value.get("api_key_file"), "api_key_file"),
         api_version=_optional_string(value.get("api_version"), "api_version"),

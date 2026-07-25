@@ -11,7 +11,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -25,6 +25,8 @@ from heartwood.gateway import (
     ProjectContext,
     ProviderModel,
     SessionGateway,
+    SubscriptionDeviceLogin,
+    SubscriptionError,
     custom_model_connection,
     load_model_connections,
 )
@@ -32,15 +34,80 @@ from heartwood.gateway._model_catalog import _model_compatibility
 from heartwood.schemas import PolicyProfile
 
 
+class _SubscriptionProvider:
+    connection_id = "openai-subscription"
+    vendor = "openai"
+
+    def __init__(self) -> None:
+        self.available = False
+        self.credential_checks = 0
+        self.logged_in_model: str | None = None
+        self.logged_out = False
+
+    def models(self) -> tuple[str, ...]:
+        return ("gpt-subscription",)
+
+    def credential_available(self) -> bool:
+        self.credential_checks += 1
+        return self.available
+
+    def login(
+        self,
+        *,
+        model: str,
+        force_login: bool,  # noqa: ARG002
+        open_browser: bool,  # noqa: ARG002
+        auth_method: Literal["browser", "device_code"],  # noqa: ARG002
+    ) -> None:
+        self.logged_in_model = model
+        self.available = True
+
+    def start_device_login(self) -> SubscriptionDeviceLogin:
+        return SubscriptionDeviceLogin(
+            login_id="login-1",
+            connection_id=self.connection_id,
+            verification_url="https://auth.example/device",
+            user_code="TEST-CODE",
+            poll_interval_seconds=2,
+            status="pending",
+        )
+
+    def poll_device_login(self, login_id: str) -> SubscriptionDeviceLogin:
+        assert login_id == "login-1"
+        self.available = True
+        return SubscriptionDeviceLogin(
+            login_id=login_id,
+            connection_id=self.connection_id,
+            verification_url="https://auth.example/device",
+            user_code="TEST-CODE",
+            poll_interval_seconds=2,
+            status="complete",
+        )
+
+    def logout(self) -> bool:
+        self.available = False
+        self.logged_out = True
+        return True
+
+
 def test_built_in_connections_are_non_secret_and_researcher_facing() -> None:
     connections = {
         connection.connection_id: connection for connection in BUILT_IN_MODEL_CONNECTIONS
     }
 
-    assert set(connections) == {"anthropic", "custom-api", "heartwood", "openai"}
+    assert set(connections) == {
+        "anthropic",
+        "custom-api",
+        "heartwood",
+        "openai",
+        "openai-subscription",
+    }
     assert connections["heartwood"].label == "Run with Heartwood"
     assert connections["heartwood"].group == "heartwood-managed"
     assert connections["openai"].group == "hosted-provider"
+    assert connections["openai-subscription"].protocol == "subscription"
+    assert connections["openai-subscription"].subscription_vendor == "openai"
+    assert connections["openai-subscription"].credential_reference == "subscription:openai"
     assert connections["custom-api"].group == "compatible-service"
     assert connections["heartwood"].presentation_order < connections["openai"].presentation_order
     assert connections["custom-api"].description.startswith("A service")
@@ -50,6 +117,107 @@ def test_built_in_connections_are_non_secret_and_researcher_facing() -> None:
         assert serialized["group_label"]
         assert "token" not in serialized
         assert "api_key" not in serialized
+
+
+def test_subscription_login_uses_shared_catalog_policy_and_profile(tmp_path: Path) -> None:
+    provider = _SubscriptionProvider()
+    gateway = SessionGateway(
+        project=_project(tmp_path),
+        env={},
+        backend_id="deterministic",
+        subscription_provider=provider,
+        model_catalog_service=ModelCatalogService(
+            subscription_lister=lambda _connection, _api_key: (ProviderModel("gpt-subscription"),),
+        ),
+    )
+
+    gateway.configure_model_source("openai-subscription")
+    catalog = gateway.discover_models("openai-subscription", refresh=True)
+    assert cast(dict[str, object], catalog["connection"])["credential_status"] == "missing"
+    assert cast(list[dict[str, object]], catalog["models"])[0]["model_id"] == "gpt-subscription"
+
+    started = gateway.start_subscription_device_login("openai-subscription")
+    assert started["status"] == "pending"
+    completed = gateway.poll_subscription_device_login("openai-subscription", "login-1")
+    assert completed["status"] == "complete"
+
+    settings = gateway.connect_model("openai-subscription", "gpt-subscription")
+    profile = cast(list[dict[str, object]], settings["profiles"])[0]
+    assert profile["auth_type"] == "subscription"
+    assert profile["subscription_vendor"] == "openai"
+    assert profile["credential_status"] == "available"
+    provider.credential_checks = 0
+    settings = gateway.model_settings()
+    assert provider.credential_checks == 1
+    assert (
+        cast(list[dict[str, object]], settings["profiles"])[0]["credential_status"] == "available"
+    )
+    subscription_connection = next(
+        connection
+        for connection in cast(list[dict[str, object]], settings["connections"])
+        if connection["connection_id"] == "openai-subscription"
+    )
+    assert subscription_connection["credential_status"] == "available"
+    validation = gateway.validate_model_profile()
+    assert validation["credential_status"] == "available"
+    assert cast(dict[str, object], validation["policy_decision"])["decision"] == "allow"
+
+    gateway.forget_credential("openai-subscription")
+    assert provider.logged_out
+    profiles = cast(list[dict[str, object]], gateway.model_settings()["profiles"])
+    assert profiles[0]["credential_status"] == "missing"
+
+
+def test_subscription_gateway_fails_closed_at_the_openhands_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _SubscriptionProvider()
+    gateway = SessionGateway(
+        project=_project(tmp_path),
+        env={},
+        backend_id="deterministic",
+        subscription_provider=provider,
+    )
+
+    with pytest.raises(ModelCatalogError, match="unknown model connection"):
+        gateway.login_subscription("missing", model_id="gpt-subscription")
+    with pytest.raises(ModelCatalogError, match="does not support account sign-in"):
+        gateway.login_subscription("openai", model_id="gpt-subscription")
+    with pytest.raises(ModelCatalogError, match="no forgettable credential"):
+        gateway.forget_credential("heartwood")
+    with pytest.raises(ModelCatalogError, match="unsupported subscription login method"):
+        gateway.login_subscription(
+            "openai-subscription",
+            model_id="gpt-subscription",
+            auth_method=cast(Any, "password"),
+        )
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise SubscriptionError("OpenHands subscription unavailable")
+
+    monkeypatch.setattr(provider, "login", fail)
+    with pytest.raises(ModelCatalogError, match="subscription unavailable"):
+        gateway.login_subscription("openai-subscription", model_id="gpt-subscription")
+
+    monkeypatch.setattr(provider, "start_device_login", fail)
+    with pytest.raises(ModelCatalogError, match="subscription unavailable"):
+        gateway.start_subscription_device_login("openai-subscription")
+
+    monkeypatch.setattr(provider, "poll_device_login", fail)
+    with pytest.raises(ModelCatalogError, match="subscription unavailable"):
+        gateway.poll_subscription_device_login("openai-subscription", "login-1")
+
+    monkeypatch.setattr(provider, "logout", fail)
+    with pytest.raises(ModelCatalogError, match="subscription unavailable"):
+        gateway.forget_credential("openai-subscription")
+
+    monkeypatch.setattr(provider, "credential_available", fail)
+    connections = cast(list[dict[str, object]], gateway.model_settings()["connections"])
+    subscription = next(
+        item for item in connections if item["connection_id"] == "openai-subscription"
+    )
+    assert subscription["credential_status"] == "missing"
 
 
 def test_platform_connection_manifest_supports_multi_model_research_service(
@@ -526,8 +694,10 @@ def test_generic_project_authorizes_only_the_selected_custom_api_route(
     assert config_save_calls == 0
     assert config.policy.policy_id == "generic-custom-api"
     assert "https://second.example/v1/chat/completions" in config.policy.allowed_model_endpoints
+    assert "https://second.example/v1/responses" in config.policy.allowed_model_endpoints
     assert "https://second.example/v1/models" in config.policy.allowed_model_catalog_endpoints
     assert "https://first.example/v1/chat/completions" not in config.policy.allowed_model_endpoints
+    assert "https://first.example/v1/responses" not in config.policy.allowed_model_endpoints
     assert "https://first.example/v1/models" not in config.policy.allowed_model_catalog_endpoints
     assert "HEARTWOOD_CUSTOM_MODEL_API_KEY" in config.policy.credential_allowlist
     assert "first-transient-secret" not in persisted
@@ -834,3 +1004,59 @@ def test_compatibility_uses_openhands_and_litellm_metadata(
     assert experimental[3] is None
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
     assert os.environ["OPENHANDS_SUPPRESS_BANNER"] == "1"
+
+
+def test_stanford_gateway_uses_openhands_model_compatibility_and_request_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = ModelConnection(
+        connection_id="stanford-ai-api-gateway",
+        label="Stanford AI API Gateway",
+        protocol="openai-compatible",
+        model_prefix="openai/",
+        source="platform",
+        credential_kind="environment",
+        api_key_env="STANFORD_AI_API_KEY",
+        base_url="https://aiapi-prod.stanford.edu/v1",
+        catalog_endpoint="https://aiapi-prod.stanford.edu/v1/models",
+        policy_endpoint="https://aiapi-prod.stanford.edu/v1/chat/completions",
+    )
+    monkeypatch.setattr(
+        "heartwood.gateway._model_catalog._verified_openhands_models",
+        lambda _connection: {"openai/gpt-5.4"},
+    )
+
+    availability, reason, context_window, supports_tools = _model_compatibility(
+        connection,
+        "openai/gpt-5.4",
+    )
+
+    assert availability == "available"
+    assert reason == "Verified by the pinned OpenHands SDK"
+    assert context_window is None
+    assert supports_tools is True
+    assert connection.request_endpoint("openai/gpt-5.4") == (
+        "https://aiapi-prod.stanford.edu/v1/responses"
+    )
+    assert connection.request_endpoint("openai/claude-opus-4-7") == (
+        "https://aiapi-prod.stanford.edu/v1/chat/completions"
+    )
+
+
+def test_request_endpoint_uses_openhands_model_capabilities() -> None:
+    connections = {
+        connection.connection_id: connection for connection in BUILT_IN_MODEL_CONNECTIONS
+    }
+
+    assert connections["openai"].request_endpoint("openai/gpt-5.4") == (
+        "https://api.openai.com/v1/responses"
+    )
+    assert connections["openai"].request_endpoint("openai/gpt-4.1") == (
+        "https://api.openai.com/v1/chat/completions"
+    )
+    assert connections["anthropic"].request_endpoint("anthropic/claude-current") == (
+        "https://api.anthropic.com/v1/messages"
+    )
+    assert connections["openai-subscription"].request_endpoint("openai/gpt-5.4") == (
+        "https://chatgpt.com/backend-api/codex/responses"
+    )

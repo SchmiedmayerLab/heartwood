@@ -20,7 +20,7 @@ In an approved connected staging environment:
 5. transfer the complete project through the institution's approved process when the offline host differs.
 
 Model provenance remains in `.heartwood/models/`.
-Do not transfer provider tokens or unrelated project state.
+Do not transfer provider API keys or unrelated project state.
 
 ## Start a Container Without Networking
 

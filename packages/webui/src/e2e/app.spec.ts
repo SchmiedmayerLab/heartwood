@@ -94,7 +94,7 @@ test("supports the researcher conversation and session workflow", async ({
     has: page.getByText("OpenAI", { exact: true }),
   });
   await hostedConnection.getByRole("button", { name: "Connect" }).click();
-  await page.getByLabel("API token").fill("synthetic-runtime-token");
+  await page.getByLabel("API key").fill("synthetic-runtime-token");
   const loadModels = page.getByRole("button", { name: "Load models" });
   await expect(loadModels).toBeVisible();
   await loadModels.click();
@@ -248,9 +248,12 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         description:
           "Models served by the runtime Heartwood manages for this project",
         static_models: [],
+        subscription_vendor: null,
         group: "heartwood-managed",
         group_label: "Run with Heartwood",
         accepts_token: false,
+        supports_login: false,
+        auth_type: "api_key",
         credential_status: "configured",
       },
       {
@@ -270,9 +273,12 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         aws_profile_name: null,
         description: "Models available to the supplied OpenAI credential",
         static_models: [],
+        subscription_vendor: null,
         group: "hosted-provider",
         group_label: "Hosted providers",
         accepts_token: true,
+        supports_login: false,
+        auth_type: "api_key",
         credential_status: "missing",
       },
     ],
@@ -300,14 +306,14 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         source_id: "openai",
         connection_id: "openai",
         label: "OpenAI",
-        description: "Use the models available to an OpenAI token.",
+        description: "Use the models available to an OpenAI API key.",
         selected: false,
       },
       {
         source_id: "anthropic",
         connection_id: "anthropic",
         label: "Anthropic",
-        description: "Use the models available to an Anthropic token.",
+        description: "Use the models available to an Anthropic API key.",
         selected: false,
       },
       {
@@ -591,6 +597,8 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       capability_tier: "supervised",
       base_url: connection.base_url,
       credential_kind: connection.credential_kind,
+      auth_type: connection.auth_type,
+      subscription_vendor: connection.subscription_vendor,
       api_key_env: connection.api_key_env,
       api_key_file: null,
       api_version: null,

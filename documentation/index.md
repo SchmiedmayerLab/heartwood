@@ -53,7 +53,7 @@ The terminal, browser, and notebook bridge use the same project configuration, m
 ## Choose Where the Model Runs
 
 Heartwood does not include model weights or credentials in its images or installers.
-During setup, choose an available research-environment connection, OpenAI, Anthropic, another authorized OpenAI-compatible service, or a [model that Heartwood manages in the current environment](models/choose-managed.md).
+During setup, choose the Stanford AI API Gateway, sign in with an eligible ChatGPT account, provide an OpenAI or Anthropic API key, connect another authorized OpenAI-compatible service, or select a [model that Heartwood manages in the current environment](models/choose-managed.md).
 
 The platform remains authoritative for identity, network access, data permissions, and which model routes may receive project content.
 
@@ -69,7 +69,7 @@ See [Security and Controlled Data](operate/security.md) before using restricted 
 
 - [Your First Project](start/index.md) provides the shortest complete path from installation to a reviewed action.
 - [Work With Heartwood](use/index.md) explains the normal conversation, action, replay, and audit workflow.
-- [Models](models/index.md) compares research-environment, hosted, compatible-service, and Heartwood-managed routes.
+- [Models](models/index.md) compares institution-managed, hosted, compatible-service, and Heartwood-managed routes.
 - [Platforms](platforms/index.md) covers containers, Terra, and Stanford Carina.
 - [Diagnostics and Troubleshooting](reference/troubleshooting.md) maps stable `HW-*` codes to recovery steps.
 - [How Heartwood Works](architecture/index.md) explains the architecture and security boundaries.
