@@ -1022,6 +1022,9 @@ def test_stanford_gateway_uses_openhands_model_compatibility_and_request_path(
     assert connection.request_endpoint("openai/gpt-5.4") == (
         "https://aiapi-prod.stanford.edu/v1/responses"
     )
+    assert connection.request_endpoint("openai/claude-opus-4-7") == (
+        "https://aiapi-prod.stanford.edu/v1/chat/completions"
+    )
 
 
 def test_request_endpoint_uses_openhands_model_capabilities() -> None:

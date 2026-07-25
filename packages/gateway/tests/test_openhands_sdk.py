@@ -16,7 +16,7 @@ from typing import Literal, cast
 
 import pytest
 
-from heartwood.core_adapter import BackendEventKind
+from heartwood.core_adapter import BackendEventKind, SessionService
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend
 from heartwood.gateway._openhands_sdk import (
     ConversationFactory,
@@ -32,6 +32,7 @@ from heartwood.gateway._openhands_sdk import (
     _tool_call,
     _tool_observation,
 )
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
 def test_verified_skills_load_through_openhands_native_loader() -> None:
@@ -454,6 +455,109 @@ def test_openhands_backend_maps_finish_lifecycle_to_agent_message(tmp_path: Path
     assert events[2].message == "The requested file was created."
 
 
+def test_openhands_backend_maps_upstream_finish_contract_to_agent_message(
+    tmp_path: Path,
+) -> None:
+    event_module = import_module("openhands.sdk.event")
+    llm_module = import_module("openhands.sdk.llm")
+    finish_module = import_module("openhands.sdk.tool.builtins.finish")
+    finish_action = finish_module.FinishAction(message="The requested file was created.")
+    action = event_module.ActionEvent(
+        thought=(),
+        action=finish_action,
+        tool_name=finish_module.FinishTool.name,
+        tool_call_id="finish-call",
+        tool_call=llm_module.MessageToolCall(
+            id="finish-call",
+            name=finish_module.FinishTool.name,
+            arguments='{"message":"The requested file was created."}',
+            origin="completion",
+        ),
+        llm_response_id="response-1",
+        summary="report completion",
+    )
+    observation = event_module.ObservationEvent(
+        tool_name=finish_module.FinishTool.name,
+        tool_call_id="finish-call",
+        observation=finish_module.FinishObservation(),
+        action_id=action.id,
+    )
+    conversation = _FakeConversation()
+    conversation.state.execution_status.value = "finished"
+    backend = _backend(tmp_path, conversation)
+    backend._captured.extend((action, observation))
+
+    events = backend._translate_capture(session_id="session-1")
+
+    assert [event.kind for event in events] == [BackendEventKind.AGENT_MESSAGE]
+    assert events[0].message == "The requested file was created."
+
+
+def test_openhands_finish_lifecycle_is_not_persisted_as_tool_activity(
+    tmp_path: Path,
+) -> None:
+    session_id = "session-1"
+    backend = _backend(tmp_path, _FinishConversation())
+    service = SessionService.local_default(
+        tmp_path / "sessions",
+        session_id=session_id,
+        backend=backend,
+        env={},
+        clock=lambda: "2026-07-25T00:00:00Z",
+    )
+    try:
+        first = service.handle(
+            _session_command(
+                command_id="chat",
+                session_id=session_id,
+                kind=CommandKind.CHAT,
+                prompt="create a file",
+            )
+        )
+        confirmation = next(
+            event for event in first.events if event.kind == EventKind.CONFIRMATION_REQUESTED.value
+        )
+        request = confirmation.payload["request"]
+        assert isinstance(request, dict)
+
+        service.handle(
+            _session_command(
+                command_id="approve",
+                session_id=session_id,
+                kind=CommandKind.APPROVE,
+                target_type="tool-call",
+                target_id=str(request["tool_call_id"]),
+            )
+        )
+        service.handle(
+            _session_command(
+                command_id="audit",
+                session_id=session_id,
+                kind=CommandKind.AUDIT_EXPORT,
+            )
+        )
+
+        replayed = service.replay_events()
+        tool_proposals = [
+            event for event in replayed if event.kind == EventKind.TOOL_CALL_PROPOSED.value
+        ]
+        tool_executions = [
+            event for event in replayed if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+        ]
+        agent_messages = [
+            event for event in replayed if event.kind == EventKind.AGENT_MESSAGE_EMITTED.value
+        ]
+
+        assert [event.payload["tool_name"] for event in tool_proposals] == ["terminal"]
+        assert [event.payload["tool_name"] for event in tool_executions] == ["terminal"]
+        assert [event.payload["content"] for event in agent_messages] == [
+            "The requested file was created."
+        ]
+        assert '"tool_name":"finish"' not in service.store.read_audit_export()
+    finally:
+        service.close()
+
+
 def test_openhands_backend_rejects_pending_action_without_model_continuation(
     tmp_path: Path,
 ) -> None:
@@ -833,6 +937,23 @@ class _ErrorConversation(_FakeConversation):
         callback(observation)
         callback(AgentErrorEvent())
         self.state.execution_status.value = "finished"
+
+
+def _session_command(
+    *,
+    command_id: str,
+    session_id: str,
+    kind: CommandKind,
+    **payload: JsonValue,
+) -> SessionCommand:
+    return SessionCommand(
+        command_id=command_id,
+        session_id=session_id,
+        kind=kind,
+        actor_id="test-user",
+        created_at="2026-07-25T00:00:00Z",
+        payload=payload,
+    )
 
 
 def _backend(
