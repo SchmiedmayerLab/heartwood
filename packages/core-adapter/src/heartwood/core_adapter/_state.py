@@ -14,7 +14,8 @@ import os
 import socket
 import tempfile
 import uuid
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -63,10 +64,12 @@ class FileSessionStore:
         self.audit_export_path = self.session_dir / "audit-export.jsonl"
         self.writer_lock_path = self.session_dir / ".writer.lock"
         self.writer_metadata_path = self.session_dir / ".writer.json"
+        self.snapshot_lock_path = self.session_dir / ".snapshot.lock"
         self.pending_commit_path = self.session_dir / ".pending-commit.json"
         self.commands_dir = self.session_dir / ".commands"
         self._next_sequence: int | None = None
         self._writer_lock: FileLock | None = None
+        self._snapshot_lock = FileLock(self.snapshot_lock_path, timeout=10, mode=0o600)
         self._writer_token: str | None = None
         self.recovered_stale_writer = False
 
@@ -129,6 +132,23 @@ class FileSessionStore:
             self._writer_token = None
             lock.release()
 
+    @contextmanager
+    def snapshot(self) -> Iterator[None]:
+        """Hold a stable paired view of the session event and audit logs."""
+        self._prepare_session_dir()
+        if self.snapshot_lock_path.is_symlink():
+            raise SessionStoreBoundaryError(
+                f"session snapshot lock must not be a symbolic link: {self.session_id}"
+            )
+        try:
+            with self._snapshot_lock:
+                self.snapshot_lock_path.chmod(0o600)
+                yield
+        except FileLockTimeout as error:
+            raise SessionRecoveryError(
+                f"session {self.session_id} did not provide a stable persistence snapshot"
+            ) from error
+
     def append_event(self, event: SessionEvent) -> None:
         """Persist one legacy session event envelope under the writer lease."""
         if not self.owns_writer:
@@ -147,31 +167,35 @@ class FileSessionStore:
         if event.sequence != audit_event.sequence:
             raise SessionRecoveryError("pending event and audit sequences do not match")
         _verify_pending_pair(event, audit_event)
-        self._prepare_session_dir()
-        if self.pending_commit_path.exists():
-            self.recover_pending_commit()
-        _write_private_json_atomic(
-            self.pending_commit_path,
-            {
-                "schema_version": "heartwood.session-commit.v1",
-                "session_event": event.model_dump(mode="json"),
-                "audit_event": audit_event.model_dump(mode="json"),
-            },
-        )
-        _append_private_json_line(self.audit_path, audit_event.model_dump_json())
-        _append_private_json_line(self.events_path, event.model_dump_json())
-        self.pending_commit_path.unlink()
-        _fsync_directory(self.session_dir)
-        self._next_sequence = event.sequence + 1
+        with self.snapshot():
+            if self.pending_commit_path.exists():
+                self._recover_pending_commit_locked()
+            _write_private_json_atomic(
+                self.pending_commit_path,
+                {
+                    "schema_version": "heartwood.session-commit.v1",
+                    "session_event": event.model_dump(mode="json"),
+                    "audit_event": audit_event.model_dump(mode="json"),
+                },
+            )
+            _append_private_json_line(self.audit_path, audit_event.model_dump_json())
+            _append_private_json_line(self.events_path, event.model_dump_json())
+            self.pending_commit_path.unlink()
+            _fsync_directory(self.session_dir)
+            self._next_sequence = event.sequence + 1
 
     def recover_pending_commit(self) -> bool:
         """Complete one interrupted paired event and audit append."""
-        if not self.pending_commit_path.exists():
-            return False
         if not self.owns_writer:
             raise SessionRecoveryError(
                 f"session {self.session_id} requires writer-owned commit recovery"
             )
+        with self.snapshot():
+            return self._recover_pending_commit_locked()
+
+    def _recover_pending_commit_locked(self) -> bool:
+        if not self.pending_commit_path.exists():
+            return False
         try:
             payload = _read_private_json(self.pending_commit_path)
             if payload.get("schema_version") != "heartwood.session-commit.v1":

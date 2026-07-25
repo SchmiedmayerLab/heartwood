@@ -236,15 +236,19 @@ class SessionService:
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         """Return events after verifying their one-to-one audit correspondence."""
-        if self.store.pending_commit_path.exists():
+        if not self.store.session_dir.exists():
+            return ()
+        while True:
+            with self.store.snapshot():
+                if not self.store.pending_commit_path.exists():
+                    audit_events = self.audit_log.read()
+                    self.audit_log.verify(audit_events)
+                    events = self.store.read_events()
+                    _verify_event_correspondence(audit_events, events)
+                    return events
             if not self.store.owns_writer:
                 self.store.acquire_writer()
             self.store.recover_pending_commit()
-        audit_events = self.audit_log.read()
-        self.audit_log.verify(audit_events)
-        events = self.store.read_events()
-        _verify_event_correspondence(audit_events, events)
-        return events
 
     def close(self) -> None:
         """Release backend resources."""

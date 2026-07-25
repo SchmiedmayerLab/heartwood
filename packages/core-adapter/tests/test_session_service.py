@@ -41,6 +41,13 @@ from heartwood.session import (
 )
 
 
+def test_empty_replay_does_not_create_session_state(tmp_path: Path) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+
+    assert service.replay_events() == ()
+    assert not service.store.session_dir.exists()
+
+
 def test_pause_persists_replayable_events(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
@@ -211,6 +218,84 @@ service.close()
 
     assert blocked.returncode == 23, blocked.stderr
     assert handed_off.returncode == 0, handed_off.stderr
+
+
+def test_replay_waits_for_a_complete_paired_commit(tmp_path: Path) -> None:
+    writer_script = """
+import sys
+import time
+from pathlib import Path
+import heartwood.core_adapter._state as state
+from heartwood.core_adapter import SessionService
+from heartwood.session import CommandKind, SessionCommand
+
+root = Path(sys.argv[1])
+ready = root / "audit-appended"
+release = root / "release-commit"
+original_append = state._append_private_json_line
+
+def pause_after_audit(path, content):
+    original_append(path, content)
+    if path.name == "audit.jsonl" and not ready.exists():
+        ready.write_text("ready", encoding="utf-8")
+        while not release.exists():
+            time.sleep(0.01)
+
+state._append_private_json_line = pause_after_audit
+service = SessionService.synthetic_default(root)
+service.handle(
+    SessionCommand(
+        command_id="paused-pair",
+        session_id="session-synthetic-001",
+        kind=CommandKind.PAUSE,
+        actor_id="writer",
+        created_at="2026-01-01T00:00:00Z",
+    )
+)
+service.close()
+"""
+    reader_script = """
+import sys
+from pathlib import Path
+from heartwood.core_adapter import SessionService
+
+root = Path(sys.argv[1])
+(root / "reader-started").write_text("ready", encoding="utf-8")
+service = SessionService.synthetic_default(root)
+print(len(service.replay_events()))
+service.close()
+"""
+    writer = subprocess.Popen(
+        [sys.executable, "-c", writer_script, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    reader: subprocess.Popen[str] | None = None
+    try:
+        _wait_for_process_marker(writer, tmp_path / "audit-appended")
+        reader = subprocess.Popen(
+            [sys.executable, "-c", reader_script, str(tmp_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _wait_for_process_marker(reader, tmp_path / "reader-started")
+        time.sleep(0.1)
+        assert reader.poll() is None, reader.stderr.read() if reader.stderr is not None else ""
+
+        (tmp_path / "release-commit").write_text("continue", encoding="utf-8")
+        writer_stdout, writer_stderr = writer.communicate(timeout=5)
+        reader_stdout, reader_stderr = reader.communicate(timeout=5)
+    finally:
+        for process in (writer, reader):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
+    assert writer.returncode == 0, f"{writer_stdout}\n{writer_stderr}"
+    assert reader.returncode == 0, reader_stderr
+    assert reader_stdout.strip() in {"1", "2"}
 
 
 def test_distinct_sessions_can_mutate_independently(tmp_path: Path) -> None:
@@ -1418,6 +1503,17 @@ class _RecordingBackend:
 
     def close(self) -> None:
         return None
+
+
+def _wait_for_process_marker(process: subprocess.Popen[str], marker: Path) -> None:
+    for _ in range(100):
+        if marker.is_file():
+            return
+        if process.poll() is not None:
+            stdout, stderr = process.communicate(timeout=5)
+            pytest.fail(f"child process exited before {marker.name}\n{stdout}\n{stderr}")
+        time.sleep(0.05)
+    pytest.fail(f"child process did not create {marker.name}")
 
 
 def _event_pair(
