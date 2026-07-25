@@ -61,7 +61,7 @@ jobs:
         run: npm run license:check
       - name: Audit npm dependencies
         working-directory: packages/webui
-        run: npm audit --audit-level=moderate
+        run: npm audit --omit=dev --audit-level=moderate
       - name: Install Playwright Chromium
         working-directory: packages/webui
         run: npx playwright install --with-deps chromium

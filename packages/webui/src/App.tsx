@@ -45,6 +45,7 @@ import type {
   ModelSettings,
   ModelValidation,
   ProjectReadiness,
+  SessionCommand,
   SessionEvent,
   SessionSummary,
   SkillSettings,
@@ -98,6 +99,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [requestActivity, setRequestActivity] =
     useState<RequestActivity | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryCommand, setRetryCommand] = useState<SessionCommand | null>(null);
   const [panel, setPanel] = useState<UtilityPanel>(null);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(
@@ -471,35 +473,46 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const send = async (
     kind: Parameters<typeof createCommand>[1],
     payload: Record<string, JsonValue> = {},
+    existingCommand?: SessionCommand,
   ) => {
     if (sessionId === null || commandInFlight.current) return false;
     commandInFlight.current = true;
+    const command = existingCommand ?? createCommand(sessionId, kind, payload);
     setRequestActivity(requestActivityForCommand(kind));
     setRequestStatus("busy");
     setError(null);
     try {
-      const command = createCommand(sessionId, kind, events.length, payload);
       const submittedPrompt = promptContent(payload);
       if (kind === "chat" && submittedPrompt) {
-        setLocalConversation((current) => [
-          ...current,
-          {
-            id: `local-${command.command_id}`,
-            sequence: (events.at(-1)?.sequence ?? -1) + 0.5,
-            role: "user",
-            label: "You",
-            content: submittedPrompt,
-            detail: null,
-            sessionId,
-          },
-        ]);
+        setLocalConversation((current) =>
+          (
+            current.some(
+              (message) => message.id === `local-${command.command_id}`,
+            )
+          ) ?
+            current
+          : [
+              ...current,
+              {
+                id: `local-${command.command_id}`,
+                sequence: (events.at(-1)?.sequence ?? -1) + 0.5,
+                role: "user",
+                label: "You",
+                content: submittedPrompt,
+                detail: null,
+                sessionId,
+              },
+            ],
+        );
       }
       const response = await resolvedClient.postCommand(command);
       setEvents((current) => mergeEvents(current, response.events));
       await refreshSessions();
+      setRetryCommand(null);
       setRequestStatus("idle");
       return true;
     } catch (caught) {
+      setRetryCommand(command);
       setError(errorMessage(caught));
       setRequestStatus("error");
       return false;
@@ -716,11 +729,29 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           {error ?
             <div className="error-banner" role="alert">
               <span>{error}</span>
+              {retryCommand?.session_id === sessionId ?
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void send(
+                      retryCommand.kind,
+                      retryCommand.payload,
+                      retryCommand,
+                    )
+                  }
+                >
+                  Retry request
+                </Button>
+              : null}
               <Button
                 aria-label="Dismiss error"
                 size="sm"
                 variant="ghost"
-                onClick={() => setError(null)}
+                onClick={() => {
+                  setError(null);
+                  setRetryCommand(null);
+                }}
               >
                 <X size={16} />
               </Button>

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from collections.abc import Mapping
@@ -41,9 +42,15 @@ from heartwood.gateway import (
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 
-def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: JsonValue) -> str:
+def _command(
+    kind: CommandKind,
+    *,
+    session_id: str = "session-1",
+    command_id: str | None = None,
+    **payload: JsonValue,
+) -> str:
     command = SessionCommand(
-        command_id=f"{session_id}-{kind.value}",
+        command_id=command_id or f"{session_id}-{kind.value}",
         session_id=session_id,
         kind=kind,
         actor_id="synthetic-user",
@@ -123,6 +130,23 @@ class _BlockingSessionService:
 
     def close(self) -> None:
         self.closed.set()
+
+
+@dataclass
+class _ClosingSessionService:
+    closed: Event
+    fail: bool = False
+
+    def handle(self, _command: SessionCommand) -> SessionResult:
+        return SessionResult(events=())
+
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def close(self) -> None:
+        self.closed.set()
+        if self.fail:
+            raise RuntimeError("synthetic close failure")
 
 
 def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -> None:
@@ -209,6 +233,46 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
     assert closed.is_set()
 
 
+def test_gateway_releases_every_session_when_one_backend_close_fails(tmp_path: Path) -> None:
+    first_closed = Event()
+    second_closed = Event()
+    services = {
+        "session-one": _ClosingSessionService(first_closed, fail=True),
+        "session-two": _ClosingSessionService(second_closed),
+    }
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, session_id: cast(Any, services[session_id]),
+    )
+    gateway.handle(
+        SessionCommand(
+            command_id="pause-one",
+            session_id="session-one",
+            kind=CommandKind.PAUSE,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    gateway.handle(
+        SessionCommand(
+            command_id="pause-two",
+            session_id="session-two",
+            kind=CommandKind.PAUSE,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+
+    with pytest.raises(ExceptionGroup, match="unable to close all session services"):
+        gateway.stop()
+
+    assert first_closed.is_set()
+    assert second_closed.is_set()
+    assert gateway._services == {}
+
+
 def test_rest_command_routes_through_session_service_and_streams_events(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
     stream = gateway.websocket(session_id="session-1")
@@ -231,6 +295,114 @@ def test_rest_command_routes_through_session_service_and_streams_events(tmp_path
         EventKind.COMMAND_RECEIVED.value,
         EventKind.SESSION_PAUSED.value,
     ]
+
+
+def test_rest_reports_unsupported_session_storage_without_server_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def native_lock_unavailable(_descriptor: int) -> bool:
+        raise OSError(errno.ENOSYS, "synthetic unsupported filesystem")
+
+    monkeypatch.setattr("filelock._unix._lock_fd_nonblocking", native_lock_unavailable)
+    rest = RestGateway(_gateway(tmp_path))
+
+    response = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.PAUSE),
+        )
+    )
+
+    assert response.status_code == 409
+    assert response.body == {
+        "error": "session storage does not support required process locks: session-1"
+    }
+
+
+def test_rest_command_retry_is_not_published_twice(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    stream = gateway.websocket(session_id="session-1")
+    rest = RestGateway(gateway)
+    body = _command(CommandKind.PAUSE)
+
+    first = rest.handle(RestRequest(method="POST", path="/sessions/session-1/commands", body=body))
+    first_stream_events = stream.receive()
+    retried = rest.handle(
+        RestRequest(method="POST", path="/sessions/session-1/commands", body=body)
+    )
+
+    assert retried == first
+    assert len(first_stream_events) == 2
+    assert stream.receive() == ()
+
+
+def test_browser_to_cli_session_handoff_requires_owner_shutdown(tmp_path: Path) -> None:
+    browser_gateway = _gateway(tmp_path)
+    cli_gateway = _gateway(tmp_path)
+    browser = RestGateway(browser_gateway)
+    cli = RestGateway(cli_gateway)
+    browser_response = browser.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.PAUSE, command_id="browser-pause"),
+        )
+    )
+
+    blocked = cli.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.RESUME, command_id="cli-resume"),
+        )
+    )
+    browser_gateway.stop()
+    handed_off = cli.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.RESUME, command_id="cli-resume"),
+        )
+    )
+
+    assert browser_response.status_code == 200
+    assert blocked.status_code == 409
+    assert "active in another Heartwood process" in str(blocked.body["error"])
+    assert handed_off.status_code == 200
+    assert _events(handed_off)[-1]["kind"] == EventKind.SESSION_RESUMED.value
+
+
+def test_two_gateways_can_mutate_distinct_sessions(tmp_path: Path) -> None:
+    first = RestGateway(_gateway(tmp_path))
+    second = RestGateway(_gateway(tmp_path))
+
+    first_result = first.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-one/commands",
+            body=_command(
+                CommandKind.PAUSE,
+                session_id="session-one",
+                command_id="pause-one",
+            ),
+        )
+    )
+    second_result = second.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-two/commands",
+            body=_command(
+                CommandKind.PAUSE,
+                session_id="session-two",
+                command_id="pause-two",
+            ),
+        )
+    )
+
+    assert first_result.status_code == 200
+    assert second_result.status_code == 200
 
 
 def test_rest_event_replay_supports_reconnect_after_sequence(tmp_path: Path) -> None:

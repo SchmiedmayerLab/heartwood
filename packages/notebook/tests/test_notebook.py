@@ -427,7 +427,7 @@ def test_notebook_initialization_does_not_advertise_a_terra_web_route(
     assert notebook.browser_url(port=9000) is None
 
 
-def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
+def test_notebook_session_uses_unique_commands_without_duplicate_replay(
     tmp_path: Path,
 ) -> None:
     gateway = _CountingGateway()
@@ -442,10 +442,10 @@ def test_notebook_session_tracks_command_sequence_without_duplicate_replay(
     session.pause()
 
     assert gateway.replay_calls == 3
-    assert [command.command_id for command in gateway.commands] == [
-        "notebook-counting-chat-000000",
-        "notebook-counting-pause-000001",
-    ]
+    command_ids = [command.command_id for command in gateway.commands]
+    assert command_ids[0].startswith("notebook-counting-chat-")
+    assert command_ids[1].startswith("notebook-counting-pause-")
+    assert len(set(command_ids)) == 2
 
 
 def test_notebook_context_releases_the_shared_gateway(tmp_path: Path) -> None:

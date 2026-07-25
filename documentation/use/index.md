@@ -41,7 +41,7 @@ If a task should not use the network, parent directories, or particular files, s
 
 All interfaces use the project selected by the process current directory.
 They do not maintain separate browser, terminal, or notebook workspaces.
-They can continue the same session sequentially, but one process should write a session at a time.
+They can continue the same session sequentially, and Heartwood prevents separate processes from writing that session at the same time.
 Stop the active writer before moving a session to another interface, or choose distinct session identifiers for simultaneous work.
 
 ## Verify Before Trusting the Result

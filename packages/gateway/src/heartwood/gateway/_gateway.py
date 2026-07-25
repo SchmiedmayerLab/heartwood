@@ -372,8 +372,10 @@ class SessionGateway:
     @_serialized_state
     def stop(self) -> None:
         """Close active OpenHands conversations."""
-        self._reset_services()
-        self.credential_store.clear_process_values()
+        try:
+            self._reset_services()
+        finally:
+            self.credential_store.clear_process_values()
 
     @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
@@ -385,7 +387,8 @@ class SessionGateway:
             self.session_catalog.ensure(command.session_id)
         service = self._service(command.session_id)
         result = service.handle(command)
-        self._streams.publish(session_id=command.session_id, events=result.events)
+        if not result.replayed:
+            self._streams.publish(session_id=command.session_id, events=result.events)
         return result
 
     def sessions(self) -> dict[str, object]:
@@ -1266,9 +1269,16 @@ class SessionGateway:
 
     @_serialized_state
     def _reset_services(self) -> None:
-        for service in self._services.values():
-            service.close()
+        services = tuple(self._services.values())
         self._services.clear()
+        errors: list[Exception] = []
+        for service in services:
+            try:
+                service.close()
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("unable to close all session services", errors)
 
     @_serialized_state
     def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:

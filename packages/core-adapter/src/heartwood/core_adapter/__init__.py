@@ -17,19 +17,29 @@ from heartwood.core_adapter._facade import (
     ProposedToolCall,
     ToolExecution,
 )
-from heartwood.core_adapter._service import SessionResult, SessionService
-from heartwood.core_adapter._state import FileSessionStore, SessionStoreBoundaryError
+from heartwood.core_adapter._service import CommandConflictError, SessionResult, SessionService
+from heartwood.core_adapter._state import (
+    FileSessionStore,
+    SessionOwnershipError,
+    SessionRecoveryError,
+    SessionStorageCapabilityError,
+    SessionStoreBoundaryError,
+)
 
 __all__ = [
     "AgentBackend",
     "BackendEvent",
     "BackendEventKind",
+    "CommandConflictError",
     "DeterministicAgentBackend",
     "FileSessionStore",
     "LocalWorkspaceAgentBackend",
     "ProposedToolCall",
+    "SessionOwnershipError",
+    "SessionRecoveryError",
     "SessionResult",
     "SessionService",
+    "SessionStorageCapabilityError",
     "SessionStoreBoundaryError",
     "ToolExecution",
     "__version__",
