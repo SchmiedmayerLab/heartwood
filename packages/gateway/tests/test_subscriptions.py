@@ -237,6 +237,27 @@ def test_device_login_rejects_unknown_and_expired_requests(
         provider.poll_device_login(started.login_id)
 
 
+def test_starting_device_login_prunes_abandoned_expired_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth = _Auth()
+    provider = OpenHandsOpenAISubscription()
+    monkeypatch.setattr(provider, "_auth_client", auth)
+    now = [100.0]
+    monkeypatch.setattr(
+        "heartwood.gateway._subscriptions.time.monotonic",
+        lambda: now[0],
+    )
+
+    abandoned = provider.start_device_login()
+    now[0] += 16 * 60
+    current = provider.start_device_login()
+
+    with pytest.raises(SubscriptionError, match="unavailable or expired"):
+        provider.poll_device_login(abandoned.login_id)
+    assert provider.poll_device_login(current.login_id).status == "pending"
+
+
 def test_device_poll_failure_is_redacted_and_clears_pending_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

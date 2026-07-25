@@ -138,47 +138,76 @@ def test_subscription_profile_persists_only_non_secret_openhands_metadata() -> N
 
 
 @pytest.mark.parametrize(
-    "profile",
+    ("profile", "message"),
     [
-        ModelProfile(
-            profile_id="missing-vendor",
-            model="openai/gpt-current",
-            policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
-            credential_kind="managed-identity",
-            auth_type="subscription",
+        pytest.param(
+            ModelProfile(
+                profile_id="missing-vendor",
+                model="openai/gpt-current",
+                policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+                credential_kind="managed-identity",
+                auth_type="subscription",
+            ),
+            "supported subscription_vendor",
+            id="missing-vendor",
         ),
-        ModelProfile(
-            profile_id="wrong-credential-kind",
-            model="openai/gpt-current",
-            policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
-            credential_kind="environment",
-            auth_type="subscription",
-            subscription_vendor="openai",
-            api_key_env="OPENAI_API_KEY",
+        pytest.param(
+            ModelProfile(
+                profile_id="wrong-credential-kind",
+                model="openai/gpt-current",
+                policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+                credential_kind="environment",
+                auth_type="subscription",
+                subscription_vendor="openai",
+                api_key_env="OPENAI_API_KEY",
+            ),
+            "dependency-managed credentials",
+            id="wrong-credential-kind",
         ),
-        ModelProfile(
-            profile_id="wrong-provider",
-            model="anthropic/claude-current",
-            policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
-            credential_kind="managed-identity",
-            auth_type="subscription",
-            subscription_vendor="openai",
+        pytest.param(
+            ModelProfile(
+                profile_id="wrong-provider",
+                model="anthropic/claude-current",
+                policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+                credential_kind="managed-identity",
+                auth_type="subscription",
+                subscription_vendor="openai",
+            ),
+            "requires an OpenAI model",
+            id="wrong-provider",
         ),
-        ModelProfile(
-            profile_id="wrong-endpoint",
-            model="openai/gpt-current",
-            policy_endpoint="https://api.openai.com/v1/responses",
-            credential_kind="managed-identity",
-            auth_type="subscription",
-            subscription_vendor="openai",
+        pytest.param(
+            ModelProfile(
+                profile_id="wrong-endpoint",
+                model="openai/gpt-current",
+                policy_endpoint="https://api.openai.com/v1/responses",
+                credential_kind="managed-identity",
+                auth_type="subscription",
+                subscription_vendor="openai",
+            ),
+            "requires the OpenHands Codex endpoint",
+            id="wrong-endpoint",
         ),
     ],
 )
 def test_subscription_profile_rejects_incoherent_authentication(
     profile: ModelProfile,
+    message: str,
 ) -> None:
-    with pytest.raises(ModelSettingsError):
+    with pytest.raises(ModelSettingsError, match=message):
         profile.validate()
+
+
+def test_incomplete_subscription_profile_has_no_credential_reference() -> None:
+    profile = ModelProfile(
+        profile_id="missing-vendor",
+        model="openai/gpt-current",
+        policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+        credential_kind="managed-identity",
+        auth_type="subscription",
+    )
+
+    assert profile.credential_reference is None
 
 
 def test_settings_add_select_and_remove_profiles() -> None:
@@ -262,6 +291,21 @@ def test_profile_alignment_replaces_responses_policy_for_a_chat_model() -> None:
     aligned = align_model_profile_request_endpoint(profile)
 
     assert aligned.policy_endpoint == "https://api.openai.com/v1/chat/completions"
+
+
+def test_profile_alignment_preserves_subscription_transport() -> None:
+    profile = ModelProfile(
+        profile_id="openai-subscription",
+        model="openai/gpt-subscription",
+        policy_endpoint="https://chatgpt.com/backend-api/codex/responses",
+        credential_kind="managed-identity",
+        auth_type="subscription",
+        subscription_vendor="openai",
+    )
+
+    aligned = align_model_profile_request_endpoint(profile)
+
+    assert aligned is profile
 
 
 @pytest.mark.parametrize(

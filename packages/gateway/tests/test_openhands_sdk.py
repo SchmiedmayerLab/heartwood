@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -482,15 +483,14 @@ def test_openhands_backend_maps_upstream_finish_contract_to_agent_message(
         observation=finish_module.FinishObservation(),
         action_id=action.id,
     )
-    conversation = _FakeConversation()
-    conversation.state.execution_status.value = "finished"
+    conversation = _CompletedEventConversation((action, observation))
     backend = _backend(tmp_path, conversation)
-    backend._captured.extend((action, observation))
 
-    events = backend._translate_capture(session_id="session-1")
+    events = backend.submit_turn(session_id="session-1", prompt="create a file")
 
     assert [event.kind for event in events] == [BackendEventKind.AGENT_MESSAGE]
     assert events[0].message == "The requested file was created."
+    assert conversation.messages == [("create a file", "heartwood-user")]
 
 
 def test_openhands_finish_lifecycle_is_not_persisted_as_tool_activity(
@@ -553,7 +553,10 @@ def test_openhands_finish_lifecycle_is_not_persisted_as_tool_activity(
         assert [event.payload["content"] for event in agent_messages] == [
             "The requested file was created."
         ]
-        assert '"tool_name":"finish"' not in service.store.read_audit_export()
+        audit_events = [
+            json.loads(line) for line in service.store.read_audit_export().splitlines() if line
+        ]
+        assert all(event.get("payload", {}).get("tool_name") != "finish" for event in audit_events)
     finally:
         service.close()
 
@@ -892,6 +895,20 @@ class _ParallelConversation(_FakeConversation):
             callback(ObservationEvent("call-2"))
             callback(MessageEvent("Both workspace actions completed."))
             self.state.execution_status.value = "finished"
+
+
+class _CompletedEventConversation(_FakeConversation):
+    def __init__(self, events: tuple[object, ...]) -> None:
+        super().__init__()
+        self.events = events
+
+    def run(self) -> None:
+        callback = self.callback
+        assert callback is not None
+        self.run_count += 1
+        for event in self.events:
+            callback(event)
+        self.state.execution_status.value = "finished"
 
 
 class _FinishConversation(_FakeConversation):

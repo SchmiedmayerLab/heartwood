@@ -26,7 +26,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `PROJECT` | Project boundary, storage, and private project state |
 | `SETUP` | Non-secret Heartwood configuration and policy agreement |
 | `MODEL` | Model selection, compatibility, and managed model files |
-| `CREDENTIAL` | Provider API key or managed-identity availability |
+| `CREDENTIAL` | Provider API key, subscription credential, or managed-identity availability |
 | `AGENT` | OpenHands agent runtime availability |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |

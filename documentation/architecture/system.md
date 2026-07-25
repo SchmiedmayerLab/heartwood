@@ -52,8 +52,8 @@ Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
 ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 Heartwood translates OpenHands messages, tool proposals, decisions, and results into its stable event contract rather than duplicating the agent loop.
 
-The gateway exposes only non-secret subscription status and short-lived device-flow display values to interfaces.
-The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-flow methods and retains the opaque pending handle only in gateway memory.
+The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
+The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.
 
 ### Platform Adapter
 

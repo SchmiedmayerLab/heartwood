@@ -40,6 +40,7 @@ class _SubscriptionProvider:
 
     def __init__(self) -> None:
         self.available = False
+        self.credential_checks = 0
         self.logged_in_model: str | None = None
         self.logged_out = False
 
@@ -47,6 +48,7 @@ class _SubscriptionProvider:
         return ("gpt-subscription",)
 
     def credential_available(self) -> bool:
+        self.credential_checks += 1
         return self.available
 
     def login(
@@ -144,6 +146,18 @@ def test_subscription_login_uses_shared_catalog_policy_and_profile(tmp_path: Pat
     assert profile["auth_type"] == "subscription"
     assert profile["subscription_vendor"] == "openai"
     assert profile["credential_status"] == "available"
+    provider.credential_checks = 0
+    settings = gateway.model_settings()
+    assert provider.credential_checks == 1
+    assert (
+        cast(list[dict[str, object]], settings["profiles"])[0]["credential_status"] == "available"
+    )
+    subscription_connection = next(
+        connection
+        for connection in cast(list[dict[str, object]], settings["connections"])
+        if connection["connection_id"] == "openai-subscription"
+    )
+    assert subscription_connection["credential_status"] == "available"
     validation = gateway.validate_model_profile()
     assert validation["credential_status"] == "available"
     assert cast(dict[str, object], validation["policy_decision"])["decision"] == "allow"
@@ -680,8 +694,10 @@ def test_generic_project_authorizes_only_the_selected_custom_api_route(
     assert config_save_calls == 0
     assert config.policy.policy_id == "generic-custom-api"
     assert "https://second.example/v1/chat/completions" in config.policy.allowed_model_endpoints
+    assert "https://second.example/v1/responses" in config.policy.allowed_model_endpoints
     assert "https://second.example/v1/models" in config.policy.allowed_model_catalog_endpoints
     assert "https://first.example/v1/chat/completions" not in config.policy.allowed_model_endpoints
+    assert "https://first.example/v1/responses" not in config.policy.allowed_model_endpoints
     assert "https://first.example/v1/models" not in config.policy.allowed_model_catalog_endpoints
     assert "HEARTWOOD_CUSTOM_MODEL_API_KEY" in config.policy.credential_allowlist
     assert "first-transient-secret" not in persisted

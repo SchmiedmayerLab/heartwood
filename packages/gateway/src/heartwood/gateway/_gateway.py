@@ -471,10 +471,22 @@ class SessionGateway:
         credential_bindings = sorted(self._credential_binding_ids())
         safe_settings = settings.safe_dict(credential_env)
         profiles = safe_settings.get("profiles", [])
+        has_subscription_profile = isinstance(profiles, list) and any(
+            isinstance(profile, dict) and profile.get("auth_type") == "subscription"
+            for profile in profiles
+        )
+        has_subscription_connection = any(
+            connection.protocol == "subscription" for connection in self._model_connections.values()
+        )
+        subscription_status = (
+            self._subscription_credential_status()
+            if has_subscription_profile or has_subscription_connection
+            else None
+        )
         if isinstance(profiles, list):
             for profile in profiles:
                 if isinstance(profile, dict) and profile.get("auth_type") == "subscription":
-                    profile["credential_status"] = self._subscription_credential_status()
+                    profile["credential_status"] = subscription_status
         return {
             **safe_settings,
             "model_source": config.model_source,
@@ -483,7 +495,7 @@ class SessionGateway:
                 for option in model_source_options(self.env)
             ],
             "connections": [
-                self._safe_connection(connection, credential_env)
+                self._safe_connection(connection, credential_env, subscription_status)
                 for connection in sorted(
                     self._model_connections.values(),
                     key=lambda connection: connection.presentation_order,
@@ -1265,10 +1277,11 @@ class SessionGateway:
         self,
         connection: ModelConnection,
         credential_env: Mapping[str, str],
+        subscription_status: str | None,
     ) -> dict[str, object]:
         payload = connection.safe_dict(credential_env)
         if connection.protocol == "subscription":
-            payload["credential_status"] = self._subscription_credential_status()
+            payload["credential_status"] = subscription_status or "missing"
         return payload
 
     def _configure_custom_policy(self, connection: ModelConnection) -> None:
@@ -1284,6 +1297,11 @@ class SessionGateway:
                 *credential_allowlist,
                 connection.credential_reference,
             )
+        responses_endpoints = (
+            (connection.policy_endpoint.removesuffix("/chat/completions") + "/responses",)
+            if connection.policy_endpoint.endswith("/chat/completions")
+            else ()
+        )
         policy = default_policy.model_copy(
             update={
                 "policy_id": f"{adapter.adapter_id}-custom-api",
@@ -1292,8 +1310,7 @@ class SessionGateway:
                         (
                             *default_policy.allowed_model_endpoints,
                             connection.policy_endpoint,
-                            connection.policy_endpoint.removesuffix("/chat/completions")
-                            + "/responses",
+                            *responses_endpoints,
                         )
                     )
                 ),

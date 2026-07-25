@@ -46,7 +46,7 @@ Containers and managed platforms normally use process entry, a mounted secret fi
 
 The **Sign in with ChatGPT** connection delegates OAuth, token storage, refresh, supported-model discovery, and request transport to OpenHands.
 OpenHands stores that account credential in its private user-level credential store, outside `.heartwood/`, so the account can be reused across projects for the same operating-system user.
-Heartwood project state retains only the connection identifier and selected model.
+Heartwood project state retains non-secret connection and model-profile metadata, including the selected model; it does not retain the account credential.
 Disposable containers require an explicit private credential-directory mount to retain this state after the container exits.
 
 Run `heartwood models forget openai-subscription` or use **Sign out** in browser settings to remove the OpenHands credential.

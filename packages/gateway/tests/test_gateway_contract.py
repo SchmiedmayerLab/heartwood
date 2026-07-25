@@ -877,10 +877,11 @@ def test_rest_coordinates_browser_subscription_login(
 ) -> None:
     gateway = _gateway(tmp_path)
     rest = RestGateway(gateway)
-    monkeypatch.setattr(
-        gateway,
-        "start_subscription_device_login",
-        lambda connection_id: {
+    start_calls: list[str] = []
+
+    def start_login(connection_id: str) -> dict[str, JsonValue]:
+        start_calls.append(connection_id)
+        return {
             "schema_version": "heartwood.subscription-login.v1",
             "login_id": "login-1",
             "connection_id": connection_id,
@@ -888,7 +889,12 @@ def test_rest_coordinates_browser_subscription_login(
             "user_code": "TEST-CODE",
             "poll_interval_seconds": 5,
             "status": "pending",
-        },
+        }
+
+    monkeypatch.setattr(
+        gateway,
+        "start_subscription_device_login",
+        start_login,
     )
     monkeypatch.setattr(
         gateway,
@@ -916,6 +922,8 @@ def test_rest_coordinates_browser_subscription_login(
             ),
         )
     )
+    assert start_calls == []
+
     started = rest.handle(
         RestRequest(
             method="POST",
@@ -942,6 +950,7 @@ def test_rest_coordinates_browser_subscription_login(
     )
 
     assert rejected.status_code == 422
+    assert start_calls == ["openai-subscription"]
     assert started.status_code == 201
     assert started.body["status"] == "pending"
     assert completed.status_code == 200

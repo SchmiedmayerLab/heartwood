@@ -197,6 +197,7 @@ class OpenHandsOpenAISubscription:
     def start_device_login(self) -> SubscriptionDeviceLogin:
         """Start OpenHands' device-code flow and retain only its opaque handle."""
         try:
+            self._prune_expired_pending()
             provider_value = _run_async(self._auth().start_device_login())
             verification_url = getattr(provider_value, "verification_url", None)
             user_code = getattr(provider_value, "user_code", None)
@@ -270,6 +271,16 @@ class OpenHandsOpenAISubscription:
         if self._auth_client is None:
             self._auth_client = _openhands_auth()
         return self._auth_client
+
+    def _prune_expired_pending(self) -> None:
+        now = time.monotonic()
+        expired = (
+            login_id
+            for login_id, pending in self._pending.items()
+            if now - pending.created_at > _DEVICE_LOGIN_LIFETIME_SECONDS
+        )
+        for login_id in tuple(expired):
+            self._pending.pop(login_id, None)
 
 
 def create_openai_subscription_llm(

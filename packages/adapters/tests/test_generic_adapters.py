@@ -42,6 +42,7 @@ def test_generic_platform_adapter_conforms() -> None:
         "anthropic",
         "custom",
     )
+    assert capabilities.managed_model_connections == ("Stanford AI API Gateway",)
     assert policy.credential_allowlist == (
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
@@ -69,6 +70,7 @@ def test_carina_platform_adapter_conforms_and_defaults_to_local_only() -> None:
     assert capabilities.interfaces == ("terminal",)
     assert capabilities.scheduler == "slurm"
     assert capabilities.model_sources == ("heartwood", "stanford-ai-api-gateway")
+    assert capabilities.managed_model_connections == ("Stanford AI API Gateway",)
     assert capabilities.validation_level == "ci"
 
 
@@ -102,6 +104,7 @@ def test_terra_platform_adapter_conforms_and_uses_provisioned_compute() -> None:
         "anthropic",
         "custom",
     )
+    assert capabilities.managed_model_connections == ("Stanford AI API Gateway",)
     assert capabilities.validation_level == "ci"
     assert select_platform_adapter({"GOOGLE_PROJECT": "synthetic-project"}).adapter_id == "terra"
 

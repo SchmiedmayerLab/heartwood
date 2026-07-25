@@ -113,12 +113,13 @@ class ModelProfile:
             if self.credential_kind != "managed-identity":
                 msg = "subscription authentication requires dependency-managed credentials"
                 raise ModelSettingsError(msg)
-            if not self.model.startswith("openai/"):
-                msg = "OpenAI subscription authentication requires an OpenAI model"
-                raise ModelSettingsError(msg)
-            if self.policy_endpoint != OPENAI_SUBSCRIPTION_ENDPOINT:
-                msg = "OpenAI subscription authentication requires the OpenHands Codex endpoint"
-                raise ModelSettingsError(msg)
+            if self.subscription_vendor == "openai":
+                if not self.model.startswith("openai/"):
+                    msg = "OpenAI subscription authentication requires an OpenAI model"
+                    raise ModelSettingsError(msg)
+                if self.policy_endpoint != OPENAI_SUBSCRIPTION_ENDPOINT:
+                    msg = "OpenAI subscription authentication requires the OpenHands Codex endpoint"
+                    raise ModelSettingsError(msg)
         elif self.subscription_vendor is not None:
             msg = "subscription_vendor is allowed only for subscription authentication"
             raise ModelSettingsError(msg)
@@ -170,7 +171,11 @@ class ModelProfile:
     def credential_reference(self) -> str | None:
         """Return the non-secret reference evaluated by deployment policy."""
         if self.auth_type == "subscription":
-            return f"subscription:{self.subscription_vendor}"
+            return (
+                None
+                if self.subscription_vendor is None
+                else f"subscription:{self.subscription_vendor}"
+            )
         if self.credential_kind == "environment":
             return self.api_key_env
         if self.credential_kind == "file":
@@ -398,6 +403,8 @@ def model_profile_from_preset(preset_id: str, model_name: str) -> ModelProfile:
 
 def align_model_profile_request_endpoint(profile: ModelProfile) -> ModelProfile:
     """Return a profile whose policy endpoint matches OpenHands' request path."""
+    if profile.auth_type == "subscription":
+        return profile
     try:
         policy_endpoint = request_endpoint_for_model(profile.model, profile.policy_endpoint)
     except OpenHandsModelError as error:

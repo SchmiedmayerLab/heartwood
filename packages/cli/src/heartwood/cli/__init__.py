@@ -1165,7 +1165,7 @@ def _prompt_for_provider_token(
     if non_interactive:
         return None
     try:
-        token = getpass.getpass(f"{connection.get('label', 'Provider')} token: ")
+        token = getpass.getpass(f"{connection.get('label', 'Provider')} API key: ")
     except EOFError as error:
         raise ModelCatalogError("credential entry was cancelled because input closed") from error
     if not token.strip():

@@ -21,7 +21,7 @@ This route is separate from the OpenAI API and does not use OpenAI API credits o
 5. Choose a model from the list maintained by the pinned OpenHands SDK.
 
 OpenHands owns the OAuth flow, supported-model registry, credential storage, token refresh, and Codex Responses API transport.
-Heartwood stores only the selected connection and model in the project.
+Heartwood stores non-secret connection and model-profile metadata in the project, including the selected model.
 OAuth tokens do not enter `.heartwood/config.toml`, browser storage, session events, logs, or audit exports.
 
 This connection is available on workstations, in the generic container, and on Terra.

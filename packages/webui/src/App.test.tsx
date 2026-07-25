@@ -383,14 +383,17 @@ class FakeClient implements HeartwoodClient {
     loginId: string,
   ): Promise<SubscriptionDeviceLogin> {
     this.subscriptionPolls += 1;
-    this.currentSettings = {
-      ...this.currentSettings,
-      connections: this.currentSettings.connections.map((connection) =>
-        connection.connection_id === connectionId ?
-          { ...connection, credential_status: "available" }
-        : connection,
-      ),
-    };
+    const complete = this.subscriptionPolls > 1;
+    if (complete) {
+      this.currentSettings = {
+        ...this.currentSettings,
+        connections: this.currentSettings.connections.map((connection) =>
+          connection.connection_id === connectionId ?
+            { ...connection, credential_status: "available" }
+          : connection,
+        ),
+      };
+    }
     return Promise.resolve({
       schema_version: "heartwood.subscription-login.v1",
       login_id: loginId,
@@ -398,7 +401,7 @@ class FakeClient implements HeartwoodClient {
       verification_url: "https://auth.openai.test/device",
       user_code: "TEST-CODE",
       poll_interval_seconds: 1,
-      status: "complete",
+      status: complete ? "complete" : "pending",
     });
   }
 
@@ -1186,7 +1189,102 @@ describe("App", () => {
         await Promise.resolve();
       });
       expect(client.subscriptionPolls).toBe(1);
+      expect(screen.getByText("Waiting for sign-in...")).toBeVisible();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_100);
+        await Promise.resolve();
+      });
+      expect(client.subscriptionPolls).toBe(2);
       expect(screen.getByText("Signed in with ChatGPT")).toBeVisible();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+        await Promise.resolve();
+      });
+      expect(client.subscriptionPolls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a device-login poll after the connection changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new FakeClient();
+      let resolvePoll: ((login: SubscriptionDeviceLogin) => void) | undefined;
+      vi.spyOn(client, "pollSubscriptionDeviceLogin").mockImplementation(
+        (connectionId, loginId) =>
+          new Promise((resolve) => {
+            resolvePoll = resolve;
+            expect(connectionId).toBe("openai-subscription");
+            expect(loginId).toBe("login-test");
+          }),
+      );
+      render(<App client={client} initialSessionId="session-test" />);
+      await act(async () => Promise.resolve());
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+      const subscriptionRow = screen
+        .getByText("Sign in with ChatGPT")
+        .closest(".connection-row");
+      expect(subscriptionRow).not.toBeNull();
+      fireEvent.click(
+        within(subscriptionRow as HTMLElement).getByRole("button", {
+          name: "Sign in",
+        }),
+      );
+      const subscriptionForm = screen
+        .getAllByText("Sign in with ChatGPT")
+        .at(-1)
+        ?.closest<HTMLElement>(".connection-form");
+      expect(subscriptionForm).not.toBeNull();
+      if (!subscriptionForm)
+        throw new Error("subscription form is unavailable");
+      fireEvent.click(
+        within(subscriptionForm).getByRole("button", {
+          name: "Sign in with ChatGPT",
+        }),
+      );
+      await act(async () => Promise.resolve());
+      await act(async () => {
+        vi.advanceTimersByTime(1_100);
+        await Promise.resolve();
+      });
+      expect(resolvePoll).toBeDefined();
+
+      const openAiRow = screen
+        .getByText("OpenAI API")
+        .closest(".connection-row");
+      expect(openAiRow).not.toBeNull();
+      fireEvent.click(
+        within(openAiRow as HTMLElement).getByRole("button", {
+          name: "Connect",
+        }),
+      );
+      fireEvent.click(
+        within(subscriptionRow as HTMLElement).getByRole("button", {
+          name: "Sign in",
+        }),
+      );
+
+      await act(async () => {
+        resolvePoll?.({
+          schema_version: "heartwood.subscription-login.v1",
+          login_id: "login-test",
+          connection_id: "openai-subscription",
+          verification_url: "https://auth.openai.test/device",
+          user_code: "TEST-CODE",
+          poll_interval_seconds: 1,
+          status: "complete",
+        });
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByText(/^Signed in$/)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Sign in with ChatGPT" }),
+      ).toBeVisible();
     } finally {
       vi.useRealTimers();
     }

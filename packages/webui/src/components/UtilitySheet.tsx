@@ -53,7 +53,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
@@ -1151,6 +1151,7 @@ const ModelConnectionSetup = ({
   const [remember, setRemember] = useState(false);
   const [subscriptionLogin, setSubscriptionLogin] =
     useState<SubscriptionDeviceLogin | null>(null);
+  const activeSubscriptionLoginId = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -1173,6 +1174,8 @@ const ModelConnectionSetup = ({
 
   useEffect(() => {
     if (subscriptionLogin?.status !== "pending") return;
+    const loginId = subscriptionLogin.login_id;
+    activeSubscriptionLoginId.current = loginId;
     let polling = false;
     const interval = window.setInterval(() => {
       if (polling) return;
@@ -1182,12 +1185,20 @@ const ModelConnectionSetup = ({
         subscriptionLogin.login_id,
       )
         .then((updated) => {
+          if (
+            activeSubscriptionLoginId.current !== loginId ||
+            updated.login_id !== loginId
+          )
+            return;
           setSubscriptionLogin(updated);
           if (updated.status === "complete") {
+            activeSubscriptionLoginId.current = null;
             onSubscriptionComplete();
           }
         })
         .catch((caught: unknown) => {
+          if (activeSubscriptionLoginId.current !== loginId) return;
+          activeSubscriptionLoginId.current = null;
           setError(errorMessage(caught));
           setSubscriptionLogin(null);
         })
@@ -1195,10 +1206,16 @@ const ModelConnectionSetup = ({
           polling = false;
         });
     }, subscriptionLogin.poll_interval_seconds * 1000);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      if (activeSubscriptionLoginId.current === loginId) {
+        activeSubscriptionLoginId.current = null;
+      }
+    };
   }, [onPollSubscriptionLogin, onSubscriptionComplete, subscriptionLogin]);
 
   const selectConnection = (next: ModelConnection) => {
+    activeSubscriptionLoginId.current = null;
     setConnectionId(next.connection_id);
     setCatalog(null);
     setSelectedModel("");
@@ -1268,9 +1285,9 @@ const ModelConnectionSetup = ({
     setPending(true);
     setError(null);
     try {
-      setSubscriptionLogin(
-        await onStartSubscriptionLogin(connection.connection_id),
-      );
+      const started = await onStartSubscriptionLogin(connection.connection_id);
+      activeSubscriptionLoginId.current = started.login_id;
+      setSubscriptionLogin(started);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
