@@ -119,12 +119,11 @@ class FileSessionStore:
         if lock is None:
             return
         try:
-            metadata = _read_private_json(self.writer_metadata_path)
-            if metadata.get("token") == self._writer_token:
-                self.writer_metadata_path.unlink(missing_ok=True)
-                _fsync_directory(self.session_dir)
-        except (OSError, ValueError):
-            pass
+            with suppress(OSError, ValueError):
+                metadata = _read_private_json(self.writer_metadata_path)
+                if metadata.get("token") == self._writer_token:
+                    self.writer_metadata_path.unlink(missing_ok=True)
+                    _fsync_directory(self.session_dir)
         finally:
             self._writer_lock = None
             self._writer_token = None
