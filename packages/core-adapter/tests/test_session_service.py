@@ -236,12 +236,12 @@ def test_writer_lease_can_be_released_from_a_gateway_worker_thread(
 ) -> None:
     owner = FileSessionStore(tmp_path, "session-main")
     owner.acquire_writer()
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def release() -> None:
         try:
             owner.release_writer()
-        except BaseException as error:
+        except Exception as error:
             errors.append(error)
 
     worker = threading.Thread(target=release)
@@ -406,7 +406,7 @@ with store.snapshot():
     service = SessionService.synthetic_default(tmp_path)
     command = _command(CommandKind.PAUSE, command_id="contended-pause")
     results: list[object] = []
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     original_accept = service.store.accept_command
 
     def accept_then_contend(

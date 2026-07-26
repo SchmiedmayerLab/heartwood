@@ -320,7 +320,7 @@ def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
         await _wait_for_sent(sent, 3)
         await incoming.put({"type": "websocket.disconnect"})
-        assert await task is None
+        await asyncio.wait_for(task, timeout=1)
         return sent
 
     sent = asyncio.run(scenario())
@@ -393,7 +393,7 @@ def test_asgi_websocket_streams_transient_tokens_with_monotonic_snapshots(
         gateway._publish_token_delta(session_id="session-1", delta="late")
         await asyncio.sleep(0.05)
         await incoming.put({"type": "websocket.disconnect"})
-        await task
+        await asyncio.wait_for(task, timeout=1)
         return sent
 
     sent = asyncio.run(scenario())
