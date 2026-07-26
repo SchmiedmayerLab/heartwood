@@ -682,6 +682,8 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     json(route, {
       schema_version: "heartwood.action-settings.v1",
       confirmation_mode: "always-confirm",
+      change_allowed: true,
+      change_blocked_reason: null,
       modes: [
         { mode: "always-confirm", label: "Ask Every Time", allowed: true },
         {

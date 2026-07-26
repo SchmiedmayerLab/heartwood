@@ -270,8 +270,14 @@ def _verify_gateway_session(external_base: str) -> None:
         data=_gateway_command("pause", "terra-demo-smoke-pause"),
     )
     event_kinds = {event["kind"] for event in response["events"]}
-    if "session.paused" not in event_kinds:
-        raise AssertionError("gateway command route did not return session state")
+    projection = response.get("projection")
+    if (
+        not {"command.received", "error.recorded"}.issubset(event_kinds)
+        or not isinstance(projection, dict)
+        or projection.get("lifecycle", {}).get("status") != "idle"
+        or projection.get("availableCommands") != ["chat"]
+    ):
+        raise AssertionError("gateway command route did not return its authoritative projection")
 
     _trace("replaying session events")
     replay = _request_json(
@@ -284,13 +290,12 @@ def _verify_gateway_session(external_base: str) -> None:
     stream = _request_sse(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/events/stream?after=0")
     )
-    if "event: heartwood-session-events" not in stream or "session.paused" not in stream:
-        raise AssertionError("gateway SSE route did not stream persisted events")
-
-    _request_json(
-        urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
-        data=_gateway_command("resume", "terra-demo-smoke-resume"),
-    )
+    if (
+        "event: heartwood-session-events" not in stream
+        or "error.recorded" not in stream
+        or '"projection"' not in stream
+    ):
+        raise AssertionError("gateway SSE route did not stream events with their projection")
 
     _trace("submitting OpenHands chat command")
     task = _request_json(
@@ -308,14 +313,24 @@ def _verify_gateway_session(external_base: str) -> None:
         ),
     )
     task_kinds = {event["kind"] for event in task["events"]}
-    if "confirmation.requested" not in task_kinds:
-        raise AssertionError("gateway chat did not return an OpenHands confirmation")
-    confirmation = next(
-        event for event in task["events"] if event["kind"] == "confirmation.requested"
+    if not {"command.received", "user_message.recorded"}.issubset(task_kinds):
+        raise AssertionError("gateway chat did not accept the OpenHands task")
+    waiting = _wait_for_session_state(
+        external_base,
+        status="waiting-for-confirmation",
     )
-    target_id = confirmation["payload"]["request"]["tool_call_id"]
+    waiting_projection = waiting["projection"]
+    if not isinstance(waiting_projection, dict):
+        raise AssertionError("gateway did not return a session projection")
+    pending_approval = waiting_projection.get("pendingApproval")
+    if not isinstance(pending_approval, dict):
+        raise AssertionError("gateway did not project the pending OpenHands action set")
+    actions = pending_approval.get("actions")
+    target_id = pending_approval.get("groupId")
+    if not isinstance(actions, list) or len(actions) != 2 or not isinstance(target_id, str):
+        raise AssertionError("gateway did not preserve the grouped OpenHands approval")
 
-    _trace("approving OpenHands tool call")
+    _trace("approving OpenHands action set")
     allowed = _request_json(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
         data=_gateway_command(
@@ -323,14 +338,19 @@ def _verify_gateway_session(external_base: str) -> None:
             "terra-demo-smoke-allow",
             {
                 "target_id": target_id,
-                "target_type": "tool-call",
+                "target_type": "action-set",
             },
         ),
     )
     allowed_kinds = {event["kind"] for event in allowed["events"]}
-    if not {"confirmation.resolved", "tool.execution.recorded"}.issubset(allowed_kinds):
+    if "approval.recorded" not in allowed_kinds:
+        raise AssertionError("gateway did not record the grouped approval")
+    completed = _wait_for_session_state(external_base, status="finished")
+    completed_kinds = {event["kind"] for event in completed["events"]}
+    if not {"confirmation.resolved", "tool.execution.recorded"}.issubset(completed_kinds):
         raise AssertionError(
-            f"gateway allow did not execute the pending OpenHands action: {sorted(allowed_kinds)}"
+            "gateway allow did not execute the pending OpenHands action set: "
+            f"{sorted(completed_kinds)}"
         )
     artifact = PROJECT_ROOT / "cohort-summary.json"
     payload = json.loads(artifact.read_text(encoding="utf-8"))
@@ -348,8 +368,35 @@ def _verify_notebook_api() -> None:
     if session.project.root != PROJECT_ROOT.resolve():
         raise AssertionError("notebook API did not preserve the current-directory project")
     view_model = session.pause()
-    if not view_model.paused:
-        raise AssertionError("notebook API did not project the shared session state")
+    if (
+        view_model.lifecycle.status != "idle"
+        or view_model.available_commands != ("chat",)
+        or view_model.projection.last_command_outcome is None
+        or view_model.projection.last_command_outcome.status != "rejected"
+    ):
+        raise AssertionError("notebook API did not preserve the shared idle-session contract")
+    session.close()
+
+
+def _wait_for_session_state(
+    external_base: str,
+    *,
+    status: str,
+) -> dict[str, object]:
+    deadline = time.time() + REQUEST_TIMEOUT
+    last_response: dict[str, object] | None = None
+    url = urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/events")
+    while time.time() < deadline:
+        response = _request_json(url)
+        last_response = response
+        projection = response.get("projection")
+        lifecycle = projection.get("lifecycle") if isinstance(projection, dict) else None
+        if isinstance(lifecycle, dict) and lifecycle.get("status") == status:
+            return response
+        time.sleep(0.1)
+    raise AssertionError(
+        f"gateway session did not reach {status}: {json.dumps(last_response, sort_keys=True)}"
+    )
 
 
 def _wait_for_url(url: str, *, process: subprocess.Popen[str] | None = None) -> None:

@@ -100,9 +100,10 @@ from heartwood.notebook import NotebookSession
 session = NotebookSession(session_id="terra-jupyter-contract")
 assert session.project.root == Path.cwd().resolve()
 assert ProjectContext.current().state_root == Path.cwd() / ".heartwood"
-view = session.pause()
+view = session.replay()
 assert view.session_id == "terra-jupyter-contract"
-assert view.paused
+assert view.lifecycle.status == "idle"
+assert view.available_commands == ("chat",)
 PY
 
 test -f "${project_root}/.heartwood/state.json"

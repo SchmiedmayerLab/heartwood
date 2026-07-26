@@ -53,7 +53,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
@@ -658,10 +658,13 @@ const SettingsContent = (props: UtilitySheetProps) => {
               {actions?.modes.map((option) => (
                 <button
                   aria-pressed={actions.confirmation_mode === option.mode}
-                  disabled={!option.allowed}
+                  disabled={!option.allowed || !actions.change_allowed}
                   key={option.mode}
                   title={
-                    option.allowed ?
+                    !actions.change_allowed ?
+                      (actions.change_blocked_reason ??
+                      "Finish active work before changing approvals")
+                    : option.allowed ?
                       option.label
                     : `${option.label} is not allowed by platform policy`
                   }

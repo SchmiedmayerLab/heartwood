@@ -120,7 +120,11 @@ from heartwood.gateway._session_catalog import (
     SessionCatalog,
     SessionCatalogError,
 )
-from heartwood.gateway._session_projection import SessionProjection, project_session
+from heartwood.gateway._session_projection import (
+    SessionLifecycle,
+    SessionProjection,
+    project_session,
+)
 from heartwood.gateway._skill_settings import SkillManager
 from heartwood.gateway._startup import InterfaceKind, StartupPlan, plan_startup
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
@@ -286,8 +290,12 @@ class _UnconfiguredAgentBackend:
             ),
         )
 
-    def pause(self) -> None:
-        return None
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
+        return (
+            BackendErrorEvent(
+                error_code=BackendErrorCode.RUNTIME_UNAVAILABLE,
+            ),
+        )
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
         return ()
@@ -870,8 +878,15 @@ class SessionGateway:
         settings = self.action_settings_store.load()
         policy_profile = self._policy_profile()
         allowed = set(policy_profile.allowed_action_confirmation_modes)
+        blocking_sessions = self._active_service_session_ids()
         return {
             **settings.safe_dict(),
+            "change_allowed": not blocking_sessions,
+            "change_blocked_reason": (
+                None
+                if not blocking_sessions
+                else "Finish or resolve active session work before changing approvals."
+            ),
             "modes": [
                 {**option.safe_dict(), "allowed": option.mode in allowed}
                 for option in ACTION_MODE_OPTIONS
@@ -885,9 +900,14 @@ class SessionGateway:
         if mode not in policy_profile.allowed_action_confirmation_modes:
             msg = f"action confirmation mode is not allowed by platform policy: {mode}"
             raise ActionSettingsError(msg)
+        blocking_sessions = self._active_service_session_ids()
+        if blocking_sessions:
+            raise ActionSettingsError(
+                "action confirmation mode cannot change while a session is active"
+            )
         settings = self.action_settings_store.load().selecting(mode)
-        self.action_settings_store.save(settings)
         self._reset_services()
+        self.action_settings_store.save(settings)
         return self.action_settings()
 
     @_serialized_state
@@ -1584,6 +1604,24 @@ class SessionGateway:
         )
         return bindings
 
+    def _active_service_session_ids(self) -> tuple[str, ...]:
+        active: list[str] = []
+        for session_id, service in self._services.items():
+            projection = project_session(
+                service.replay_events(),
+                session_id=session_id,
+                streaming_text=self._streaming_text.get(session_id, ""),
+                stream_epoch=self._stream_epoch,
+                stream_revision=self._stream_revisions.get(session_id, 0),
+            )
+            if projection.lifecycle.status in {
+                SessionLifecycle.RUNNING,
+                SessionLifecycle.PAUSED,
+                SessionLifecycle.WAITING_FOR_CONFIRMATION,
+            }:
+                active.append(session_id)
+        return tuple(sorted(active))
+
     @_serialized_state
     def _reset_services(self) -> None:
         services = tuple(self._services.items())
@@ -1598,8 +1636,7 @@ class SessionGateway:
             else:
                 with self._stream_lock:
                     had_transient_state = (
-                        session_id in self._streaming_active
-                        or session_id in self._streaming_text
+                        session_id in self._streaming_active or session_id in self._streaming_text
                     )
                     self._streaming_active.discard(session_id)
                     self._streaming_text.pop(session_id, None)

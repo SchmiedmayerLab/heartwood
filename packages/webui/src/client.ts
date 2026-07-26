@@ -451,12 +451,7 @@ export class GatewayClient implements HeartwoodClient {
           return;
         }
         fallbackOpen = true;
-        cleanup = this.openSse(
-          sessionId,
-          afterSequence,
-          onProjection,
-          onError,
-        );
+        cleanup = this.openSse(sessionId, afterSequence, onProjection, onError);
       };
       socket.onmessage = (message): void => {
         try {

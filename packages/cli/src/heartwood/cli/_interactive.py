@@ -43,9 +43,7 @@ class InteractionResult:
     @property
     def failed(self) -> bool:
         """Return whether this interaction recorded an error."""
-        outcome = (
-            None if self.projection is None else self.projection.last_command_outcome
-        )
+        outcome = None if self.projection is None else self.projection.last_command_outcome
         return (
             self.error
             or (self.projection is not None and self.projection.lifecycle.status == "error")

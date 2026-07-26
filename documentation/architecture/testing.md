@@ -34,7 +34,8 @@ It emits a machine-readable qualification record containing the exact runtime, m
 The CPU capable-model job and GPU qualification wrapper use this same acceptance contract instead of maintaining separate agent scenarios.
 
 OpenHands SDK conformance tests use the real conversation persistence layer and deterministic `TestLLM`.
-They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state resumes explicitly, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
+They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state fails closed as an unknown outcome, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
+The browser reference analysis stops its gateway, replays and mutates the same session through the CLI, restarts the gateway, and verifies that the browser receives the CLI update on one contiguous authoritative sequence.
 
 Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths.
 Actual Terra and Carina qualification still requires the exact published artifact and synthetic task on those platforms because public CI cannot provision their managed workspaces.

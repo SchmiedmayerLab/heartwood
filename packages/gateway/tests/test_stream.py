@@ -46,7 +46,9 @@ def test_closed_streams_ignore_updates_and_are_removed_from_the_hub() -> None:
     active = hub.connect(session_id="session-1")
     assert closed.receive() == ()
     assert active.receive() == ()
+    assert hub.active_stream_count(session_id="session-1") == 2
     closed.close()
+    assert hub.active_stream_count(session_id="session-1") == 1
 
     event = SessionEvent(
         event_id="event-1",
@@ -65,6 +67,7 @@ def test_closed_streams_ignore_updates_and_are_removed_from_the_hub() -> None:
     hub.notify(session_id="session-1")
     assert active.receive() == ()
     active.close()
+    assert hub.active_stream_count(session_id="session-1") == 0
     hub.notify(session_id="session-1")
 
 

@@ -658,6 +658,8 @@ describe("GatewayClient", () => {
     const actions = {
       schema_version: "heartwood.action-settings.v1",
       confirmation_mode: "always-confirm",
+      change_allowed: true,
+      change_blocked_reason: null,
       modes: [],
     };
     const fetch = vi

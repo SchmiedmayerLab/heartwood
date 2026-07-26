@@ -294,7 +294,7 @@ class HeartwoodTerminalApp(App[None]):
         self.query_one("#composer", Input).focus()
 
     def action_pause(self) -> None:
-        """Pause an idle session through the shared command contract."""
+        """Pause active agent work through the shared command contract."""
         if self._busy:
             self.notify("The active OpenHands turn cannot yet be interrupted.", severity="warning")
             return

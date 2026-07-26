@@ -131,6 +131,8 @@ const settings = (): ModelSettings => ({
 const actions = (): ActionSettings => ({
   schema_version: "heartwood.action-settings.v1",
   confirmation_mode: "always-confirm",
+  change_allowed: true,
+  change_blocked_reason: null,
   modes: [
     { mode: "always-confirm", label: "Ask Every Time", allowed: true },
     {
@@ -1177,10 +1179,18 @@ describe("App", () => {
         streamRevision: 0,
         streamingText: "",
       });
+      client.emitStream({
+        ...running,
+        streamRevision: 5,
+        streamingText: "Delayed stale response",
+      });
     });
 
     expect(
       screen.queryByText("Stale partial response", { exact: true }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Delayed stale response", { exact: true }),
     ).not.toBeInTheDocument();
   });
 
@@ -1361,6 +1371,29 @@ describe("App", () => {
       await screen.findByLabelText("Allow all 1 action once"),
     ).toBeDisabled();
     expect(screen.getByLabelText("Reject all 1 action")).toBeDisabled();
+  });
+
+  it("disables approval-mode changes while session work is active", async () => {
+    const client = new FakeClient();
+    client.currentActions = {
+      ...actions(),
+      change_allowed: false,
+      change_blocked_reason:
+        "Finish or resolve active session work before changing approvals.",
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Approvals" }), {
+      button: 0,
+    });
+
+    const mode = screen.getByRole("button", { name: "Auto-Approve Low Risk" });
+    expect(mode).toBeDisabled();
+    expect(mode).toHaveAttribute(
+      "title",
+      "Finish or resolve active session work before changing approvals.",
+    );
   });
 
   it("configures and validates model profiles in the settings panel", async () => {

@@ -35,11 +35,11 @@ from openhands.sdk.event import (
     MessageEvent,
     ObservationEvent,
     PauseEvent,
+    UserRejectObservation,
 )
 from openhands.sdk.event import (
     Event as OpenHandsEvent,
 )
-from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import Message, MessageToolCall, Metrics, TextContent
 from openhands.sdk.security import (
     AlwaysConfirm,
@@ -67,8 +67,10 @@ from openhands.tools.task_tracker import TaskTrackerObservation
 from openhands.tools.task_tracker.definition import TaskItem
 from openhands.tools.terminal import TerminalAction, TerminalObservation
 
+import heartwood.gateway._openhands_sdk as openhands_sdk_module
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
+    BackendConfirmationResolutionEvent,
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
@@ -186,6 +188,51 @@ def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
     )
 
     with pytest.raises(OpenHandsSdkError, match="must be tool-free"):
+        backend._register_specialized_agents()
+
+
+def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
+    specialist_name = f"heartwood-collision-{uuid.uuid4().hex}"
+    assert register_agent_if_absent(
+        name=specialist_name,
+        factory_func=lambda llm: OpenHandsAgentSettings(
+            llm=llm,
+            tools=[Tool(name=TerminalTool.name)],
+        ).create_agent(),
+        description="Externally registered tool-enabled specialist.",
+    )
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / f"{specialist_name}.md").write_text(
+        "\n".join(
+            (
+                "---",
+                f"name: {specialist_name}",
+                "description: Verified tool-free specialist.",
+                "tools: []",
+                "---",
+                "",
+                "Return a bounded plan.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="specialist-collision",
+        agents_dir=agents_dir,
+        env={},
+        conversation_factory=_finished_conversation_factory(
+            tmp_path,
+            TestLLM.from_messages([]),
+        ),
+    )
+
+    with pytest.raises(OpenHandsSdkError, match="already registered outside Heartwood"):
         backend._register_specialized_agents()
 
 
@@ -369,15 +416,17 @@ def test_unavailable_conversation_fails_closed_without_provider_details(
             prompt="Still do not send",
         )[0],
     )
-    failed_errors = [
-        event for event in failed_submissions if isinstance(event, BackendErrorEvent)
-    ]
+    failed_errors = [event for event in failed_submissions if isinstance(event, BackendErrorEvent)]
     assert len(failed_errors) == len(failed_submissions)
     assert [event.error_code for event in failed_errors] == [
         BackendErrorCode.WORKER_STOPPED,
         BackendErrorCode.WORKER_STOPPED,
     ]
     assert all(event.source_event_id is None for event in failed_submissions)
+    failed_resume = backend.resume(session_id="session-1")
+    assert isinstance(failed_resume[0], BackendErrorEvent)
+    assert failed_resume[0].error_code == BackendErrorCode.WORKER_STOPPED
+    assert failed_resume[0].source_event_id is None
     missing_group = backend.resolve_confirmation(
         session_id="session-1",
         action_group_id="missing-group",
@@ -560,15 +609,6 @@ def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
             ),
             session_id="session-1",
         ),
-        *backend._translate_event(
-            ConversationErrorEvent(
-                id="conversation-error-1",
-                source="agent",
-                code="provider_failure",
-                detail="private endpoint detail",
-            ),
-            session_id="session-1",
-        ),
         *backend._translate_event(PauseEvent(id="pause-1"), session_id="session-1"),
     )
 
@@ -578,38 +618,218 @@ def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
     assert translated[1].tool_call.arguments == {"command": "pwd"}
     assert isinstance(translated[2], BackendToolExecutionEvent)
     assert translated[2].tool_execution.exit_code == 0
-    task_event = next(
-        event for event in translated if isinstance(event, BackendTaskPlanEvent)
-    )
+    task_event = next(event for event in translated if isinstance(event, BackendTaskPlanEvent))
     assert [task.status for task in task_event.tasks] == [
         BackendTaskStatus.DONE,
         BackendTaskStatus.IN_PROGRESS,
     ]
     subagent_events = [
-        event.subagent
-        for event in translated
-        if isinstance(event, BackendSubagentEvent)
+        event.subagent for event in translated if isinstance(event, BackendSubagentEvent)
     ]
     assert [item.status for item in subagent_events] == [
         BackendSubagentStatus.PROPOSED,
         BackendSubagentStatus.COMPLETED,
     ]
     errors = [event for event in translated if isinstance(event, BackendErrorEvent)]
-    assert [event.error_code for event in errors] == ["HW-AGENT-002", "HW-AGENT-003"]
+    assert [event.error_code for event in errors] == ["HW-AGENT-002"]
     assert "provider-specific detail" not in repr(errors)
-    assert "private endpoint detail" not in repr(errors)
     assert isinstance(translated[-1], BackendLifecycleEvent)
     assert translated[-1].lifecycle == BackendLifecycle.PAUSED
 
 
+def test_persisted_observations_reconstruct_one_grouped_approval_without_duplicates(
+    tmp_path: Path,
+) -> None:
+    first = _terminal_action_event("action-1", "call-1", "printf first")
+    second = _terminal_action_event("action-2", "call-2", "printf second")
+    first = first.model_copy(update={"llm_response_id": "response-group"})
+    second = second.model_copy(update={"llm_response_id": "response-group"})
+    observations = (
+        ObservationEvent(
+            id="observation-1",
+            tool_name="terminal",
+            tool_call_id=first.tool_call_id,
+            action_id=first.id,
+            observation=TerminalObservation(command="printf first", exit_code=0),
+        ),
+        ObservationEvent(
+            id="observation-2",
+            tool_name="terminal",
+            tool_call_id=second.tool_call_id,
+            action_id=second.id,
+            observation=TerminalObservation(command="printf second", exit_code=0),
+        ),
+    )
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    state.execution_status = ConversationExecutionStatus.FINISHED
+    state.events = (first, second, *observations)
+    conversation.state = state
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    resolutions = [
+        event for event in events if isinstance(event, BackendConfirmationResolutionEvent)
+    ]
+    executions = [
+        event.tool_execution for event in events if isinstance(event, BackendToolExecutionEvent)
+    ]
+
+    assert len(resolutions) == 2
+    assert {event.tool_call.tool_call_id for event in resolutions} == {"call-1", "call-2"}
+    assert len({event.action_group_id for event in resolutions}) == 1
+    assert all(event.approved for event in resolutions)
+    assert {(event.action_id, event.tool_call_id) for event in executions} == {
+        ("action-1", "call-1"),
+        ("action-2", "call-2"),
+    }
+    backend.close()
+
+
+def test_approval_reconstruction_does_not_group_reused_response_ids_across_turns(
+    tmp_path: Path,
+) -> None:
+    first = _terminal_action_event("action-1", "call-1", "printf first")
+    second = _terminal_action_event("action-2", "call-2", "printf second")
+    later = _terminal_action_event("action-3", "call-3", "printf later")
+    first = first.model_copy(update={"llm_response_id": "reused-response"})
+    second = second.model_copy(update={"llm_response_id": "reused-response"})
+    later = later.model_copy(update={"llm_response_id": "reused-response"})
+    state = _BranchState(uuid.uuid4())
+    state.execution_status = ConversationExecutionStatus.FINISHED
+    state.events = (
+        first,
+        second,
+        ObservationEvent(
+            id="observation-1",
+            tool_name="terminal",
+            tool_call_id=first.tool_call_id,
+            action_id=first.id,
+            observation=TerminalObservation(command="printf first", exit_code=0),
+        ),
+        ObservationEvent(
+            id="observation-2",
+            tool_name="terminal",
+            tool_call_id=second.tool_call_id,
+            action_id=second.id,
+            observation=TerminalObservation(command="printf second", exit_code=0),
+        ),
+        later,
+        ObservationEvent(
+            id="observation-3",
+            tool_name="terminal",
+            tool_call_id=later.tool_call_id,
+            action_id=later.id,
+            observation=TerminalObservation(command="printf later", exit_code=0),
+        ),
+    )
+    conversation = _ControlledConversation()
+    conversation.state = state
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    resolutions = [
+        event
+        for event in backend.reconcile(
+            session_id="session-1",
+            known_source_event_ids=frozenset(),
+        )
+        if isinstance(event, BackendConfirmationResolutionEvent)
+    ]
+
+    groups = {event.tool_call.tool_call_id: event.action_group_id for event in resolutions}
+    assert groups["call-1"] == groups["call-2"]
+    assert groups["call-3"] != groups["call-1"]
+    assert len(resolutions) == 3
+    backend.close()
+
+
+def test_persisted_user_rejection_reconstructs_denied_confirmation(
+    tmp_path: Path,
+) -> None:
+    action = _terminal_action_event("action-1", "call-1", "printf rejected")
+    rejection = UserRejectObservation(
+        id="rejection-1",
+        tool_name="terminal",
+        tool_call_id=action.tool_call_id,
+        action_id=action.id,
+    )
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    state.execution_status = ConversationExecutionStatus.FINISHED
+    state.events = (action, rejection)
+    conversation.state = state
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    resolutions = [
+        event for event in events if isinstance(event, BackendConfirmationResolutionEvent)
+    ]
+
+    assert len(resolutions) == 1
+    assert resolutions[0].tool_call.tool_call_id == "call-1"
+    assert not resolutions[0].approved
+    backend.close()
+
+
 def test_openhands_adapter_uses_typed_public_state_only() -> None:
-    source = inspect.getsource(OpenHandsSdkBackend)
+    source = inspect.getsource(openhands_sdk_module)
 
     assert "type(event).__name__" not in source
     assert "getattr(" not in source
+    assert "openhands.sdk.event.conversation_error" not in source
     assert "restore_pending" not in source
     assert "self._pending" not in source
     assert "self._captured" not in source
+
+
+def test_public_conversation_state_projects_a_content_safe_error(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    conversation.state.execution_status = ConversationExecutionStatus.ERROR
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert any(
+        isinstance(event, BackendErrorEvent)
+        and event.error_code == BackendErrorCode.CONVERSATION_STOPPED
+        for event in events
+    )
+    backend.close()
 
 
 def test_real_sdk_test_llm_turn_runs_in_background_and_reconciles_once(
@@ -623,9 +843,7 @@ def test_real_sdk_test_llm_turn_runs_in_background_and_reconciles_once(
     assert isinstance(immediate[0], BackendLifecycleEvent)
     assert immediate[0].lifecycle == BackendLifecycle.RUNNING
     events = _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
-    messages = [
-        event.message for event in events if isinstance(event, BackendAgentMessageEvent)
-    ]
+    messages = [event.message for event in events if isinstance(event, BackendAgentMessageEvent)]
     assert messages == ["Analysis complete."]
     assert llm.call_count == 1
     source_ids = frozenset(
@@ -725,9 +943,7 @@ def test_real_sdk_task_tracker_updates_the_shared_task_plan(tmp_path: Path) -> N
     )
 
     events = _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
-    task_plan = next(
-        event for event in events if isinstance(event, BackendTaskPlanEvent)
-    )
+    task_plan = next(event for event in events if isinstance(event, BackendTaskPlanEvent))
 
     assert [(task.title, task.status) for task in task_plan.tasks] == [
         ("Inspect synthetic inputs", BackendTaskStatus.DONE),
@@ -911,9 +1127,13 @@ def test_real_sdk_grouped_approval_executes_every_action_once(tmp_path: Path) ->
         approved=True,
     )
 
-    assert [event.kind for event in resolved] == [BackendEventKind.LIFECYCLE]
-    assert isinstance(resolved[0], BackendLifecycleEvent)
-    assert resolved[0].lifecycle == BackendLifecycle.RUNNING
+    assert [event.kind for event in resolved] == [
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.CONFIRMATION_RESOLVED,
+        BackendEventKind.LIFECYCLE,
+    ]
+    assert isinstance(resolved[-1], BackendLifecycleEvent)
+    assert resolved[-1].lifecycle == BackendLifecycle.RUNNING
     _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
     assert (tmp_path / "workspace" / "first.txt").read_text(encoding="utf-8") == "first"
     assert (tmp_path / "workspace" / "second.txt").read_text(encoding="utf-8") == "second"
@@ -943,7 +1163,7 @@ def test_real_sdk_grouped_rejection_executes_nothing_and_does_not_continue(
         approved=False,
     )
 
-    assert all(event.kind != BackendEventKind.CONFIRMATION_RESOLVED for event in resolved)
+    assert [event.kind for event in resolved[:1]] == [BackendEventKind.CONFIRMATION_RESOLVED]
     assert not (tmp_path / "workspace" / "rejected.txt").exists()
     assert llm.call_count == 1
     assert backend.pending_action_group(session_id="session-1") is None
@@ -968,18 +1188,25 @@ def test_active_run_can_be_steered_paused_and_resumed(tmp_path: Path) -> None:
     backend._start_run(session_id="session-1")
     assert backend._run_thread is run_thread
 
+    active_state = _BranchState(conversation.id)
+    active_state.execution_status = ConversationExecutionStatus.RUNNING
+    active_state.events = (_terminal_action_event("active-action", "active-call", "printf safe"),)
+    conversation.state = active_state
+    assert backend.pending_action_group(session_id="session-1") is None
     assert backend.submit_turn(session_id="session-1", prompt="Steer") == ()
-    backend.pause()
+    paused_directly = backend.pause(session_id="session-1")
     assert conversation.stopped.wait(timeout=2)
-    paused = backend.reconcile(
-        session_id="session-1",
-        known_source_event_ids=frozenset(),
+    paused = (
+        *paused_directly,
+        *backend.reconcile(
+            session_id="session-1",
+            known_source_event_ids=frozenset(),
+        ),
     )
 
     assert conversation.messages == [("Start", "heartwood-user"), ("Steer", "heartwood-user")]
     assert any(
-        isinstance(event, BackendLifecycleEvent)
-        and event.lifecycle == BackendLifecycle.PAUSED
+        isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
         for event in paused
     )
     resumed = backend.resume(session_id="session-1")
@@ -1002,11 +1229,48 @@ def test_resume_waits_for_an_interrupt_still_transitioning_to_paused(
     backend.submit_turn(session_id="session-1", prompt="Start")
     assert conversation.started.wait(timeout=2)
 
-    backend.pause()
+    started_at = time.monotonic()
+    paused = backend.pause(session_id="session-1")
+    assert time.monotonic() - started_at >= 0.04
+    assert conversation.stopped.is_set()
+    assert any(
+        isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+        for event in paused
+    )
     resumed = backend.resume(session_id="session-1")
 
     assert isinstance(resumed[0], BackendLifecycleEvent)
     assert resumed[0].lifecycle == BackendLifecycle.RUNNING
+    backend.close()
+
+
+def test_pause_reports_failure_without_acknowledging_an_unstopped_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = _StubbornConversation()
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    monkeypatch.setattr(
+        openhands_sdk_module,
+        "_AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS",
+        0.05,
+    )
+    backend.submit_turn(session_id="session-1", prompt="Start")
+    assert conversation.started.wait(timeout=2)
+
+    paused = backend.pause(session_id="session-1")
+
+    assert len(paused) == 1
+    assert isinstance(paused[0], BackendErrorEvent)
+    assert paused[0].error_code == BackendErrorCode.WORKER_STOPPED
+    conversation.release.set()
+    assert conversation.finished.wait(timeout=2)
     backend.close()
 
 
@@ -1067,7 +1331,7 @@ def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path)
     backend.close()
 
 
-def test_stale_running_state_becomes_paused_and_can_be_resumed_explicitly(
+def test_stale_running_model_turn_fails_closed_without_repeating_provider_work(
     tmp_path: Path,
 ) -> None:
     conversation = _ControlledConversation()
@@ -1085,13 +1349,20 @@ def test_stale_running_state_becomes_paused_and_can_be_resumed_explicitly(
         known_source_event_ids=frozenset(),
     )
     assert isinstance(events[0], BackendLifecycleEvent)
-    assert events[0].lifecycle == BackendLifecycle.PAUSED
+    assert events[0].lifecycle == BackendLifecycle.ERROR
+    assert any(
+        isinstance(event, BackendErrorEvent)
+        and event.error_code == BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+        for event in events
+    )
 
     resumed = backend.resume(session_id="session-1")
-    assert isinstance(resumed[0], BackendLifecycleEvent)
-    assert resumed[0].lifecycle == BackendLifecycle.RUNNING
-    assert conversation.started.wait(timeout=2)
-    assert conversation.stopped.wait(timeout=2)
+    assert isinstance(resumed[0], BackendErrorEvent)
+    assert resumed[0].error_code == BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+    submitted = backend.submit_turn(session_id="session-1", prompt="Do not repeat")
+    assert isinstance(submitted[0], BackendErrorEvent)
+    assert submitted[0].error_code == BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+    assert not conversation.started.is_set()
 
     conversation.state.execution_status = ConversationExecutionStatus.FINISHED
     invalid_resume = backend.resume(session_id="session-1")
@@ -1123,8 +1394,7 @@ def test_interrupted_unmatched_action_requires_explicit_recovery(
     )
 
     assert any(
-        isinstance(event, BackendLifecycleEvent)
-        and event.lifecycle == BackendLifecycle.ERROR
+        isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.ERROR
         for event in events
     )
     assert any(
@@ -1132,7 +1402,13 @@ def test_interrupted_unmatched_action_requires_explicit_recovery(
         and event.error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
         for event in events
     )
-    assert backend.pending_action_group(session_id="session-1") is not None
+    assert backend.pending_action_group(session_id="session-1") is None
+    blocked_turn = backend.submit_turn(session_id="session-1", prompt="Do not continue")
+    blocked_resume = backend.resume(session_id="session-1")
+    assert isinstance(blocked_turn[0], BackendErrorEvent)
+    assert blocked_turn[0].error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
+    assert isinstance(blocked_resume[0], BackendErrorEvent)
+    assert blocked_resume[0].error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
 
 
 def test_background_failure_finishes_in_error_instead_of_running(
@@ -1242,11 +1518,7 @@ def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
         approved=True,
     )
     events = (*continued, *_wait_for_lifecycle(backend, BackendLifecycle.FINISHED))
-    subagents = [
-        event.subagent
-        for event in events
-        if isinstance(event, BackendSubagentEvent)
-    ]
+    subagents = [event.subagent for event in events if isinstance(event, BackendSubagentEvent)]
 
     assert {item.status for item in subagents} == {
         BackendSubagentStatus.PROPOSED,
@@ -1258,6 +1530,71 @@ def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
     assert all(item.parent_session_id == "session-1" for item in subagents)
     assert subagents[0].parent_action_id
     assert parent_llm.call_count == 2
+    backend.close()
+
+
+def test_packaged_research_planner_returns_output_to_the_parent_agent(
+    tmp_path: Path,
+) -> None:
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="")],
+                tool_calls=[
+                    MessageToolCall(
+                        id="packaged-task-call",
+                        name="task",
+                        arguments=(
+                            '{"description":"Plan analysis","prompt":"Plan a synthetic '
+                            'cohort analysis","subagent_type":"research-planner"}'
+                        ),
+                        origin="completion",
+                    )
+                ],
+            ),
+            _assistant_message(
+                "Inspect the synthetic cohort, validate denominators, and record assumptions."
+            ),
+            _assistant_message("The research plan was incorporated into the parent task."),
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="packaged-specialist",
+        agents_dir=_repository_root() / "agents" / "verified",
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[Tool(name=TaskToolSet.name)],
+        ),
+    )
+    backend._register_specialized_agents()
+    backend.submit_turn(session_id="session-1", prompt="Develop an analysis plan")
+    group = _wait_for_pending_group(backend)
+    continued = backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    events = (*continued, *_wait_for_lifecycle(backend, BackendLifecycle.FINISHED))
+
+    assert any(
+        isinstance(event, BackendSubagentEvent)
+        and event.subagent.agent_name == "research-planner"
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+        for event in events
+    )
+    assert any(
+        isinstance(event, BackendAgentMessageEvent)
+        and event.message == "The research plan was incorporated into the parent task."
+        for event in events
+    )
+    assert llm.call_count == 2
     backend.close()
 
 
@@ -1279,6 +1616,8 @@ def test_translation_reports_analyzed_risk_and_nonzero_exit() -> None:
     assert tool_call.risk == "medium"
     assert _analyzed_risk(cast(SecurityAnalyzerBase, _FailingAnalyzer()), action) == "high"
     assert isinstance(translated, BackendToolExecutionEvent)
+    assert translated.tool_execution.tool_call_id == "call-1"
+    assert translated.tool_execution.action_id == "action-1"
     assert translated.tool_execution.exit_code == 127
     assert translated.tool_execution.summary == "terminal failed"
 
@@ -1402,19 +1741,13 @@ def test_openhands_finish_events_persist_without_tool_or_audit_activity(
             if event.kind == EventKind.AGENT_MESSAGE_EMITTED
         ] == ["The requested file was created."]
         assert all(
-            event.kind
-            not in {EventKind.TOOL_CALL_PROPOSED, EventKind.TOOL_EXECUTION_RECORDED}
+            event.kind not in {EventKind.TOOL_CALL_PROPOSED, EventKind.TOOL_EXECUTION_RECORDED}
             for event in replayed
         )
         audit_events = [
-            json.loads(line)
-            for line in service.store.read_audit_export().splitlines()
-            if line
+            json.loads(line) for line in service.store.read_audit_export().splitlines() if line
         ]
-        assert all(
-            event.get("payload", {}).get("tool_name") != "finish"
-            for event in audit_events
-        )
+        assert all(event.get("payload", {}).get("tool_name") != "finish" for event in audit_events)
     finally:
         service.close()
 

@@ -47,7 +47,8 @@ The first mutating command registers the session and creates private state.
 
 The gateway acquires an interprocess writer lease before mutating a session and retains it until that gateway closes the session service.
 If an OpenHands worker does not stop during shutdown, Heartwood keeps the lease instead of allowing another writer to mutate the session.
-Another process may replay the completed event stream, but it cannot append commands to the same session until the owner exits.
+A second process cannot reconcile or mutate that session until the owner exits.
+Replay and live updates remain available through the interface connected to the owning gateway.
 Distinct sessions have independent leases.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
 This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
@@ -59,14 +60,15 @@ Local disks, attached persistent disks, and qualified project filesystems are th
 Every command has an opaque identifier and a durable receipt.
 An exact retry of a completed command returns its original event range without repeating a model call, confirmation callback, or tool action.
 Reusing the identifier with different command content is rejected.
-If a process stops after command acceptance but before completion is recorded, Heartwood marks the outcome as uncertain and refuses to execute that identifier again automatically.
-The session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
+If a process stops after command acceptance but before completion is recorded, Heartwood refuses to execute that identifier again unless its exact outcome can be derived from durable state.
+An interrupted approval is completed automatically only when its recorded intent and OpenHands state unambiguously prove whether the complete action set was resolved.
+Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
 After replaying and verifying the available evidence, continue in a new session.
 
 Each session event and its corresponding audit record are committed through a private recovery journal.
 After an interrupted append, the next writer verifies the journal, hash links, and existing records before completing only the missing write.
 Malformed or inconsistent recovery state fails closed.
-After process loss, a persisted OpenHands `RUNNING` state is presented as paused and resumes only after an explicit command.
+After process loss, a persisted OpenHands `RUNNING` state is reported as an unknown outcome and cannot be resumed or repeated automatically.
 
 ## Action Decisions
 

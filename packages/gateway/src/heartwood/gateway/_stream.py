@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from threading import Lock
 
 from heartwood.session import SessionEvent
@@ -25,11 +25,13 @@ class GatewayEventStream:
         session_id: str,
         initial_events: Iterable[SessionEvent] = (),
         initial_changed: bool = True,
+        on_close: Callable[[GatewayEventStream], None] | None = None,
     ) -> None:
         self.session_id = session_id
         self._pending = list(initial_events)
         self._closed = False
         self._changed = initial_changed
+        self._on_close = on_close
         self._lock = Lock()
         self._ready = asyncio.Event()
         try:
@@ -78,9 +80,13 @@ class GatewayEventStream:
     def close(self) -> None:
         """Close the stream."""
         with self._lock:
+            if self._closed:
+                return
             self._closed = True
             self._pending.clear()
         self._signal()
+        if self._on_close is not None:
+            self._on_close(self)
 
     def _receive_locked(self) -> tuple[SessionEvent, ...]:
         events = tuple(self._pending)
@@ -102,6 +108,7 @@ class EventStreamHub:
 
     def __init__(self) -> None:
         self._streams: dict[str, list[GatewayEventStream]] = defaultdict(list)
+        self._lock = Lock()
 
     def connect(
         self,
@@ -115,29 +122,40 @@ class EventStreamHub:
             session_id=session_id,
             initial_events=replay_events,
             initial_changed=initial_changed,
+            on_close=self._remove,
         )
-        self._streams[session_id].append(stream)
+        with self._lock:
+            self._streams[session_id].append(stream)
         return stream
 
     def publish(self, *, session_id: str, events: Iterable[SessionEvent]) -> None:
         """Publish events to active streams."""
         event_tuple = tuple(events)
-        streams = self._streams.get(session_id, [])
-        active_streams: list[GatewayEventStream] = []
+        with self._lock:
+            streams = tuple(self._streams.get(session_id, ()))
         for stream in streams:
-            if stream.closed:
-                continue
             stream.push(event_tuple)
-            active_streams.append(stream)
-        self._streams[session_id] = active_streams
 
     def notify(self, *, session_id: str) -> None:
         """Wake active streams after a transient projection update."""
-        streams = self._streams.get(session_id, [])
-        active_streams: list[GatewayEventStream] = []
+        with self._lock:
+            streams = tuple(self._streams.get(session_id, ()))
         for stream in streams:
-            if stream.closed:
-                continue
             stream.notify()
-            active_streams.append(stream)
-        self._streams[session_id] = active_streams
+
+    def active_stream_count(self, *, session_id: str) -> int:
+        """Return the number of streams retained for one session."""
+        with self._lock:
+            return len(self._streams.get(session_id, ()))
+
+    def _remove(self, stream: GatewayEventStream) -> None:
+        with self._lock:
+            remaining = [
+                candidate
+                for candidate in self._streams.get(stream.session_id, ())
+                if candidate is not stream
+            ]
+            if remaining:
+                self._streams[stream.session_id] = remaining
+            else:
+                self._streams.pop(stream.session_id, None)

@@ -6,15 +6,16 @@
 
 version = 1
 
-# Files that cannot carry an inline SPDX header — the root license file, the
-# generated lockfile, the Python pin, and empty PEP 561 markers — are annotated
-# here. Everything else (including Markdown, via an HTML-comment header) carries
-# its own SPDX header.
+# Files that cannot carry an inline SPDX header — the root license file,
+# generated files, runtime definitions, and empty PEP 561 markers — are
+# annotated here. Everything else (including Markdown, via an HTML-comment
+# header) carries its own SPDX header.
 [[annotations]]
 path = [
     "LICENSE",
     ".python-version",
     "uv.lock",
+    "agents/**/*.md",
     "images/gpu/vllm-requirements.txt",
     "**/py.typed",
     "**/__pycache__/**",

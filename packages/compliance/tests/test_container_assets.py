@@ -982,7 +982,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert " allow " in smoke
     assert " reject " in smoke
     assert "Action set approved" in smoke
-    assert "Action set denied" in smoke
+    assert "Action set rejected" in smoke
     assert "audit export" in smoke
     assert "load_skills_from_dir" in smoke
     assert "start_agent_server" not in smoke
@@ -1129,7 +1129,10 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         '[\n            "heartwood",\n            "gateway",\n            "serve",' in jupyter_smoke
     )
     assert 'RUNTIME_ROOT / "packages" / "webui" / "dist"' in jupyter_smoke
-    assert '"confirmation.requested"' in jupyter_smoke
+    assert '"waiting-for-confirmation"' in jupyter_smoke
+    assert '"pendingApproval"' in jupyter_smoke
+    assert '"target_type": "action-set"' in jupyter_smoke
+    assert '"confirmation.resolved"' in jupyter_smoke
     assert '"tool.execution.recorded"' in jupyter_smoke
     assert "os.chdir(PROJECT_ROOT)" in jupyter_smoke
     assert "NotebookSession(session_id=" in jupyter_smoke
@@ -1153,7 +1156,8 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
     assert terra_persistence.count("terra_image_smoke.sh") == 2
-    assert "terra-project-persistence replay" in terra_persistence
+    assert terra_persistence.count("terra-project-persistence audit export") == 2
+    assert ".heartwood/sessions/terra-project-persistence/audit-export.jsonl" in terra_persistence
     assert "heartwood doctor --json" in terra_persistence
     assert " terra-project-persistence detect" not in terra_persistence
     assert "test ! -e /home/jupyter/.heartwood" in terra_persistence

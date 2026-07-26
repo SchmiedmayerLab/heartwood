@@ -32,8 +32,8 @@ docker run --rm --platform "${docker_platform}" --network none \
     /opt/heartwood/images/platform/scripts/terra_image_smoke.sh
     heartwood doctor --json >/tmp/heartwood-readiness.json
     grep --fixed-strings "${HEARTWOOD_TEST_PROJECT}" /tmp/heartwood-readiness.json
-    heartwood --session-id terra-project-persistence pause \
-      | grep --fixed-strings "Session paused"
+    heartwood --session-id terra-project-persistence audit export \
+      | grep --fixed-strings "Audit export:"
     printf "%s\n" persisted > .heartwood/cache/terra-project-persistence
     test ! -e /home/jupyter/.heartwood
   '
@@ -49,8 +49,11 @@ docker run --rm --platform "${docker_platform}" --network none \
     set -euo pipefail
     test "$(cat .heartwood/cache/terra-project-persistence)" = persisted
     /opt/heartwood/images/platform/scripts/terra_image_smoke.sh
-    heartwood --session-id terra-project-persistence replay \
-      | grep --fixed-strings "Session paused"
+    test -s .heartwood/sessions/terra-project-persistence/audit-export.jsonl
+    grep --fixed-strings "audit.export.recorded" \
+      .heartwood/sessions/terra-project-persistence/audit-export.jsonl
+    heartwood --session-id terra-project-persistence audit export \
+      | grep --fixed-strings "Audit export:"
     test ! -e /home/jupyter/.heartwood
   '
 

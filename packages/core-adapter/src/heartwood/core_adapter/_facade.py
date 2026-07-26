@@ -43,6 +43,7 @@ class BackendErrorCode(StrEnum):
     WORKER_STOPPED = "HW-AGENT-004"
     INVALID_STATE = "HW-AGENT-005"
     ACTION_OUTCOME_UNKNOWN = "HW-AGENT-006"
+    AGENT_OUTCOME_UNKNOWN = "HW-AGENT-007"
     UNKNOWN = "HW-AGENT-999"
 
 
@@ -58,6 +59,10 @@ def backend_error_message(code: BackendErrorCode) -> str:
         ),
         BackendErrorCode.ACTION_OUTCOME_UNKNOWN: (
             "A previously approved action has an unknown outcome; verify the project "
+            "and continue in a new session"
+        ),
+        BackendErrorCode.AGENT_OUTCOME_UNKNOWN: (
+            "A previously started agent turn has an unknown outcome; inspect the session "
             "and continue in a new session"
         ),
         BackendErrorCode.UNKNOWN: "The agent runtime reported an error",
@@ -96,6 +101,8 @@ class BackendSubagentStatus(StrEnum):
 class ToolExecution:
     """Content-minimized summary of a tool observation."""
 
+    tool_call_id: str
+    action_id: str | None
     tool_name: str
     exit_code: int
     summary: str
@@ -354,8 +361,8 @@ class AgentBackend(Protocol):
     ) -> tuple[BackendEvent, ...]:
         """Apply a gateway-recorded decision to the complete pending action group."""
 
-    def pause(self) -> None:
-        """Pause the conversation."""
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+        """Pause the conversation after reaching a stable execution boundary."""
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:
         """Resume a paused conversation."""
@@ -474,12 +481,15 @@ class DeterministicAgentBackend:
             BackendToolCallEvent(tool_call=self._pending),
         )
         if self.action_confirmation_mode == "confirm-risky":
+            pending = self._pending
             self._pending = None
             self._persist_pending()
             return (
                 *events,
                 BackendToolExecutionEvent(
                     tool_execution=ToolExecution(
+                        tool_call_id=pending.tool_call_id,
+                        action_id=None,
                         tool_name="heartwood.synthetic.noop",
                         exit_code=0,
                         summary=f"automatically executed low-risk action; session_id={session_id}",
@@ -517,10 +527,25 @@ class DeterministicAgentBackend:
         self._pending = None
         self._persist_pending()
         if not approved:
-            return ()
+            return (
+                BackendConfirmationResolutionEvent(
+                    tool_call=pending,
+                    action_group_id=group.group_id,
+                    approved=False,
+                    source_event_id=_deterministic_confirmation_source(pending.tool_call_id),
+                ),
+            )
         return (
+            BackendConfirmationResolutionEvent(
+                tool_call=pending,
+                action_group_id=group.group_id,
+                approved=True,
+                source_event_id=_deterministic_confirmation_source(pending.tool_call_id),
+            ),
             BackendToolExecutionEvent(
                 tool_execution=ToolExecution(
+                    tool_call_id=pending.tool_call_id,
+                    action_id=None,
                     tool_name=pending.tool_name,
                     exit_code=0,
                     summary=f"approved deterministic action; session_id={session_id}",
@@ -528,8 +553,9 @@ class DeterministicAgentBackend:
             ),
         )
 
-    def pause(self) -> None:
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
         """Pause the deterministic backend."""
+        return ()
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
         """Resume the deterministic backend without producing events."""
@@ -647,11 +673,26 @@ class LocalWorkspaceAgentBackend(DeterministicAgentBackend):
         self._pending = None
         self._persist_pending()
         if not approved:
-            return ()
+            return (
+                BackendConfirmationResolutionEvent(
+                    tool_call=pending,
+                    action_group_id=group.group_id,
+                    approved=False,
+                    source_event_id=_deterministic_confirmation_source(pending.tool_call_id),
+                ),
+            )
         path = self._write_summary(session_id)
         return (
+            BackendConfirmationResolutionEvent(
+                tool_call=pending,
+                action_group_id=group.group_id,
+                approved=True,
+                source_event_id=_deterministic_confirmation_source(pending.tool_call_id),
+            ),
             BackendToolExecutionEvent(
                 tool_execution=ToolExecution(
+                    tool_call_id=pending.tool_call_id,
+                    action_id=None,
                     tool_name=pending.tool_name,
                     exit_code=0,
                     summary=(f"wrote synthetic workspace artifact: {path.parent.name}/{path.name}"),
@@ -680,3 +721,7 @@ class LocalWorkspaceAgentBackend(DeterministicAgentBackend):
             encoding="utf-8",
         )
         return path
+
+
+def _deterministic_confirmation_source(tool_call_id: str) -> str:
+    return f"deterministic-tool-call:{tool_call_id}:confirmation-resolution"

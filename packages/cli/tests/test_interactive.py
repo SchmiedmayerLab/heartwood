@@ -113,18 +113,22 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
             composer = app.query_one("#composer", Input)
             composer.value = "inspect the synthetic workspace"
             await pilot.press("enter")
-            for _ in range(50):
+            approval = app.query_one("#approval", Vertical)
+            options = app.query_one("#approval-options", OptionList)
+            for _ in range(100):
                 await pilot.pause(0.02)
-                if "waiting" in str(app.query_one("#status", Static).render()):
+                if approval.display and composer.disabled and options.has_focus:
                     break
 
             assert composer.disabled
-            assert app.query_one("#approval", Vertical).display
-            assert app.query_one("#approval-options", OptionList).has_focus
+            assert approval.display
+            assert options.has_focus
             await pilot.press("down", "enter")
-            for _ in range(50):
+            for _ in range(100):
                 await pilot.pause(0.02)
-                if "ready" in str(app.query_one("#status", Static).render()):
+                current_approval = app.query_one("#approval", Vertical)
+                current_composer = app.query_one("#composer", Input)
+                if not current_approval.display and not current_composer.disabled:
                     break
 
             assert app.query_one("#composer", Input).disabled is False

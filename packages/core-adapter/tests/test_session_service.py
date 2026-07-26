@@ -22,6 +22,7 @@ from heartwood.audit import AuditIntegrityError, compute_event_hash
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendConfirmationRequestEvent,
+    BackendConfirmationResolutionEvent,
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
@@ -87,6 +88,26 @@ def test_pause_persists_replayable_events(tmp_path: Path) -> None:
         EventKind.SESSION_PAUSED.value,
     ]
     assert service.replay_events() == result.events
+
+
+def test_pause_is_not_acknowledged_when_backend_does_not_reach_a_boundary(
+    tmp_path: Path,
+) -> None:
+    service = SessionService.local_default(
+        tmp_path,
+        backend=_PauseFailureBackend(endpoint="https://model.local.invalid/v1/chat/completions"),
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(CommandKind.PAUSE).model_copy(update={"session_id": "session-main"})
+    )
+
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+    assert result.events[-1].payload["code"] == BackendErrorCode.WORKER_STOPPED.value
 
 
 def test_completed_command_retry_returns_exact_events_without_backend_reexecution(
@@ -614,7 +635,7 @@ def test_command_remains_uncertain_if_completion_receipt_write_is_interrupted(
     ]
 
 
-def test_uncertain_approval_blocks_new_commands_and_cannot_repeat_tool_resolution(
+def test_interrupted_approval_receipt_recovers_without_repeating_tool_resolution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -667,16 +688,91 @@ def test_uncertain_approval_blocks_new_commands_and_cannot_repeat_tool_resolutio
         service.handle(approval)
     monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
 
-    with pytest.raises(SessionRecoveryError, match="cannot accept more work"):
-        service.handle(
-            _command(
-                CommandKind.APPROVE,
-                command_id="command-approve-retry",
-                target_type="action-set",
-                target_id=_action_group_id(tool_call.tool_call_id),
-            ).model_copy(update={"session_id": "session-main"})
-        )
+    replayed = service.handle(approval)
 
+    assert replayed.replayed
+    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+
+
+def test_approval_intent_recovers_when_interrupted_before_backend_transition(
+    tmp_path: Path,
+) -> None:
+    tool_call = ProposedToolCall(
+        tool_call_id="session-main-action",
+        tool_name="file_editor",
+        risk="medium",
+        summary="write one file",
+    )
+    backend = _InterruptBeforeResolutionBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendToolCallEvent(tool_call=tool_call),
+            BackendConfirmationRequestEvent(
+                tool_call=tool_call,
+                action_group_id=_action_group_id(tool_call.tool_call_id),
+            ),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(
+        _command(CommandKind.CHAT, prompt="write").model_copy(update={"session_id": "session-main"})
+    )
+    approval = _command(
+        CommandKind.APPROVE,
+        target_type="action-set",
+        target_id=_action_group_id(tool_call.tool_call_id),
+    ).model_copy(update={"session_id": "session-main"})
+
+    with pytest.raises(OSError, match="before backend transition"):
+        service.handle(approval)
+    replayed = service.handle(approval)
+
+    assert replayed.replayed
+    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+
+
+def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
+    tmp_path: Path,
+) -> None:
+    tool_call = ProposedToolCall(
+        tool_call_id="session-main-action",
+        tool_name="file_editor",
+        risk="medium",
+        summary="write one file",
+    )
+    backend = _InterruptAfterResolutionBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendToolCallEvent(tool_call=tool_call),
+            BackendConfirmationRequestEvent(
+                tool_call=tool_call,
+                action_group_id=_action_group_id(tool_call.tool_call_id),
+            ),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(
+        _command(CommandKind.CHAT, prompt="write").model_copy(update={"session_id": "session-main"})
+    )
+    approval = _command(
+        CommandKind.APPROVE,
+        target_type="action-set",
+        target_id=_action_group_id(tool_call.tool_call_id),
+    ).model_copy(update={"session_id": "session-main"})
+
+    with pytest.raises(OSError, match="after backend transition"):
+        service.handle(approval)
+    replayed = service.handle(approval)
+
+    assert replayed.replayed
     assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
 
 
@@ -1204,6 +1300,18 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     ]
     assert result.events[1].payload["decision"] == "approved"
     assert result.events[3].payload["exit_code"] == 0
+    assert result.events[3].payload["tool_call_id"] == "session-synthetic-001-toolcall-0"
+    assert result.events[3].payload["action_id"] is None
+    assert _audit_payload(
+        EventKind.TOOL_EXECUTION_RECORDED,
+        result.events[3].payload,
+    ) == {
+        "backend_id": "deterministic-local",
+        "tool_call_id": "session-synthetic-001-toolcall-0",
+        "action_id": None,
+        "tool_name": "heartwood.synthetic.noop",
+        "exit_code": 0,
+    }
 
 
 def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> None:
@@ -1259,9 +1367,7 @@ def test_failed_backend_decision_keeps_the_action_group_pending(
     )
 
     assert EventKind.APPROVAL_RECORDED.value in [event.kind for event in result.events]
-    assert EventKind.CONFIRMATION_RESOLVED.value not in [
-        event.kind for event in result.events
-    ]
+    assert EventKind.CONFIRMATION_RESOLVED.value not in [event.kind for event in result.events]
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
     assert backend.pending_action_group(session_id="session-main") is not None
 
@@ -1760,13 +1866,24 @@ class _RecordingBackend:
         action_group_id: str,
         approved: bool,
     ) -> tuple[BackendEvent, ...]:
+        group = pending_action_group(self._pending_actions)
         self.resolutions.append((action_group_id, approved))
         if not any(isinstance(event, BackendErrorEvent) for event in self._resolution_response):
             self._pending_actions = ()
-        return self._resolution_response
+        if self._resolution_response or group is None:
+            return self._resolution_response
+        return tuple(
+            BackendConfirmationResolutionEvent(
+                tool_call=action,
+                action_group_id=group.group_id,
+                approved=approved,
+                source_event_id=f"recording:{action.tool_call_id}:confirmation-resolution",
+            )
+            for action in group.actions
+        )
 
-    def pause(self) -> None:
-        return None
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
+        return ()
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
         self.resume_calls += 1
@@ -1774,6 +1891,57 @@ class _RecordingBackend:
 
     def close(self) -> None:
         return None
+
+
+class _InterruptBeforeResolutionBackend(_RecordingBackend):
+    interrupt = True
+
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,
+        action_group_id: str,
+        approved: bool,
+    ) -> tuple[BackendEvent, ...]:
+        if self.interrupt:
+            self.interrupt = False
+            raise OSError("simulated interruption before backend transition")
+        return super().resolve_confirmation(
+            session_id=session_id,
+            action_group_id=action_group_id,
+            approved=approved,
+        )
+
+
+class _InterruptAfterResolutionBackend(_RecordingBackend):
+    interrupt = True
+
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,
+        action_group_id: str,
+        approved: bool,
+    ) -> tuple[BackendEvent, ...]:
+        events = super().resolve_confirmation(
+            session_id=session_id,
+            action_group_id=action_group_id,
+            approved=approved,
+        )
+        self._reconciled = events
+        if self.interrupt:
+            self.interrupt = False
+            raise OSError("simulated interruption after backend transition")
+        return events
+
+
+class _PauseFailureBackend(_RecordingBackend):
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:  # noqa: ARG002
+        return (
+            BackendErrorEvent(
+                error_code=BackendErrorCode.WORKER_STOPPED,
+            ),
+        )
 
 
 class _FailingCloseBackend(_RecordingBackend):

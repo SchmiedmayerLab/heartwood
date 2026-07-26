@@ -39,7 +39,6 @@ from openhands.sdk.event import (
     PauseEvent,
     UserRejectObservation,
 )
-from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import Metrics, content_to_str
 from openhands.sdk.security import (
     AlwaysConfirm,
@@ -58,6 +57,7 @@ from openhands.sdk.settings import (
 )
 from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import (
+    AgentDefinition,
     agent_definition_to_factory,
     load_agents_from_dir,
     register_agent_if_absent,
@@ -70,6 +70,7 @@ from openhands.tools.task_tracker import TaskTrackerObservation
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendConfirmationRequestEvent,
+    BackendConfirmationResolutionEvent,
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
@@ -128,10 +129,12 @@ _AGENT_CONDENSER_INPUT_FRACTION = 0.75
 _AGENT_CONDENSER_MAX_EVENTS = 240
 _AGENT_CONDENSER_KEEP_FIRST = 2
 _AGENT_MAX_ITERATIONS_PER_RUN = 100
-_AGENT_PROGRESS_POLL_SECONDS = 0.1
+_AGENT_PROGRESS_POLL_SECONDS = 0.25
 _AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS = 10
 _AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30
 _OPENHANDS_FINISH_TOOL_NAME = "finish"
+_SPECIALIST_REGISTRATION_LOCK = Lock()
+_REGISTERED_HEARTWOOD_SPECIALISTS: dict[str, AgentDefinition] = {}
 
 
 class _ConversationRuntimeOptions(TypedDict):
@@ -194,6 +197,7 @@ class OpenHandsSdkBackend:
         self._run_thread: Thread | None = None
         self._worker_threads: set[Thread] = set()
         self._run_lock = Lock()
+        self._execution_active = False
         self._run_failed = False
 
     @property
@@ -283,17 +287,28 @@ class OpenHandsSdkBackend:
             return (
                 () if backend_error.source_event_id in known_source_event_ids else (backend_error,)
             )
-        translated = [
-            backend_event
-            for event in _conversation_state(conversation).active_branch()
-            for backend_event in self._translate_event(event, session_id=session_id)
-            if backend_event.source_event_id not in known_source_event_ids
-        ]
-        translated.extend(
-            event
-            for event in self._state_events()
-            if event.source_event_id not in known_source_event_ids
-        )
+        branch = tuple(_conversation_state(conversation).active_branch())
+        actions_by_id, action_groups = self._action_resolution_context(branch)
+        translated: list[BackendEvent] = []
+        seen_source_event_ids = set(known_source_event_ids)
+        for event in branch:
+            for backend_event in self._translate_event(
+                event,
+                session_id=session_id,
+                actions_by_id=actions_by_id,
+                action_groups=action_groups,
+            ):
+                if backend_event.source_event_id in seen_source_event_ids:
+                    continue
+                translated.append(backend_event)
+                if backend_event.source_event_id is not None:
+                    seen_source_event_ids.add(backend_event.source_event_id)
+        for state_event in self._state_events():
+            if state_event.source_event_id in seen_source_event_ids:
+                continue
+            translated.append(state_event)
+            if state_event.source_event_id is not None:
+                seen_source_event_ids.add(state_event.source_event_id)
         return tuple(translated)
 
     def pending_action_group(
@@ -306,33 +321,39 @@ class OpenHandsSdkBackend:
             conversation = self._get_conversation()
         except Exception:
             return None
-        return pending_action_group(
-            tuple(
-                _tool_call(
-                    event,
-                    analyzed_risk=_analyzed_risk(self._security_analyzer, event),
-                )
-                for event in ConversationState.get_unmatched_actions(
-                    _conversation_state(conversation).active_branch()
-                )
-            )
-        )
+        state = _conversation_state(conversation)
+        if state.execution_status != ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
+            return None
+        return self._unmatched_action_group(conversation)
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and start or steer the active OpenHands run."""
+        try:
+            conversation = self._get_conversation()
+        except Exception as error:
+            return (_backend_error(error),)
+        if (outcome_error := self._interrupted_outcome_error(conversation)) is not None:
+            return (
+                BackendErrorEvent(
+                    error_code=outcome_error,
+                ),
+            )
         if self.pending_action_group(session_id=session_id) is not None:
             return (
                 BackendErrorEvent(
                     error_code=BackendErrorCode.INVALID_STATE,
                 ),
             )
+        if self._run_active() and not self._execution_in_flight():
+            return (
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.INVALID_STATE,
+                ),
+            )
         try:
-            conversation = self._get_conversation()
             conversation.send_message(prompt, sender="heartwood-user")
         except Exception as error:
-            return (
-                _backend_error(error),
-            )
+            return (_backend_error(error),)
         if self._run_active():
             return ()
         if not self._start_run(session_id=session_id):
@@ -366,17 +387,19 @@ class OpenHandsSdkBackend:
         try:
             conversation = self._get_conversation()
         except Exception as error:
-            return (
-                _backend_error(error),
-            )
+            return (_backend_error(error),)
         if not approved:
             try:
                 conversation.reject_pending_actions("User rejected the pending action set")
             except Exception as error:
-                return (
-                    _backend_error(error),
-                )
-            return self._state_events()
+                return (_backend_error(error),)
+            return (
+                *self._confirmation_resolution_events(
+                    pending_group,
+                    approved=False,
+                ),
+                *self._state_events(),
+            )
         if not self._wait_for_run_boundary(_AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS):
             return (
                 BackendErrorEvent(
@@ -394,6 +417,10 @@ class OpenHandsSdkBackend:
                 ),
             )
         return (
+            *self._confirmation_resolution_events(
+                pending_group,
+                approved=True,
+            ),
             *subagents,
             BackendLifecycleEvent(
                 lifecycle=BackendLifecycle.RUNNING,
@@ -401,30 +428,45 @@ class OpenHandsSdkBackend:
             ),
         )
 
-    def pause(self) -> None:
-        """Interrupt active OpenHands I/O and leave the conversation resumable."""
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+        """Interrupt active OpenHands I/O and acknowledge a stable boundary."""
         conversation = self._conversation
-        if conversation is not None and self._run_active():
-            conversation.interrupt()
+        if conversation is None or not self._run_active():
+            return (
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.INVALID_STATE,
+                ),
+            )
+        conversation.interrupt()
+        if not self._wait_for_run_boundary(_AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS):
+            return (
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.WORKER_STOPPED,
+                ),
+            )
+        return self.reconcile(
+            session_id=session_id,
+            known_source_event_ids=frozenset(),
+        )
 
     def resume(self, *, session_id: str) -> tuple[BackendEvent, ...]:
         """Resume OpenHands in the background."""
-        conversation = self._get_conversation()
+        try:
+            conversation = self._get_conversation()
+        except Exception as error:
+            return (_backend_error(error),)
+        if (outcome_error := self._interrupted_outcome_error(conversation)) is not None:
+            return (
+                BackendErrorEvent(
+                    error_code=outcome_error,
+                ),
+            )
         if self._run_active():
-            execution_status = _execution_status(conversation)
-            if execution_status == BackendLifecycle.RUNNING.value:
-                conversation.interrupt()
-            if not self._wait_for_run_boundary(_AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS):
-                return (
-                    BackendErrorEvent(
-                        error_code=BackendErrorCode.WORKER_STOPPED,
-                    ),
-                )
-        if (
-            _conversation_state(conversation).execution_status
-            == ConversationExecutionStatus.RUNNING
-        ):
-            conversation.interrupt()
+            return (
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.INVALID_STATE,
+                ),
+            )
         if _execution_status(conversation) not in {
             BackendLifecycle.PAUSED.value,
             BackendLifecycle.IDLE.value,
@@ -561,14 +603,28 @@ class OpenHandsSdkBackend:
                     f"specialized agent {definition.name} must be tool-free until "
                     "Heartwood supports audited child-action confirmation"
                 )
-            register_agent_if_absent(
-                name=definition.name,
-                factory_func=agent_definition_to_factory(
-                    definition,
-                    work_dir=self.workspace,
-                ),
-                description=definition,
-            )
+            with _SPECIALIST_REGISTRATION_LOCK:
+                registered_definition = _REGISTERED_HEARTWOOD_SPECIALISTS.get(definition.name)
+                if registered_definition is not None:
+                    if registered_definition != definition:
+                        raise OpenHandsSdkError(
+                            f"specialized agent name has conflicting definitions: {definition.name}"
+                        )
+                    continue
+                registered = register_agent_if_absent(
+                    name=definition.name,
+                    factory_func=agent_definition_to_factory(
+                        definition,
+                        work_dir=self.workspace,
+                    ),
+                    description=definition,
+                )
+                if not registered:
+                    raise OpenHandsSdkError(
+                        f"specialized agent name is already registered outside Heartwood: "
+                        f"{definition.name}"
+                    )
+                _REGISTERED_HEARTWOOD_SPECIALISTS[definition.name] = definition
 
     def _handle_sdk_event(self, event: Event) -> None:  # noqa: ARG002
         """Leave durable translation to the persisted OpenHands state.
@@ -590,11 +646,16 @@ class OpenHandsSdkBackend:
         thread = self._run_thread
         return thread is not None and thread.is_alive()
 
+    def _execution_in_flight(self) -> bool:
+        with self._run_lock:
+            return self._execution_active
+
     def _start_run(self, *, session_id: str) -> bool:
         with self._run_lock:
             if self._run_active():
                 return False
             self._run_failed = False
+            self._execution_active = True
             thread = Thread(
                 target=self._run,
                 kwargs={"session_id": session_id},
@@ -608,8 +669,9 @@ class OpenHandsSdkBackend:
 
     def _run(self, *, session_id: str) -> None:
         failure: tuple[BackendEvent, ...] = ()
+        published_source_event_ids: frozenset[str] = frozenset()
         try:
-            asyncio.run(self._run_until_stable(session_id=session_id))
+            published_source_event_ids = asyncio.run(self._run_until_stable(session_id=session_id))
         except Exception as error:
             with self._run_lock:
                 self._run_failed = True
@@ -622,37 +684,55 @@ class OpenHandsSdkBackend:
         finally:
             worker = current_thread()
             with self._run_lock:
+                self._execution_active = False
+            try:
+                final_events = (
+                    *failure,
+                    *self.reconcile(
+                        session_id=session_id,
+                        known_source_event_ids=published_source_event_ids,
+                    ),
+                )
+            except Exception as error:
+                final_events = (
+                    *failure,
+                    _backend_error(
+                        error,
+                        source_event_id=self._error_source(f"finalize:{uuid.uuid4()}"),
+                    ),
+                )
+            with self._run_lock:
                 if self._run_thread is worker:
                     self._run_thread = None
             try:
-                if failure:
-                    self._event_sink(failure)
-                self._event_sink(
-                    self.reconcile(
-                        session_id=session_id,
-                        known_source_event_ids=frozenset(),
-                    )
-                )
+                self._event_sink(final_events)
             finally:
                 with self._run_lock:
                     self._worker_threads.discard(worker)
 
-    async def _run_until_stable(self, *, session_id: str) -> None:
+    async def _run_until_stable(self, *, session_id: str) -> frozenset[str]:
         """Run OpenHands while publishing newly persisted non-token progress."""
         run = asyncio.create_task(self._get_conversation().arun())
+        published_source_event_ids: set[str] = set()
         while not run.done():
             done, _pending = await asyncio.wait(
                 {run},
                 timeout=_AGENT_PROGRESS_POLL_SECONDS,
             )
             if run not in done:
-                self._event_sink(
-                    self.reconcile(
-                        session_id=session_id,
-                        known_source_event_ids=frozenset(),
-                    )
+                events = self.reconcile(
+                    session_id=session_id,
+                    known_source_event_ids=frozenset(published_source_event_ids),
                 )
+                if events:
+                    self._event_sink(events)
+                    published_source_event_ids.update(
+                        event.source_event_id
+                        for event in events
+                        if event.source_event_id is not None
+                    )
         await run
+        return frozenset(published_source_event_ids)
 
     def _wait_for_run_boundary(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
@@ -705,12 +785,111 @@ class OpenHandsSdkBackend:
             if isinstance(event.action, TaskAction)
         )
 
+    def _unmatched_action_group(
+        self,
+        conversation: BaseConversation,
+    ) -> PendingActionGroup | None:
+        return pending_action_group(
+            tuple(
+                _tool_call(
+                    event,
+                    analyzed_risk=_analyzed_risk(self._security_analyzer, event),
+                )
+                for event in ConversationState.get_unmatched_actions(
+                    _conversation_state(conversation).active_branch()
+                )
+            )
+        )
+
+    def _interrupted_outcome_error(
+        self,
+        conversation: BaseConversation,
+    ) -> BackendErrorCode | None:
+        state = _conversation_state(conversation)
+        if (
+            state.execution_status != ConversationExecutionStatus.RUNNING
+            or self._execution_in_flight()
+        ):
+            return None
+        if ConversationState.get_unmatched_actions(state.active_branch()):
+            return BackendErrorCode.ACTION_OUTCOME_UNKNOWN
+        return BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+
+    def _action_resolution_context(
+        self,
+        branch: Sequence[Event],
+    ) -> tuple[dict[str, ActionEvent], dict[str, PendingActionGroup]]:
+        actions_by_id: dict[str, ActionEvent] = {}
+        pending_actions: list[ActionEvent] = []
+        groups: dict[str, PendingActionGroup] = {}
+        for event in branch:
+            if (
+                isinstance(event, ActionEvent)
+                and event.action is not None
+                and event.tool_name != _OPENHANDS_FINISH_TOOL_NAME
+            ):
+                actions_by_id[event.id] = event
+                pending_actions.append(event)
+                continue
+            if not isinstance(event, ObservationEvent | UserRejectObservation):
+                continue
+            action = actions_by_id.get(event.action_id)
+            if action is None:
+                continue
+            if action.id not in groups:
+                group = pending_action_group(
+                    tuple(
+                        _tool_call(
+                            pending,
+                            analyzed_risk=_analyzed_risk(self._security_analyzer, pending),
+                        )
+                        for pending in pending_actions
+                    )
+                )
+                if group is not None:
+                    groups.update(dict.fromkeys((pending.id for pending in pending_actions), group))
+            pending_actions = [pending for pending in pending_actions if pending.id != action.id]
+        for action in pending_actions:
+            if action.id in groups:
+                continue
+            group = pending_action_group(
+                (
+                    _tool_call(
+                        action,
+                        analyzed_risk=_analyzed_risk(self._security_analyzer, action),
+                    ),
+                )
+            )
+            if group is not None:
+                groups[action.id] = group
+        return actions_by_id, groups
+
+    def _confirmation_resolution_events(
+        self,
+        group: PendingActionGroup,
+        *,
+        approved: bool,
+    ) -> tuple[BackendEvent, ...]:
+        return tuple(
+            BackendConfirmationResolutionEvent(
+                tool_call=action,
+                action_group_id=group.group_id,
+                approved=approved,
+                source_event_id=_confirmation_resolution_source(action.tool_call_id),
+            )
+            for action in group.actions
+        )
+
     def _translate_event(
         self,
         event: Event,
         *,
         session_id: str,
+        actions_by_id: Mapping[str, ActionEvent] | None = None,
+        action_groups: Mapping[str, PendingActionGroup] | None = None,
     ) -> tuple[BackendEvent, ...]:
+        actions_by_id = {} if actions_by_id is None else actions_by_id
+        action_groups = {} if action_groups is None else action_groups
         source = f"openhands:{event.id}"
         if isinstance(event, MessageEvent):
             if event.source != "agent":
@@ -769,12 +948,26 @@ class OpenHandsSdkBackend:
         if isinstance(event, ObservationEvent):
             if event.tool_name == _OPENHANDS_FINISH_TOOL_NAME:
                 return ()
-            observation_events: list[BackendEvent] = [
+            action = actions_by_id.get(event.action_id)
+            action_group = None if action is None else action_groups.get(action.id)
+            observation_events: list[BackendEvent] = []
+            if (
+                action is not None
+                and action_group is not None
+                and self._action_required_confirmation(action)
+            ):
+                observation_events.extend(
+                    self._confirmation_resolution_events(
+                        action_group,
+                        approved=True,
+                    )
+                )
+            observation_events.append(
                 _tool_observation(
                     event,
                     source_event_id=f"{source}:observation",
                 )
-            ]
+            )
             if isinstance(event.observation, TaskTrackerObservation):
                 observation_events.append(
                     BackendTaskPlanEvent(
@@ -808,18 +1001,18 @@ class OpenHandsSdkBackend:
                 )
             return tuple(observation_events)
         if isinstance(event, UserRejectObservation):
-            return ()
+            action = actions_by_id.get(event.action_id)
+            action_group = None if action is None else action_groups.get(action.id)
+            if action is None or action_group is None:
+                return ()
+            return self._confirmation_resolution_events(
+                action_group,
+                approved=False,
+            )
         if isinstance(event, AgentErrorEvent):
             return (
                 BackendErrorEvent(
                     error_code=BackendErrorCode.ACTION_FAILED,
-                    source_event_id=f"{source}:error",
-                ),
-            )
-        if isinstance(event, ConversationErrorEvent):
-            return (
-                BackendErrorEvent(
-                    error_code=BackendErrorCode.CONVERSATION_STOPPED,
                     source_event_id=f"{source}:error",
                 ),
             )
@@ -832,50 +1025,60 @@ class OpenHandsSdkBackend:
             )
         return ()
 
+    def _action_required_confirmation(self, action: ActionEvent) -> bool:
+        if self.action_confirmation_mode == "always-confirm":
+            return True
+        return _analyzed_risk(self._security_analyzer, action) != SecurityRisk.LOW.value.lower()
+
     def _state_events(self) -> tuple[BackendEvent, ...]:
         conversation = self._get_conversation()
         state = _conversation_state(conversation)
         branch = state.active_branch()
         anchor = branch[-1].id if branch else str(conversation.id)
         unmatched_actions = ConversationState.get_unmatched_actions(branch)
-        unmatched_group = pending_action_group(
-            tuple(
-                _tool_call(
-                    action,
-                    analyzed_risk=_analyzed_risk(self._security_analyzer, action),
-                )
-                for action in unmatched_actions
-            )
-        )
+        unmatched_group = self._unmatched_action_group(conversation)
         lifecycle = _backend_lifecycle(state.execution_status)
         with self._run_lock:
             run_failed = self._run_failed
-            run_active = self._run_active()
-        action_outcome_unknown = (
-            state.execution_status == ConversationExecutionStatus.RUNNING
-            and not run_active
-            and unmatched_group is not None
+            execution_active = self._execution_active
+        interrupted_outcome = (
+            state.execution_status == ConversationExecutionStatus.RUNNING and not execution_active
         )
-        if run_failed or action_outcome_unknown:
+        if run_failed or interrupted_outcome:
             lifecycle = BackendLifecycle.ERROR
-        elif (
-            state.execution_status == ConversationExecutionStatus.RUNNING and not run_active
-        ):
-            lifecycle = BackendLifecycle.PAUSED
         events: list[BackendEvent] = [
             BackendLifecycleEvent(
                 lifecycle=lifecycle,
                 source_event_id=(f"openhands-state:{anchor}:{lifecycle.value}:lifecycle"),
             )
         ]
-        if action_outcome_unknown and unmatched_group is not None:
+        if interrupted_outcome:
+            outcome_error = (
+                BackendErrorCode.ACTION_OUTCOME_UNKNOWN
+                if unmatched_group is not None
+                else BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+            )
             events.append(
                 BackendErrorEvent(
-                    error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN,
+                    error_code=outcome_error,
                     source_event_id=(
-                        f"openhands-state:{anchor}:"
-                        f"{unmatched_group.group_id}:action-outcome-unknown"
+                        f"openhands-state:{anchor}:{outcome_error.value.lower()}:outcome-unknown"
                     ),
+                )
+            )
+        if (
+            state.execution_status
+            in {
+                ConversationExecutionStatus.ERROR,
+                ConversationExecutionStatus.STUCK,
+                ConversationExecutionStatus.DELETING,
+            }
+            and not run_failed
+        ):
+            events.append(
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.CONVERSATION_STOPPED,
+                    source_event_id=(f"openhands-state:{anchor}:conversation-stopped"),
                 )
             )
         if state.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
@@ -986,12 +1189,18 @@ def _tool_observation(
     tool_name = event.tool_name or "unknown-tool"
     return BackendToolExecutionEvent(
         tool_execution=ToolExecution(
+            tool_call_id=event.tool_call_id,
+            action_id=event.action_id,
             tool_name=tool_name,
             exit_code=resolved_exit_code,
             summary=f"{tool_name} {'failed' if failed else 'completed'}",
         ),
         source_event_id=source_event_id,
     )
+
+
+def _confirmation_resolution_source(tool_call_id: str) -> str:
+    return f"openhands-tool-call:{tool_call_id}:confirmation-resolution"
 
 
 def _observation_exit_code(observation: Observation) -> int | None:

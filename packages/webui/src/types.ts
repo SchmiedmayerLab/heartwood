@@ -204,6 +204,8 @@ export interface ActionModeOption {
 export interface ActionSettings {
   schema_version: "heartwood.action-settings.v1";
   confirmation_mode: ActionConfirmationMode;
+  change_allowed: boolean;
+  change_blocked_reason: string | null;
   modes: ActionModeOption[];
 }
 

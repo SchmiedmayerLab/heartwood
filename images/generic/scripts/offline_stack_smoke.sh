@@ -116,10 +116,10 @@ grep -q "build the aggregate synthetic target-condition cohort" "${transcript}"
 grep -q "as one OpenHands action set" "${transcript}"
 grep -q "Allow all once: /allow" "${transcript}"
 grep -q "Action set approved" "${transcript}"
-grep -q "Tool terminal exit=0" "${transcript}"
-grep -q "Action set denied" "${transcript}"
+grep -q "Tool: Ran terminal command" "${transcript}"
+grep -q "Action set rejected" "${transcript}"
 grep -q "Agent: The synthetic target-condition cohort summary is ready for review." "${transcript}"
-grep -q "Tool terminal exit=0" "${automatic_transcript}"
+grep -q "Tool: Ran terminal command" "${automatic_transcript}"
 if grep -q "as one OpenHands action set" "${automatic_transcript}"; then
   echo "low-risk action unexpectedly required confirmation" >&2
   exit 1
@@ -127,14 +127,15 @@ fi
 grep -q "run a medium-risk network command \[tool=terminal, risk=medium\]" "${risky_transcript}"
 grep -q "as one OpenHands action set" "${risky_transcript}"
 grep -q "Reject all: /reject" "${risky_transcript}"
-grep -q "Action set denied" "${risky_transcript}"
+grep -q "Action set rejected" "${risky_transcript}"
 "${heartwood_python}" - <<'PY'
 import json
 import os
 from pathlib import Path
 
 workspace = Path.cwd() / ".heartwood" / "sessions"
-session_id = os.environ.get("HEARTWOOD_SESSION_ID", "session-offline-stack") + "-automatic"
+base_session_id = os.environ.get("HEARTWOOD_SESSION_ID", "session-offline-stack")
+session_id = base_session_id + "-automatic"
 events = [
     json.loads(line)
     for line in (workspace / session_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
@@ -144,6 +145,19 @@ if "confirmation.requested" in kinds:
     raise SystemExit("low-risk automatic session contains a confirmation request")
 if not {"tool_call.proposed", "tool.execution.recorded"}.issubset(kinds):
     raise SystemExit(f"low-risk automatic session is incomplete: {sorted(kinds)}")
+approved_events = [
+    json.loads(line)
+    for line in (workspace / base_session_id / "events.jsonl")
+    .read_text(encoding="utf-8")
+    .splitlines()
+]
+executions = [
+    event["payload"]
+    for event in approved_events + events
+    if event["kind"] == "tool.execution.recorded"
+]
+if len(executions) != 3 or any(execution.get("exit_code") != 0 for execution in executions):
+    raise SystemExit(f"unexpected tool execution records: {executions}")
 decision = next(event for event in events if event["kind"] == "model_call.decision.recorded")
 if decision["payload"]["model_profile"]["action_confirmation_mode"] != "confirm-risky":
     raise SystemExit("action confirmation mode was not recorded")

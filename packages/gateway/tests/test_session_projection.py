@@ -39,10 +39,10 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
         _event(
             6,
             EventKind.SUBAGENT_UPDATED,
-                {
-                    "subagent": {
-                        "invocation_id": "task-plan-call",
-                        "task_id": "task-plan",
+            {
+                "subagent": {
+                    "invocation_id": "task-plan-call",
+                    "task_id": "task-plan",
                     "agent_name": "research-planner",
                     "status": "proposed",
                     "parent_session_id": "session-1",
@@ -53,10 +53,10 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
         _event(
             7,
             EventKind.SUBAGENT_UPDATED,
-                {
-                    "subagent": {
-                        "invocation_id": "task-plan-call",
-                        "task_id": "task-plan",
+            {
+                "subagent": {
+                    "invocation_id": "task-plan-call",
+                    "task_id": "task-plan",
                     "agent_name": "research-planner",
                     "status": "completed",
                     "parent_session_id": "session-1",
@@ -147,6 +147,7 @@ def test_projection_displays_stable_error_code_without_technical_details() -> No
     )
 
     assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert projection.available_commands == ()
     assert projection.activity[0].detail == "HW-AGENT-003"
     assert projection.conversation[0].detail == ("HW-AGENT-003: The agent conversation stopped")
 
@@ -220,10 +221,10 @@ def test_projection_normalizes_incomplete_runtime_events_without_client_logic() 
         _event(
             3,
             EventKind.SUBAGENT_UPDATED,
-                {
-                    "subagent": {
-                        "invocation_id": "task-error-call",
-                        "task_id": "task-error",
+            {
+                "subagent": {
+                    "invocation_id": "task-error-call",
+                    "task_id": "task-error",
                     "agent_name": "research-planner",
                     "status": "error",
                     "parent_session_id": "session-1",
@@ -234,10 +235,10 @@ def test_projection_normalizes_incomplete_runtime_events_without_client_logic() 
         _event(
             4,
             EventKind.SUBAGENT_UPDATED,
-                {
-                    "subagent": {
-                        "invocation_id": "task-running-call",
-                        "task_id": "task-running",
+            {
+                "subagent": {
+                    "invocation_id": "task-running-call",
+                    "task_id": "task-running",
                     "agent_name": "research-planner",
                     "status": "unexpected",
                     "parent_session_id": "session-1",

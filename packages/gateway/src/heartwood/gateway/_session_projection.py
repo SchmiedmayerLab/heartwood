@@ -556,6 +556,8 @@ def _available_commands(
         return ("chat", "pause")
     if lifecycle == SessionLifecycle.PAUSED:
         return ("chat", "resume")
+    if lifecycle == SessionLifecycle.ERROR:
+        return ()
     return ("chat",)
 
 

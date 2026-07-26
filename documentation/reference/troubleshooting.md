@@ -136,6 +136,12 @@ Heartwood stopped after an action was approved but before OpenHands recorded whe
 Do not approve or repeat the action blindly.
 Inspect the project files and Activity & audit, then continue in a new session once you understand the project state.
 
+### `HW-AGENT-007` — An Agent Turn Has an Unknown Outcome
+
+Heartwood stopped during a model turn before OpenHands recorded a stable completion boundary.
+Do not repeat the task blindly because the provider may already have processed the request.
+Inspect the session replay and Activity & audit, then continue in a new session.
+
 ### `HW-AGENT-999` — The Agent Runtime Reported an Error
 
 An execution backend returned an error without a more specific stable code.

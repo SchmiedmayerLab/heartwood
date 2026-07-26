@@ -19,7 +19,15 @@ from typing import cast
 import pytest
 
 from heartwood.core_adapter import BackendLifecycle, BackendLifecycleEvent
-from heartwood.gateway import GatewayAsgiApp, ProjectContext, RestResponse, SessionGateway
+from heartwood.gateway import (
+    GatewayAsgiApp,
+    GatewayEventStream,
+    ProjectContext,
+    RestResponse,
+    SessionGateway,
+)
+from heartwood.gateway._asgi import _wait_for_stream_signal
+from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -95,6 +103,78 @@ def test_asgi_http_keeps_the_event_loop_responsive_during_blocking_gateway_work(
         return elapsed
 
     assert asyncio.run(scenario()) < 0.25
+
+
+def test_stream_wait_cancels_the_sibling_task_when_receive_fails() -> None:
+    async def scenario() -> None:
+        update_cancelled = asyncio.Event()
+
+        async def receive_update() -> object:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                update_cancelled.set()
+            return object()
+
+        async def receive_message() -> dict[str, object]:
+            raise RuntimeError("synthetic receive failure")
+
+        with pytest.raises(RuntimeError, match="synthetic receive failure"):
+            await _wait_for_stream_signal(
+                receive_update,
+                receive_message,
+                disconnect_type="websocket.disconnect",
+            )
+        assert update_cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_asgi_websocket_closes_gateway_stream_when_send_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> bool:
+        gateway = _gateway(tmp_path)
+        app = GatewayAsgiApp(gateway)
+        opened = []
+        original_open = gateway.open_event_stream
+
+        def open_event_stream(
+            *,
+            session_id: str,
+            after_sequence: int | None = None,
+        ) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
+            stream, snapshot = original_open(
+                session_id=session_id,
+                after_sequence=after_sequence,
+            )
+            opened.append(stream)
+            return stream, snapshot
+
+        monkeypatch.setattr(gateway, "open_event_stream", open_event_stream)
+
+        async def receive() -> dict[str, object]:
+            return {"type": "websocket.disconnect"}
+
+        async def send(message: dict[str, object]) -> None:
+            if message["type"] == "websocket.send":
+                raise RuntimeError("synthetic send failure")
+
+        with pytest.raises(RuntimeError, match="synthetic send failure"):
+            await app(
+                {
+                    "type": "websocket",
+                    "path": "/sessions/session-1/events",
+                    "query_string": b"",
+                },
+                receive,
+                send,
+            )
+        assert len(opened) == 1
+        return opened[0].closed
+
+    assert asyncio.run(scenario()) is True
 
 
 def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> None:
@@ -692,8 +772,9 @@ async def _http_call(
 
 
 async def _wait_for_sent(sent: list[dict[str, object]], count: int) -> None:
-    for _ in range(10):
+    deadline = asyncio.get_running_loop().time() + 2
+    while asyncio.get_running_loop().time() < deadline:
         if len(sent) >= count:
             return
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     assert len(sent) >= count

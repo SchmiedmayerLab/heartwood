@@ -124,6 +124,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const selectionGeneration = useRef(0);
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
   const commandInFlight = useRef(false);
+  const retiredStreamEpochs = useRef(new Map<string, Set<string>>());
   const setupOpened = useRef(false);
   const modelPollingError = useRef<string | null>(null);
 
@@ -213,7 +214,14 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       .replayEvents(sessionId)
       .then(({ projection: replayed }) => {
         if (!active) return;
-        setProjection(replayed);
+        setProjection((current) =>
+          selectProjection(
+            current,
+            replayed,
+            sessionId,
+            retiredStreamEpochs.current,
+          ),
+        );
         setRequestStatus("idle");
         closeStream = resolvedClient.streamSession(
           sessionId,
@@ -221,7 +229,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           (streamed) => {
             if (!active) return;
             setProjection((current) =>
-              selectProjection(current, streamed, sessionId),
+              selectProjection(
+                current,
+                streamed,
+                sessionId,
+                retiredStreamEpochs.current,
+              ),
             );
             refreshTimer ??= window.setTimeout(() => {
               refreshTimer = null;
@@ -490,7 +503,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     try {
       const response = await resolvedClient.postCommand(command);
       setProjection((current) =>
-        selectProjection(current, response.projection, sessionId),
+        selectProjection(
+          current,
+          response.projection,
+          sessionId,
+          retiredStreamEpochs.current,
+        ),
       );
       await refreshSessions();
       const outcome = response.projection.lastCommandOutcome;
@@ -890,7 +908,16 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             sessionId === null ? undefined : (
               void resolvedClient
                 .replayEvents(sessionId)
-                .then(({ projection: replayed }) => setProjection(replayed))
+                .then(({ projection: replayed }) =>
+                  setProjection((current) =>
+                    selectProjection(
+                      current,
+                      replayed,
+                      sessionId,
+                      retiredStreamEpochs.current,
+                    ),
+                  ),
+                )
                 .catch((caught: unknown) => setError(errorMessage(caught)))
             )
           }
@@ -980,11 +1007,19 @@ const selectProjection = (
   current: SessionProjection | null,
   next: SessionProjection,
   sessionId: string,
+  retiredEpochsBySession: Map<string, Set<string>>,
 ): SessionProjection | null => {
   if (next.sessionId !== sessionId) return current;
+  if (current?.sessionId !== sessionId) return next;
+  if (next.streamEpoch !== current.streamEpoch) {
+    const retiredEpochs =
+      retiredEpochsBySession.get(sessionId) ?? new Set<string>();
+    if (retiredEpochs.has(next.streamEpoch)) return current;
+    retiredEpochs.add(current.streamEpoch);
+    retiredEpochsBySession.set(sessionId, retiredEpochs);
+    return next;
+  }
   if (
-    current?.sessionId !== sessionId ||
-    next.streamEpoch !== current.streamEpoch ||
     next.revision > current.revision ||
     (next.revision === current.revision &&
       next.streamRevision > current.streamRevision)

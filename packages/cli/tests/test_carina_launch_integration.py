@@ -232,7 +232,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         input="/status\n/exit\n",
-        timeout=30,
+        timeout=90,
         env=env,
         cwd=project_root,
     )

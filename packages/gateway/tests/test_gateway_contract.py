@@ -183,6 +183,53 @@ class _PublishingCloseSessionService:
         self.closed.set()
 
 
+@dataclass
+class _RacingFinalSessionService:
+    publish: Callable[[tuple[SessionEvent, ...]], None]
+    worker_started: Event
+    worker_finished: Event
+    events: list[SessionEvent]
+
+    def handle(self, command: SessionCommand) -> SessionResult:
+        running = SessionEvent(
+            event_id="running-event",
+            session_id=command.session_id,
+            sequence=0,
+            kind=EventKind.AGENT_LIFECYCLE_UPDATED,
+            occurred_at="2026-01-01T00:00:00Z",
+            payload={"status": "running"},
+        )
+        finished = SessionEvent(
+            event_id="finished-event",
+            session_id=command.session_id,
+            sequence=1,
+            kind=EventKind.AGENT_LIFECYCLE_UPDATED,
+            occurred_at="2026-01-01T00:00:01Z",
+            payload={"status": "finished"},
+        )
+        self.events.append(running)
+
+        def finalize() -> None:
+            self.worker_started.set()
+            self.events.append(finished)
+            self.publish((finished,))
+            self.worker_finished.set()
+
+        Thread(target=finalize).start()
+        if not self.worker_started.wait(timeout=1):
+            raise TimeoutError("synthetic worker did not start")
+        return SessionResult(events=(running,))
+
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        return tuple(self.events)
+
+    def reconcile(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def close(self) -> None:
+        return None
+
+
 def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -> None:
     first = _gateway(tmp_path / "first-project")
     second = _gateway(tmp_path / "second-project")
@@ -355,6 +402,50 @@ def test_gateway_shutdown_does_not_block_final_background_publication(
     assert gateway._services == {}
 
 
+def test_fast_background_finalization_preserves_stream_order_and_projection(
+    tmp_path: Path,
+) -> None:
+    worker_started = Event()
+    worker_finished = Event()
+    events: list[SessionEvent] = []
+    gateway: SessionGateway
+    service = _RacingFinalSessionService(
+        publish=lambda emitted: gateway._publish_background_events(
+            session_id="session-one",
+            events=emitted,
+        ),
+        worker_started=worker_started,
+        worker_finished=worker_finished,
+        events=events,
+    )
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    stream = gateway.websocket(session_id="session-one")
+    stream.receive()
+
+    result = gateway.handle(
+        SessionCommand(
+            command_id="fast-turn",
+            session_id="session-one",
+            kind=CommandKind.CHAT,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+
+    assert worker_finished.wait(timeout=1)
+    assert [event.event_id for event in result.events] == ["running-event"]
+    assert [event.event_id for event in stream.receive()] == [
+        "running-event",
+        "finished-event",
+    ]
+    assert gateway.session_projection(session_id="session-one").lifecycle.status == "finished"
+
+
 def test_pause_clears_partial_text_and_nonfatal_errors_keep_streaming_active(
     tmp_path: Path,
 ) -> None:
@@ -371,14 +462,10 @@ def test_pause_clears_partial_text_and_nonfatal_errors_keep_streaming_active(
     )
     service._token_sink("partial response")
     before_pause = gateway.session_projection(session_id="session-1")
-    gateway.handle(
-        SessionCommand.model_validate_json(_command(CommandKind.PAUSE))
-    )
+    gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.PAUSE)))
     paused = gateway.session_projection(session_id="session-1")
     gateway.handle(
-        SessionCommand.model_validate_json(
-            _command(CommandKind.RESUME, command_id="resume-once")
-        )
+        SessionCommand.model_validate_json(_command(CommandKind.RESUME, command_id="resume-once"))
     )
     service._token_sink("fresh response")
     gateway.handle(
@@ -484,7 +571,9 @@ def test_rest_command_retry_is_not_published_twice(tmp_path: Path) -> None:
     assert stream.receive() == ()
 
 
-def test_browser_to_cli_session_handoff_requires_owner_shutdown(tmp_path: Path) -> None:
+def test_interface_handoff_requires_owner_shutdown_and_preserves_sequence(
+    tmp_path: Path,
+) -> None:
     browser_gateway = _gateway(tmp_path)
     cli_gateway = _gateway(tmp_path)
     browser = RestGateway(browser_gateway)

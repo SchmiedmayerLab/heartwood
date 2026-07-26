@@ -121,6 +121,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Verify the project files and continue in a new session; do not repeat the action blindly.",
         "/reference/troubleshooting/#hw-agent-006-an-approved-action-has-an-unknown-outcome",
     ),
+    "agent-turn-outcome": DiagnosticDefinition(
+        "HW-AGENT-007",
+        "An agent turn has an unknown outcome",
+        "Inspect the session and continue in a new session; do not repeat the task blindly.",
+        "/reference/troubleshooting/#hw-agent-007-an-agent-turn-has-an-unknown-outcome",
+    ),
     "agent-unknown": DiagnosticDefinition(
         "HW-AGENT-999",
         "The agent runtime reported an error",
