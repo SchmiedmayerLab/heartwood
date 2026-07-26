@@ -59,6 +59,7 @@ from openhands.sdk.subagent import (
     register_agent_if_absent,
 )
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.tool.builtins.finish import FinishAction, FinishObservation, FinishTool
 from openhands.sdk.tool.schema import Observation
 from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
 from openhands.tools.task import TaskAction, TaskObservation
@@ -81,6 +82,7 @@ from heartwood.core_adapter import (
     BackendToolCallEvent,
     BackendToolExecutionEvent,
     PendingActionGroup,
+    SessionService,
 )
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend
 from heartwood.gateway._openhands_sdk import (
@@ -104,6 +106,7 @@ from heartwood.gateway._openhands_sdk import (
     _usage,
     _usage_source_event_id,
 )
+from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
 @pytest.fixture(autouse=True)
@@ -1297,6 +1300,125 @@ def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> No
     assert backend.configuration_error == "active model profile credential reference is unavailable"
 
 
+@pytest.mark.parametrize(
+    ("model", "endpoint"),
+    [
+        ("openai/gpt-5.4", "https://api.openai.com/v1/chat/completions"),
+        ("openai/gpt-4.1", "https://api.openai.com/v1/responses"),
+    ],
+)
+def test_openhands_backend_rejects_stale_provider_routes(
+    tmp_path: Path,
+    model: str,
+    endpoint: str,
+) -> None:
+    backend = OpenHandsSdkBackend(
+        profile=ModelProfile(
+            profile_id="openai",
+            model=model,
+            policy_endpoint=endpoint,
+            credential_kind="environment",
+            api_key_env="OPENAI_API_KEY",
+        ),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="route-test",
+        env={"OPENAI_API_KEY": "test-key"},
+        conversation_factory=_finished_conversation_factory(
+            tmp_path,
+            TestLLM.from_messages([]),
+        ),
+    )
+
+    assert backend.configuration_error == (
+        "The active model profile request path does not match OpenHands"
+    )
+
+
+def test_openhands_finish_events_map_only_to_a_final_agent_message(
+    tmp_path: Path,
+) -> None:
+    action, observation = _finish_event_pair()
+    backend = _backend(
+        tmp_path,
+        _finished_conversation_factory(tmp_path, TestLLM.from_messages([])),
+    )
+
+    translated_action = backend._translate_event(action, session_id="session-1")
+    translated_observation = backend._translate_event(
+        observation,
+        session_id="session-1",
+    )
+
+    assert translated_action == (
+        BackendAgentMessageEvent(
+            message="The requested file was created.",
+            source_event_id=f"openhands:{action.id}:message",
+        ),
+    )
+    assert translated_observation == ()
+
+
+def test_openhands_finish_events_persist_without_tool_or_audit_activity(
+    tmp_path: Path,
+) -> None:
+    action, observation = _finish_event_pair()
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    state.execution_status = ConversationExecutionStatus.FINISHED
+    state.events = (action, observation)
+    conversation.state = state
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path / "sessions",
+        session_id="session-1",
+        backend=backend,
+        env={},
+        clock=lambda: "2026-07-25T00:00:00Z",
+    )
+    try:
+        service.reconcile()
+        service.handle(
+            SessionCommand(
+                command_id="audit",
+                session_id="session-1",
+                kind=CommandKind.AUDIT_EXPORT,
+                actor_id="test-user",
+                created_at="2026-07-25T00:00:00Z",
+            )
+        )
+
+        replayed = service.replay_events()
+        assert [
+            event.payload["content"]
+            for event in replayed
+            if event.kind == EventKind.AGENT_MESSAGE_EMITTED
+        ] == ["The requested file was created."]
+        assert all(
+            event.kind
+            not in {EventKind.TOOL_CALL_PROPOSED, EventKind.TOOL_EXECUTION_RECORDED}
+            for event in replayed
+        )
+        audit_events = [
+            json.loads(line)
+            for line in service.store.read_audit_export().splitlines()
+            if line
+        ]
+        assert all(
+            event.get("payload", {}).get("tool_name") != "finish"
+            for event in audit_events
+        )
+    finally:
+        service.close()
+
+
 def _backend(
     tmp_path: Path,
     factory: ConversationFactory,
@@ -1312,6 +1434,35 @@ def _backend(
         action_confirmation_mode=mode,
         env={},
         conversation_factory=factory,
+    )
+
+
+def _finish_event_pair() -> tuple[ActionEvent, ObservationEvent]:
+    action = ActionEvent(
+        id="finish-action",
+        thought=[],
+        action=FinishAction(message="The requested file was created."),
+        tool_name=FinishTool.name,
+        tool_call_id="finish-call",
+        tool_call=MessageToolCall(
+            id="finish-call",
+            name=FinishTool.name,
+            arguments='{"message":"The requested file was created."}',
+            origin="completion",
+        ),
+        llm_response_id="finish-response",
+        security_risk=SecurityRisk.LOW,
+        summary="Report completion",
+    )
+    return (
+        action,
+        ObservationEvent(
+            id="finish-observation",
+            tool_name=FinishTool.name,
+            tool_call_id="finish-call",
+            observation=FinishObservation(),
+            action_id=action.id,
+        ),
     )
 
 

@@ -18,7 +18,7 @@ Start the full-screen terminal interface:
 heartwood
 ```
 
-On first use, bare `heartwood` guides model selection and then opens the conversation. Later invocations resume the same project setup. A provider token entered at the prompt is held only for that process; platform-managed credential bindings can survive a restart without storing a secret in `.heartwood/`.
+On first use, bare `heartwood` guides model selection and then opens the conversation. Later invocations resume the same project setup. OpenHands manages ChatGPT account sign-in and refresh. A provider API key entered at the prompt is held only for that process; platform-managed credential bindings can survive a restart without storing a secret in `.heartwood/`.
 
 Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
 

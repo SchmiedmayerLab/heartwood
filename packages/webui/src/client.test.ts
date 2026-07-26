@@ -330,6 +330,8 @@ describe("GatewayClient", () => {
       capability_tier: "supervised" as const,
       base_url: "http://127.0.0.1:8765/v1",
       credential_kind: "none" as const,
+      auth_type: "api_key" as const,
+      subscription_vendor: null,
       api_key_env: null,
       api_key_file: null,
       api_version: null,
@@ -384,9 +386,12 @@ describe("GatewayClient", () => {
       aws_profile_name: null,
       description: "OpenAI models",
       static_models: [],
+      subscription_vendor: null,
       group: "hosted-provider",
       group_label: "Hosted providers",
       accepts_token: true,
+      supports_login: false,
+      auth_type: "api_key",
       credential_status: "missing",
     };
     const catalog = {
@@ -450,6 +455,52 @@ describe("GatewayClient", () => {
           connection_id: "openai",
           model_id: "provider-coder",
           token: "runtime-only-token",
+        }),
+        method: "POST",
+      }),
+    );
+  });
+
+  it("starts and polls OpenHands device login without exposing credentials", async () => {
+    const pending = {
+      schema_version: "heartwood.subscription-login.v1",
+      login_id: "login-1",
+      connection_id: "openai-subscription",
+      verification_url: "https://auth.openai.test/device",
+      user_code: "TEST-CODE",
+      poll_interval_seconds: 5,
+      status: "pending",
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(pending)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...pending, status: "complete" })),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.startSubscriptionDeviceLogin("openai-subscription");
+    await client.pollSubscriptionDeviceLogin("openai-subscription", "login-1");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/subscription/device",
+      expect.objectContaining({
+        body: JSON.stringify({
+          connection_id: "openai-subscription",
+          terms_accepted: true,
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/subscription/device/poll",
+      expect.objectContaining({
+        body: JSON.stringify({
+          connection_id: "openai-subscription",
+          login_id: "login-1",
         }),
         method: "POST",
       }),

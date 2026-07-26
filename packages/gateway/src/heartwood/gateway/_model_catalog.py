@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -20,20 +19,39 @@ from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
 from heartwood.gateway._model_settings import CredentialKind
+from heartwood.gateway._openhands_models import (
+    OpenHandsModelError,
+    prepare_openhands_import,
+    request_endpoint_for_model,
+)
+from heartwood.gateway._subscriptions import (
+    OPENAI_SUBSCRIPTION_CONNECTION_ID,
+    OPENAI_SUBSCRIPTION_CREDENTIAL_REFERENCE,
+    OPENAI_SUBSCRIPTION_ENDPOINT,
+    OpenHandsOpenAISubscription,
+)
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
 
-type ConnectionProtocol = Literal["anthropic", "openai", "openai-compatible", "static"]
+type ConnectionProtocol = Literal[
+    "anthropic", "openai", "openai-compatible", "static", "subscription"
+]
 type ConnectionSource = Literal["built-in", "platform", "user"]
 type ConnectionGroup = Literal[
     "compatible-service", "heartwood-managed", "hosted-provider", "research-environment"
 ]
 type ModelAvailability = Literal["available", "experimental", "unsupported"]
 
-_CONNECTION_PROTOCOLS = {"anthropic", "openai", "openai-compatible", "static"}
+_CONNECTION_PROTOCOLS = {
+    "anthropic",
+    "openai",
+    "openai-compatible",
+    "static",
+    "subscription",
+}
 _CONNECTION_SOURCES = {"built-in", "platform", "user"}
 _CONNECTION_GROUP_LABELS: dict[ConnectionGroup, str] = {
     "heartwood-managed": "Run with Heartwood",
-    "research-environment": "Research environment",
+    "research-environment": "Institution-managed providers",
     "hosted-provider": "Hosted providers",
     "compatible-service": "Other compatible services",
 }
@@ -65,6 +83,7 @@ _CONNECTION_FIELDS = {
     "protocol",
     "source",
     "static_models",
+    "subscription_vendor",
 }
 _SECRET_FIELD_MARKERS = ("api_key", "apikey", "password", "secret", "token")
 
@@ -93,6 +112,7 @@ class ModelConnection:
     aws_profile_name: str | None = None
     description: str = ""
     static_models: tuple[str, ...] = ()
+    subscription_vendor: str | None = None
 
     def validate(self, *, configurable: bool = False) -> None:
         """Validate connection identity, routes, and credential references."""
@@ -124,7 +144,7 @@ class ModelConnection:
             if self.policy_endpoint is None:
                 raise ModelCatalogError("model connections require a policy_endpoint")
             _validate_endpoint(self.policy_endpoint, "policy_endpoint")
-            if self.protocol != "static" and self.catalog_endpoint is None:
+            if self.protocol not in {"static", "subscription"} and self.catalog_endpoint is None:
                 raise ModelCatalogError("discoverable model connections require a catalog_endpoint")
         if self.catalog_endpoint is not None:
             _validate_endpoint(self.catalog_endpoint, "catalog_endpoint")
@@ -136,6 +156,19 @@ class ModelConnection:
                         "base_url, catalog_endpoint, and policy_endpoint must use the same origin"
                     )
         self._validate_credentials(configurable=configurable)
+        if self.protocol == "subscription":
+            if self.subscription_vendor != "openai":
+                raise ModelCatalogError(
+                    "subscription connections require a supported subscription_vendor"
+                )
+            if self.credential_kind != "managed-identity":
+                raise ModelCatalogError(
+                    "subscription connections require dependency-managed credentials"
+                )
+        elif self.subscription_vendor is not None:
+            raise ModelCatalogError(
+                "subscription_vendor is allowed only for subscription connections"
+            )
         if self.protocol == "static" and not self.static_models:
             raise ModelCatalogError("static model connections require at least one model")
         if self.protocol != "static" and self.static_models:
@@ -175,6 +208,8 @@ class ModelConnection:
     @property
     def credential_reference(self) -> str | None:
         """Return the non-secret policy reference for this connection."""
+        if self.protocol == "subscription":
+            return OPENAI_SUBSCRIPTION_CREDENTIAL_REFERENCE
         if self.credential_kind == "environment":
             return self.api_key_env
         if self.credential_kind == "file":
@@ -186,6 +221,17 @@ class ModelConnection:
     def provider_model_id(self, execution_model: str) -> str:
         """Return the provider-facing identifier from a normalized execution model."""
         return execution_model.removeprefix(self.model_prefix)
+
+    def request_endpoint(self, execution_model: str) -> str:
+        """Return the endpoint OpenHands will use for this model."""
+        if self.policy_endpoint is None:
+            raise ModelCatalogError("model connection does not define a request endpoint")
+        if self.protocol not in {"openai", "openai-compatible"}:
+            return self.policy_endpoint
+        try:
+            return request_endpoint_for_model(execution_model, self.policy_endpoint)
+        except OpenHandsModelError as error:
+            raise ModelCatalogError(str(error)) from error
 
     @property
     def group(self) -> ConnectionGroup:
@@ -240,6 +286,8 @@ class ModelConnection:
             "group": self.group,
             "group_label": _CONNECTION_GROUP_LABELS[self.group],
             "accepts_token": self.credential_kind == "environment",
+            "supports_login": self.protocol == "subscription",
+            "auth_type": "subscription" if self.protocol == "subscription" else "api_key",
             "credential_status": self.credential_status(env),
         }
 
@@ -306,6 +354,7 @@ class ModelCatalogService:
         *,
         openai_lister: ModelLister | None = None,
         anthropic_lister: ModelLister | None = None,
+        subscription_lister: ModelLister | None = None,
         compatibility: Callable[
             [ModelConnection, str],
             tuple[ModelAvailability, str, int | None, bool | None],
@@ -315,6 +364,7 @@ class ModelCatalogService:
     ) -> None:
         self._openai_lister = openai_lister or _list_openai_models
         self._anthropic_lister = anthropic_lister or _list_anthropic_models
+        self._subscription_lister = subscription_lister or _list_subscription_models
         self._compatibility = compatibility or _model_compatibility
         self._cache_ttl_seconds = cache_ttl_seconds
         self._cache: dict[str, tuple[float, ModelCatalog]] = {}
@@ -338,6 +388,8 @@ class ModelCatalogService:
                 )
             elif connection.protocol == "anthropic":
                 discovered = tuple(self._anthropic_lister(connection, api_key))
+            elif connection.protocol == "subscription":
+                discovered = tuple(self._subscription_lister(connection, api_key))
             else:
                 discovered = tuple(self._openai_lister(connection, api_key))
         except ModelCatalogError:
@@ -440,8 +492,20 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         description="Models served by the runtime Heartwood manages for this project.",
     ),
     ModelConnection(
+        connection_id=OPENAI_SUBSCRIPTION_CONNECTION_ID,
+        label="Sign in with ChatGPT",
+        protocol="subscription",
+        model_prefix="openai/",
+        source="built-in",
+        credential_kind="managed-identity",
+        policy_endpoint=OPENAI_SUBSCRIPTION_ENDPOINT,
+        catalog_endpoint=None,
+        description="Codex models available through a ChatGPT Plus or Pro subscription.",
+        subscription_vendor="openai",
+    ),
+    ModelConnection(
         connection_id="openai",
-        label="OpenAI",
+        label="OpenAI API",
         protocol="openai",
         model_prefix="openai/",
         source="built-in",
@@ -636,14 +700,26 @@ def _list_anthropic_models(
         client.close()
 
 
+def _list_subscription_models(
+    connection: ModelConnection,
+    api_key: str | None,  # noqa: ARG001
+) -> Sequence[ProviderModel]:
+    if connection.subscription_vendor != "openai":
+        raise ModelCatalogError("unsupported model subscription provider")
+    return tuple(
+        ProviderModel(model_id=model_id) for model_id in OpenHandsOpenAISubscription().models()
+    )
+
+
 def _model_compatibility(
     connection: ModelConnection,
     execution_model: str,
 ) -> tuple[ModelAvailability, str, int | None, bool | None]:
-    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
+    prepare_openhands_import()
     verified = _verified_openhands_models(connection)
     model_name = connection.provider_model_id(execution_model)
+    if connection.protocol == "subscription":
+        return "available", "Provided by the pinned OpenHands subscription registry", None, True
     if execution_model in verified or model_name in verified:
         return "available", "Verified by the pinned OpenHands SDK", None, True
     try:

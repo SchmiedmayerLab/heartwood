@@ -26,7 +26,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `PROJECT` | Project boundary, storage, and private project state |
 | `SETUP` | Non-secret Heartwood configuration and policy agreement |
 | `MODEL` | Model selection, compatibility, and managed model files |
-| `CREDENTIAL` | Provider token or managed-identity availability |
+| `CREDENTIAL` | Provider API key, subscription credential, or managed-identity availability |
 | `AGENT` | OpenHands agent runtime availability |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |
@@ -84,8 +84,10 @@ For Heartwood-managed inference, download or import the model before starting th
 
 ### `HW-CREDENTIAL-001` — Model Credential Is Unavailable
 
-Reopen setup and enter the provider token, or ask the platform operator how its secret binding is supplied.
+Reopen setup and enter the provider API key, or ask the platform operator how its secret binding is supplied.
 An operating-system keyring entry is project-scoped, so another project may correctly ask again.
+For **Sign in with ChatGPT**, repeat the one-time-code flow.
+If the account should no longer be used, run `heartwood models forget openai-subscription` before signing in with another account.
 
 ### `HW-MODEL-002` — Heartwood-Managed Model Files Are Unavailable
 

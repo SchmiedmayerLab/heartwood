@@ -171,6 +171,13 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(self.gateway.model_artifacts()))
         if parts == ("settings", "models", "catalog") and request.method == "POST":
             return self._handle_model_catalog(body=request.body)
+        if parts == ("settings", "models", "subscription", "device") and request.method == "POST":
+            return self._handle_subscription_device_login(body=request.body)
+        if (
+            parts == ("settings", "models", "subscription", "device", "poll")
+            and request.method == "POST"
+        ):
+            return self._handle_subscription_device_poll(body=request.body)
         if parts == ("settings", "models", "repository") and request.method == "POST":
             return self._handle_model_repository(body=request.body)
         if parts == ("settings", "models", "source") and request.method == "PUT":
@@ -506,6 +513,45 @@ class RestGateway:
         except (CredentialStoreError, ModelCatalogError) as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(catalog))
+
+    def _handle_subscription_device_login(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return _error(422, "request body must be an object")
+        if set(payload) != {"connection_id", "terms_accepted"}:
+            return _error(422, "subscription login request contains unsupported fields")
+        connection_id = payload.get("connection_id")
+        if not isinstance(connection_id, str):
+            return _error(422, "connection_id must be a string")
+        if payload.get("terms_accepted") is not True:
+            return _error(422, "ChatGPT terms must be accepted before sign-in")
+        try:
+            login = self.gateway.start_subscription_device_login(connection_id)
+        except ModelCatalogError as error:
+            return _error(422, error)
+        return RestResponse(status_code=201, body=_json_object(login))
+
+    def _handle_subscription_device_poll(self, *, body: str) -> RestResponse:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _error(400, "request body must be valid JSON")
+        if not isinstance(payload, dict):
+            return _error(422, "request body must be an object")
+        if set(payload) != {"connection_id", "login_id"}:
+            return _error(422, "subscription login poll contains unsupported fields")
+        connection_id = payload.get("connection_id")
+        login_id = payload.get("login_id")
+        if not isinstance(connection_id, str) or not isinstance(login_id, str):
+            return _error(422, "connection_id and login_id must be strings")
+        try:
+            login = self.gateway.poll_subscription_device_login(connection_id, login_id)
+        except ModelCatalogError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(login))
 
     def _handle_model_selection(self, *, body: str) -> RestResponse:
         try:

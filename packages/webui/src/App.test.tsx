@@ -51,6 +51,7 @@ import type {
   SkillSettings,
   SkillSummary,
   StartupPlan,
+  SubscriptionDeviceLogin,
 } from "./types";
 
 const settings = (): ModelSettings => ({
@@ -73,7 +74,14 @@ const settings = (): ModelSettings => ({
       "configured",
       false,
     ),
-    modelConnection("openai", "OpenAI", "built-in", "missing", true),
+    modelConnection(
+      "openai-subscription",
+      "Sign in with ChatGPT",
+      "built-in",
+      "missing",
+      false,
+    ),
+    modelConnection("openai", "OpenAI API", "built-in", "missing", true),
     modelConnection("anthropic", "Anthropic", "built-in", "missing", true),
     modelConnection(
       "custom-api",
@@ -97,7 +105,12 @@ const settings = (): ModelSettings => ({
   ],
   source_options: [
     modelSource("heartwood", "heartwood", "Run with Heartwood"),
-    modelSource("openai", "openai", "OpenAI"),
+    modelSource(
+      "openai-subscription",
+      "openai-subscription",
+      "Sign in with ChatGPT",
+    ),
+    modelSource("openai", "openai", "OpenAI API"),
     modelSource("anthropic", "anthropic", "Anthropic"),
     modelSource(
       "stanford-ai-api-gateway",
@@ -203,6 +216,7 @@ class FakeClient implements HeartwoodClient {
   projections = new Map<string, SessionProjection>();
   streamListener: ((projection: SessionProjection) => void) | null = null;
   commandFailure: { code: string; message: string } | null = null;
+  subscriptionPolls = 0;
 
   getProjectReadiness(): Promise<ProjectReadiness> {
     return Promise.resolve(this.currentReadiness);
@@ -422,6 +436,47 @@ class FakeClient implements HeartwoodClient {
     });
   }
 
+  startSubscriptionDeviceLogin(
+    connectionId: string,
+  ): Promise<SubscriptionDeviceLogin> {
+    return Promise.resolve({
+      schema_version: "heartwood.subscription-login.v1",
+      login_id: "login-test",
+      connection_id: connectionId,
+      verification_url: "https://auth.openai.test/device",
+      user_code: "TEST-CODE",
+      poll_interval_seconds: 1,
+      status: "pending",
+    });
+  }
+
+  pollSubscriptionDeviceLogin(
+    connectionId: string,
+    loginId: string,
+  ): Promise<SubscriptionDeviceLogin> {
+    this.subscriptionPolls += 1;
+    const complete = this.subscriptionPolls > 1;
+    if (complete) {
+      this.currentSettings = {
+        ...this.currentSettings,
+        connections: this.currentSettings.connections.map((connection) =>
+          connection.connection_id === connectionId ?
+            { ...connection, credential_status: "available" }
+          : connection,
+        ),
+      };
+    }
+    return Promise.resolve({
+      schema_version: "heartwood.subscription-login.v1",
+      login_id: loginId,
+      connection_id: connectionId,
+      verification_url: "https://auth.openai.test/device",
+      user_code: "TEST-CODE",
+      poll_interval_seconds: 1,
+      status: complete ? "complete" : "pending",
+    });
+  }
+
   configureModelSource(sourceId: ModelSource): Promise<ModelSettings> {
     const source = this.currentSettings.source_options.find(
       (option) => option.source_id === sourceId,
@@ -512,6 +567,8 @@ class FakeClient implements HeartwoodClient {
           `litellm_proxy/${request.model_id}`
         : `openai/${request.model_id}`,
       credential_kind: connection.credential_kind,
+      auth_type: connection.auth_type,
+      subscription_vendor: connection.subscription_vendor,
       api_key_env: connection.api_key_env,
     };
     this.currentSettings = {
@@ -826,7 +883,7 @@ describe("App", () => {
     fireEvent.click(
       within(stanford as HTMLElement).getByRole("button", { name: "Set up" }),
     );
-    fireEvent.change(await screen.findByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "runtime-only-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
@@ -1403,12 +1460,170 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("signs in with ChatGPT through the OpenHands device flow", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new FakeClient();
+      render(<App client={client} initialSessionId="session-test" />);
+      await act(async () => Promise.resolve());
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+      const connection = screen
+        .getByText("Sign in with ChatGPT")
+        .closest(".connection-row");
+      expect(connection).not.toBeNull();
+      fireEvent.click(
+        within(connection as HTMLElement).getByRole("button", {
+          name: "Sign in",
+        }),
+      );
+      const form = screen
+        .getAllByText("Sign in with ChatGPT")
+        .at(-1)
+        ?.closest(".connection-form");
+      expect(form).not.toBeNull();
+      fireEvent.click(
+        within(form as HTMLElement).getByRole("button", {
+          name: "Sign in with ChatGPT",
+        }),
+      );
+      await act(async () => Promise.resolve());
+      expect(screen.getByText("TEST-CODE")).toBeVisible();
+      expect(
+        screen.getByRole("link", { name: "Open ChatGPT sign-in" }),
+      ).toHaveAttribute("href", "https://auth.openai.test/device");
+
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+        const current = client.projectionFor("session-test");
+        client.emitStream({
+          ...current,
+          eventCount: 8,
+          revision: 7,
+          conversation: [
+            ...current.conversation,
+            {
+              id: "session-test-event-000007-agent",
+              sequence: 7,
+              role: "agent",
+              label: "Agent",
+              content: "Session update",
+              detail: null,
+            },
+          ],
+        });
+        await Promise.resolve();
+        vi.advanceTimersByTime(600);
+        await Promise.resolve();
+      });
+      expect(client.subscriptionPolls).toBe(1);
+      expect(screen.getByText("Waiting for sign-in...")).toBeVisible();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_100);
+        await Promise.resolve();
+      });
+      expect(client.subscriptionPolls).toBe(2);
+      expect(screen.getByText("Signed in with ChatGPT")).toBeVisible();
+
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+        await Promise.resolve();
+      });
+      expect(client.subscriptionPolls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a device-login poll after the connection changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new FakeClient();
+      let resolvePoll: ((login: SubscriptionDeviceLogin) => void) | undefined;
+      vi.spyOn(client, "pollSubscriptionDeviceLogin").mockImplementation(
+        (connectionId, loginId) =>
+          new Promise((resolve) => {
+            resolvePoll = resolve;
+            expect(connectionId).toBe("openai-subscription");
+            expect(loginId).toBe("login-test");
+          }),
+      );
+      render(<App client={client} initialSessionId="session-test" />);
+      await act(async () => Promise.resolve());
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+      const subscriptionRow = screen
+        .getByText("Sign in with ChatGPT")
+        .closest(".connection-row");
+      expect(subscriptionRow).not.toBeNull();
+      fireEvent.click(
+        within(subscriptionRow as HTMLElement).getByRole("button", {
+          name: "Sign in",
+        }),
+      );
+      const subscriptionForm = screen
+        .getAllByText("Sign in with ChatGPT")
+        .at(-1)
+        ?.closest<HTMLElement>(".connection-form");
+      expect(subscriptionForm).not.toBeNull();
+      if (!subscriptionForm)
+        throw new Error("subscription form is unavailable");
+      fireEvent.click(
+        within(subscriptionForm).getByRole("button", {
+          name: "Sign in with ChatGPT",
+        }),
+      );
+      await act(async () => Promise.resolve());
+      await act(async () => {
+        vi.advanceTimersByTime(1_100);
+        await Promise.resolve();
+      });
+      expect(resolvePoll).toBeDefined();
+
+      const openAiRow = screen
+        .getByText("OpenAI API")
+        .closest(".connection-row");
+      expect(openAiRow).not.toBeNull();
+      fireEvent.click(
+        within(openAiRow as HTMLElement).getByRole("button", {
+          name: "Connect",
+        }),
+      );
+      fireEvent.click(
+        within(subscriptionRow as HTMLElement).getByRole("button", {
+          name: "Sign in",
+        }),
+      );
+
+      await act(async () => {
+        resolvePoll?.({
+          schema_version: "heartwood.subscription-login.v1",
+          login_id: "login-test",
+          connection_id: "openai-subscription",
+          verification_url: "https://auth.openai.test/device",
+          user_code: "TEST-CODE",
+          poll_interval_seconds: 1,
+          status: "complete",
+        });
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByText(/^Signed in$/)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Sign in with ChatGPT" }),
+      ).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a transient cloud token to discover and select a model", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
-    const openAiConnection = (await screen.findByText("OpenAI")).closest(
+    const openAiConnection = (await screen.findByText("OpenAI API")).closest(
       ".connection-row",
     );
     expect(openAiConnection).not.toBeNull();
@@ -1417,11 +1632,11 @@ describe("App", () => {
         name: "Connect",
       }),
     );
-    fireEvent.change(await screen.findByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "runtime-only-token" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
-    await screen.findByLabelText("Models available from OpenAI");
+    await screen.findByLabelText("Models available from OpenAI API");
     expect(client.currentSettings.model_source).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Use model" }));
 
@@ -1436,7 +1651,7 @@ describe("App", () => {
       token: "runtime-only-token",
       refresh: true,
     });
-    expect(screen.getByLabelText("API token")).toHaveValue("");
+    expect(screen.getByLabelText("API key")).toHaveValue("");
     expect(JSON.stringify(client.currentSettings)).not.toContain(
       "runtime-only-token",
     );
@@ -1457,7 +1672,7 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
-    const openAiConnection = (await screen.findByText("OpenAI")).closest(
+    const openAiConnection = (await screen.findByText("OpenAI API")).closest(
       ".connection-row",
     );
     expect(openAiConnection).not.toBeNull();
@@ -1466,7 +1681,7 @@ describe("App", () => {
         name: "Connect",
       }),
     );
-    fireEvent.change(await screen.findByLabelText("API token"), {
+    fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "remembered-token" },
     });
     fireEvent.click(
@@ -1484,7 +1699,7 @@ describe("App", () => {
         remember: true,
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Forget token" }));
+    fireEvent.click(screen.getByRole("button", { name: "Forget API key" }));
     await waitFor(() =>
       expect(client.currentSettings.credential_bindings).toHaveLength(0),
     );
@@ -1705,7 +1920,7 @@ describe("App", () => {
       target: { value: "https://models.example/v1" },
     });
     fireEvent.change(
-      screen.getByLabelText("Token (optional for loopback services)"),
+      screen.getByLabelText("API key (optional for loopback services)"),
       {
         target: { value: "runtime-only-token" },
       },
@@ -2123,6 +2338,8 @@ const localProfile = (): ModelProfile => ({
   capability_tier: "supervised",
   base_url: "http://127.0.0.1:8765/v1",
   credential_kind: "none",
+  auth_type: "api_key",
+  subscription_vendor: null,
   api_key_env: null,
   api_key_file: null,
   api_version: null,
@@ -2152,7 +2369,7 @@ const modelConnection = (
     : "hosted-provider";
   const groupLabel =
     group === "heartwood-managed" ? "Run with Heartwood"
-    : group === "research-environment" ? "Research environment"
+    : group === "research-environment" ? "Institution-managed providers"
     : group === "compatible-service" ? "Other compatible services"
     : "Hosted providers";
   return {
@@ -2161,17 +2378,22 @@ const modelConnection = (
     protocol:
       connectionId === "anthropic" ? "anthropic"
       : connectionId === "research-ai" ? "static"
+      : connectionId === "openai-subscription" ? "subscription"
       : "openai-compatible",
     model_prefix: connectionId === "research-ai" ? "litellm_proxy/" : "openai/",
     source,
     credential_kind:
       connectionId === "heartwood" ? "none"
-      : connectionId === "research-ai" ? "managed-identity"
+      : (
+        connectionId === "research-ai" || connectionId === "openai-subscription"
+      ) ?
+        "managed-identity"
       : "environment",
     policy_endpoint:
-      connectionId === "custom-api" ? null : (
-        "http://127.0.0.1:8765/v1/chat/completions"
-      ),
+      connectionId === "custom-api" ? null
+      : connectionId === "openai-subscription" ?
+        "https://chatgpt.com/backend-api/codex/responses"
+      : "http://127.0.0.1:8765/v1/chat/completions",
     catalog_endpoint:
       connectionId === "custom-api" ? null : "http://127.0.0.1:8765/v1/models",
     base_url: connectionId === "heartwood" ? "http://127.0.0.1:8765/v1" : null,
@@ -2187,9 +2409,14 @@ const modelConnection = (
     aws_profile_name: null,
     description: `${label} models`,
     static_models: [],
+    subscription_vendor:
+      connectionId === "openai-subscription" ? "openai" : null,
     group,
     group_label: groupLabel,
     accepts_token: acceptsToken,
+    supports_login: connectionId === "openai-subscription",
+    auth_type:
+      connectionId === "openai-subscription" ? "subscription" : "api_key",
     credential_status: credentialStatus,
   };
 };

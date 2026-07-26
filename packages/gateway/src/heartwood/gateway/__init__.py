@@ -154,6 +154,11 @@ from heartwood.gateway._skill_settings import (
 )
 from heartwood.gateway._startup import InterfaceKind, SetupPhase, StartupPlan, plan_startup
 from heartwood.gateway._stream import GatewayEventStream
+from heartwood.gateway._subscriptions import (
+    SubscriptionDeviceLogin,
+    SubscriptionError,
+    SubscriptionProvider,
+)
 
 __all__ = [
     "ACTION_MODE_OPTIONS",
@@ -244,6 +249,9 @@ __all__ = [
     "SkillSummary",
     "SlurmGpuPartition",
     "StartupPlan",
+    "SubscriptionDeviceLogin",
+    "SubscriptionError",
+    "SubscriptionProvider",
     "ToolCallParser",
     "action_settings_from_mapping",
     "automatic_model_tier",

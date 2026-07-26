@@ -60,10 +60,15 @@ It uses public typed OpenHands events and conversation state to derive lifecycle
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
+Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
+ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 
 The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
 Tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled unless a future reviewed contract enables them.
 The verified `research-planner` specialist is tool-free and can produce a bounded analysis plan before the parent agent changes project files.
+
+The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
+The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.
 
 ### Platform Adapter
 

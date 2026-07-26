@@ -19,7 +19,11 @@ from typing import Literal, assert_never
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
-from heartwood.gateway._model_catalog import ModelConnection, model_connections_from_mapping
+from heartwood.gateway._model_catalog import (
+    ModelCatalogError,
+    ModelConnection,
+    model_connections_from_mapping,
+)
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._openhands_sdk import prepare_openhands_sdk
 from heartwood.gateway._project import ProjectContext, ProjectStateError
@@ -28,6 +32,13 @@ from heartwood.gateway._project_config import (
     ProjectConfig,
     ProjectConfigError,
     ProjectConfigStore,
+)
+from heartwood.gateway._subscriptions import (
+    OPENAI_SUBSCRIPTION_CONNECTION_ID,
+    OPENAI_SUBSCRIPTION_CREDENTIAL_REFERENCE,
+    OPENAI_SUBSCRIPTION_ENDPOINT,
+    OpenHandsOpenAISubscription,
+    SubscriptionError,
 )
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
@@ -38,6 +49,7 @@ ModelSource = Literal[
     "custom",
     "heartwood",
     "openai",
+    "openai-subscription",
     "stanford-ai-api-gateway",
 ]
 
@@ -89,28 +101,34 @@ MODEL_SOURCE_OPTIONS: tuple[ModelSourceOption, ...] = (
         description=("Let Heartwood download or import a model and run it in this environment."),
     ),
     ModelSourceOption(
+        source_id="stanford-ai-api-gateway",
+        connection_id="stanford-ai-api-gateway",
+        label="Stanford AI API Gateway",
+        description="Use the models available to a Stanford AI API Gateway key.",
+    ),
+    ModelSourceOption(
+        source_id="openai-subscription",
+        connection_id=OPENAI_SUBSCRIPTION_CONNECTION_ID,
+        label="Sign in with ChatGPT",
+        description="Use a ChatGPT Plus or Pro subscription through OpenHands.",
+    ),
+    ModelSourceOption(
         source_id="openai",
         connection_id="openai",
-        label="OpenAI",
-        description="Use the models available to an OpenAI token.",
+        label="OpenAI API",
+        description="Use models billed through an OpenAI API key.",
     ),
     ModelSourceOption(
         source_id="anthropic",
         connection_id="anthropic",
         label="Anthropic",
-        description="Use the models available to an Anthropic token.",
+        description="Use the models available to an Anthropic API key.",
     ),
     ModelSourceOption(
         source_id="custom",
         connection_id="custom-api",
         label="Other compatible service",
         description="Connect to an approved service that implements the OpenAI API format.",
-    ),
-    ModelSourceOption(
-        source_id="stanford-ai-api-gateway",
-        connection_id="stanford-ai-api-gateway",
-        label="Research environment",
-        description="Use a model connection already provided by this research environment.",
     ),
 )
 
@@ -431,7 +449,10 @@ def persist_deployment_profile(
                 "policy_id": f"{adapter.adapter_id}-stanford-ai-api-gateway",
                 "platform_id": adapter.adapter_id,
                 "deny_egress_by_default": True,
-                "allowed_model_endpoints": [f"{_STANFORD_ROOT}/chat/completions"],
+                "allowed_model_endpoints": [
+                    f"{_STANFORD_ROOT}/chat/completions",
+                    f"{_STANFORD_ROOT}/responses",
+                ],
                 "allowed_model_catalog_endpoints": [f"{_STANFORD_ROOT}/models"],
                 "allowed_capability_tiers": ["supervised", "experimental"],
                 "allowed_action_confirmation_modes": list(
@@ -442,7 +463,13 @@ def persist_deployment_profile(
                 "notes": "Stanford gateway route; data eligibility requires deployment approval.",
             }
         )
-    elif model_source in {"anthropic", "custom", "heartwood", "openai"}:
+    elif model_source in {
+        "anthropic",
+        "custom",
+        "heartwood",
+        "openai",
+        "openai-subscription",
+    }:
         policy = platform_policy
     else:  # pragma: no cover - protected by the public type and CLI choices
         raise ProjectConfigError(f"unsupported model source: {model_source}")
@@ -510,6 +537,16 @@ def _active_model_label(config: ProjectConfig | None, profile: ModelProfile) -> 
 def _credential_readiness(
     profile: ModelProfile, env: Mapping[str, str]
 ) -> tuple[Literal["pass", "warning", "fail"], str, bool]:
+    if profile.auth_type == "subscription":
+        try:
+            available = OpenHandsOpenAISubscription().credential_available()
+        except SubscriptionError:
+            return "warning", "OpenHands could not inspect ChatGPT sign-in", False
+        return (
+            ("pass", "ChatGPT sign-in is available through OpenHands", True)
+            if available
+            else ("warning", "Sign in with ChatGPT to use the selected model", False)
+        )
     kind = profile.credential_kind
     if kind == "none":
         return "pass", "Selected model requires no credential", True
@@ -542,16 +579,35 @@ def _configuration_is_coherent(config: ProjectConfig) -> bool:
     if config.model_source == "heartwood":
         source_matches = model.is_local
     elif config.model_source == "stanford-ai-api-gateway":
-        source_matches = (
-            model.policy_endpoint == f"{_STANFORD_ROOT}/chat/completions"
-            and model.api_key_env == "STANFORD_AI_API_KEY"
-            and any(
-                connection.connection_id == "stanford-ai-api-gateway"
+        connection = next(
+            (
+                connection
                 for connection in config.additional_connections
+                if connection.connection_id == "stanford-ai-api-gateway"
+            ),
+            None,
+        )
+        try:
+            request_endpoint = (
+                connection.request_endpoint(model.model) if connection is not None else None
             )
+        except ModelCatalogError:
+            request_endpoint = None
+        source_matches = (
+            connection is not None
+            and model.policy_endpoint == request_endpoint
+            and model.api_key_env == "STANFORD_AI_API_KEY"
         )
     elif config.model_source == "custom":
         source_matches = model.profile_id == "custom-api"
+    elif config.model_source == "openai-subscription":
+        source_matches = (
+            model.profile_id == OPENAI_SUBSCRIPTION_CONNECTION_ID
+            and model.auth_type == "subscription"
+            and model.subscription_vendor == "openai"
+            and model.policy_endpoint == OPENAI_SUBSCRIPTION_ENDPOINT
+            and model.credential_reference == OPENAI_SUBSCRIPTION_CREDENTIAL_REFERENCE
+        )
     else:
         source_matches = model.profile_id == config.model_source
     if not source_matches:

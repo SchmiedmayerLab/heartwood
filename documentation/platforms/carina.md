@@ -71,7 +71,7 @@ The supported Carina interaction surface is the terminal; the platform adapter d
 
 ### Stanford AI API Gateway
 
-Choose **Research environment** when your project has an eligible Stanford AI API Gateway key and the route is approved for the intended data.
+Choose **Stanford AI API Gateway** when your project has an eligible gateway key and the route is approved for the intended data.
 Heartwood queries the gateway for available models and keeps an entered key only for the running process unless the deployment supplies a mounted secret binding.
 
 Stanford's [AI API Gateway service page](https://uit.stanford.edu/service/ai-api-gateway) describes current access, data-security status, rates, and support.

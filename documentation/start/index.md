@@ -59,6 +59,7 @@ Heartwood then lists only the model connections available in the detected enviro
 ### Choose a Model Connection
 
 Choose a connection, select a model returned by that service, and provide a credential only when the selected route requires one.
+**Sign in with ChatGPT** uses a Plus or Pro account and a one-time browser code; **OpenAI API**, **Anthropic**, and **Stanford AI API Gateway** use API keys.
 
 For a Heartwood-managed model, Heartwood shows a small set of recommendations and an **Other Hugging Face model** option.
 It displays the model format, license metadata, download size, runtime, and resource guidance before downloading.

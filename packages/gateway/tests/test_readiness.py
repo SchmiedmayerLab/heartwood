@@ -149,6 +149,8 @@ def test_generic_model_sources_use_platform_neutral_public_language() -> None:
     assert options["heartwood"].label == "Run with Heartwood"
     assert "this environment" in options["heartwood"].description
     assert "computer" not in options["heartwood"].label.lower()
+    assert options["stanford-ai-api-gateway"].label == "Stanford AI API Gateway"
+    assert "gateway key" in options["stanford-ai-api-gateway"].description.lower()
 
 
 def test_readiness_is_read_only_before_setup(tmp_path: Path) -> None:
@@ -298,7 +300,6 @@ def test_terra_gpu_image_reports_attachment_readiness(tmp_path: Path) -> None:
     ("env", "model_source"),
     [
         ({"HEARTWOOD_PLATFORM": "carina"}, "openai"),
-        ({}, "stanford-ai-api-gateway"),
     ],
 )
 def test_persist_deployment_profile_rejects_platform_unsupported_model_sources(
@@ -349,7 +350,12 @@ def test_terra_baseline_persists_builtin_hosted_provider_routes(tmp_path: Path) 
     assert policy.policy_id == "terra-default"
     assert "https://api.openai.com/v1/chat/completions" in policy.allowed_model_endpoints
     assert "https://api.anthropic.com/v1/models" in policy.allowed_model_catalog_endpoints
-    assert policy.credential_allowlist == ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+    assert policy.credential_allowlist == (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "STANFORD_AI_API_KEY",
+        "subscription:openai",
+    )
     assert catalog["models"]
     decision = validation["policy_decision"]
     assert isinstance(decision, dict)
@@ -497,10 +503,11 @@ def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> No
         env=platform_env,
     )
 
-    settings = SessionGateway(
+    gateway = SessionGateway(
         project=project,
         env={**platform_env, "STANFORD_AI_API_KEY": "external-secret"},
-    ).model_settings()
+    )
+    settings = gateway.model_settings()
     connections = settings["connections"]
     assert isinstance(connections, list)
     connection = next(
@@ -512,8 +519,50 @@ def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> No
     assert connection["catalog_endpoint"] == "https://aiapi-prod.stanford.edu/v1/models"
     assert connection["policy_endpoint"] == "https://aiapi-prod.stanford.edu/v1/chat/completions"
     assert connection["credential_status"] == "available"
+    assert (
+        "https://aiapi-prod.stanford.edu/v1/responses"
+        in (gateway_policy := gateway.config_store.load().policy).allowed_model_endpoints
+    )
+    assert gateway_policy.allowed_model_endpoints == (
+        "https://aiapi-prod.stanford.edu/v1/chat/completions",
+        "https://aiapi-prod.stanford.edu/v1/responses",
+    )
     assert "external-secret" not in project.config_path.read_text(encoding="utf-8")
     assert "external-secret" not in json.dumps(settings)
+
+
+@pytest.mark.parametrize(
+    "platform_env",
+    [
+        {},
+        {
+            "HEARTWOOD_PLATFORM": "terra",
+            "HEARTWOOD_PLATFORM_HOME": "/home/jupyter",
+        },
+    ],
+)
+def test_stanford_setup_is_available_outside_carina(
+    tmp_path: Path,
+    platform_env: dict[str, str],
+) -> None:
+    project_root = tmp_path
+    if platform_env:
+        project_root = tmp_path / "home" / "jupyter" / "synthetic-project"
+        project_root.mkdir(parents=True)
+        platform_env["HEARTWOOD_PLATFORM_HOME"] = str(project_root.parent)
+    project = ProjectContext(project_root)
+
+    persist_deployment_profile(
+        project,
+        model_source="stanford-ai-api-gateway",
+        env=platform_env,
+    )
+
+    settings = SessionGateway(
+        project=project,
+        env={**platform_env, "STANFORD_AI_API_KEY": "external-secret"},
+    ).model_settings()
+    assert settings["model_source"] == "stanford-ai-api-gateway"
 
 
 def test_stanford_catalog_uses_external_key_and_exact_connection(tmp_path: Path) -> None:
