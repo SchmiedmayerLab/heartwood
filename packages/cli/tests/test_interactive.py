@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
 from textual.containers import Vertical
+from textual.pilot import Pilot
 from textual.widgets import Input, OptionList, RichLog, Static
 
 from heartwood.cli._interactive import (
@@ -45,6 +47,21 @@ from heartwood.gateway import (
 )
 from heartwood.schemas import ActionModeOptionResponse, ActionSettingsResponse
 from heartwood.session import EventKind
+
+
+async def _wait_for_tui(
+    pilot: Pilot[None],
+    condition: Callable[[], bool],
+    *,
+    description: str,
+    timeout: float = 10.0,
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not condition():
+        if loop.time() >= deadline:
+            raise AssertionError(f"Timed out waiting for {description}.")
+        await pilot.pause(0.05)
 
 
 def test_interactive_session_uses_gateway_commands_and_persisted_replay(
@@ -139,10 +156,11 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
             await pilot.press("enter")
             approval = app.query_one("#approval", Vertical)
             options = app.query_one("#approval-options", OptionList)
-            for _ in range(100):
-                await pilot.pause(0.02)
-                if approval.display and composer.disabled and options.has_focus:
-                    break
+            await _wait_for_tui(
+                pilot,
+                lambda: approval.display and composer.disabled and options.has_focus,
+                description="the action review to receive focus",
+            )
 
             assert composer.disabled
             assert approval.display
@@ -151,12 +169,14 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
             assert str(conversation.lines).count("You: inspect the synthetic workspace") == 1
 
             await pilot.press("enter")
-            for _ in range(100):
-                await pilot.pause(0.02)
-                current_approval = app.query_one("#approval", Vertical)
-                current_composer = app.query_one("#composer", Input)
-                if not current_approval.display and not current_composer.disabled:
-                    break
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    not app.query_one("#approval", Vertical).display
+                    and not app.query_one("#composer", Input).disabled
+                ),
+                description="the rejected action set to return control to the composer",
+            )
 
             assert app.query_one("#composer", Input).disabled is False
             assert any(
@@ -169,10 +189,9 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
 
             composer.value = "/replay"
             await pilot.press("enter")
-            for _ in range(50):
-                await pilot.pause(0.02)
-                if "ready" in str(app.query_one("#status", Static).render()):
-                    break
+            await asyncio.wait_for(app.workers.wait_for_complete(), timeout=10.0)
+            await pilot.pause()
+            assert app.query_one("#composer", Input).disabled is False
             assert str(conversation.lines).count("You: inspect the synthetic workspace") == 1
 
     try:
@@ -343,7 +362,11 @@ def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
             composer = app.query_one("#composer", Input)
             composer.value = "/permissions"
             await pilot.press("enter")
-            await pilot.pause()
+            await _wait_for_tui(
+                pilot,
+                lambda: isinstance(app.screen, ActionModeScreen),
+                description="the action review mode screen",
+            )
 
             assert isinstance(app.screen, ActionModeScreen)
             options = app.screen.query_one("#action-mode-options", OptionList)
@@ -351,10 +374,11 @@ def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
             assert options.highlighted == 0
 
             await pilot.press("down", "enter")
-            for _ in range(50):
-                await pilot.pause(0.02)
-                if gateway.action_settings()["confirmation_mode"] == "confirm-risky":
-                    break
+            await _wait_for_tui(
+                pilot,
+                lambda: gateway.action_settings()["confirmation_mode"] == "confirm-risky",
+                description="the selected action review mode to persist",
+            )
 
             assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
             assert "Low-Risk Automation" in str(app.query_one("#status", Static).render())
@@ -443,10 +467,11 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
             assert app.query_one("#composer", Input).disabled
 
             await pilot.press("enter")
-            for _ in range(50):
-                await pilot.pause(0.02)
-                if session.submitted:
-                    break
+            await _wait_for_tui(
+                pilot,
+                lambda: bool(session.submitted),
+                description="the grouped action decision to be submitted",
+            )
 
             assert session.submitted == ["/reject"]
             assert not app.query_one("#approval", Vertical).display
