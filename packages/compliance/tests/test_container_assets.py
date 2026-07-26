@@ -1068,6 +1068,16 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "command -v jq" in smoke
 
 
+def test_coding_agent_acceptance_uses_unambiguous_exact_content() -> None:
+    coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
+    qualification = _read("images/generic/scripts/verify_coding_agent_e2e.py")
+
+    assert "printf %s heartwood-agent-exact-ok" in coding_agent
+    assert "with no trailing newline" in coding_agent
+    assert 'b"heartwood-agent-exact-ok"' in qualification
+    assert 'b"heartwood-agent-exact-ok\\n"' not in qualification
+
+
 def test_local_model_stub_preserves_explicit_action_risk() -> None:
     path = _repo_root() / "images/generic/scripts/local_model_stub.py"
     spec = importlib.util.spec_from_file_location("heartwood_local_model_stub", path)

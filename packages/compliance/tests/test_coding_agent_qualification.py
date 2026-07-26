@@ -164,7 +164,7 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
-    (tmp_path / "heartwood-exact-output.txt").write_bytes(b"heartwood-agent-exact-ok\n")
+    (tmp_path / "heartwood-exact-output.txt").write_bytes(b"heartwood-agent-exact-ok")
     replay_path = tmp_path / "replay.txt"
     replay_lines = format_projection_lines(project_session(events, session_id="qualification"))
     replay_path.write_text(
@@ -211,7 +211,7 @@ def test_coding_agent_qualification_rejects_inexact_or_rejected_output(
     events, audit, artifact, replay, inference = _acceptance_files(tmp_path)
     exact = tmp_path / "heartwood-exact-output.txt"
 
-    exact.write_bytes(b"heartwood-agent-exact-ok")
+    exact.write_bytes(b"heartwood-agent-exact-ok\n")
     with pytest.raises(ValueError, match="exact-content artifact"):
         verify(
             events_path=events,
@@ -221,7 +221,7 @@ def test_coding_agent_qualification_rejects_inexact_or_rejected_output(
             inference_path=inference,
         )
 
-    exact.write_bytes(b"heartwood-agent-exact-ok\n")
+    exact.write_bytes(b"heartwood-agent-exact-ok")
     (tmp_path / "heartwood-rejected-output.txt").write_text(
         "this-action-must-remain-rejected\n",
         encoding="utf-8",

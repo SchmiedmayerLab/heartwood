@@ -15,8 +15,19 @@ import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
+from typing import Any, cast
 
 import pytest
+
+
+def _workflow(path: str) -> dict[str, Any]:
+    yaml = importlib.import_module("yaml")
+    document = yaml.load(
+        Path(path).read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assert isinstance(document, dict)
+    return cast(dict[str, Any], document)
 
 
 def _release_verifier() -> ModuleType:
@@ -280,12 +291,32 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "name: Release Candidate Ready" in pull_request_workflow
     assert "uses: ./.github/workflows/codeql.yml" not in pull_request_workflow
     assert "uses: ./.github/workflows/container-image.yml" not in pull_request_workflow
-    assert "uses: ./.github/workflows/capable-model.yml" not in pull_request_workflow
+    assert "uses: ./.github/workflows/capable-model.yml" in pull_request_workflow
     assert "uses: ./.github/workflows/gpu-container-pr-validation.yml" in pull_request_workflow
     assert 'to_entries | all(.value.result == "success")' in pull_request_workflow
     assert '.result == "skipped"' not in pull_request_workflow
     assert "group: dependency-review-${{ github.ref }}" in dependency_review
     assert "cancel-in-progress: true" in dependency_review
+
+
+def test_every_pull_request_runs_capable_model_acceptance_before_merge() -> None:
+    workflow = _workflow(".github/workflows/pull-request-validation.yml")
+    triggers = cast(dict[str, Any], workflow["on"])
+
+    assert triggers["pull_request"] == ""
+    assert "push" not in triggers
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {
+        "group": "pull-request-validation-${{ github.ref }}",
+        "cancel-in-progress": "true",
+    }
+    jobs = cast(dict[str, Any], workflow["jobs"])
+    assert jobs["capable-model"] == {
+        "name": "Capable Model Acceptance",
+        "uses": "./.github/workflows/capable-model.yml",
+    }
+    release_ready = cast(dict[str, Any], jobs["release-ready"])
+    assert "capable-model" in cast(list[str], release_ready["needs"])
 
 
 def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
@@ -341,7 +372,6 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     dependabot = Path(".github/dependabot.yml").read_text(encoding="utf-8")
 
     assert "Container Images" not in pull_request
-    assert "Capable Model Acceptance" not in pull_request
     assert "GPU Coding-Agent Qualification" not in pull_request
     assert "Promote GPU Channel Tags" not in pull_request
     assert pull_request.count("    if:") == 1
