@@ -1413,6 +1413,53 @@ def test_models_list_select_remove_and_artifacts_use_one_configuration(
     assert "No model profiles configured" not in output
 
 
+def test_models_connect_prepares_stanford_source_in_a_fresh_project(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    observed: list[tuple[str, str | None]] = []
+
+    def models(
+        connection: ModelConnection,
+        api_key: str | None,
+    ) -> tuple[ProviderModel, ...]:
+        observed.append((connection.connection_id, api_key))
+        return (ProviderModel(model_id="gpt-synthetic"),)
+
+    _install_deterministic_gateway(
+        monkeypatch,
+        env={"STANFORD_AI_API_KEY": "external-secret"},
+        model_catalog_service=ModelCatalogService(
+            openai_lister=models,
+            compatibility=lambda _connection, _model: (
+                "available",
+                "verified",
+                32_768,
+                True,
+            ),
+        ),
+    )
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            ["models", "connect", "stanford-ai-api-gateway", "gpt-synthetic"],
+        )
+        == 0
+    )
+
+    assert observed == [("stanford-ai-api-gateway", "external-secret")]
+    output = capsys.readouterr().out
+    assert "* stanford-ai-api-gateway  openai/gpt-synthetic" in output
+    assert "Policy: allow" in output
+    config = (project / ".heartwood" / "config.toml").read_text(encoding="utf-8")
+    assert 'model_source = "stanford-ai-api-gateway"' in config
+    assert "external-secret" not in config
+
+
 def test_cli_imports_a_local_model_and_forgets_provider_credentials(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

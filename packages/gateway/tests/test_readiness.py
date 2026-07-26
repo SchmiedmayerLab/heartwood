@@ -708,3 +708,39 @@ def test_stanford_catalog_uses_external_key_and_exact_connection(tmp_path: Path)
             "supports_tools": True,
         }
     ]
+
+
+def test_connect_model_prepares_stanford_source_in_a_fresh_project(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    observed: list[tuple[str, str | None]] = []
+
+    def list_models(connection: ModelConnection, api_key: str | None) -> tuple[ProviderModel, ...]:
+        observed.append((connection.connection_id, api_key))
+        return (ProviderModel(model_id="gpt-synthetic"),)
+
+    gateway = SessionGateway(
+        project=project,
+        env={"STANFORD_AI_API_KEY": "external-secret"},
+        backend_id="deterministic",
+        model_catalog_service=ModelCatalogService(
+            openai_lister=list_models,
+            compatibility=lambda _connection, _model: (
+                "available",
+                "verified",
+                32_768,
+                True,
+            ),
+        ),
+    )
+
+    settings = gateway.connect_model("stanford-ai-api-gateway", "gpt-synthetic")
+
+    assert observed == [("stanford-ai-api-gateway", "external-secret")]
+    assert settings["model_source"] == "stanford-ai-api-gateway"
+    assert settings["active_profile"] == "stanford-ai-api-gateway"
+    config = gateway.config_store.load()
+    assert config.policy.policy_id == "generic-stanford-ai-api-gateway"
+    assert config.additional_connections[0].connection_id == "stanford-ai-api-gateway"
+    assert "external-secret" not in project.config_path.read_text(encoding="utf-8")

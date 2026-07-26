@@ -943,6 +943,7 @@ class SessionGateway:
         remember: bool = False,
     ) -> ModelSettingsResponse:
         """Select a discovered model and materialize its OpenHands profile."""
+        self._prepare_model_connection(connection_id)
         connection = self._resolve_model_connection(
             connection_id,
             token=token,
@@ -1763,6 +1764,21 @@ class SessionGateway:
 
     def _policy_profile(self) -> PolicyProfile:
         return self.config_store.load().policy
+
+    def _prepare_model_connection(self, connection_id: str) -> None:
+        if connection_id in self._model_connections:
+            return
+        try:
+            model_source = model_source_for_connection(connection_id)
+        except ProjectConfigError:
+            return
+        available_sources = {option.source_id for option in model_source_options(self.env)}
+        if model_source not in available_sources:
+            raise ModelCatalogError(f"{connection_id} is unavailable in the detected environment")
+        try:
+            self.configure_model_source(model_source)
+        except ProjectConfigError as error:
+            raise ModelCatalogError(str(error)) from error
 
     @_serialized_state
     def _resolve_model_connection(

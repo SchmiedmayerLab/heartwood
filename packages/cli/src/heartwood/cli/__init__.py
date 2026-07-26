@@ -1197,12 +1197,6 @@ def _handle_models(
             print(_format_model_catalog(catalog))
             return 0
         if command == "connect":
-            if not args.manual:
-                gateway.discover_models(
-                    args.connection_id,
-                    base_url=args.base_url,
-                    refresh=True,
-                )
             settings = gateway.connect_model(
                 args.connection_id,
                 args.model_id,
