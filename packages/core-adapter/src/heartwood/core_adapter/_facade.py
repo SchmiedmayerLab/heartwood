@@ -8,10 +8,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from heartwood.schemas import JsonValue
 
@@ -24,6 +27,68 @@ class BackendEventKind(StrEnum):
     CONFIRMATION_REQUESTED = "confirmation_requested"
     CONFIRMATION_RESOLVED = "confirmation_resolved"
     TOOL_EXECUTION = "tool_execution"
+    LIFECYCLE = "lifecycle"
+    TASK_PLAN = "task_plan"
+    USAGE = "usage"
+    SUBAGENT = "subagent"
+    ERROR = "error"
+
+
+class BackendErrorCode(StrEnum):
+    """Stable content-safe errors emitted by an execution backend."""
+
+    RUNTIME_UNAVAILABLE = "HW-AGENT-001"
+    ACTION_FAILED = "HW-AGENT-002"
+    CONVERSATION_STOPPED = "HW-AGENT-003"
+    WORKER_STOPPED = "HW-AGENT-004"
+    INVALID_STATE = "HW-AGENT-005"
+    ACTION_OUTCOME_UNKNOWN = "HW-AGENT-006"
+    UNKNOWN = "HW-AGENT-999"
+
+
+def backend_error_message(code: BackendErrorCode) -> str:
+    """Return the public message associated with a stable backend error."""
+    return {
+        BackendErrorCode.RUNTIME_UNAVAILABLE: "Agent runtime is unavailable",
+        BackendErrorCode.ACTION_FAILED: "An agent action failed",
+        BackendErrorCode.CONVERSATION_STOPPED: "The agent conversation stopped",
+        BackendErrorCode.WORKER_STOPPED: "The agent worker stopped",
+        BackendErrorCode.INVALID_STATE: (
+            "The agent cannot perform that operation in its current state"
+        ),
+        BackendErrorCode.ACTION_OUTCOME_UNKNOWN: (
+            "A previously approved action has an unknown outcome; verify the project "
+            "and continue in a new session"
+        ),
+        BackendErrorCode.UNKNOWN: "The agent runtime reported an error",
+    }[code]
+
+
+class BackendLifecycle(StrEnum):
+    """Normalized OpenHands conversation lifecycle."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    WAITING_FOR_CONFIRMATION = "waiting-for-confirmation"
+    FINISHED = "finished"
+    ERROR = "error"
+
+
+class BackendTaskStatus(StrEnum):
+    """Normalized OpenHands task status."""
+
+    TODO = "todo"
+    IN_PROGRESS = "in-progress"
+    DONE = "done"
+
+
+class BackendSubagentStatus(StrEnum):
+    """Normalized sequential subagent lifecycle."""
+
+    PROPOSED = "proposed"
+    RUNNING = "running"
+    COMPLETED = "completed"
     ERROR = "error"
 
 
@@ -48,14 +113,179 @@ class ProposedToolCall:
 
 
 @dataclass(frozen=True, slots=True)
-class BackendEvent:
-    """One SDK-neutral event emitted by an agent backend."""
+class PendingActionGroup:
+    """One atomic OpenHands confirmation decision."""
 
-    kind: BackendEventKind
-    message: str | None = None
-    tool_call: ProposedToolCall | None = None
-    approved: bool | None = None
-    tool_execution: ToolExecution | None = None
+    group_id: str
+    actions: tuple[ProposedToolCall, ...]
+
+
+def pending_action_group(
+    actions: tuple[ProposedToolCall, ...],
+) -> PendingActionGroup | None:
+    """Return the stable atomic group represented by ordered pending actions."""
+    if not actions:
+        return None
+    canonical = "\n".join(action.tool_call_id for action in actions)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return PendingActionGroup(
+        group_id=f"action-set-{digest}",
+        actions=actions,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class BackendTask:
+    """One task projected from the OpenHands Task Tracker."""
+
+    title: str
+    status: BackendTaskStatus
+
+
+@dataclass(frozen=True, slots=True)
+class BackendUsage:
+    """Content-minimized cumulative model usage."""
+
+    usage_id: str
+    model_name: str
+    call_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    context_window: int | None = None
+    accumulated_cost: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class BackendSubagent:
+    """One sequential specialized-agent task."""
+
+    invocation_id: str
+    task_id: str | None
+    agent_name: str
+    status: BackendSubagentStatus
+    parent_session_id: str
+    parent_action_id: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _BackendEvent:
+    """Common source identity for one SDK-neutral backend event."""
+
+    source_event_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendAgentMessageEvent(_BackendEvent):
+    message: str
+    kind: Literal[BackendEventKind.AGENT_MESSAGE] = field(
+        default=BackendEventKind.AGENT_MESSAGE,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendToolCallEvent(_BackendEvent):
+    tool_call: ProposedToolCall
+    kind: Literal[BackendEventKind.TOOL_CALL_PROPOSED] = field(
+        default=BackendEventKind.TOOL_CALL_PROPOSED,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendConfirmationRequestEvent(_BackendEvent):
+    tool_call: ProposedToolCall
+    action_group_id: str
+    kind: Literal[BackendEventKind.CONFIRMATION_REQUESTED] = field(
+        default=BackendEventKind.CONFIRMATION_REQUESTED,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendConfirmationResolutionEvent(_BackendEvent):
+    tool_call: ProposedToolCall
+    action_group_id: str
+    approved: bool
+    kind: Literal[BackendEventKind.CONFIRMATION_RESOLVED] = field(
+        default=BackendEventKind.CONFIRMATION_RESOLVED,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendToolExecutionEvent(_BackendEvent):
+    tool_execution: ToolExecution
+    kind: Literal[BackendEventKind.TOOL_EXECUTION] = field(
+        default=BackendEventKind.TOOL_EXECUTION,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendLifecycleEvent(_BackendEvent):
+    lifecycle: BackendLifecycle
+    kind: Literal[BackendEventKind.LIFECYCLE] = field(
+        default=BackendEventKind.LIFECYCLE,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendTaskPlanEvent(_BackendEvent):
+    tasks: tuple[BackendTask, ...]
+    kind: Literal[BackendEventKind.TASK_PLAN] = field(
+        default=BackendEventKind.TASK_PLAN,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendUsageEvent(_BackendEvent):
+    usage: BackendUsage
+    kind: Literal[BackendEventKind.USAGE] = field(
+        default=BackendEventKind.USAGE,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendSubagentEvent(_BackendEvent):
+    subagent: BackendSubagent
+    kind: Literal[BackendEventKind.SUBAGENT] = field(
+        default=BackendEventKind.SUBAGENT,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BackendErrorEvent(_BackendEvent):
+    error_code: BackendErrorCode
+    kind: Literal[BackendEventKind.ERROR] = field(
+        default=BackendEventKind.ERROR,
+        init=False,
+    )
+
+
+type BackendEvent = (
+    BackendAgentMessageEvent
+    | BackendToolCallEvent
+    | BackendConfirmationRequestEvent
+    | BackendConfirmationResolutionEvent
+    | BackendToolExecutionEvent
+    | BackendLifecycleEvent
+    | BackendTaskPlanEvent
+    | BackendUsageEvent
+    | BackendSubagentEvent
+    | BackendErrorEvent
+)
+
+
+BackendEventSink = Callable[[tuple[BackendEvent, ...]], None]
+TokenDeltaSink = Callable[[str], None]
 
 
 class AgentBackend(Protocol):
@@ -93,20 +323,36 @@ class AgentBackend(Protocol):
     def continuation_requires_model_authorization(self) -> bool:
         """Return whether approval or resume can continue model execution."""
 
-    def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
-        """Submit a user task and run until completion or confirmation."""
+    def bind_runtime(
+        self,
+        *,
+        event_sink: BackendEventSink,
+        token_sink: TokenDeltaSink,
+    ) -> None:
+        """Bind durable and transient gateway-owned runtime sinks."""
 
-    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
-        """Restore pending confirmation state from the Heartwood event log."""
+    def reconcile(
+        self,
+        *,
+        session_id: str,
+        known_source_event_ids: frozenset[str],
+    ) -> tuple[BackendEvent, ...]:
+        """Project SDK state not yet present in the Heartwood event stream."""
+
+    def pending_action_group(self, *, session_id: str) -> PendingActionGroup | None:
+        """Return the atomic unmatched action group directly from backend state."""
+
+    def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+        """Submit a user task and start or steer execution."""
 
     def resolve_confirmation(
         self,
         *,
         session_id: str,
-        tool_call_id: str,
+        action_group_id: str,
         approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        """Resolve the pending action; a rejection must not continue the model."""
+        """Apply a gateway-recorded decision to the complete pending action group."""
 
     def pause(self) -> None:
         """Pause the conversation."""
@@ -121,12 +367,20 @@ class AgentBackend(Protocol):
 class DeterministicAgentBackend:
     """Deterministic conversation used by unit tests and replay fixtures."""
 
-    def __init__(self, *, action_confirmation_mode: str = "always-confirm") -> None:
+    def __init__(
+        self,
+        *,
+        action_confirmation_mode: str = "always-confirm",
+        persistence_path: Path | None = None,
+    ) -> None:
         if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
             msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
             raise ValueError(msg)
         self._action_confirmation_mode = action_confirmation_mode
-        self._pending: ProposedToolCall | None = None
+        self._persistence_path = None if persistence_path is None else persistence_path.resolve()
+        self._pending = self._load_pending()
+        self._event_sink: BackendEventSink = lambda _events: None
+        self._token_sink: TokenDeltaSink = lambda _delta: None
 
     @property
     def backend_id(self) -> str:
@@ -168,13 +422,40 @@ class DeterministicAgentBackend:
         """Return false because the deterministic backend makes no model calls."""
         return False
 
+    def bind_runtime(
+        self,
+        *,
+        event_sink: BackendEventSink,
+        token_sink: TokenDeltaSink,
+    ) -> None:
+        """Bind runtime sinks for contract parity with OpenHands."""
+        self._event_sink = event_sink
+        self._token_sink = token_sink
+
+    def reconcile(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+        known_source_event_ids: frozenset[str],  # noqa: ARG002
+    ) -> tuple[BackendEvent, ...]:
+        """Return no additional events for the in-memory deterministic backend."""
+        return ()
+
+    def pending_action_group(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+    ) -> PendingActionGroup | None:
+        """Return the current deterministic pending action group."""
+        actions = () if self._pending is None else (self._pending,)
+        return pending_action_group(actions)
+
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Emit a message and one pending synthetic action."""
         if self._pending is not None:
             return (
-                BackendEvent(
-                    kind=BackendEventKind.ERROR,
-                    message="resolve the pending action before submitting another task",
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.INVALID_STATE,
                 ),
             )
         self._pending = ProposedToolCall(
@@ -184,21 +465,20 @@ class DeterministicAgentBackend:
             summary="run the synthetic aggregate no-op",
         )
         events = (
-            BackendEvent(
-                kind=BackendEventKind.AGENT_MESSAGE,
+            BackendAgentMessageEvent(
                 message=(
                     "Planned a synthetic aggregate analysis over the detected dataset "
                     f"(session_id={session_id}, prompt_length={len(prompt)})."
                 ),
             ),
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=self._pending),
+            BackendToolCallEvent(tool_call=self._pending),
         )
         if self.action_confirmation_mode == "confirm-risky":
             self._pending = None
+            self._persist_pending()
             return (
                 *events,
-                BackendEvent(
-                    kind=BackendEventKind.TOOL_EXECUTION,
+                BackendToolExecutionEvent(
                     tool_execution=ToolExecution(
                         tool_name="heartwood.synthetic.noop",
                         exit_code=0,
@@ -206,43 +486,40 @@ class DeterministicAgentBackend:
                     ),
                 ),
             )
+        self._persist_pending()
+        action_group = self.pending_action_group(session_id=session_id)
+        if action_group is None:  # pragma: no cover - pending action was just assigned
+            raise RuntimeError("deterministic action group was not created")
         return (
             *events,
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=self._pending),
+            BackendConfirmationRequestEvent(
+                tool_call=self._pending,
+                action_group_id=action_group.group_id,
+            ),
         )
-
-    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
-        """Restore pending deterministic confirmation state."""
-        self._pending = tool_calls[0] if len(tool_calls) == 1 else None
 
     def resolve_confirmation(
         self,
         *,
         session_id: str,
-        tool_call_id: str,
+        action_group_id: str,
         approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        """Resolve and clear the pending synthetic action."""
+        """Apply a gateway-recorded decision and clear the pending synthetic action."""
         pending = self._pending
-        if pending is None or pending.tool_call_id != tool_call_id:
+        group = self.pending_action_group(session_id=session_id)
+        if pending is None or group is None or group.group_id != action_group_id:
             return (
-                BackendEvent(
-                    kind=BackendEventKind.ERROR,
-                    message=f"no matching pending action: {tool_call_id}",
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.INVALID_STATE,
                 ),
             )
         self._pending = None
-        resolved = BackendEvent(
-            kind=BackendEventKind.CONFIRMATION_RESOLVED,
-            tool_call=pending,
-            approved=approved,
-        )
+        self._persist_pending()
         if not approved:
-            return (resolved,)
+            return ()
         return (
-            resolved,
-            BackendEvent(
-                kind=BackendEventKind.TOOL_EXECUTION,
+            BackendToolExecutionEvent(
                 tool_execution=ToolExecution(
                     tool_name=pending.tool_name,
                     exit_code=0,
@@ -260,6 +537,59 @@ class DeterministicAgentBackend:
 
     def close(self) -> None:
         """Release deterministic backend resources."""
+
+    def _load_pending(self) -> ProposedToolCall | None:
+        path = self._persistence_path
+        if path is None or not path.is_file():
+            return None
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError("deterministic backend state is invalid") from error
+        if not isinstance(raw, dict):
+            raise ValueError("deterministic backend state is invalid")
+        risk_value = raw.get("risk")
+        risk: Literal["low", "medium", "high", "unknown"]
+        if risk_value in {"low", "medium", "high"}:
+            risk = cast(Literal["low", "medium", "high"], risk_value)
+        else:
+            risk = "unknown"
+        arguments = raw.get("arguments")
+        return ProposedToolCall(
+            tool_call_id=str(raw.get("tool_call_id", "")),
+            tool_name=str(raw.get("tool_name", "unknown-tool")),
+            risk=risk,
+            summary=str(raw.get("summary", "pending action")),
+            arguments=(
+                cast(dict[str, JsonValue], arguments) if isinstance(arguments, dict) else {}
+            ),
+        )
+
+    def _persist_pending(self) -> None:
+        path = self._persistence_path
+        if path is None:
+            return
+        if self._pending is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f"{path.suffix}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "tool_call_id": self._pending.tool_call_id,
+                    "tool_name": self._pending.tool_name,
+                    "risk": self._pending.risk,
+                    "summary": self._pending.summary,
+                    "arguments": self._pending.arguments,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.chmod(0o600)
+        temporary.replace(path)
 
 
 class LocalWorkspaceAgentBackend(DeterministicAgentBackend):
@@ -285,40 +615,42 @@ class LocalWorkspaceAgentBackend(DeterministicAgentBackend):
             risk="low",
             summary="write a synthetic workspace summary artifact",
         )
+        self._persist_pending()
+        action_group = self.pending_action_group(session_id=session_id)
+        if action_group is None:  # pragma: no cover - assignment above guarantees presence
+            raise RuntimeError("deterministic action group was not created")
         return (
             events[0],
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=self._pending),
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=self._pending),
+            BackendToolCallEvent(tool_call=self._pending),
+            BackendConfirmationRequestEvent(
+                tool_call=self._pending,
+                action_group_id=action_group.group_id,
+            ),
         )
 
     def resolve_confirmation(
         self,
         *,
         session_id: str,
-        tool_call_id: str,
+        action_group_id: str,
         approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        """Write the bounded artifact after an allow-once decision."""
+        """Apply a gateway-recorded decision and optionally write the artifact."""
         pending = self._pending
-        if pending is None or pending.tool_call_id != tool_call_id:
+        group = self.pending_action_group(session_id=session_id)
+        if pending is None or group is None or group.group_id != action_group_id:
             return super().resolve_confirmation(
                 session_id=session_id,
-                tool_call_id=tool_call_id,
+                action_group_id=action_group_id,
                 approved=approved,
             )
         self._pending = None
-        resolved = BackendEvent(
-            kind=BackendEventKind.CONFIRMATION_RESOLVED,
-            tool_call=pending,
-            approved=approved,
-        )
+        self._persist_pending()
         if not approved:
-            return (resolved,)
+            return ()
         path = self._write_summary(session_id)
         return (
-            resolved,
-            BackendEvent(
-                kind=BackendEventKind.TOOL_EXECUTION,
+            BackendToolExecutionEvent(
                 tool_execution=ToolExecution(
                     tool_name=pending.tool_name,
                     exit_code=0,

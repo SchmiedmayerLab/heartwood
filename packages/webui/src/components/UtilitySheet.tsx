@@ -53,7 +53,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useState } from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
@@ -75,20 +75,19 @@ import type {
   ModelSettings,
   ModelValidation,
   ProjectReadiness,
-  SessionEvent,
+  SessionProjection,
   SkillSettings,
   SkillSummary,
   StartupPlan,
 } from "../types";
-import { buildViewModel } from "../viewModel";
 import type { UtilityPanel } from "./SessionRail";
 
 interface UtilitySheetProps {
   actions: ActionSettings | null;
   artifacts: ModelArtifacts | null;
-  events: SessionEvent[];
   panel: UtilityPanel;
   profileDraft: ModelProfile;
+  projection: SessionProjection | null;
   projectReadiness: ProjectReadiness | null;
   startupPlan: StartupPlan | null;
   skillApproved: boolean;
@@ -153,17 +152,16 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
 );
 
 const ActivityContent = ({
-  events,
   onExportAudit,
   onRefreshActivity,
+  projection,
 }: UtilitySheetProps) => {
-  const viewModel = useMemo(() => buildViewModel(events), [events]);
   return (
     <>
       <SheetHeader>
         <SheetTitle>Activity &amp; audit</SheetTitle>
         <SheetDescription>
-          {viewModel.eventCount} persisted session events
+          {projection?.eventCount ?? 0} persisted session events
         </SheetDescription>
       </SheetHeader>
       <div className="sheet-toolbar">
@@ -177,9 +175,9 @@ const ActivityContent = ({
         </Button>
       </div>
       <div className="activity-list">
-        {viewModel.activity.length === 0 ?
+        {!projection || projection.activity.length === 0 ?
           <p className="panel-empty">No events recorded</p>
-        : viewModel.activity.map((item) => (
+        : projection.activity.map((item) => (
             <div className="activity-row" key={`${item.sequence}-${item.kind}`}>
               <small>{String(item.sequence).padStart(3, "0")}</small>
               <div>

@@ -7,7 +7,12 @@
  */
 
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { event, syntheticEvents } from "../test/fixtures";
+import {
+  emptyProjection,
+  event,
+  syntheticEvents,
+  syntheticProjection,
+} from "../test/fixtures";
 import type {
   PlatformCapabilities,
   SessionSummary,
@@ -214,6 +219,7 @@ test("confirms a new project before creating private state", async ({
 const installGatewayRoutes = async (page: Page): Promise<void> => {
   let projectInitialized: boolean | null = null;
   let sessionEvents = syntheticEvents();
+  let sessionProjection = syntheticProjection();
   let sessions: SessionSummary[] = [
     summary("session-test", "Synthetic cohort analysis", 7),
   ];
@@ -436,11 +442,19 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     if (resource === "events") {
       await json(route, {
         events: sessionId === "session-test" ? sessionEvents : [],
+        projection:
+          sessionId === "session-test" ? sessionProjection : (
+            emptyProjection(sessionId)
+          ),
       });
       return;
     }
     if (resource === "commands") {
-      const payload = request.postDataJSON() as { kind?: string };
+      const payload = request.postDataJSON() as {
+        command_id?: string;
+        kind?: string;
+        payload?: { prompt?: string };
+      };
       if (payload.kind === "chat") {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
       }
@@ -454,7 +468,44 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           ]
         : [];
       sessionEvents = [...sessionEvents, ...nextEvents];
-      await json(route, { events: nextEvents });
+      if (sessionId === "session-test" && payload.kind === "approve") {
+        sessionProjection = {
+          ...sessionProjection,
+          eventCount: sessionEvents.length,
+          revision:
+            sessionEvents.at(-1)?.sequence ?? sessionProjection.revision,
+          pendingApproval: null,
+          lifecycle: {
+            status: "idle",
+            canPause: false,
+            canResume: false,
+            canSteer: true,
+          },
+          availableCommands: ["chat"],
+        };
+      } else if (
+        sessionId === "session-test" &&
+        payload.kind === "chat" &&
+        payload.payload?.prompt
+      ) {
+        sessionProjection = {
+          ...sessionProjection,
+          eventCount: sessionProjection.eventCount + 1,
+          revision: sessionProjection.revision + 1,
+          conversation: [
+            ...sessionProjection.conversation,
+            {
+              id: `local-${payload.command_id ?? "chat"}`,
+              sequence: sessionProjection.revision + 1,
+              role: "user",
+              label: "You",
+              content: payload.payload.prompt,
+              detail: null,
+            },
+          ],
+        };
+      }
+      await json(route, { events: nextEvents, projection: sessionProjection });
       return;
     }
     if (resource === "audit-export") {

@@ -16,8 +16,12 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { HeartwoodClient, SessionEventResponse } from "./client";
-import { event, syntheticEvents } from "./test/fixtures";
+import type { HeartwoodClient, SessionProjectionResponse } from "./client";
+import {
+  emptyProjection,
+  syntheticEvents,
+  syntheticProjection,
+} from "./test/fixtures";
 import type {
   ActionConfirmationMode,
   ActionSettings,
@@ -41,8 +45,8 @@ import type {
   ModelValidation,
   ProjectReadiness,
   SessionCommand,
-  SessionEvent,
   SessionList,
+  SessionProjection,
   SessionSummary,
   SkillSettings,
   SkillSummary,
@@ -196,7 +200,9 @@ class FakeClient implements HeartwoodClient {
   customModel: LocalModelChoice | null = null;
   installedSkill: string | null = null;
   currentSessions: SessionSummary[] = [sessionSummary("session-test")];
-  streamListener: ((events: SessionEvent[]) => void) | null = null;
+  projections = new Map<string, SessionProjection>();
+  streamListener: ((projection: SessionProjection) => void) | null = null;
+  commandFailure: { code: string; message: string } | null = null;
 
   getProjectReadiness(): Promise<ProjectReadiness> {
     return Promise.resolve(this.currentReadiness);
@@ -266,43 +272,109 @@ class FakeClient implements HeartwoodClient {
     });
   }
 
-  postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+  postCommand(command: SessionCommand): Promise<SessionProjectionResponse> {
     this.commands.push(command);
-    return Promise.resolve({
-      events:
-        command.kind === "chat" ?
+    const current = this.projectionFor(command.session_id);
+    const prompt =
+      typeof command.payload.prompt === "string" ? command.payload.prompt : "";
+    const commandFailure = this.commandFailure;
+    this.commandFailure = null;
+    const next: SessionProjection = {
+      ...current,
+      eventCount: current.eventCount + 1,
+      revision: current.revision + 1,
+      lastCommandOutcome: {
+        commandId: command.command_id,
+        commandKind: command.kind,
+        status: commandFailure === null ? "accepted" : "rejected",
+        errorCode: commandFailure?.code ?? null,
+        message: commandFailure?.message ?? null,
+      },
+      conversation:
+        command.kind === "chat" && prompt ?
           [
-            event(0, "user_message.recorded", {
-              actor_id: command.actor_id,
-              command_id: command.command_id,
-              content:
-                typeof command.payload.prompt === "string" ?
-                  command.payload.prompt
-                : "",
-            }),
+            ...current.conversation,
+            {
+              id: `local-${command.command_id}`,
+              sequence: current.revision + 1,
+              role: "user",
+              label: "You",
+              content: prompt,
+              detail: null,
+            },
           ]
-        : [],
+        : current.conversation,
+      pendingApproval:
+        command.kind === "approve" || command.kind === "deny" ?
+          null
+        : current.pendingApproval,
+      paused:
+        command.kind === "pause" ? true
+        : command.kind === "resume" ? false
+        : current.paused,
+      lifecycle:
+        command.kind === "pause" ?
+          {
+            status: "paused",
+            canPause: false,
+            canResume: true,
+            canSteer: true,
+          }
+        : command.kind === "resume" ?
+          {
+            status: "running",
+            canPause: true,
+            canResume: false,
+            canSteer: true,
+          }
+        : command.kind === "approve" || command.kind === "deny" ?
+          {
+            status: "idle",
+            canPause: false,
+            canResume: false,
+            canSteer: true,
+          }
+        : current.lifecycle,
+      availableCommands:
+        command.kind === "pause" ? ["chat", "resume"]
+        : command.kind === "resume" ? ["chat", "pause"]
+        : command.kind === "approve" || command.kind === "deny" ? ["chat"]
+        : current.availableCommands,
+    };
+    this.projections.set(command.session_id, next);
+    return Promise.resolve({ events: [], projection: next });
+  }
+
+  replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    this.replayCalls += 1;
+    return Promise.resolve({
+      events: [],
+      projection: this.projectionFor(sessionId),
     });
   }
 
-  replayEvents(): Promise<SessionEventResponse> {
-    this.replayCalls += 1;
-    return Promise.resolve({ events: [] });
-  }
-
-  streamEvents(
+  streamSession(
     _sessionId: string,
     _afterSequence: number | undefined,
-    onEvents: (events: SessionEvent[]) => void,
+    onProjection: (projection: SessionProjection) => void,
   ): () => void {
-    this.streamListener = onEvents;
+    this.streamListener = onProjection;
     return () => {
-      if (this.streamListener === onEvents) this.streamListener = null;
+      if (this.streamListener === onProjection) this.streamListener = null;
     };
   }
 
-  emitStream(events: SessionEvent[]): void {
-    this.streamListener?.(events);
+  emitStream(projection: SessionProjection): void {
+    this.projections.set(projection.sessionId, projection);
+    this.streamListener?.(projection);
+  }
+
+  projectionFor(sessionId: string): SessionProjection {
+    const existing = this.projections.get(sessionId);
+    if (existing) return existing;
+    const created = emptyProjection(sessionId);
+    this.projections.set(sessionId, created);
+    return created;
   }
 
   getModelSettings(): Promise<ModelSettings> {
@@ -694,9 +766,12 @@ class FakeClient implements HeartwoodClient {
 }
 
 class DeferredCommandClient extends FakeClient {
-  private complete: ((response: SessionEventResponse) => void) | null = null;
+  private complete: ((response: SessionProjectionResponse) => void) | null =
+    null;
 
-  override postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+  override postCommand(
+    command: SessionCommand,
+  ): Promise<SessionProjectionResponse> {
     this.commands.push(command);
     return new Promise((resolve) => {
       this.complete = resolve;
@@ -704,7 +779,10 @@ class DeferredCommandClient extends FakeClient {
   }
 
   completeCommand(): void {
-    this.complete?.({ events: [] });
+    this.complete?.({
+      events: [],
+      projection: this.projectionFor("session-test"),
+    });
     this.complete = null;
   }
 }
@@ -846,10 +924,13 @@ describe("App", () => {
     await waitFor(() => expect(client.replayCalls).toBe(1));
     await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
 
-    fireEvent.change(screen.getByLabelText("Task"), {
+    const task = screen.getByLabelText("Task");
+    fireEvent.change(task, {
       target: { value: "Inspect the synthetic cohort" },
     });
-    fireEvent.click(screen.getByLabelText("Send task"));
+    fireEvent.keyDown(task, { key: "Enter", shiftKey: true });
+    expect(client.commands).toEqual([]);
+    fireEvent.keyDown(task, { key: "Enter", shiftKey: false });
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("chat"));
     expect(client.commands.at(-1)?.payload).toEqual({
@@ -955,22 +1036,241 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("coalesces session refreshes for streamed event batches", async () => {
+  it("coalesces session refreshes for streamed projection updates", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
     await screen.findByRole("heading", { name: "Synthetic analysis" });
     const initialListCalls = client.listCalls;
 
     act(() => {
-      client.emitStream([
-        event(7, "agent_message.emitted", { content: "First update" }),
-      ]);
-      client.emitStream([
-        event(8, "agent_message.emitted", { content: "Second update" }),
-      ]);
+      client.emitStream(
+        syntheticProjection({
+          eventCount: 7,
+          revision: 6,
+          pendingApproval: null,
+        }),
+      );
+      client.emitStream(
+        syntheticProjection({
+          eventCount: 8,
+          revision: 7,
+          pendingApproval: null,
+        }),
+      );
     });
 
     await waitFor(() => expect(client.listCalls).toBe(initialListCalls + 1));
+  });
+
+  it("does not replace a newer token frame with an older equal-revision response", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    const running: SessionProjection = {
+      ...emptyProjection(),
+      eventCount: 7,
+      revision: 6,
+      streamRevision: 2,
+      lifecycle: {
+        status: "running",
+        canPause: true,
+        canResume: false,
+        canSteer: true,
+      },
+      streamingText: "Current streamed response",
+      availableCommands: ["chat", "pause"],
+    };
+
+    act(() => {
+      client.emitStream(running);
+      client.emitStream({
+        ...running,
+        streamRevision: 1,
+        streamingText: "",
+      });
+    });
+
+    expect(
+      screen.getByLabelText("Agent response in progress"),
+    ).toHaveTextContent("Current streamed response");
+  });
+
+  it("accepts an authoritative projection from a restarted stream epoch", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    const running = syntheticProjection({
+      streamEpoch: "first-process",
+      streamRevision: 4,
+      lifecycle: {
+        status: "running",
+        canPause: true,
+        canResume: false,
+        canSteer: true,
+      },
+      streamingText: "Stale partial response",
+      availableCommands: ["chat", "pause"],
+    });
+
+    act(() => {
+      client.emitStream(running);
+      client.emitStream({
+        ...running,
+        streamEpoch: "restarted-process",
+        streamRevision: 0,
+        streamingText: "",
+      });
+    });
+
+    expect(
+      screen.queryByText("Stale partial response", { exact: true }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders gateway-owned lifecycle, streaming, task, usage, and specialist state", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    act(() => {
+      client.emitStream({
+        ...emptyProjection(),
+        eventCount: 4,
+        revision: 3,
+        lifecycle: {
+          status: "running",
+          canPause: true,
+          canResume: false,
+          canSteer: true,
+        },
+        taskPlan: [
+          {
+            title: "Inspect the analysis",
+            status: "in-progress",
+          },
+          { title: "Verify the result", status: "todo" },
+        ],
+        usage: {
+          usageId: "total",
+          modelName: "openai/synthetic-coder",
+          callCount: 2,
+          promptTokens: 1200,
+          completionTokens: 300,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          contextWindow: 32768,
+          accumulatedCost: 0,
+        },
+        usageByPurpose: [
+          {
+            usageId: "agent",
+            modelName: "openai/synthetic-coder",
+            callCount: 2,
+            promptTokens: 1200,
+            completionTokens: 300,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            reasoningTokens: 0,
+            contextWindow: 32768,
+            accumulatedCost: 0,
+          },
+        ],
+        subagents: [
+          {
+            invocationId: "task-research-plan",
+            taskId: "task-research-plan",
+            agentName: "research-planner",
+            status: "running",
+            parentSessionId: "session-test",
+            parentActionId: "task-action-1",
+          },
+        ],
+        streamingText: "Reviewing the analysis structure",
+        availableCommands: ["chat", "pause"],
+      });
+    });
+
+    expect(
+      screen.getByLabelText("Agent response in progress"),
+    ).toHaveTextContent("Reviewing the analysis structure");
+    const status = screen.getByRole("status", { name: "Agent status" });
+    expect(status).toHaveTextContent("Heartwood is working");
+    expect(status).toHaveTextContent("Plan: 0 of 2 complete");
+    expect(status).toHaveTextContent("1,500 tokens · openai/synthetic-coder");
+    expect(status).toHaveTextContent("2 calls");
+    expect(status).toHaveTextContent("agent");
+    expect(status).toHaveTextContent("research-planner (running)");
+    expect(status).toHaveTextContent(
+      "Parent session session-test · action task-action-1",
+    );
+    expect(screen.getByLabelText("Task")).toBeEnabled();
+    expect(screen.getByLabelText("Send guidance")).toBeInTheDocument();
+    expect(screen.getByLabelText("Pause agent")).toBeEnabled();
+
+    act(() => {
+      const current = client.projectionFor("session-test");
+      client.emitStream({
+        ...current,
+        revision: 4,
+        usage:
+          current.usage === null ?
+            null
+          : {
+              ...current.usage,
+              contextWindow: null,
+              accumulatedCost: 1.25,
+            },
+        subagents: [
+          ...current.subagents,
+          {
+            invocationId: "task-verification",
+            taskId: "task-verification",
+            agentName: "result-reviewer",
+            status: "proposed",
+            parentSessionId: "session-test",
+            parentActionId: "task-action-2",
+          },
+        ],
+      });
+    });
+    await waitFor(() => expect(status).toHaveTextContent("$1.25"));
+    expect(status).toHaveTextContent("2 specialists");
+  });
+
+  it("uses projection capabilities for paused work and resume commands", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    client.projections.set("session-test", {
+      ...emptyProjection(),
+      lifecycle: {
+        status: "paused",
+        canPause: false,
+        canResume: true,
+        canSteer: true,
+      },
+      availableCommands: ["chat", "resume"],
+      paused: true,
+    });
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const status = await screen.findByRole("status", { name: "Agent status" });
+    expect(status).toHaveTextContent("Agent paused");
+    expect(status).not.toHaveTextContent("Plan:");
+    const resume = screen.getByLabelText("Resume agent");
+    expect(resume).toBeEnabled();
+    fireEvent.click(resume);
+
+    await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("resume"));
   });
 
   it("renders the pending OpenHands action set and sends one batch decision", async () => {
@@ -987,9 +1287,23 @@ describe("App", () => {
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));
     expect(client.commands.at(-1)?.payload).toEqual({
-      target_id: "session-test-toolcall-0",
-      target_type: "tool-call",
+      target_id: "action-set-session-test",
+      target_type: "action-set",
     });
+  });
+
+  it("disables grouped decisions that the projection does not allow", async () => {
+    const client = new FakeClient();
+    client.projections.set(
+      "session-test",
+      syntheticProjection({ availableCommands: [] }),
+    );
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(
+      await screen.findByLabelText("Allow all 1 action once"),
+    ).toBeDisabled();
+    expect(screen.getByLabelText("Reject all 1 action")).toBeDisabled();
   });
 
   it("configures and validates model profiles in the settings panel", async () => {
@@ -1524,6 +1838,21 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByLabelText("Reject all 1 action"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("deny"));
+    act(() => {
+      const current = client.projectionFor("session-test");
+      client.emitStream({
+        ...current,
+        eventCount: current.eventCount + 1,
+        revision: current.revision + 1,
+        lifecycle: {
+          status: "running",
+          canPause: true,
+          canResume: false,
+          canSteer: true,
+        },
+        availableCommands: ["chat", "pause"],
+      });
+    });
     fireEvent.click(screen.getByLabelText("Pause agent"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("pause"));
 
@@ -1624,9 +1953,17 @@ describe("App", () => {
 });
 
 class PendingClient extends FakeClient {
-  override replayEvents(): Promise<SessionEventResponse> {
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
     this.replayCalls += 1;
-    return Promise.resolve({ events: syntheticEvents() });
+    const projection = {
+      ...syntheticProjection(),
+      sessionId,
+    };
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({
+      events: syntheticEvents(),
+      projection,
+    });
   }
 }
 
@@ -1683,22 +2020,61 @@ class DeferredInitializationClient extends FakeClient {
 }
 
 class RejectingClient extends FakeClient {
-  override postCommand(): Promise<SessionEventResponse> {
+  override postCommand(): Promise<SessionProjectionResponse> {
     return Promise.reject(new Error("synthetic gateway failure"));
   }
 }
 
 class LostResponseClient extends FakeClient {
-  override postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+  override postCommand(
+    command: SessionCommand,
+  ): Promise<SessionProjectionResponse> {
     this.commands.push(command);
     if (this.commands.length === 1) {
       return Promise.reject(new Error("connection lost after submission"));
     }
-    return Promise.resolve({ events: [] });
+    const projection = this.projectionFor(command.session_id);
+    const prompt =
+      typeof command.payload.prompt === "string" ? command.payload.prompt : "";
+    const next = {
+      ...projection,
+      eventCount: projection.eventCount + 1,
+      revision: projection.revision + 1,
+      conversation: [
+        ...projection.conversation,
+        {
+          id: `local-${command.command_id}`,
+          sequence: projection.revision + 1,
+          role: "user" as const,
+          label: "You",
+          content: prompt,
+          detail: null,
+        },
+      ],
+    };
+    this.projections.set(command.session_id, next);
+    return Promise.resolve({ events: [], projection: next });
   }
 }
 
 describe("App error handling", () => {
+  it("uses the gateway-owned command outcome for rejected commands", async () => {
+    const client = new FakeClient();
+    client.commandFailure = {
+      code: "HW-AGENT-005",
+      message: "HW-AGENT-005: The operation is unavailable.",
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
+
+    expect(
+      await screen.findByText("HW-AGENT-005: The operation is unavailable."),
+    ).toBeVisible();
+    expect(client.auditExportCalls).toBe(0);
+  });
+
   it("renders gateway command errors", async () => {
     render(
       <App client={new RejectingClient()} initialSessionId="session-test" />,

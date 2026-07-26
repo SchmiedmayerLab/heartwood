@@ -506,6 +506,20 @@ summary:focus-visible {
   white-space: pre-wrap;
 }
 
+.streaming-message {
+  background: #fbfdfc;
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 0.45rem;
+  height: 1em;
+  margin-left: 3px;
+  animation: streaming-cursor-pulse 1s steps(2, start) infinite;
+  background: #18825f;
+  vertical-align: -0.12em;
+}
+
 .trace-message {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -599,6 +613,70 @@ summary:focus-visible {
   to {
     transform: rotate(360deg);
   }
+}
+
+@keyframes streaming-cursor-pulse {
+  50% {
+    opacity: 0;
+  }
+}
+
+.runtime-status {
+  display: grid;
+  width: min(88%, 780px);
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid #d8dfda;
+  border-radius: 7px;
+  background: #f7f9f8;
+  color: #415047;
+  font-size: 0.76rem;
+}
+
+.runtime-status-heading,
+.runtime-status-metrics {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.runtime-status-heading strong {
+  color: #263a2f;
+}
+
+.runtime-status details summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.runtime-status ol,
+.runtime-status ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.runtime-status li span,
+.runtime-status li small {
+  display: block;
+}
+
+.runtime-status li small,
+.runtime-status li p,
+.runtime-status-metrics {
+  color: #657169;
+}
+
+.runtime-status li p {
+  margin: 2px 0 0;
+}
+
+.runtime-status-metrics {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  font-size: 0.72rem;
 }
 
 .composer-area {
@@ -1365,6 +1443,7 @@ summary:focus-visible {
   }
 
   .conversation-message,
+  .runtime-status,
   .trace-message {
     width: 94%;
   }

@@ -36,8 +36,9 @@ Rejecting the set prevents all of its members from executing.
 
 ## Session History
 
-Session events include user requests, model-route decisions, assistant responses, proposed tools, confirmation decisions, tool outcomes, pause state, and errors.
-Terminal, browser, and notebook views derive their presentation from that same event stream.
+Session events include user requests, model-route decisions, final assistant responses, proposed tools, confirmation decisions, tool outcomes, lifecycle, task status, model usage, specialist lineage, and stable errors.
+The gateway turns that stream into one projection for terminal, browser, and notebook clients.
+Incremental response tokens are visible while the model works but are not persisted.
 
 Use `/replay` in the terminal or the browser activity view to inspect it.
 Replay verifies the audit chain and the one-to-one hash binding between each audit record and the complete session event before returning persisted history.
@@ -45,6 +46,8 @@ Replay verifies the audit chain and the one-to-one hash binding between each aud
 ## Audit Export
 
 Use `/audit-export` or the browser export control to create a JSON Lines file for review.
-The export is scrubbed and content-minimized, but it still contains operational identifiers, decisions, classifications, counts, and timestamps that may be sensitive in context.
+The export is scrubbed and content-minimized.
+It records task counts and statuses instead of task titles or notes, usage totals instead of completion content, and stable error codes instead of provider details.
+Operational identifiers, decisions, classifications, counts, and timestamps may still be sensitive in context.
 
 An audit record supports review and reproducibility; it is not proof that a scientific result is correct or that a deployment meets a regulatory requirement.

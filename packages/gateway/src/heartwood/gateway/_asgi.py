@@ -131,31 +131,53 @@ class GatewayAsgiApp:
                 ],
             }
         )
-        stream = self.gateway.websocket(session_id=session_id, after_sequence=after_sequence)
-        await _send_sse_events(send, stream.receive())
-
-        while not stream.closed:
-            next_events = cast(asyncio.Future[Any], asyncio.create_task(stream.receive_next()))
-            next_message = cast(asyncio.Future[Any], asyncio.ensure_future(receive()))
-            done, pending = await asyncio.wait(
-                {next_events, next_message},
-                return_when=asyncio.FIRST_COMPLETED,
+        stream, snapshot = self.gateway.open_event_stream(
+            session_id=session_id,
+            after_sequence=after_sequence,
+        )
+        try:
+            last_sequence = snapshot.projection.revision
+            await _send_sse_events(
+                send,
+                snapshot.events,
+                projection=snapshot.projection.safe_dict(),
             )
-            if next_message in done:
-                message = cast(AsgiMessage, next_message.result())
-                next_events.cancel()
-                await _drain_cancelled(next_events)
-                if _message_type(message) == "http.disconnect":
-                    stream.close()
-                    return
-            if next_events in done:
-                events = cast(tuple[SessionEvent, ...], next_events.result())
-                next_message.cancel()
-                await _drain_cancelled(next_message)
-                await _send_sse_events(send, events)
-            for task in pending:
-                task.cancel()
-                await _drain_cancelled(task)
+
+            while not stream.closed:
+                next_events = cast(
+                    asyncio.Future[Any],
+                    asyncio.create_task(stream.receive_next()),
+                )
+                next_message = cast(asyncio.Future[Any], asyncio.ensure_future(receive()))
+                done, pending = await asyncio.wait(
+                    {next_events, next_message},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if next_message in done:
+                    message = cast(AsgiMessage, next_message.result())
+                    next_events.cancel()
+                    await _drain_cancelled(next_events)
+                    if _message_type(message) == "http.disconnect":
+                        return
+                if next_events in done:
+                    next_events.result()
+                    next_message.cancel()
+                    await _drain_cancelled(next_message)
+                    snapshot = self.gateway.session_snapshot(
+                        session_id=session_id,
+                        after_sequence=last_sequence,
+                    )
+                    last_sequence = snapshot.projection.revision
+                    await _send_sse_events(
+                        send,
+                        snapshot.events,
+                        projection=snapshot.projection.safe_dict(),
+                    )
+                for task in pending:
+                    task.cancel()
+                    await _drain_cancelled(task)
+        finally:
+            stream.close()
 
     async def _handle_websocket(
         self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend
@@ -176,35 +198,54 @@ class GatewayAsgiApp:
             return
 
         await send({"type": "websocket.accept"})
-        stream = self.gateway.websocket(session_id=route, after_sequence=after)
-        await _send_websocket_events(send, stream.receive())
+        stream, snapshot = self.gateway.open_event_stream(
+            session_id=route,
+            after_sequence=after,
+        )
+        try:
+            last_sequence = snapshot.projection.revision
+            await _send_websocket_events(
+                send,
+                snapshot.events,
+                projection=snapshot.projection.safe_dict(),
+            )
 
-        while not stream.closed:
-            next_events = cast(
-                asyncio.Future[Any],
-                asyncio.create_task(stream.receive_next()),
-            )
-            next_message = cast(asyncio.Future[Any], asyncio.ensure_future(receive()))
-            tasks = {next_events, next_message}
-            done, pending = await asyncio.wait(
-                tasks,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if next_message in done:
-                message = cast(AsgiMessage, next_message.result())
-                next_events.cancel()
-                await _drain_cancelled(next_events)
-                if _message_type(message) == "websocket.disconnect":
-                    stream.close()
-                    return
-            if next_events in done:
-                events = cast(tuple[SessionEvent, ...], next_events.result())
-                next_message.cancel()
-                await _drain_cancelled(next_message)
-                await _send_websocket_events(send, events)
-            for task in pending:
-                task.cancel()
-                await _drain_cancelled(task)
+            while not stream.closed:
+                next_events = cast(
+                    asyncio.Future[Any],
+                    asyncio.create_task(stream.receive_next()),
+                )
+                next_message = cast(asyncio.Future[Any], asyncio.ensure_future(receive()))
+                tasks = {next_events, next_message}
+                done, pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if next_message in done:
+                    message = cast(AsgiMessage, next_message.result())
+                    next_events.cancel()
+                    await _drain_cancelled(next_events)
+                    if _message_type(message) == "websocket.disconnect":
+                        return
+                if next_events in done:
+                    next_events.result()
+                    next_message.cancel()
+                    await _drain_cancelled(next_message)
+                    snapshot = self.gateway.session_snapshot(
+                        session_id=route,
+                        after_sequence=last_sequence,
+                    )
+                    last_sequence = snapshot.projection.revision
+                    await _send_websocket_events(
+                        send,
+                        snapshot.events,
+                        projection=snapshot.projection.safe_dict(),
+                    )
+                for task in pending:
+                    task.cancel()
+                    await _drain_cancelled(task)
+        finally:
+            stream.close()
 
 
 async def _read_http_body(receive: AsgiReceive) -> bytes:
@@ -219,10 +260,16 @@ async def _read_http_body(receive: AsgiReceive) -> bytes:
     return b"".join(chunks)
 
 
-async def _send_websocket_events(send: AsgiSend, events: tuple[SessionEvent, ...]) -> None:
-    if not events:
-        return
-    payload = {"events": [event.model_dump(mode="json") for event in events]}
+async def _send_websocket_events(
+    send: AsgiSend,
+    events: tuple[SessionEvent, ...],
+    *,
+    projection: Mapping[str, object],
+) -> None:
+    payload = {
+        "events": [event.model_dump(mode="json") for event in events],
+        "projection": projection,
+    }
     await send(
         {
             "type": "websocket.send",
@@ -231,8 +278,16 @@ async def _send_websocket_events(send: AsgiSend, events: tuple[SessionEvent, ...
     )
 
 
-async def _send_sse_events(send: AsgiSend, events: tuple[SessionEvent, ...]) -> None:
-    payload = {"events": [event.model_dump(mode="json") for event in events]}
+async def _send_sse_events(
+    send: AsgiSend,
+    events: tuple[SessionEvent, ...],
+    *,
+    projection: Mapping[str, object],
+) -> None:
+    payload = {
+        "events": [event.model_dump(mode="json") for event in events],
+        "projection": projection,
+    }
     body = (
         f"event: heartwood-session-events\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
     ).encode()

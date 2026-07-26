@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import type { SessionEvent } from "../types";
+import type { SessionEvent, SessionProjection } from "../types";
 
 export const event = (
   sequence: number,
@@ -68,3 +68,111 @@ export const syntheticEvents = (): SessionEvent[] => [
     },
   }),
 ];
+
+export const emptyProjection = (
+  sessionId = "session-test",
+): SessionProjection => ({
+  schema_version: "heartwood.session-projection.v1",
+  sessionId,
+  eventCount: 0,
+  revision: -1,
+  streamEpoch: "synthetic-epoch",
+  streamRevision: 0,
+  activity: [],
+  conversation: [],
+  pendingApproval: null,
+  context: {
+    modelEndpoint: null,
+    modelDecision: null,
+    modelReason: null,
+  },
+  lifecycle: {
+    status: "idle",
+    canPause: false,
+    canResume: false,
+    canSteer: true,
+  },
+  lastCommandOutcome: null,
+  taskPlan: [],
+  usage: null,
+  usageByPurpose: [],
+  subagents: [],
+  streamingText: "",
+  availableCommands: ["chat"],
+  paused: false,
+});
+
+export const syntheticProjection = (
+  overrides: Partial<SessionProjection> = {},
+): SessionProjection => ({
+  ...emptyProjection(),
+  eventCount: 6,
+  revision: 5,
+  streamRevision: 0,
+  activity: syntheticEvents().map((item) => ({
+    sequence: item.sequence,
+    kind: item.kind,
+    label: item.kind,
+    detail: "",
+  })),
+  conversation: [
+    {
+      id: "local-session-test-chat-000002",
+      sequence: 1,
+      role: "user",
+      label: "You",
+      content: "Build the synthetic target-condition cohort",
+      detail: null,
+    },
+    {
+      id: "session-test-event-000003-agent",
+      sequence: 3,
+      role: "agent",
+      label: "Agent",
+      content: "I will run the repository-verified cohort Skill.",
+      detail: null,
+    },
+    {
+      id: "session-test-event-000004-trace",
+      sequence: 4,
+      role: "trace",
+      label: "Trace",
+      content: "Proposed terminal command",
+      detail: "build the aggregate synthetic target-condition cohort",
+      technicalDetail: JSON.stringify(
+        { command: "python run.py --output /project/cohort-summary.json" },
+        null,
+        2,
+      ),
+    },
+  ],
+  pendingApproval: {
+    groupId: "action-set-session-test",
+    actions: [
+      {
+        targetId: "session-test-toolcall-0",
+        toolName: "terminal",
+        risk: "low",
+        summary: "build the aggregate synthetic target-condition cohort",
+        arguments: {
+          command: "python run.py --output /project/cohort-summary.json",
+        },
+      },
+    ],
+    decision: null,
+    decisionScope: "all",
+  },
+  context: {
+    modelEndpoint: "http://127.0.0.1:8765/v1/chat/completions",
+    modelDecision: "allow",
+    modelReason: "model route policy allows the configured profile",
+  },
+  lifecycle: {
+    status: "waiting-for-confirmation",
+    canPause: false,
+    canResume: false,
+    canSteer: false,
+  },
+  availableCommands: ["approve", "deny"],
+  ...overrides,
+});

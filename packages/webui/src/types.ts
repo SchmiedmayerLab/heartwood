@@ -26,6 +26,10 @@ export type EventKind =
   | "tool.execution.recorded"
   | "session.paused"
   | "session.resumed"
+  | "agent.lifecycle.updated"
+  | "task.plan.updated"
+  | "model.usage.updated"
+  | "subagent.updated"
   | "audit.export.recorded"
   | "error.recorded";
 
@@ -88,30 +92,101 @@ export interface ConversationMessage {
   technicalDetail?: string | null;
 }
 
-export interface ApprovalControl {
-  targetType: string;
+export interface ProjectionApprovalAction {
   targetId: string;
-  label: string;
   toolName: string;
   risk: string | null;
   summary: string | null;
   arguments: Record<string, JsonValue>;
-  decision: string | null;
 }
 
-export interface SessionContext {
+export interface ProjectionApprovalGroup {
+  groupId: string;
+  actions: ProjectionApprovalAction[];
+  decision: "approved" | "denied" | null;
+  decisionScope: "all";
+}
+
+export interface ProjectionModelContext {
   modelEndpoint: string | null;
   modelDecision: string | null;
   modelReason: string | null;
 }
 
-export interface SessionViewModel {
+export type ProjectionLifecycleStatus =
+  | "idle"
+  | "running"
+  | "paused"
+  | "waiting-for-confirmation"
+  | "finished"
+  | "error";
+
+export interface ProjectionLifecycle {
+  status: ProjectionLifecycleStatus;
+  canPause: boolean;
+  canResume: boolean;
+  canSteer: boolean;
+}
+
+export interface ProjectionTask {
+  title: string;
+  status: "todo" | "in-progress" | "done";
+}
+
+export interface ProjectionUsage {
+  usageId: string;
+  modelName: string;
+  callCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  contextWindow: number | null;
+  accumulatedCost: number;
+}
+
+export interface ProjectionSubagent {
+  invocationId: string;
+  taskId: string | null;
+  agentName: string;
+  status: "proposed" | "running" | "completed" | "error";
+  parentSessionId: string;
+  parentActionId: string;
+}
+
+export interface ProjectionCommandOutcome {
+  commandId: string;
+  commandKind: string;
+  status: "accepted" | "rejected";
+  errorCode: string | null;
+  message: string | null;
+}
+
+export type ProjectionCommand = Extract<
+  CommandKind,
+  "approve" | "chat" | "deny" | "pause" | "resume"
+>;
+
+export interface SessionProjection {
+  schema_version: "heartwood.session-projection.v1";
   sessionId: string;
   eventCount: number;
+  revision: number;
+  streamEpoch: string;
+  streamRevision: number;
   activity: ActivityItem[];
   conversation: ConversationMessage[];
-  approvalControls: ApprovalControl[];
-  context: SessionContext;
+  pendingApproval: ProjectionApprovalGroup | null;
+  context: ProjectionModelContext;
+  lifecycle: ProjectionLifecycle;
+  lastCommandOutcome: ProjectionCommandOutcome | null;
+  taskPlan: ProjectionTask[];
+  usage: ProjectionUsage | null;
+  usageByPurpose: ProjectionUsage[];
+  subagents: ProjectionSubagent[];
+  streamingText: string;
+  availableCommands: ProjectionCommand[];
   paused: boolean;
 }
 

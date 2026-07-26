@@ -16,18 +16,26 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Literal, cast
+from typing import assert_never
 
 from heartwood.adapters import PlatformAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter, select_platform_adapter
 from heartwood.audit import AuditIntegrityError, AuditLog
 from heartwood.core_adapter._facade import (
     AgentBackend,
+    BackendAgentMessageEvent,
+    BackendConfirmationRequestEvent,
+    BackendConfirmationResolutionEvent,
+    BackendErrorEvent,
     BackendEvent,
-    BackendEventKind,
+    BackendLifecycleEvent,
+    BackendSubagentEvent,
+    BackendTaskPlanEvent,
+    BackendToolCallEvent,
+    BackendToolExecutionEvent,
+    BackendUsageEvent,
     DeterministicAgentBackend,
-    ProposedToolCall,
-    ToolExecution,
+    backend_error_message,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
 from heartwood.model_policy import ModelPolicyEngine
@@ -65,6 +73,8 @@ class SessionService:
         policy_profile: PolicyProfile | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
+        event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
+        token_sink: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
@@ -75,6 +85,12 @@ class SessionService:
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
         self._command_lock = RLock()
+        self._event_sink = event_sink or (lambda _events: None)
+        self._token_sink = token_sink or (lambda _delta: None)
+        self.backend.bind_runtime(
+            event_sink=self._accept_backend_events,
+            token_sink=self._token_sink,
+        )
 
     @classmethod
     def synthetic_default(
@@ -84,15 +100,22 @@ class SessionService:
         session_id: str = "session-synthetic-001",
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
+        event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
+        token_sink: Callable[[str], None] | None = None,
     ) -> SessionService:
         """Build the deterministic synthetic service used in tests and replay."""
         platform = GenericPlatformAdapter()
+        store = FileSessionStore(workspace, session_id)
         return cls(
-            store=FileSessionStore(workspace, session_id),
+            store=store,
             platform_adapter=platform,
-            backend=DeterministicAgentBackend(),
+            backend=DeterministicAgentBackend(
+                persistence_path=store.session_dir / ".deterministic-backend.json"
+            ),
             env={} if env is None else env,
             clock=(lambda: "2026-01-01T00:00:00Z") if clock is None else clock,
+            event_sink=event_sink,
+            token_sink=token_sink,
         )
 
     @classmethod
@@ -105,6 +128,8 @@ class SessionService:
         policy_profile: PolicyProfile | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
+        event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
+        token_sink: Callable[[str], None] | None = None,
     ) -> SessionService:
         """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
@@ -113,13 +138,26 @@ class SessionService:
         return cls(
             store=store,
             platform_adapter=platform,
-            backend=DeterministicAgentBackend() if backend is None else backend,
+            backend=(
+                DeterministicAgentBackend(
+                    persistence_path=store.session_dir / ".deterministic-backend.json"
+                )
+                if backend is None
+                else backend
+            ),
             policy_profile=policy_profile,
             env=active_env,
             clock=clock,
+            event_sink=event_sink,
+            token_sink=token_sink,
         )
 
-    def handle(self, command: SessionCommand) -> SessionResult:
+    def handle(
+        self,
+        command: SessionCommand,
+        *,
+        unavailable_reason: str | None = None,
+    ) -> SessionResult:
         """Handle one command, persist events, and append audit records."""
         if command.session_id != self.store.session_id:
             msg = (
@@ -130,8 +168,10 @@ class SessionService:
         with self._command_lock:
             self.store.acquire_writer()
             self.store.recover_pending_commit()
+            reconciled = self._reconcile_locked()
+            if reconciled:
+                self._event_sink(reconciled)
             persisted = self.replay_events()
-            self.backend.restore_pending(_pending_tool_calls(persisted))
             command_hash = _command_hash(command)
             record = self.store.command_record(command.command_id)
             if record is not None:
@@ -158,7 +198,10 @@ class SessionService:
                 command_hash=command_hash,
                 first_sequence=first_sequence,
             )
-            result = self._handle_new_command(command)
+            result = self._handle_new_command(
+                command,
+                unavailable_reason=unavailable_reason,
+            )
             self.store.complete_command(
                 command_id=command.command_id,
                 command_hash=command_hash,
@@ -167,7 +210,12 @@ class SessionService:
             )
             return result
 
-    def _handle_new_command(self, command: SessionCommand) -> SessionResult:
+    def _handle_new_command(
+        self,
+        command: SessionCommand,
+        *,
+        unavailable_reason: str | None,
+    ) -> SessionResult:
         """Execute a command that has not previously been accepted."""
         command_kind = _kind_value(command.kind)
         events = [
@@ -181,6 +229,18 @@ class SessionService:
                 },
             )
         ]
+        if unavailable_reason is not None:
+            events.append(
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": command_kind,
+                        "reason": unavailable_reason,
+                        "affects_lifecycle": False,
+                    },
+                )
+            )
+            return SessionResult(events=tuple(events))
         if command_kind == CommandKind.CHAT.value:
             events.extend(self._handle_task(command))
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
@@ -191,8 +251,8 @@ class SessionService:
                 self._record_event(EventKind.SESSION_PAUSED, {"command_id": command.command_id})
             )
         elif command_kind == CommandKind.RESUME.value:
-            pending = _pending_tool_call(self.store.read_events())
-            if pending is not None:
+            pending_group = self.backend.pending_action_group(session_id=command.session_id)
+            if pending_group is not None:
                 events.append(
                     self._record_event(
                         EventKind.ERROR_RECORDED,
@@ -212,17 +272,15 @@ class SessionService:
                     )
                 events.extend(authorization_events)
                 if authorized:
-                    events.append(
-                        self._record_event(
-                            EventKind.SESSION_RESUMED,
-                            {"command_id": command.command_id},
+                    backend_events = self.backend.resume(session_id=command.session_id)
+                    if not any(isinstance(event, BackendErrorEvent) for event in backend_events):
+                        events.append(
+                            self._record_event(
+                                EventKind.SESSION_RESUMED,
+                                {"command_id": command.command_id},
+                            )
                         )
-                    )
-                    events.extend(
-                        self._translate_backend_events(
-                            self.backend.resume(session_id=command.session_id)
-                        )
-                    )
+                    events.extend(self._translate_backend_events(backend_events))
         elif command_kind == CommandKind.AUDIT_EXPORT.value:
             events.append(self._handle_audit_export())
         else:
@@ -238,12 +296,20 @@ class SessionService:
         """Return events after verifying their one-to-one audit correspondence."""
         return self.store.replay_events()
 
+    def reconcile(self) -> tuple[SessionEvent, ...]:
+        """Commit OpenHands state not yet represented in the durable session."""
+        with self._command_lock:
+            self.store.acquire_writer()
+            self.store.recover_pending_commit()
+            events = self._reconcile_locked()
+        if events:
+            self._event_sink(events)
+        return events
+
     def close(self) -> None:
         """Release backend resources."""
-        try:
-            self.backend.close()
-        finally:
-            self.store.release_writer()
+        self.backend.close()
+        self.store.release_writer()
 
     def _handle_task(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
         prompt_value = command.payload.get("prompt")
@@ -262,7 +328,7 @@ class SessionService:
                 "content": prompt,
             },
         )
-        if _pending_tool_call(self.store.read_events()) is not None:
+        if self.backend.pending_action_group(session_id=command.session_id) is not None:
             return (
                 user_event,
                 self._record_event(
@@ -341,19 +407,22 @@ class SessionService:
         return True, [policy_event]
 
     def _handle_action_decision(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
-        target_type = str(command.payload.get("target_type", "tool-call"))
-        if target_type != "tool-call":
+        target_type = str(command.payload.get("target_type", "action-set"))
+        if target_type != "action-set":
             return (
                 self._record_event(
                     EventKind.ERROR_RECORDED,
                     {
                         "command": _kind_value(command.kind),
-                        "reason": "interactive approval is supported only for pending tool actions",
+                        "reason": (
+                            "interactive approval is supported only for the complete pending "
+                            "action set"
+                        ),
                     },
                 ),
             )
-        tool_call_id = str(command.payload.get("target_id", ""))
-        if not tool_call_id:
+        action_group_id = str(command.payload.get("target_id", ""))
+        if not action_group_id:
             return (
                 self._record_event(
                     EventKind.ERROR_RECORDED,
@@ -361,18 +430,14 @@ class SessionService:
                 ),
             )
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
-        pending_by_id = {
-            pending.tool_call_id: pending
-            for pending in _pending_tool_calls(self.store.read_events())
-        }
-        pending = pending_by_id.get(tool_call_id)
-        if pending is None:
+        pending_group = self.backend.pending_action_group(session_id=command.session_id)
+        if pending_group is None or pending_group.group_id != action_group_id:
             return (
                 self._record_event(
                     EventKind.ERROR_RECORDED,
                     {
                         "command": _kind_value(command.kind),
-                        "reason": f"no matching pending action: {tool_call_id}",
+                        "reason": (f"no matching pending action group: {action_group_id}"),
                     },
                 ),
             )
@@ -385,26 +450,63 @@ class SessionService:
             events.extend(authorization_events)
             if not authorized:
                 return tuple(events)
-        events.extend(
-            self._translate_backend_events(
-                self.backend.resolve_confirmation(
-                    session_id=command.session_id,
-                    tool_call_id=tool_call_id,
-                    approved=approved,
-                )
+        decision = "approved" if approved else "denied"
+        events.append(
+            self._record_event(
+                EventKind.APPROVAL_RECORDED,
+                {
+                    "command_id": command.command_id,
+                    "group_id": pending_group.group_id,
+                    "decision": decision,
+                    "tool_call_ids": [
+                        action.tool_call_id for action in pending_group.actions
+                    ],
+                },
             )
         )
+        backend_events = self.backend.resolve_confirmation(
+            session_id=command.session_id,
+            action_group_id=action_group_id,
+            approved=approved,
+        )
+        if not any(isinstance(event, BackendErrorEvent) for event in backend_events):
+            for action in pending_group.actions:
+                events.append(
+                    self._record_event(
+                        EventKind.CONFIRMATION_RESOLVED,
+                        {
+                            "tool_call_id": action.tool_call_id,
+                            "group_id": pending_group.group_id,
+                            "decision": decision,
+                        },
+                    )
+                )
+        events.extend(self._translate_backend_events(backend_events))
         return tuple(events)
 
     def _translate_backend_events(self, stream: tuple[BackendEvent, ...]) -> list[SessionEvent]:
         translated: list[SessionEvent] = []
+        known_source_event_ids = _source_event_ids(self.store.read_events())
         for event in stream:
-            if event.kind == BackendEventKind.AGENT_MESSAGE:
+            if (
+                event.source_event_id is not None
+                and event.source_event_id in known_source_event_ids
+            ):
+                continue
+            source_payload: dict[str, JsonValue] = (
+                {"source_event_id": event.source_event_id}
+                if event.source_event_id is not None
+                else {}
+            )
+            if isinstance(event, BackendAgentMessageEvent):
                 translated.append(
-                    self._record_event(EventKind.AGENT_MESSAGE_EMITTED, {"content": event.message})
+                    self._record_event(
+                        EventKind.AGENT_MESSAGE_EMITTED,
+                        {"content": event.message, **source_payload},
+                    )
                 )
-            elif event.kind == BackendEventKind.TOOL_CALL_PROPOSED:
-                tool_call = _require_tool_call(event)
+            elif isinstance(event, BackendToolCallEvent):
+                tool_call = event.tool_call
                 translated.append(
                     self._record_event(
                         EventKind.TOOL_CALL_PROPOSED,
@@ -414,24 +516,27 @@ class SessionService:
                             "risk": tool_call.risk,
                             "summary": tool_call.summary,
                             "arguments": tool_call.arguments,
+                            **source_payload,
                         },
                     )
                 )
-            elif event.kind == BackendEventKind.CONFIRMATION_REQUESTED:
+            elif isinstance(event, BackendConfirmationRequestEvent):
                 translated.append(self._record_confirmation_request(event))
-            elif event.kind == BackendEventKind.CONFIRMATION_RESOLVED:
-                tool_call = _require_tool_call(event)
+            elif isinstance(event, BackendConfirmationResolutionEvent):
+                tool_call = event.tool_call
                 translated.append(
                     self._record_event(
                         EventKind.CONFIRMATION_RESOLVED,
                         {
                             "tool_call_id": tool_call.tool_call_id,
+                            "group_id": event.action_group_id,
                             "decision": "approved" if event.approved else "denied",
+                            **source_payload,
                         },
                     )
                 )
-            elif event.kind == BackendEventKind.TOOL_EXECUTION:
-                execution = _require_tool_execution(event)
+            elif isinstance(event, BackendToolExecutionEvent):
+                execution = event.tool_execution
                 translated.append(
                     self._record_event(
                         EventKind.TOOL_EXECUTION_RECORDED,
@@ -440,20 +545,96 @@ class SessionService:
                             "tool_name": execution.tool_name,
                             "exit_code": execution.exit_code,
                             "summary": execution.summary,
+                            **source_payload,
                         },
                     )
                 )
-            elif event.kind == BackendEventKind.ERROR:
+            elif isinstance(event, BackendLifecycleEvent):
+                translated.append(
+                    self._record_event(
+                        EventKind.AGENT_LIFECYCLE_UPDATED,
+                        {"status": event.lifecycle.value, **source_payload},
+                    )
+                )
+            elif isinstance(event, BackendTaskPlanEvent):
+                translated.append(
+                    self._record_event(
+                        EventKind.TASK_PLAN_UPDATED,
+                        {
+                            "tasks": [
+                                {
+                                    "title": task.title,
+                                    "status": task.status.value,
+                                }
+                                for task in event.tasks
+                            ],
+                            **source_payload,
+                        },
+                    )
+                )
+            elif isinstance(event, BackendUsageEvent):
+                usage = event.usage
+                translated.append(
+                    self._record_event(
+                        EventKind.MODEL_USAGE_UPDATED,
+                        {
+                            "usage": {
+                                "usage_id": usage.usage_id,
+                                "model_name": usage.model_name,
+                                "call_count": usage.call_count,
+                                "prompt_tokens": usage.prompt_tokens,
+                                "completion_tokens": usage.completion_tokens,
+                                "cache_read_tokens": usage.cache_read_tokens,
+                                "cache_write_tokens": usage.cache_write_tokens,
+                                "reasoning_tokens": usage.reasoning_tokens,
+                                "context_window": usage.context_window,
+                                "accumulated_cost": usage.accumulated_cost,
+                            },
+                            **source_payload,
+                        },
+                    )
+                )
+            elif isinstance(event, BackendSubagentEvent):
+                subagent = event.subagent
+                translated.append(
+                    self._record_event(
+                        EventKind.SUBAGENT_UPDATED,
+                        {
+                            "subagent": {
+                                "invocation_id": subagent.invocation_id,
+                                "task_id": subagent.task_id,
+                                "agent_name": subagent.agent_name,
+                                "status": subagent.status.value,
+                                "parent_session_id": subagent.parent_session_id,
+                                "parent_action_id": subagent.parent_action_id,
+                            },
+                            **source_payload,
+                        },
+                    )
+                )
+            elif isinstance(event, BackendErrorEvent):
                 translated.append(
                     self._record_event(
                         EventKind.ERROR_RECORDED,
-                        {"backend_id": self.backend.backend_id, "reason": event.message or "error"},
+                        {
+                            "backend_id": self.backend.backend_id,
+                            "code": event.error_code.value,
+                            "reason": backend_error_message(event.error_code),
+                            **source_payload,
+                        },
                     )
                 )
+            else:
+                assert_never(event)
+            if event.source_event_id is not None:
+                known_source_event_ids = known_source_event_ids | {event.source_event_id}
         return translated
 
-    def _record_confirmation_request(self, event: BackendEvent) -> SessionEvent:
-        tool_call = _require_tool_call(event)
+    def _record_confirmation_request(
+        self,
+        event: BackendConfirmationRequestEvent,
+    ) -> SessionEvent:
+        tool_call = event.tool_call
         request = ConfirmationRequest(
             request_id=f"{tool_call.tool_call_id}-confirm",
             session_id=self.store.session_id,
@@ -463,9 +644,42 @@ class SessionService:
             summary=tool_call.summary,
             arguments=tool_call.arguments,
         )
+        request_payload = request.model_dump(mode="json")
+        request_payload["group_id"] = event.action_group_id
+        if event.source_event_id is not None:
+            request_payload["source_event_id"] = event.source_event_id
         return self._record_event(
             EventKind.CONFIRMATION_REQUESTED,
-            {"request": request.model_dump(mode="json")},
+            {
+                "request": request_payload,
+                **(
+                    {"source_event_id": event.source_event_id}
+                    if event.source_event_id is not None
+                    else {}
+                ),
+            },
+        )
+
+    def _accept_backend_events(self, stream: tuple[BackendEvent, ...]) -> None:
+        """Persist final background events and publish their shared projection inputs."""
+        if not stream:
+            return
+        with self._command_lock:
+            self.store.acquire_writer()
+            self.store.recover_pending_commit()
+            events = tuple(self._translate_backend_events(stream))
+        if events:
+            self._event_sink(events)
+
+    def _reconcile_locked(self) -> tuple[SessionEvent, ...]:
+        persisted = self.replay_events()
+        return tuple(
+            self._translate_backend_events(
+                self.backend.reconcile(
+                    session_id=self.store.session_id,
+                    known_source_event_ids=_source_event_ids(persisted),
+                )
+            )
         )
 
     def _handle_audit_export(self) -> SessionEvent:
@@ -520,23 +734,175 @@ class SessionService:
 
 def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """Project an operational event into its content-minimized audit representation."""
-    if kind != EventKind.ERROR_RECORDED:
-        return payload
-    return {key: "[scrubbed]" if key == "reason" else value for key, value in payload.items()}
+    if kind == EventKind.COMMAND_RECEIVED:
+        return _selected_audit_fields(
+            payload,
+            "actor_id",
+            "command_id",
+            "command_hash",
+            "command_kind",
+        )
+    if kind == EventKind.MODEL_CALL_DECISION_RECORDED:
+        decision = payload.get("decision")
+        model_profile = payload.get("model_profile")
+        return {
+            "decision": (
+                _selected_audit_fields(
+                    decision,
+                    "decision_id",
+                    "policy_profile_id",
+                    "endpoint",
+                    "capability_tier",
+                    "decision",
+                )
+                if isinstance(decision, dict)
+                else {}
+            ),
+            "model_profile": (
+                _selected_audit_fields(
+                    model_profile,
+                    "backend_id",
+                    "profile_id",
+                    "capability_tier",
+                    "action_confirmation_mode",
+                )
+                if isinstance(model_profile, dict)
+                else {}
+            ),
+        }
+    if kind == EventKind.APPROVAL_RECORDED:
+        tool_call_ids = payload.get("tool_call_ids")
+        return {
+            **_selected_audit_fields(
+                payload,
+                "command_id",
+                "group_id",
+                "decision",
+            ),
+            "action_count": len(tool_call_ids) if isinstance(tool_call_ids, list) else 0,
+        }
+    if kind == EventKind.USER_MESSAGE_RECORDED:
+        content = payload.get("content")
+        return {
+            "actor_id": payload.get("actor_id", ""),
+            "command_id": payload.get("command_id", ""),
+            "content_chars": len(content) if isinstance(content, str) else 0,
+        }
+    if kind == EventKind.AGENT_MESSAGE_EMITTED:
+        content = payload.get("content")
+        return {
+            "content_chars": len(content) if isinstance(content, str) else 0,
+        }
+    if kind == EventKind.TOOL_CALL_PROPOSED:
+        return _selected_audit_fields(
+            payload,
+            "tool_call_id",
+            "tool_name",
+            "risk",
+        )
+    if kind == EventKind.CONFIRMATION_REQUESTED:
+        request = payload.get("request")
+        if not isinstance(request, dict):
+            return {"request": "invalid"}
+        return {
+            "request": _selected_audit_fields(
+                request,
+                "request_id",
+                "group_id",
+                "tool_call_id",
+                "tool_name",
+                "risk",
+            )
+        }
+    if kind == EventKind.CONFIRMATION_RESOLVED:
+        return _selected_audit_fields(
+            payload,
+            "group_id",
+            "tool_call_id",
+            "decision",
+        )
+    if kind == EventKind.TOOL_EXECUTION_RECORDED:
+        return _selected_audit_fields(
+            payload,
+            "backend_id",
+            "tool_name",
+            "exit_code",
+        )
+    if kind == EventKind.TASK_PLAN_UPDATED:
+        tasks = payload.get("tasks")
+        task_items = tasks if isinstance(tasks, list) else []
+        counts: dict[str, int] = {}
+        for task in task_items:
+            if isinstance(task, dict):
+                status = str(task.get("status", "unknown"))
+                counts[status] = counts.get(status, 0) + 1
+        normalized_counts: dict[str, JsonValue] = dict(counts)
+        return {
+            "task_count": len(task_items),
+            "status_counts": normalized_counts,
+        }
+    if kind == EventKind.MODEL_USAGE_UPDATED:
+        usage = payload.get("usage")
+        return {
+            "usage": (
+                _selected_audit_fields(
+                    usage,
+                    "usage_id",
+                    "model_name",
+                    "call_count",
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens",
+                    "reasoning_tokens",
+                    "context_window",
+                    "accumulated_cost",
+                )
+                if isinstance(usage, dict)
+                else {}
+            )
+        }
+    if kind == EventKind.SUBAGENT_UPDATED:
+        subagent = payload.get("subagent")
+        return {
+            "subagent": (
+                _selected_audit_fields(
+                    subagent,
+                    "invocation_id",
+                    "task_id",
+                    "agent_name",
+                    "status",
+                    "parent_session_id",
+                    "parent_action_id",
+                )
+                if isinstance(subagent, dict)
+                else {}
+            )
+        }
+    if kind == EventKind.AGENT_LIFECYCLE_UPDATED:
+        return _selected_audit_fields(payload, "status")
+    if kind in {EventKind.SESSION_PAUSED, EventKind.SESSION_RESUMED}:
+        return _selected_audit_fields(payload, "command_id")
+    if kind == EventKind.ERROR_RECORDED:
+        minimized = _selected_audit_fields(
+            payload,
+            "backend_id",
+            "code",
+            "command",
+        )
+        if "reason" in payload:
+            minimized["reason"] = "[scrubbed]"
+        return minimized
+    if kind == EventKind.AUDIT_EXPORT_RECORDED:
+        return _selected_audit_fields(payload, "event_count", "scrubbed")
+    return {"payload_omitted": True}
 
 
-def _require_tool_call(event: BackendEvent) -> ProposedToolCall:
-    if event.tool_call is None:  # pragma: no cover - backend contract guarantees presence
-        msg = f"{event.kind} event is missing a tool call"
-        raise TypeError(msg)
-    return event.tool_call
-
-
-def _require_tool_execution(event: BackendEvent) -> ToolExecution:
-    if event.tool_execution is None:  # pragma: no cover - backend contract guarantees presence
-        msg = f"{event.kind} event is missing a tool execution"
-        raise TypeError(msg)
-    return event.tool_execution
+def _selected_audit_fields(
+    payload: Mapping[str, JsonValue],
+    *names: str,
+) -> dict[str, JsonValue]:
+    return {name: payload[name] for name in names if name in payload}
 
 
 def _utc_now() -> str:
@@ -614,34 +980,10 @@ def _command_result_from_receipt(
     return SessionResult(events=selected, replayed=True)
 
 
-def _pending_tool_calls(events: tuple[SessionEvent, ...]) -> tuple[ProposedToolCall, ...]:
-    pending: dict[str, ProposedToolCall] = {}
-    for event in events:
-        kind = str(event.kind)
-        if kind == EventKind.CONFIRMATION_REQUESTED.value:
-            request = event.payload.get("request")
-            if isinstance(request, dict):
-                risk_value = str(request.get("risk", "unknown"))
-                risk = risk_value if risk_value in {"low", "medium", "high"} else "unknown"
-                tool_call = ProposedToolCall(
-                    tool_call_id=str(request.get("tool_call_id", "")),
-                    tool_name=str(request.get("tool_name", "unknown-tool")),
-                    risk=cast(Literal["low", "medium", "high", "unknown"], risk),
-                    summary=str(request.get("summary", "pending action")),
-                    arguments=cast(
-                        dict[str, JsonValue],
-                        request.get("arguments", {})
-                        if isinstance(request.get("arguments"), dict)
-                        else {},
-                    ),
-                )
-                pending[tool_call.tool_call_id] = tool_call
-        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
-            tool_call_id = str(event.payload.get("tool_call_id", ""))
-            pending.pop(tool_call_id, None)
-    return tuple(pending.values())
-
-
-def _pending_tool_call(events: tuple[SessionEvent, ...]) -> ProposedToolCall | None:
-    pending = _pending_tool_calls(events)
-    return pending[-1] if pending else None
+def _source_event_ids(events: tuple[SessionEvent, ...]) -> frozenset[str]:
+    return frozenset(
+        source_event_id
+        for event in events
+        if isinstance((source_event_id := event.payload.get("source_event_id")), str)
+        and source_event_id
+    )

@@ -9,29 +9,15 @@
 from __future__ import annotations
 
 from heartwood.notebook._view_model import (
-    ActivityItem,
-    ApprovalAction,
-    ApprovalControl,
-    ChatMessage,
-    ExportAction,
     NotebookSession,
     NotebookViewModel,
-    PolicyStatus,
-    SkillProposal,
     build_view_model,
 )
 from heartwood.notebook._widgets import WidgetSpec, build_widget_spec, render_widgets
 
 __all__ = [
-    "ActivityItem",
-    "ApprovalAction",
-    "ApprovalControl",
-    "ChatMessage",
-    "ExportAction",
     "NotebookSession",
     "NotebookViewModel",
-    "PolicyStatus",
-    "SkillProposal",
     "WidgetSpec",
     "__version__",
     "build_view_model",

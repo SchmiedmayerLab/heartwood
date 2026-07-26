@@ -144,9 +144,22 @@ async function main() {
     const commandEvents =
       Array.isArray(commandResponse.events) ? commandResponse.events : [];
     const commandKinds = commandEvents.map((event) => event.kind);
-    if (!commandKinds.includes("session.paused")) {
+    if (
+      !commandKinds.includes("command.received") ||
+      !commandKinds.includes("error.recorded")
+    ) {
       throw new Error(
-        "proxied gateway command route did not return session state",
+        "proxied gateway did not reject an unavailable idle-session command",
+      );
+    }
+    const projection = commandResponse.projection;
+    if (
+      projection?.lifecycle?.status !== "idle" ||
+      projection?.revision !== commandEvents.at(-1)?.sequence ||
+      projection?.availableCommands?.join(",") !== "chat"
+    ) {
+      throw new Error(
+        "proxied gateway command route did not return its authoritative projection",
       );
     }
 

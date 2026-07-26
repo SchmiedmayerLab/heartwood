@@ -44,6 +44,7 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "LITELLM_LOCAL_MODEL_COST_MAP=True" in dockerfile
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
     assert "COPY deploy/install-llama-cpp.sh" in dockerfile
+    assert "COPY agents ./agents" in dockerfile
     assert "heartwood-install-llama-cpp /opt/llama.cpp" in dockerfile
     assert "llama-${version}-bin-ubuntu-x64.tar.gz" in llama_installer
     assert "llama-${version}-bin-ubuntu-arm64.tar.gz" in llama_installer
@@ -113,6 +114,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "packages",
         "fixtures",
         "skills",
+        "agents",
         "evals",
         "images",
         "README.md NOTICE",
@@ -762,6 +764,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "npm ci --no-audit --fund=false" in packager
     assert "npm run build" in packager
     assert "packages/webui/dist/index.html" in packager
+    assert 'test -f "${source}/agents/verified/research-planner.md"' in real_smoke
     assert '"${installation}/bin/heartwood-jupyter" --version' in real_smoke
     assert '"${installation}/bin/heartwood" --interface web' in real_smoke
     assert "installer accepted a corrupted checksum" in smoke
@@ -1019,6 +1022,63 @@ def test_local_model_stub_preserves_explicit_action_risk() -> None:
     assert "<parameter=command>printf heartwood-openhands-action</parameter>" in prompt_call
     assert "<parameter=security_risk>LOW</parameter>" in prompt_call
     assert prompt_call.endswith("</function>")
+
+
+def test_local_model_stub_streams_typed_tool_calls_and_final_text() -> None:
+    path = _repo_root() / "images/generic/scripts/local_model_stub.py"
+    spec = importlib.util.spec_from_file_location("heartwood_local_model_stub_stream", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    tool_call = module._terminal_call(
+        "call-stream",
+        "printf safe",
+        "run the synthetic command",
+    )
+    tool_chunks = module._stream_chunks(
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion",
+            "model": "heartwood-managed-runtime",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call],
+                    },
+                }
+            ],
+        }
+    )
+    first_tool_choice = tool_chunks[0]["choices"][0]
+    assert first_tool_choice["delta"]["tool_calls"][0]["index"] == 0
+    assert first_tool_choice["delta"]["tool_calls"][0]["id"] == "call-stream"
+    assert tool_chunks[1]["choices"][0]["finish_reason"] == "tool_calls"
+
+    text_chunks = module._stream_chunks(
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion",
+            "model": "heartwood-managed-runtime",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "Synthetic task complete.",
+                    },
+                }
+            ],
+        }
+    )
+    assert text_chunks[0]["choices"][0]["delta"]["content"] == "Synthetic task complete."
+    assert text_chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:

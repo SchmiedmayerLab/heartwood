@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import json
 import shlex
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
 
-from heartwood.gateway import ModelSettingsError, SessionGateway
+from heartwood.gateway import (
+    ModelSettingsError,
+    ProjectionApprovalGroup,
+    SessionGateway,
+    SessionProjection,
+)
 from heartwood.session import (
     CommandKind,
-    EventKind,
     JsonValue,
     SessionCommand,
     SessionEvent,
@@ -31,6 +34,7 @@ class InteractionResult:
     """One user interaction projected for a terminal client."""
 
     events: tuple[SessionEvent, ...] = ()
+    projection: SessionProjection | None = None
     message: str | None = None
     exit_requested: bool = False
     error: bool = False
@@ -39,8 +43,13 @@ class InteractionResult:
     @property
     def failed(self) -> bool:
         """Return whether this interaction recorded an error."""
-        return self.error or any(
-            str(event.kind) == EventKind.ERROR_RECORDED.value for event in self.events
+        outcome = (
+            None if self.projection is None else self.projection.last_command_outcome
+        )
+        return (
+            self.error
+            or (self.projection is not None and self.projection.lifecycle.status == "error")
+            or (outcome is not None and outcome.status == "rejected")
         )
 
 
@@ -102,18 +111,6 @@ _COMMAND_ACTIVITIES = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class PendingAction:
-    """One member of the current OpenHands confirmation batch."""
-
-    request_id: str
-    tool_call_id: str
-    tool_name: str
-    risk: str
-    summary: str
-    arguments: dict[str, JsonValue] = field(default_factory=dict)
-
-
 class InteractiveSession:
     """Translate terminal input into the shared gateway command contract."""
 
@@ -121,13 +118,21 @@ class InteractiveSession:
         self.gateway = gateway
         self.session_id = session_id
 
-    def replay(self) -> tuple[SessionEvent, ...]:
-        """Return the persisted conversation."""
-        return self.gateway.replay_events(session_id=self.session_id)
+    def replay(self) -> SessionProjection:
+        """Return the gateway-owned session projection."""
+        return self.gateway.session_projection(session_id=self.session_id)
 
-    def pending_actions(self) -> tuple[PendingAction, ...]:
-        """Return the unresolved members of the current OpenHands action batch."""
-        return pending_actions(self.replay())
+    def pending_approval(self) -> ProjectionApprovalGroup | None:
+        """Return the complete unresolved OpenHands action group."""
+        return self.replay().pending_approval
+
+    def wait_until_stable(self, *, poll_interval: float = 0.1) -> SessionProjection:
+        """Wait for a background run to reach an interactive boundary."""
+        while True:
+            projection = self.replay()
+            if projection.lifecycle.status != "running":
+                return projection
+            time.sleep(poll_interval)
 
     def submit(self, line: str) -> InteractionResult:
         """Submit a prompt or slash command."""
@@ -135,7 +140,8 @@ class InteractiveSession:
         if not text:
             return InteractionResult()
         if not text.startswith("/"):
-            return InteractionResult(events=self._handle(CommandKind.CHAT, {"prompt": text}))
+            events = self._handle(CommandKind.CHAT, {"prompt": text})
+            return InteractionResult(events=events, projection=self.replay())
         try:
             parts = shlex.split(text)
         except ValueError:
@@ -151,20 +157,25 @@ class InteractiveSession:
                     error=True,
                 )
             kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
+            events = self._handle(
+                kind,
+                {"target_type": "action-set", "target_id": target},
+            )
             return InteractionResult(
-                events=self._handle(
-                    kind,
-                    {"target_type": "tool-call", "target_id": target},
-                )
+                events=events,
+                projection=self.replay(),
             )
         if directive == "/pause" and len(parts) == 1:
-            return InteractionResult(events=self._handle(CommandKind.PAUSE))
+            events = self._handle(CommandKind.PAUSE)
+            return InteractionResult(events=events, projection=self.replay())
         if directive == "/resume" and len(parts) == 1:
-            return InteractionResult(events=self._handle(CommandKind.RESUME))
+            events = self._handle(CommandKind.RESUME)
+            return InteractionResult(events=events, projection=self.replay())
         if directive == "/replay" and len(parts) == 1:
-            return InteractionResult(events=self.replay(), replace_transcript=True)
+            return InteractionResult(projection=self.replay(), replace_transcript=True)
         if directive == "/audit-export" and len(parts) == 1:
-            return InteractionResult(events=self._handle(CommandKind.AUDIT_EXPORT))
+            events = self._handle(CommandKind.AUDIT_EXPORT)
+            return InteractionResult(events=events, projection=self.replay())
         if directive == "/status" and len(parts) == 1:
             try:
                 return InteractionResult(message=format_model_status(self.gateway))
@@ -175,14 +186,13 @@ class InteractiveSession:
         return InteractionResult(message=f"Unknown command: {directive}")
 
     def _decision_target(self, requested_id: str | None) -> str | None:
-        actions = self.pending_actions()
-        if not actions:
+        approval = self.pending_approval()
+        if approval is None:
             return None
         if requested_id is None:
-            return actions[0].tool_call_id
-        for action in actions:
-            if requested_id in {action.tool_call_id, action.request_id}:
-                return action.tool_call_id
+            return approval.group_id
+        if requested_id == approval.group_id:
+            return requested_id
         return requested_id
 
     def _handle(
@@ -214,42 +224,71 @@ def interaction_activity(line: str) -> InteractionActivity:
     return _COMMAND_ACTIVITIES.get(directive, _DEFAULT_ACTIVITY)
 
 
-def pending_actions(events: Sequence[SessionEvent]) -> tuple[PendingAction, ...]:
-    """Project unresolved confirmation requests from a persisted event stream."""
-    pending: dict[str, PendingAction] = {}
-    for event in events:
-        kind = str(event.kind)
-        if kind == EventKind.CONFIRMATION_REQUESTED.value:
-            request = event.payload.get("request")
-            if not isinstance(request, dict):
-                continue
-            tool_call_id = request.get("tool_call_id")
-            if not isinstance(tool_call_id, str) or not tool_call_id:
-                continue
-            pending[tool_call_id] = PendingAction(
-                request_id=str(request.get("request_id", "")),
-                tool_call_id=tool_call_id,
-                tool_name=str(request.get("tool_name", "unknown-tool")),
-                risk=str(request.get("risk", "unknown")),
-                summary=str(request.get("summary", request.get("tool_name", "action"))),
-                arguments=(
-                    cast(dict[str, JsonValue], request["arguments"])
-                    if isinstance(request.get("arguments"), dict)
-                    else {}
-                ),
-            )
-        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
-            tool_call_id = event.payload.get("tool_call_id")
-            if isinstance(tool_call_id, str):
-                pending.pop(tool_call_id, None)
-    return tuple(pending.values())
-
-
 def format_action_arguments(arguments: dict[str, JsonValue]) -> tuple[str, ...]:
     """Render exact action arguments consistently across terminal clients."""
     if not arguments:
         return ()
     return tuple(json.dumps(arguments, indent=2, sort_keys=True).splitlines())
+
+
+def format_projection_lines(
+    projection: SessionProjection,
+    *,
+    include_pending_review: bool = True,
+    after_sequence: int | None = None,
+) -> tuple[str, ...]:
+    """Render the shared projection without reconstructing session state."""
+    lines: list[str] = []
+    for message in projection.conversation:
+        if after_sequence is not None and message.sequence <= after_sequence:
+            continue
+        prefix = f"[{message.sequence:03d}]"
+        lines.append(f"{prefix} {message.label}: {message.content}")
+        if message.detail:
+            lines.append(f"  {message.detail}")
+        if message.technical_detail:
+            lines.extend(f"    {line}" for line in message.technical_detail.splitlines())
+    if projection.streaming_text:
+        lines.append(f"[...] Agent: {projection.streaming_text}")
+    if projection.task_plan:
+        lines.append("Task plan:")
+        lines.extend(
+            f"  [{'x' if task.status == 'done' else '·'}] {task.title}"
+            for task in projection.task_plan
+        )
+    if projection.usage is not None:
+        usage = projection.usage
+        total_tokens = usage.prompt_tokens + usage.completion_tokens
+        lines.append(
+            f"Model activity: {usage.call_count} calls · "
+            f"{total_tokens:,} tokens · {usage.model_name}"
+        )
+        lines.extend(
+            f"  {item.usage_id}: {item.call_count} calls · "
+            f"{item.prompt_tokens + item.completion_tokens:,} tokens"
+            for item in projection.usage_by_purpose
+        )
+    if projection.subagents:
+        lines.append("Specialists:")
+        lines.extend(
+            f"  {item.agent_name}: {item.status} · invocation {item.invocation_id}"
+            f"{f' · task {item.task_id}' if item.task_id is not None else ''}"
+            for item in projection.subagents
+        )
+    approval = projection.pending_approval
+    if approval is not None and include_pending_review:
+        label = "action" if len(approval.actions) == 1 else "actions"
+        lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
+        for index, action in enumerate(approval.actions, 1):
+            lines.append(
+                f"  {index}. {action.summary or action.tool_name} "
+                f"[tool={action.tool_name}, risk={action.risk or 'unknown'}]"
+            )
+            if argument_lines := format_action_arguments(action.arguments):
+                lines.append("     Arguments:")
+                lines.extend(f"       {line}" for line in argument_lines)
+        lines.extend(("Allow all once: /allow", "Reject all: /reject"))
+    return tuple(lines)
 
 
 def format_model_status(gateway: SessionGateway) -> str:

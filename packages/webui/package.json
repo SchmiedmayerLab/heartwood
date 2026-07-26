@@ -28,7 +28,8 @@
     "@tanstack/react-query": "5.101.4",
     "lucide-react": "1.25.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
   },
   "overrides": {
     "esbuild": "0.28.1",

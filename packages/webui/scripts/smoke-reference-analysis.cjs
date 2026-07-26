@@ -98,7 +98,7 @@ async function main() {
     runCli("models", "refresh", "heartwood");
     runCli("models", "connect", "heartwood", "heartwood-managed-runtime");
 
-    startProcess(heartwoodExecutable, [
+    const gateway = startProcess(heartwoodExecutable, [
       "--interface",
       "web",
       "--host",
@@ -227,8 +227,12 @@ async function main() {
     await expect(page.getByText("Tool execution", { exact: true })).toHaveCount(
       5,
     );
-    await expect(page.getByText("exit=0", { exact: true })).toHaveCount(4);
-    await expect(page.getByText("exit=1", { exact: true })).toHaveCount(1);
+    await expect(
+      page.getByText("terminal · exit=0", { exact: true }),
+    ).toHaveCount(4);
+    await expect(
+      page.getByText("terminal · exit=1", { exact: true }),
+    ).toHaveCount(1);
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     const downloadPromise = page.waitForEvent("download");
@@ -256,6 +260,8 @@ async function main() {
       );
     }
 
+    terminateProcessGroup(gateway);
+    await waitForExit(gateway);
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||

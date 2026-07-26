@@ -37,6 +37,7 @@ test -x "${runtime}/llama.cpp/llama-server"
 test -f "${runtime}/llama.cpp/.heartwood-runtime.tar.gz"
 test -x "${installation}/bin/heartwood-jupyter"
 test -f "${source}/packages/webui/dist/index.html"
+test -f "${source}/agents/verified/research-planner.md"
 test ! -e "${installation}/.installer"
 "${installation}/bin/heartwood" --version | grep --quiet '^heartwood '
 "${installation}/bin/heartwood-jupyter" --version | grep --quiet '^[0-9]'

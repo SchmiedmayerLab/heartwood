@@ -198,7 +198,8 @@ def test_terra_notebook_is_output_free_and_uses_the_shared_project() -> None:
     assert "startup_plan" in combined
     assert "project_readiness" in combined
     assert "platform_capabilities" in combined
-    assert "approval_controls" in combined
+    assert "pending_approval" in combined
+    assert "session.approve(group_id=" in combined
     assert "heartwood --interface web" not in combined
     assert "--workspace" not in combined
     for cell in cells:

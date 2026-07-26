@@ -14,8 +14,9 @@ No single layer establishes every property of a deployment.
 | Layer | Establishes |
 |---|---|
 | Unit and schema tests | Validation, state boundaries, policy, diagnostics, model planning, and serialization |
-| Gateway contract tests | Shared command/event behavior, REST and stream parity, credentials, sessions, and imports |
-| Interface tests | Terminal, browser, and notebook projections over the same state |
+| OpenHands conformance tests | Public typed events, explicit settings, background control, grouped approval, restart recovery, real Task Tracker execution, usage, and sequential specialists with deterministic `TestLLM` |
+| Gateway contract tests | Shared command/event behavior, projection replay, coherent REST, WebSocket, and server-sent-events snapshots, transient ordering, credentials, sessions, and imports |
+| Interface tests | Terminal, browser, and notebook rendering of the gateway-owned projection |
 | Container smoke tests | Entrypoint, filesystem, architecture, no-secret image layers, and deterministic OpenHands integration |
 | No-network smoke tests | Gateway, OpenHands, grouped action, tool, replay, and audit operation without outbound network |
 | Capable-model evaluation | Real Heartwood-managed inference, OpenHands-compatible tool proposal, bounded execution, and exact synthetic output |
@@ -31,6 +32,9 @@ Without GPU hardware, CI does not claim successful CUDA initialization or GPU mo
 The shared coding-agent acceptance test performs direct model inference and then drives the real Heartwood gateway and OpenHands adapter through structured terminal proposals, grouped approval and rejection, synthetic file modification, byte-exact independent verification, proof that the rejected action did not execute, fresh-process replay, and hash-chain-verified audit export.
 It emits a machine-readable qualification record containing the exact runtime, model revision, GPU, driver, context, tensor parallelism, server parser, and agent tool mode.
 The CPU capable-model job and GPU qualification wrapper use this same acceptance contract instead of maintaining separate agent scenarios.
+
+OpenHands SDK conformance tests use the real conversation persistence layer and deterministic `TestLLM`.
+They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state resumes explicitly, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
 
 Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths.
 Actual Terra and Carina qualification still requires the exact published artifact and synthetic task on those platforms because public CI cannot provision their managed workspaces.

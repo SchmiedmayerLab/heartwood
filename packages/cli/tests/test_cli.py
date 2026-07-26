@@ -31,6 +31,7 @@ from heartwood.cli import (
     _format_model_validation,
     _format_skill_settings,
     _mapping_payload,
+    _submit_and_wait,
     _submit_with_progress,
     _supports_full_screen_terminal,
     main,
@@ -46,9 +47,13 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    ProjectionLifecycleState,
     ProviderModel,
     RestGateway,
     RestRequest,
+    SessionLifecycle,
+    SessionProjection,
+    project_session,
 )
 from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
@@ -1028,15 +1033,15 @@ def test_one_shot_aliases_and_unknown_action_return_meaningful_status(
     assert _run(project, monkeypatch, ["--prompt", "inspect the project"]) == 0
     assert _run(project, monkeypatch, ["allow", "missing-action"]) == 1
     assert _run(project, monkeypatch, ["reject"]) == 0
-    assert _run(project, monkeypatch, ["pause"]) == 0
-    assert _run(project, monkeypatch, ["resume"]) == 0
+    assert _run(project, monkeypatch, ["pause"]) == 1
+    assert _run(project, monkeypatch, ["resume"]) == 1
 
     output = capsys.readouterr().out
     assert "Review 1 action as one OpenHands action set" in output
     assert "no matching pending action" in output
-    assert "Action set denied" in output
-    assert "Session paused" in output
-    assert "Session resumed" in output
+    assert "Action set rejected" in output
+    assert "pause is unavailable while the agent is idle" in output
+    assert "resume is unavailable while the agent is idle" in output
 
 
 def test_action_alias_reports_gateway_error_event(
@@ -1056,11 +1061,49 @@ def test_action_alias_reports_gateway_error_event(
     monkeypatch.setattr(
         InteractiveSession,
         "submit",
-        lambda _session, _directive: InteractionResult(events=(error_event,)),
+        lambda _session, _directive: InteractionResult(
+            events=(error_event,),
+            projection=project_session((error_event,), session_id="gateway-error"),
+        ),
     )
 
     assert _run(tmp_path, monkeypatch, ["--session-id", "gateway-error", "approve"]) == 1
-    assert "Error: synthetic gateway failure" in capsys.readouterr().out
+    assert "synthetic gateway failure" in capsys.readouterr().out
+
+
+def test_one_shot_interaction_waits_for_background_work() -> None:
+    class BackgroundSession:
+        waited = False
+
+        def submit(self, line: str) -> InteractionResult:
+            assert line == "/allow"
+            return InteractionResult(
+                projection=SessionProjection(
+                    session_id="background",
+                    event_count=1,
+                    revision=0,
+                    lifecycle=ProjectionLifecycleState(
+                        status=SessionLifecycle.RUNNING,
+                        can_pause=True,
+                    ),
+                )
+            )
+
+        def wait_until_stable(self) -> SessionProjection:
+            self.waited = True
+            return SessionProjection(
+                session_id="background",
+                event_count=2,
+                revision=1,
+                lifecycle=ProjectionLifecycleState(status=SessionLifecycle.FINISHED),
+            )
+
+    session = BackgroundSession()
+    result = _submit_and_wait(cast(InteractiveSession, session), "/allow")
+
+    assert session.waited
+    assert result.projection is not None
+    assert result.projection.lifecycle.status == "finished"
 
 
 def test_interactive_chat_does_not_repeat_live_user_message(
@@ -1105,7 +1148,7 @@ def test_interactive_chat_does_not_repeat_live_user_message(
     assert "Heartwood agent." in output
     assert "You: summarize" not in output
     assert "Review 1 action as one OpenHands action set" in output
-    assert "Action set denied (1 action)" in output
+    assert "Action set rejected (1 action)" in output
 
 
 def test_actions_and_advanced_model_profile_persist_in_config_toml(
@@ -1410,8 +1453,9 @@ def test_audit_export_uses_project_sessions(
     project = tmp_path / "analysis"
     audit = tmp_path / "audit.jsonl"
     _install_deterministic_gateway(monkeypatch)
+    project.mkdir()
+    ProjectContext(project).initialize()
 
-    assert _run(project, monkeypatch, ["--session-id", "review", "pause"]) == 0
     assert (
         _run(
             project,

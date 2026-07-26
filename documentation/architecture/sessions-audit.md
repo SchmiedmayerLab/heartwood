@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT
 # Sessions and Audit
 
 Heartwood separates presentation state from durable session evidence.
-Terminal lines, browser cards, and notebook view models are projections of one ordered event stream.
+The gateway reduces one ordered event stream into the authoritative session projection used by terminal, browser, and notebook clients.
 
 ## Command Flow
 
@@ -21,26 +21,32 @@ sequenceDiagram
     User->>Interface: Submit task
     Interface->>Gateway: Typed session command
     Gateway->>OpenHands: Continue conversation
-    OpenHands-->>Gateway: Message or action set
-    Gateway-->>Interface: Durable events
+    OpenHands-->>Gateway: Typed state and transient tokens
+    Gateway-->>Interface: Shared session projection
     Interface-->>User: Review complete action set
     User->>Interface: Allow all once or reject all
     Interface->>Gateway: Confirmation command
+    Gateway->>Gateway: Persist complete-set decision
     Gateway->>OpenHands: Resolve callback
     OpenHands->>Tool: Execute only when allowed
     Tool-->>Gateway: Result
-    Gateway-->>Interface: Result and audit events
+    Gateway-->>Interface: Updated shared projection
 ```
 
 ## Persistence
 
 Session directories contain metadata, event records, audit records, exports, and OpenHands persistence for that conversation.
 Session identifiers are validated before any state path is created.
+The gateway incrementally translates persisted OpenHands messages, actions, observations, lifecycle, task, usage, specialist, and error state into Heartwood events.
+Incremental token deltas remain in process memory and disappear after the run reaches a stable boundary or the process stops.
+Each REST, WebSocket, and server-sent-events response pairs an event batch with the projection produced from the same serialized snapshot.
+A transient revision orders token-only updates that share a durable event revision.
 
 Read-only replay returns no events for a new session without initializing the project.
 The first mutating command registers the session and creates private state.
 
 The gateway acquires an interprocess writer lease before mutating a session and retains it until that gateway closes the session service.
+If an OpenHands worker does not stop during shutdown, Heartwood keeps the lease instead of allowing another writer to mutate the session.
 Another process may replay the completed event stream, but it cannot append commands to the same session until the owner exits.
 Distinct sessions have independent leases.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
@@ -60,11 +66,14 @@ After replaying and verifying the available evidence, continue in a new session.
 Each session event and its corresponding audit record are committed through a private recovery journal.
 After an interrupted append, the next writer verifies the journal, hash links, and existing records before completing only the missing write.
 Malformed or inconsistent recovery state fails closed.
+After process loss, a persisted OpenHands `RUNNING` state is presented as paused and resumes only after an explicit command.
 
 ## Action Decisions
 
 OpenHands can supply several proposed tool calls through one confirmation callback.
 Heartwood displays every member as one action set and applies one decision to the complete set; it does not imply that members can be approved independently.
+The gateway commits that complete-set decision before OpenHands can continue into model or tool execution.
+The pending set is reconstructed from unmatched OpenHands actions after restart rather than from a separate Heartwood cache.
 
 ## Audit Integrity
 
@@ -82,7 +91,17 @@ Deployments must define retention, access, export, and deletion policy.
 The OpenHands SDK backend receives explicit model input and output budgets.
 A rolling-history condenser uses the same authorized model route to summarize older history before the active context exceeds the configured budget, while recent events and the condensed summary remain available to the agent.
 
-Condenser calls use a separate usage identifier and do not bypass model-route policy.
+Agent and condenser calls use separate usage identifiers and do not bypass model-route policy.
+The shared projection reports each purpose and a combined total without storing completion content in usage events.
+
+## Tasks and Specialists
+
+OpenHands Task Tracker updates supply the title and status of each plan item.
+Free-form task notes are not copied into Heartwood session or audit events.
+
+Sequential specialist work is represented with its specialist name, task identifier, status, parent session, and parent action.
+The parent OpenHands conversation remains authoritative and receives the specialist result before continuing.
+Parallel delegation is not part of the current runtime contract.
 
 ## Move Between Interfaces
 

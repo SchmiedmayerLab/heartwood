@@ -12,16 +12,26 @@ from pathlib import Path
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, RichLog, Static
 
-from heartwood.cli import _format_event, _format_event_lines, _format_tui_event_lines
 from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
-    PendingAction,
+    format_projection_lines,
     interaction_activity,
 )
 from heartwood.cli._tui import HeartwoodTerminalApp
-from heartwood.gateway import ProjectContext, SessionGateway
-from heartwood.session import EventKind, JsonValue, SessionEvent
+from heartwood.gateway import (
+    ProjectContext,
+    ProjectionApprovalAction,
+    ProjectionApprovalGroup,
+    ProjectionMessage,
+    ProjectionSubagent,
+    ProjectionUsage,
+    RestGateway,
+    RestRequest,
+    SessionGateway,
+    SessionProjection,
+)
+from heartwood.session import EventKind
 
 
 def test_interactive_session_uses_gateway_commands_and_persisted_replay(
@@ -42,13 +52,46 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         replay = session.submit("/replay")
 
         assert not task.failed
-        assert any("You: summarize" in _format_event(event) for event in task.events)
+        assert task.projection is not None
+        assert any(
+            message.role == "user" and "summarize" in message.content
+            for message in task.projection.conversation
+        )
         assert not allowed.failed
-        assert any("Action approved" in _format_event(event) for event in allowed.events)
+        assert any(
+            str(event.kind) == EventKind.CONFIRMATION_RESOLVED.value
+            and event.payload.get("decision") == "approved"
+            for event in allowed.events
+        )
         assert invalid.message == "No actions are awaiting review."
         assert invalid.error
-        assert replay.events == session.replay()
+        assert replay.events == ()
+        assert replay.projection == session.replay()
         assert replay.replace_transcript
+    finally:
+        gateway.stop()
+
+
+def test_terminal_and_browser_consume_the_same_gateway_projection(tmp_path: Path) -> None:
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    session = InteractiveSession(gateway, session_id="shared-projection")
+    try:
+        session.submit("inspect the synthetic workspace")
+
+        terminal_projection = session.replay()
+        browser_response = RestGateway(gateway).handle(
+            RestRequest(
+                method="GET",
+                path="/sessions/shared-projection/projection",
+            )
+        )
+
+        assert browser_response.status_code == 200
+        assert browser_response.body == terminal_projection.safe_dict()
     finally:
         gateway.stop()
 
@@ -65,7 +108,7 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
 
     async def exercise() -> None:
         session = InteractiveSession(gateway, session_id="tui")
-        app = HeartwoodTerminalApp(session, format_events=_format_tui_event_lines)
+        app = HeartwoodTerminalApp(session)
         async with app.run_test(size=(64, 22)) as pilot:
             composer = app.query_one("#composer", Input)
             composer.value = "inspect the synthetic workspace"
@@ -86,14 +129,13 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
 
             assert app.query_one("#composer", Input).disabled is False
             assert any(
-                str(event.kind) == EventKind.CONFIRMATION_RESOLVED.value
-                and event.payload.get("decision") == "denied"
-                for event in session.replay()
+                message.role == "trace" and message.content == "Action set rejected (1 action)"
+                for message in session.replay().conversation
             )
             conversation = app.query_one("#conversation", RichLog)
             line_count = len(conversation.lines)
             assert line_count > 0
-            assert session.replay()
+            assert session.replay().event_count > 0
 
             composer.value = "/replay"
             await pilot.press("enter")
@@ -109,114 +151,85 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
         gateway.stop()
 
 
-def test_line_formatter_groups_multi_action_review_and_resolution() -> None:
-    proposal_without_arguments = _event(
-        0,
-        EventKind.TOOL_CALL_PROPOSED,
-        {"tool_name": "terminal", "risk": "low", "summary": "Inspect status"},
-    )
-    proposal_with_empty_arguments = _event(
-        0,
-        EventKind.TOOL_CALL_PROPOSED,
-        {
-            "tool_name": "terminal",
-            "risk": "low",
-            "summary": "Inspect status",
-            "arguments": {},
-        },
-    )
-    assert _format_event(proposal_without_arguments) == ("[000] Action: Inspect status (risk=low)")
-    assert _format_event(proposal_with_empty_arguments) == (
-        "[000] Action: Inspect status (risk=low)"
-    )
-
-    pending = (
-        _event(
-            1,
-            EventKind.CONFIRMATION_REQUESTED,
-            {
-                "request": {
-                    "request_id": "internal-request-1",
-                    "tool_call_id": "tool-1",
-                    "tool_name": "terminal",
-                    "risk": "medium",
-                    "summary": "Run the synthetic cohort command",
-                    "arguments": {"command": "python run.py --output /project/cohort-summary.json"},
-                }
-            },
-        ),
-        _event(
-            2,
-            EventKind.CONFIRMATION_REQUESTED,
-            {
-                "request": {
-                    "request_id": "internal-request-2",
-                    "tool_call_id": "tool-2",
-                    "tool_name": "file_editor",
-                    "risk": "unknown",
-                    "summary": "Write the aggregate result",
-                }
-            },
-        ),
-    )
-
-    pending_lines = _format_event_lines(pending)
-
-    assert pending_lines[0] == "Review 2 actions as one OpenHands action set:"
-    assert "Run the synthetic cohort command" in pending_lines[1]
-    assert "Arguments:" in pending_lines[2]
-    assert "python run.py --output /project/cohort-summary.json" in "\n".join(pending_lines)
-    assert any("Write the aggregate result" in line for line in pending_lines)
-    assert pending_lines[-2:] == ("Allow all once: /allow", "Reject all: /reject")
-    assert "internal-request" not in "\n".join(pending_lines)
-
-    resolved_lines = _format_event_lines(
-        (
-            _event(
-                3,
-                EventKind.CONFIRMATION_RESOLVED,
-                {"tool_call_id": "tool-1", "decision": "approved"},
+def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
+    projection = SessionProjection(
+        session_id="terminal-batch",
+        event_count=3,
+        revision=2,
+        conversation=(
+            ProjectionMessage(
+                id="proposal",
+                sequence=1,
+                role="trace",
+                label="Trace",
+                content="Proposed terminal command",
+                detail="Run the synthetic cohort command",
             ),
-            _event(
-                4,
-                EventKind.CONFIRMATION_RESOLVED,
-                {"tool_call_id": "tool-2", "decision": "approved"},
-            ),
-        )
-    )
-
-    assert resolved_lines == ("[003-004] Action set approved (2 actions)",)
-
-    replay_lines = _format_event_lines(
-        (
-            _event(
-                5,
-                EventKind.TOOL_CALL_PROPOSED,
-                {
-                    "tool_call_id": "tool-3",
-                    "tool_name": "file_editor",
-                    "risk": "medium",
-                    "summary": "Write the reviewed aggregate",
-                    "arguments": {
+        ),
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-synthetic",
+            actions=(
+                ProjectionApprovalAction(
+                    target_id="tool-1",
+                    tool_name="terminal",
+                    risk="medium",
+                    summary="Run the synthetic cohort command",
+                    arguments={"command": "python run.py --output cohort-summary.json"},
+                ),
+                ProjectionApprovalAction(
+                    target_id="tool-2",
+                    tool_name="file_editor",
+                    risk="unknown",
+                    summary="Write the aggregate result",
+                    arguments={
                         "command": "create",
-                        "path": "/project/cohort-summary.txt",
+                        "path": "cohort-summary.txt",
                         "file_text": "heartwood-corrected-review-ok\n",
                     },
-                },
+                ),
             ),
-            _event(
-                6,
-                EventKind.CONFIRMATION_RESOLVED,
-                {"tool_call_id": "tool-3", "decision": "denied"},
+        ),
+        usage=ProjectionUsage(
+            usage_id="total",
+            model_name="synthetic-model",
+            call_count=2,
+            prompt_tokens=120,
+            completion_tokens=30,
+        ),
+        usage_by_purpose=(
+            ProjectionUsage(
+                usage_id="agent",
+                model_name="synthetic-model",
+                call_count=2,
+                prompt_tokens=120,
+                completion_tokens=30,
             ),
-        )
+        ),
+        subagents=(
+            ProjectionSubagent(
+                invocation_id="task-call-1",
+                task_id="task-1",
+                agent_name="research-planner",
+                status="completed",
+                parent_session_id="session-test",
+                parent_action_id="action-1",
+            ),
+        ),
     )
-    replay_text = "\n".join(replay_lines)
-    assert "Arguments:" in replay_text
-    assert '"command": "create"' in replay_text
-    assert '"path": "/project/cohort-summary.txt"' in replay_text
-    assert '"file_text": "heartwood-corrected-review-ok\\n"' in replay_text
-    assert replay_lines[-1] == "[006] Action set denied (1 action)"
+
+    lines = format_projection_lines(projection)
+    rendered = "\n".join(lines)
+
+    assert "Review 2 actions as one OpenHands action set:" in rendered
+    assert "Run the synthetic cohort command" in rendered
+    assert '"command": "python run.py --output cohort-summary.json"' in rendered
+    assert "Write the aggregate result" in rendered
+    assert '"file_text": "heartwood-corrected-review-ok\\n"' in rendered
+    assert "Model activity: 2 calls · 150 tokens · synthetic-model" in rendered
+    assert "agent: 2 calls · 150 tokens" in rendered
+    assert "research-planner: completed · invocation task-call-1 · task task-1" in rendered
+    assert lines[-2:] == ("Allow all once: /allow", "Reject all: /reject")
+    assert "tool-1" not in rendered
 
 
 def test_interaction_activity_matches_the_submitted_operation() -> None:
@@ -232,26 +245,43 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
             self.session_id = "batch"
             self.submitted: list[str] = []
             self.resolved = False
-
-        def replay(self) -> tuple[SessionEvent, ...]:
-            return ()
-
-        def pending_actions(self) -> tuple[PendingAction, ...]:
-            if self.resolved:
-                return ()
-            return (
-                PendingAction("request-1", "tool-1", "terminal", "medium", "Run cohort"),
-                PendingAction("request-2", "tool-2", "file_editor", "unknown", "Write result"),
+            self.projection = SessionProjection(
+                session_id=self.session_id,
+                event_count=2,
+                revision=1,
+                pending_approval=ProjectionApprovalGroup(
+                    group_id="action-set-batch",
+                    actions=(
+                        ProjectionApprovalAction(
+                            target_id="tool-1",
+                            tool_name="terminal",
+                            risk="medium",
+                            summary="Run cohort",
+                        ),
+                        ProjectionApprovalAction(
+                            target_id="tool-2",
+                            tool_name="file_editor",
+                            risk="unknown",
+                            summary="Write result",
+                        ),
+                    ),
+                ),
             )
+
+        def replay(self) -> SessionProjection:
+            return self.projection
 
         def submit(self, line: str) -> InteractionResult:
             self.submitted.append(line)
             self.resolved = True
-            return InteractionResult()
+            self.projection = self.projection.model_copy(
+                update={"pending_approval": None, "revision": 2}
+            )
+            return InteractionResult(projection=self.projection)
 
     async def exercise() -> None:
         session = BatchSession()
-        app = HeartwoodTerminalApp(session, format_events=_format_tui_event_lines)
+        app = HeartwoodTerminalApp(session)
         async with app.run_test(size=(64, 22)) as pilot:
             title = str(app.query_one("#approval-title", Static).render())
             assert "One decision applies to all 2 actions" in title
@@ -276,14 +306,15 @@ def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progre
         def __init__(self) -> None:
             self.session_id = "activity"
 
-        def replay(self) -> tuple[SessionEvent, ...]:
-            return ()
-
-        def pending_actions(self) -> tuple[PendingAction, ...]:
-            return ()
+        def replay(self) -> SessionProjection:
+            return SessionProjection(
+                session_id=self.session_id,
+                event_count=0,
+                revision=-1,
+            )
 
     async def exercise() -> None:
-        app = HeartwoodTerminalApp(IdleSession(), format_events=_format_tui_event_lines)
+        app = HeartwoodTerminalApp(IdleSession())
         async with app.run_test(size=(72, 20)):
             app._set_busy(
                 True,
@@ -298,18 +329,3 @@ def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progre
             assert "managed models can take several minutes" not in status
 
     asyncio.run(exercise())
-
-
-def _event(
-    sequence: int,
-    kind: EventKind,
-    payload: dict[str, JsonValue],
-) -> SessionEvent:
-    return SessionEvent(
-        event_id=f"event-{sequence}",
-        session_id="session",
-        sequence=sequence,
-        kind=kind,
-        occurred_at="2026-07-13T00:00:00Z",
-        payload=payload,
-    )

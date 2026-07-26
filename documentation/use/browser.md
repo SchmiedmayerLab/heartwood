@@ -42,6 +42,8 @@ The first browser conversation is the same **Main session** used by the terminal
 
 - Use **New analysis** to create another persistent session.
 - Enter requests in the composer after model readiness is confirmed.
+- Send additional guidance or pause while OpenHands is working.
+- Inspect task progress, model-call totals, and sequential specialist status below the conversation.
 - Open **Activity** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
 - Open **Settings** to change the selected model or action-confirmation mode.

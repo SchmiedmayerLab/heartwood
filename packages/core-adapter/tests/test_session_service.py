@@ -20,19 +20,33 @@ import pytest
 import heartwood.core_adapter._state as session_state
 from heartwood.audit import AuditIntegrityError, compute_event_hash
 from heartwood.core_adapter import (
+    BackendAgentMessageEvent,
+    BackendConfirmationRequestEvent,
+    BackendErrorCode,
+    BackendErrorEvent,
     BackendEvent,
-    BackendEventKind,
+    BackendEventSink,
+    BackendTask,
+    BackendTaskPlanEvent,
+    BackendTaskStatus,
+    BackendToolCallEvent,
+    BackendUsage,
+    BackendUsageEvent,
     CommandConflictError,
     DeterministicAgentBackend,
     FileSessionStore,
     LocalWorkspaceAgentBackend,
+    PendingActionGroup,
     ProposedToolCall,
     SessionOwnershipError,
     SessionRecoveryError,
     SessionService,
     SessionStorageCapabilityError,
     SessionStoreBoundaryError,
+    TokenDeltaSink,
+    pending_action_group,
 )
+from heartwood.core_adapter._service import _audit_payload
 from heartwood.schemas import AuditEvent, PolicyProfile
 from heartwood.session import (
     CommandKind,
@@ -49,6 +63,18 @@ def test_empty_replay_does_not_create_session_state(tmp_path: Path) -> None:
 
     assert service.replay_events() == ()
     assert not service.store.session_dir.exists()
+
+
+def test_reserved_audit_event_payloads_fail_closed() -> None:
+    payload: dict[str, JsonValue] = {
+        "unexpected_private_content": "synthetic-sensitive-value",
+        "source_event_id": "source-1",
+    }
+
+    assert _audit_payload(EventKind.APPROVAL_RECORDED, payload) == {"action_count": 0}
+    assert "synthetic-sensitive-value" not in json.dumps(
+        _audit_payload(EventKind.POLICY_DECISION_RECORDED, payload)
+    )
 
 
 def test_pause_persists_replayable_events(tmp_path: Path) -> None:
@@ -68,7 +94,7 @@ def test_completed_command_retry_returns_exact_events_without_backend_reexecutio
 ) -> None:
     backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
-        response=(BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message="done"),),
+        response=(BackendAgentMessageEvent(message="done"),),
     )
     service = SessionService.local_default(
         tmp_path,
@@ -91,7 +117,7 @@ def test_completed_command_retry_returns_exact_events_without_backend_reexecutio
 def test_completed_command_retry_survives_gateway_restart(tmp_path: Path) -> None:
     first_backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
-        response=(BackendEvent(kind=BackendEventKind.AGENT_MESSAGE, message="done"),),
+        response=(BackendAgentMessageEvent(message="done"),),
     )
     first_service = SessionService.local_default(
         tmp_path,
@@ -142,8 +168,11 @@ def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path
     backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
         response=(
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=tool_call),
+            BackendToolCallEvent(tool_call=tool_call),
+            BackendConfirmationRequestEvent(
+                tool_call=tool_call,
+                action_group_id=_action_group_id(tool_call.tool_call_id),
+            ),
         ),
     )
     service = SessionService.local_default(
@@ -156,8 +185,8 @@ def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path
     )
     approval = _command(
         CommandKind.APPROVE,
-        target_type="tool-call",
-        target_id=tool_call.tool_call_id,
+        target_type="action-set",
+        target_id=_action_group_id(tool_call.tool_call_id),
     ).model_copy(update={"session_id": "session-main"})
 
     first = service.handle(approval)
@@ -165,7 +194,7 @@ def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path
 
     assert retried.replayed
     assert retried.events == first.events
-    assert backend.resolutions == [(tool_call.tool_call_id, True)]
+    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
 
 
 def test_second_writer_cannot_mutate_until_owner_closes(tmp_path: Path) -> None:
@@ -598,8 +627,11 @@ def test_uncertain_approval_blocks_new_commands_and_cannot_repeat_tool_resolutio
     backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
         response=(
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=tool_call),
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=tool_call),
+            BackendToolCallEvent(tool_call=tool_call),
+            BackendConfirmationRequestEvent(
+                tool_call=tool_call,
+                action_group_id=_action_group_id(tool_call.tool_call_id),
+            ),
         ),
     )
     service = SessionService.local_default(
@@ -628,8 +660,8 @@ def test_uncertain_approval_blocks_new_commands_and_cannot_repeat_tool_resolutio
     )
     approval = _command(
         CommandKind.APPROVE,
-        target_type="tool-call",
-        target_id=tool_call.tool_call_id,
+        target_type="action-set",
+        target_id=_action_group_id(tool_call.tool_call_id),
     ).model_copy(update={"session_id": "session-main"})
     with pytest.raises(OSError, match="simulated approval receipt interruption"):
         service.handle(approval)
@@ -640,12 +672,12 @@ def test_uncertain_approval_blocks_new_commands_and_cannot_repeat_tool_resolutio
             _command(
                 CommandKind.APPROVE,
                 command_id="command-approve-retry",
-                target_type="tool-call",
-                target_id=tool_call.tool_call_id,
+                target_type="action-set",
+                target_id=_action_group_id(tool_call.tool_call_id),
             ).model_copy(update={"session_id": "session-main"})
         )
 
-    assert backend.resolutions == [(tool_call.tool_call_id, True)]
+    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
 
 
 def test_session_control_files_are_private(tmp_path: Path) -> None:
@@ -1122,7 +1154,7 @@ def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path:
     )
     audit_text = service.store.audit_path.read_text(encoding="utf-8")
     assert "summarize the cohort" not in audit_text
-    assert '"content":"[scrubbed]"' in audit_text
+    assert '"content_chars":20' in audit_text
     assert stat.S_IMODE(service.store.session_dir.stat().st_mode) == 0o700
     for path in (
         service.store.events_path,
@@ -1159,18 +1191,19 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     result = service.handle(
         _command(
             CommandKind.APPROVE,
-            target_type="tool-call",
-            target_id="session-synthetic-001-toolcall-0",
+            target_type="action-set",
+            target_id=_action_group_id("session-synthetic-001-toolcall-0"),
         )
     )
 
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
+        EventKind.APPROVAL_RECORDED.value,
         EventKind.CONFIRMATION_RESOLVED.value,
         EventKind.TOOL_EXECUTION_RECORDED.value,
     ]
     assert result.events[1].payload["decision"] == "approved"
-    assert result.events[2].payload["exit_code"] == 0
+    assert result.events[3].payload["exit_code"] == 0
 
 
 def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> None:
@@ -1180,16 +1213,57 @@ def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> No
     result = service.handle(
         _command(
             CommandKind.DENY,
-            target_type="tool-call",
-            target_id="session-synthetic-001-toolcall-0",
+            target_type="action-set",
+            target_id=_action_group_id("session-synthetic-001-toolcall-0"),
         )
     )
 
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
+        EventKind.APPROVAL_RECORDED.value,
         EventKind.CONFIRMATION_RESOLVED.value,
     ]
     assert result.events[1].payload["decision"] == "denied"
+
+
+def test_failed_backend_decision_keeps_the_action_group_pending(
+    tmp_path: Path,
+) -> None:
+    action = ProposedToolCall(
+        tool_call_id="tool-1",
+        tool_name="terminal",
+        risk="medium",
+        summary="Run the synthetic command",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        pending_actions=(action,),
+        resolution_response=(
+            BackendErrorEvent(
+                error_code=BackendErrorCode.WORKER_STOPPED,
+            ),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="action-set",
+            target_id=_action_group_id(action.tool_call_id),
+        ).model_copy(update={"session_id": "session-main"})
+    )
+
+    assert EventKind.APPROVAL_RECORDED.value in [event.kind for event in result.events]
+    assert EventKind.CONFIRMATION_RESOLVED.value not in [
+        event.kind for event in result.events
+    ]
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert backend.pending_action_group(session_id="session-main") is not None
 
 
 def test_interactive_approval_rejects_non_action_targets(tmp_path: Path) -> None:
@@ -1200,14 +1274,14 @@ def test_interactive_approval_rejects_non_action_targets(tmp_path: Path) -> None
     )
 
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
-    assert "only for pending tool actions" in str(result.events[-1].payload["reason"])
+    assert "complete pending action set" in str(result.events[-1].payload["reason"])
 
 
 def test_action_decision_requires_matching_pending_action(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
     result = service.handle(
-        _command(CommandKind.APPROVE, target_type="tool-call", target_id="missing")
+        _command(CommandKind.APPROVE, target_type="action-set", target_id="missing")
     )
 
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
@@ -1282,8 +1356,11 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
     backend = _RecordingBackend(
         endpoint="http://127.0.0.1:8765/v1/chat/completions",
         response=(
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=pending),
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=pending),
+            BackendToolCallEvent(tool_call=pending),
+            BackendConfirmationRequestEvent(
+                tool_call=pending,
+                action_group_id=_action_group_id(pending.tool_call_id),
+            ),
         ),
     )
     service = SessionService.local_default(
@@ -1307,8 +1384,8 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
     result = service.handle(
         _command(
             CommandKind.APPROVE,
-            target_type="tool-call",
-            target_id=pending.tool_call_id,
+            target_type="action-set",
+            target_id=_action_group_id(pending.tool_call_id),
         ).model_copy(update={"session_id": "session-main"})
     )
 
@@ -1323,7 +1400,7 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
     assert decision["decision"] == "deny"
 
 
-def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: Path) -> None:
+def test_service_uses_backend_owned_pending_group_after_restart(tmp_path: Path) -> None:
     first = ProposedToolCall(
         tool_call_id="session-main-action-1",
         tool_name="terminal",
@@ -1340,10 +1417,16 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
     initial_backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
         response=(
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=first),
-            BackendEvent(kind=BackendEventKind.TOOL_CALL_PROPOSED, tool_call=second),
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=first),
-            BackendEvent(kind=BackendEventKind.CONFIRMATION_REQUESTED, tool_call=second),
+            BackendToolCallEvent(tool_call=first),
+            BackendToolCallEvent(tool_call=second),
+            BackendConfirmationRequestEvent(
+                tool_call=first,
+                action_group_id=_action_group_id(first.tool_call_id, second.tool_call_id),
+            ),
+            BackendConfirmationRequestEvent(
+                tool_call=second,
+                action_group_id=_action_group_id(first.tool_call_id, second.tool_call_id),
+            ),
         ),
     )
     initial_service = SessionService.local_default(
@@ -1358,7 +1441,10 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
     )
     initial_service.close()
 
-    restored_backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    restored_backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        pending_actions=(first, second),
+    )
     restored_service = SessionService.local_default(
         tmp_path,
         backend=restored_backend,
@@ -1368,15 +1454,14 @@ def test_service_restores_all_pending_actions_and_accepts_any_target(tmp_path: P
     result = restored_service.handle(
         _command(
             CommandKind.APPROVE,
-            target_type="tool-call",
-            target_id=first.tool_call_id,
+            target_type="action-set",
+            target_id=_action_group_id(first.tool_call_id, second.tool_call_id),
         ).model_copy(update={"session_id": "session-main"})
     )
-    restored_ids = [action.tool_call_id for action in restored_backend.restored_pending]
 
-    assert restored_ids == [first.tool_call_id, second.tool_call_id]
-    assert restored_backend.restored_pending[0].arguments == {"command": "python first.py"}
-    assert restored_backend.resolutions == [(first.tool_call_id, True)]
+    assert restored_backend.resolutions == [
+        (_action_group_id(first.tool_call_id, second.tool_call_id), True)
+    ]
     assert any(
         event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value for event in result.events
     )
@@ -1436,13 +1521,9 @@ def test_backend_configuration_fails_before_route_decision(tmp_path: Path) -> No
 
 
 def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
-    private_detail = (
-        "tool validation failed for path /project/rejected.txt with "
-        "file_text=heartwood-corrected-review-ok"
-    )
     backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
-        response=(BackendEvent(kind=BackendEventKind.ERROR, message=private_detail),),
+        response=(BackendErrorEvent(error_code=BackendErrorCode.UNKNOWN),),
     )
     service = SessionService.local_default(
         tmp_path,
@@ -1455,14 +1536,58 @@ def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
     )
 
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
-    assert result.events[-1].payload["reason"] == private_detail
-    assert private_detail in json.dumps(
-        [event.model_dump(mode="json") for event in service.replay_events()]
-    )
+    assert result.events[-1].payload["code"] == "HW-AGENT-999"
+    assert result.events[-1].payload["reason"] == "The agent runtime reported an error"
     audit_text = service.store.audit_path.read_text(encoding="utf-8")
-    assert private_detail not in audit_text
-    assert "heartwood-corrected-review-ok" not in audit_text
     assert '"reason":"[scrubbed]"' in audit_text
+
+
+def test_task_titles_stay_out_of_audit_while_usage_remains_verifiable(
+    tmp_path: Path,
+) -> None:
+    private_task_title = "Compare the named participant cohort"
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendTaskPlanEvent(
+                tasks=(
+                    BackendTask(
+                        title=private_task_title,
+                        status=BackendTaskStatus.IN_PROGRESS,
+                    ),
+                ),
+            ),
+            BackendUsageEvent(
+                usage=BackendUsage(
+                    usage_id="agent",
+                    model_name="synthetic-model",
+                    call_count=2,
+                    prompt_tokens=120,
+                    completion_tokens=30,
+                ),
+            ),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    service.handle(
+        _command(CommandKind.CHAT, prompt="analyze").model_copy(
+            update={"session_id": "session-main"}
+        )
+    )
+
+    replay_text = json.dumps([event.model_dump(mode="json") for event in service.replay_events()])
+    audit_text = service.store.audit_path.read_text(encoding="utf-8")
+    assert private_task_title in replay_text
+    assert private_task_title not in audit_text
+    assert '"task_count":1' in audit_text
+    assert '"in-progress":1' in audit_text
+    assert '"usage_id":"agent"' in audit_text
+    assert '"call_count":2' in audit_text
 
 
 def test_empty_prompt_is_rejected_before_backend(tmp_path: Path) -> None:
@@ -1513,15 +1638,19 @@ def test_local_workspace_backend_writes_only_after_allow_once(tmp_path: Path) ->
     artifact = tmp_path / "session-local" / "agent-artifacts" / "synthetic-workspace-summary.md"
     assert not artifact.exists()
 
-    service.handle(
+    approved = service.handle(
         _command(
             CommandKind.APPROVE,
-            target_type="tool-call",
-            target_id="session-local-toolcall-0",
+            target_type="action-set",
+            target_id=_action_group_id("session-local-toolcall-0"),
         ).model_copy(update={"session_id": "session-local"})
     )
 
     assert artifact.is_file()
+    assert [event.kind for event in approved.events][-2:] == [
+        EventKind.CONFIRMATION_RESOLVED.value,
+        EventKind.TOOL_EXECUTION_RECORDED.value,
+    ]
     assert "Persisted prompt content: none" in artifact.read_text(encoding="utf-8")
 
 
@@ -1532,14 +1661,21 @@ class _RecordingBackend:
         endpoint: str,
         response: tuple[BackendEvent, ...] = (),
         configuration_error: str | None = None,
+        pending_actions: tuple[ProposedToolCall, ...] = (),
+        reconciled: tuple[BackendEvent, ...] = (),
+        resolution_response: tuple[BackendEvent, ...] = (),
     ) -> None:
         self.endpoint = endpoint
         self.response = response
         self._configuration_error = configuration_error
+        self._pending_actions = pending_actions
+        self._reconciled = reconciled
+        self._resolution_response = resolution_response
         self.prompts: list[str] = []
         self.resolutions: list[tuple[str, bool]] = []
-        self.restored_pending: tuple[ProposedToolCall, ...] = ()
         self.resume_calls = 0
+        self.event_sink: BackendEventSink = lambda _events: None
+        self.token_sink: TokenDeltaSink = lambda _delta: None
 
     @property
     def backend_id(self) -> str:
@@ -1573,6 +1709,34 @@ class _RecordingBackend:
     def continuation_requires_model_authorization(self) -> bool:
         return True
 
+    def bind_runtime(
+        self,
+        *,
+        event_sink: BackendEventSink,
+        token_sink: TokenDeltaSink,
+    ) -> None:
+        self.event_sink = event_sink
+        self.token_sink = token_sink
+
+    def reconcile(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+        known_source_event_ids: frozenset[str],
+    ) -> tuple[BackendEvent, ...]:
+        return tuple(
+            event
+            for event in self._reconciled
+            if event.source_event_id not in known_source_event_ids
+        )
+
+    def pending_action_group(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+    ) -> PendingActionGroup | None:
+        return pending_action_group(self._pending_actions)
+
     def submit_turn(
         self,
         *,
@@ -1580,20 +1744,26 @@ class _RecordingBackend:
         prompt: str,
     ) -> tuple[BackendEvent, ...]:
         self.prompts.append(prompt)
+        requested = tuple(
+            event.tool_call
+            for event in self.response
+            if isinstance(event, BackendConfirmationRequestEvent)
+        )
+        if requested:
+            self._pending_actions = requested
         return self.response
-
-    def restore_pending(self, tool_calls: tuple[ProposedToolCall, ...]) -> None:
-        self.restored_pending = tool_calls
 
     def resolve_confirmation(
         self,
         *,
         session_id: str,  # noqa: ARG002
-        tool_call_id: str,
+        action_group_id: str,
         approved: bool,
     ) -> tuple[BackendEvent, ...]:
-        self.resolutions.append((tool_call_id, approved))
-        return ()
+        self.resolutions.append((action_group_id, approved))
+        if not any(isinstance(event, BackendErrorEvent) for event in self._resolution_response):
+            self._pending_actions = ()
+        return self._resolution_response
 
     def pause(self) -> None:
         return None
@@ -1604,6 +1774,34 @@ class _RecordingBackend:
 
     def close(self) -> None:
         return None
+
+
+class _FailingCloseBackend(_RecordingBackend):
+    fail_close = True
+
+    def close(self) -> None:
+        if self.fail_close:
+            raise RuntimeError("synthetic worker is still active")
+
+
+def test_backend_shutdown_failure_retains_session_ownership(tmp_path: Path) -> None:
+    backend = _FailingCloseBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    service = SessionService.local_default(
+        tmp_path,
+        session_id="session-main",
+        env={},
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(_command(CommandKind.PAUSE).model_copy(update={"session_id": "session-main"}))
+
+    with pytest.raises(RuntimeError, match="still active"):
+        service.close()
+
+    assert service.store.writer_metadata_path.is_file()
+    backend.fail_close = False
+    service.close()
+    assert not service.store.writer_metadata_path.exists()
 
 
 def _wait_for_process_marker(process: subprocess.Popen[str], marker: Path) -> None:
@@ -1661,6 +1859,22 @@ def _write_pending_commit(
         ),
         encoding="utf-8",
     )
+
+
+def _action_group_id(*tool_call_ids: str) -> str:
+    group = pending_action_group(
+        tuple(
+            ProposedToolCall(
+                tool_call_id=tool_call_id,
+                tool_name="test-tool",
+                risk="unknown",
+                summary="test action",
+            )
+            for tool_call_id in tool_call_ids
+        )
+    )
+    assert group is not None
+    return group.group_id
 
 
 def _command(

@@ -11,16 +11,21 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from typing import Any, cast
 
 import pytest
 
-from heartwood.core_adapter import AgentBackend, SessionResult
+from heartwood.core_adapter import (
+    AgentBackend,
+    BackendLifecycle,
+    BackendLifecycleEvent,
+    SessionResult,
+)
 from heartwood.gateway import (
     GpuCapacity,
     GpuEnvironment,
@@ -128,6 +133,9 @@ class _BlockingSessionService:
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return ()
 
+    def reconcile(self) -> tuple[SessionEvent, ...]:
+        return ()
+
     def close(self) -> None:
         self.closed.set()
 
@@ -143,10 +151,36 @@ class _ClosingSessionService:
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return ()
 
+    def reconcile(self) -> tuple[SessionEvent, ...]:
+        return ()
+
     def close(self) -> None:
         self.closed.set()
         if self.fail:
             raise RuntimeError("synthetic close failure")
+
+
+@dataclass
+class _PublishingCloseSessionService:
+    publish: Callable[[], None]
+    closed: Event
+
+    def handle(self, _command: SessionCommand) -> SessionResult:
+        return SessionResult(events=())
+
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def reconcile(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def close(self) -> None:
+        publisher = Thread(target=self.publish)
+        publisher.start()
+        publisher.join(timeout=1)
+        if publisher.is_alive():
+            raise TimeoutError("background publication deadlocked during close")
+        self.closed.set()
 
 
 def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -> None:
@@ -199,10 +233,10 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
     command = SessionCommand(
         command_id="command-1",
         session_id="session-1",
-        kind=CommandKind.PAUSE,
+        kind=CommandKind.CHAT,
         actor_id="synthetic-user",
         created_at="2026-01-01T00:00:00Z",
-        payload={},
+        payload={"prompt": "hold the synthetic turn"},
     )
 
     def select_download() -> None:
@@ -250,7 +284,7 @@ def test_gateway_releases_every_session_when_one_backend_close_fails(tmp_path: P
         SessionCommand(
             command_id="pause-one",
             session_id="session-one",
-            kind=CommandKind.PAUSE,
+            kind=CommandKind.CHAT,
             actor_id="synthetic-user",
             created_at="2026-01-01T00:00:00Z",
         )
@@ -259,7 +293,7 @@ def test_gateway_releases_every_session_when_one_backend_close_fails(tmp_path: P
         SessionCommand(
             command_id="pause-two",
             session_id="session-two",
-            kind=CommandKind.PAUSE,
+            kind=CommandKind.CHAT,
             actor_id="synthetic-user",
             created_at="2026-01-01T00:00:00Z",
         )
@@ -270,10 +304,116 @@ def test_gateway_releases_every_session_when_one_backend_close_fails(tmp_path: P
 
     assert first_closed.is_set()
     assert second_closed.is_set()
+    assert tuple(gateway._services) == ("session-one",)
+    services["session-one"].fail = False
+    gateway.stop()
     assert gateway._services == {}
 
 
-def test_rest_command_routes_through_session_service_and_streams_events(tmp_path: Path) -> None:
+def test_gateway_shutdown_does_not_block_final_background_publication(
+    tmp_path: Path,
+) -> None:
+    publish: list[Callable[[], None]] = []
+    closed = Event()
+    service = _PublishingCloseSessionService(
+        publish=lambda: publish[0](),
+        closed=closed,
+    )
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    event = SessionEvent(
+        event_id="shutdown-event",
+        session_id="session-one",
+        sequence=0,
+        kind=EventKind.AGENT_LIFECYCLE_UPDATED,
+        occurred_at="2026-01-01T00:00:00Z",
+        payload={"status": "finished"},
+    )
+    publish.append(
+        lambda: gateway._publish_background_events(
+            session_id="session-one",
+            events=(event,),
+        )
+    )
+    gateway.handle(
+        SessionCommand(
+            command_id="open-session",
+            session_id="session-one",
+            kind=CommandKind.CHAT,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+
+    gateway.stop()
+
+    assert closed.is_set()
+    assert gateway._services == {}
+
+
+def test_pause_clears_partial_text_and_nonfatal_errors_keep_streaming_active(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(tmp_path)
+    gateway.project.initialize()
+    service = gateway._service("session-1")
+    service._accept_backend_events(
+        (
+            BackendLifecycleEvent(
+                lifecycle=BackendLifecycle.RUNNING,
+                source_event_id="synthetic-running",
+            ),
+        )
+    )
+    service._token_sink("partial response")
+    before_pause = gateway.session_projection(session_id="session-1")
+    gateway.handle(
+        SessionCommand.model_validate_json(_command(CommandKind.PAUSE))
+    )
+    paused = gateway.session_projection(session_id="session-1")
+    gateway.handle(
+        SessionCommand.model_validate_json(
+            _command(CommandKind.RESUME, command_id="resume-once")
+        )
+    )
+    service._token_sink("fresh response")
+    gateway.handle(
+        SessionCommand.model_validate_json(
+            _command(CommandKind.RESUME, command_id="invalid-resume")
+        )
+    )
+    service._token_sink(" continues")
+    after_nonfatal_error = gateway.session_projection(session_id="session-1")
+
+    assert before_pause.streaming_text == "partial response"
+    assert paused.lifecycle.status == "paused"
+    assert paused.streaming_text == ""
+    assert paused.stream_revision > before_pause.stream_revision
+    assert after_nonfatal_error.lifecycle.status == "running"
+    assert after_nonfatal_error.streaming_text == "fresh response continues"
+    assert after_nonfatal_error.last_command_outcome is not None
+    assert after_nonfatal_error.last_command_outcome.status == "rejected"
+
+
+def test_gateway_restart_changes_the_transient_stream_epoch(tmp_path: Path) -> None:
+    first = _gateway(tmp_path)
+    first_projection = first.session_projection(session_id="session-1")
+    first.stop()
+    second = _gateway(tmp_path)
+    second_projection = second.session_projection(session_id="session-1")
+
+    assert second_projection.revision == first_projection.revision
+    assert second_projection.stream_epoch != first_projection.stream_epoch
+    second.stop()
+
+
+def test_gateway_rejects_unavailable_commands_and_streams_the_shared_error(
+    tmp_path: Path,
+) -> None:
     gateway = _gateway(tmp_path)
     stream = gateway.websocket(session_id="session-1")
     rest = RestGateway(gateway)
@@ -289,12 +429,18 @@ def test_rest_command_routes_through_session_service_and_streams_events(tmp_path
     assert response.status_code == 200
     assert [event["kind"] for event in _events(response)] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.SESSION_PAUSED.value,
+        EventKind.ERROR_RECORDED.value,
     ]
     assert [event.kind for event in stream.receive()] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.SESSION_PAUSED.value,
+        EventKind.ERROR_RECORDED.value,
     ]
+    projection = response.body["projection"]
+    assert isinstance(projection, dict)
+    lifecycle = projection["lifecycle"]
+    assert isinstance(lifecycle, dict)
+    assert lifecycle["status"] == "idle"
+    assert projection["availableCommands"] == ["chat"]
 
 
 def test_rest_reports_unsupported_session_storage_without_server_error(
@@ -347,15 +493,30 @@ def test_browser_to_cli_session_handoff_requires_owner_shutdown(tmp_path: Path) 
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.PAUSE, command_id="browser-pause"),
+            body=_command(
+                CommandKind.CHAT,
+                command_id="browser-chat",
+                prompt="inspect the synthetic project",
+            ),
         )
+    )
+    projection = browser_response.body["projection"]
+    assert isinstance(projection, dict)
+    pending = projection["pendingApproval"]
+    assert isinstance(pending, dict)
+    group_id = str(pending["groupId"])
+    handoff_command = _command(
+        CommandKind.DENY,
+        command_id="cli-deny",
+        target_type="action-set",
+        target_id=group_id,
     )
 
     blocked = cli.handle(
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.RESUME, command_id="cli-resume"),
+            body=handoff_command,
         )
     )
     browser_gateway.stop()
@@ -363,7 +524,7 @@ def test_browser_to_cli_session_handoff_requires_owner_shutdown(tmp_path: Path) 
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
-            body=_command(CommandKind.RESUME, command_id="cli-resume"),
+            body=handoff_command,
         )
     )
 
@@ -371,7 +532,10 @@ def test_browser_to_cli_session_handoff_requires_owner_shutdown(tmp_path: Path) 
     assert blocked.status_code == 409
     assert "active in another Heartwood process" in str(blocked.body["error"])
     assert handed_off.status_code == 200
-    assert _events(handed_off)[-1]["kind"] == EventKind.SESSION_RESUMED.value
+    assert _events(handed_off)[-1]["kind"] == EventKind.CONFIRMATION_RESOLVED.value
+    handed_off_projection = handed_off.body["projection"]
+    assert isinstance(handed_off_projection, dict)
+    assert handed_off_projection["revision"] == 8
 
 
 def test_two_gateways_can_mutate_distinct_sessions(tmp_path: Path) -> None:
@@ -492,7 +656,18 @@ def test_rest_delivers_generated_scrubbed_audit_export(tmp_path: Path) -> None:
 
 def test_pause_and_resume_are_streamed(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
+    gateway.project.initialize()
+    service = gateway._service("session-1")
+    service._accept_backend_events(
+        (
+            BackendLifecycleEvent(
+                lifecycle=BackendLifecycle.RUNNING,
+                source_event_id="synthetic-running",
+            ),
+        )
+    )
     stream = gateway.websocket(session_id="session-1")
+    stream.receive()
     rest = RestGateway(gateway)
 
     rest.handle(
@@ -562,7 +737,7 @@ def test_unconfigured_model_fails_without_allowing_a_synthetic_route(tmp_path: P
 def test_allow_once_streams_confirmation_resolution_and_execution(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
     rest = RestGateway(gateway)
-    rest.handle(
+    started = rest.handle(
         RestRequest(
             method="POST",
             path="/sessions/session-1/commands",
@@ -572,6 +747,12 @@ def test_allow_once_streams_confirmation_resolution_and_execution(tmp_path: Path
             ),
         )
     )
+    projection = started.body["projection"]
+    assert isinstance(projection, dict)
+    approval = projection["pendingApproval"]
+    assert isinstance(approval, dict)
+    group_id = approval["groupId"]
+    assert isinstance(group_id, str)
 
     response = rest.handle(
         RestRequest(
@@ -579,8 +760,8 @@ def test_allow_once_streams_confirmation_resolution_and_execution(tmp_path: Path
             path="/sessions/session-1/commands",
             body=_command(
                 CommandKind.APPROVE,
-                target_type="tool-call",
-                target_id="session-1-toolcall-0",
+                target_type="action-set",
+                target_id=group_id,
             ),
         )
     )

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Sequence
 from typing import ClassVar
 
 from rich.text import Text
@@ -26,9 +25,10 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     format_action_arguments,
+    format_projection_lines,
     interaction_activity,
 )
-from heartwood.session import SessionEvent
+from heartwood.gateway import SessionProjection
 
 
 class HeartwoodTerminalApp(App[None]):
@@ -57,12 +57,9 @@ class HeartwoodTerminalApp(App[None]):
     def __init__(
         self,
         session: InteractiveSession,
-        *,
-        format_events: Callable[[Sequence[SessionEvent]], Sequence[str]],
     ) -> None:
         super().__init__()
         self.session = session
-        self.format_events = format_events
         self._busy = False
         self._busy_started = 0.0
         self._frame = 0
@@ -70,6 +67,9 @@ class HeartwoodTerminalApp(App[None]):
         self._guidance_shown = False
         self._animations_enabled = "NO_COLOR" not in os.environ
         self._activity_timer: Timer | None = None
+        self._projection_timer: Timer | None = None
+        self._projection: SessionProjection | None = None
+        self._projection_signature: tuple[object, ...] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -90,12 +90,12 @@ class HeartwoodTerminalApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Replay the persisted conversation and focus the composer."""
-        self._render_events(self.session.replay())
+        """Render and continuously refresh the gateway-owned projection."""
         self._activity_timer = self.set_interval(
             0.5, self._refresh_working_status, pause=True, name="activity"
         )
-        self._sync_approval()
+        self._projection_timer = self.set_interval(0.25, self._sync_projection, name="projection")
+        self._sync_projection()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Submit input without blocking terminal rendering."""
@@ -121,17 +121,46 @@ class HeartwoodTerminalApp(App[None]):
             self.query_one("#conversation", RichLog).write(result.message)
         if result.replace_transcript:
             self.query_one("#conversation", RichLog).clear()
-        self._render_events(result.events)
+        if result.projection is not None:
+            self._render_projection(result.projection)
         self._set_busy(False, failed=result.failed)
-        self._sync_approval()
+        self._sync_projection()
 
-    def _render_events(self, events: Sequence[SessionEvent]) -> None:
+    def _render_projection(self, projection: SessionProjection) -> None:
         log = self.query_one("#conversation", RichLog)
-        for line in self.format_events(events):
+        log.clear()
+        for line in format_projection_lines(
+            projection,
+            include_pending_review=False,
+        ):
             if not line:
                 continue
             style = _line_style(line) if self._animations_enabled else None
             log.write(Text(line, style=style) if style else line)
+        self._projection = projection
+
+    def _sync_projection(self) -> None:
+        projection = self.session.replay()
+        approval = projection.pending_approval
+        signature = (
+            projection.revision,
+            projection.streaming_text,
+            projection.lifecycle.status,
+            None if approval is None else approval.group_id,
+            0 if approval is None else len(approval.actions),
+        )
+        if signature != self._projection_signature:
+            was_running = (
+                self._projection is not None and self._projection.lifecycle.status == "running"
+            )
+            if projection.lifecycle.status == "running" and not was_running and not self._busy:
+                self._busy_started = time.monotonic()
+                self._frame = 0
+                self._guidance_shown = False
+            self._projection_signature = signature
+            self._render_projection(projection)
+            self._sync_approval(projection)
+            self._sync_runtime_status(projection)
 
     def _set_busy(
         self,
@@ -158,9 +187,18 @@ class HeartwoodTerminalApp(App[None]):
                 timer.resume()
             self._refresh_working_status()
         else:
-            if timer is not None:
+            runtime_running = (
+                self._projection is not None and self._projection.lifecycle.status == "running"
+            )
+            if timer is not None and not runtime_running:
                 timer.pause()
-            state = "error" if failed else "ready"
+            state = (
+                "error"
+                if failed
+                else (
+                    self._projection.lifecycle.status if self._projection is not None else "ready"
+                )
+            )
             if failed:
                 status.add_class("error")
             status.update(f"Session {self.session.session_id} · {state}")
@@ -168,7 +206,10 @@ class HeartwoodTerminalApp(App[None]):
             composer.focus()
 
     def _refresh_working_status(self) -> None:
-        if not self._busy:
+        runtime_running = (
+            self._projection is not None and self._projection.lifecycle.status == "running"
+        )
+        if not self._busy and not runtime_running:
             return
         frames = (".  ", ".. ", "...") if self._animations_enabled else ("...",)
         marker = frames[self._frame % len(frames)]
@@ -183,18 +224,38 @@ class HeartwoodTerminalApp(App[None]):
                 self.notify(self._activity.guidance, title="Still working", timeout=6)
         self.query_one("#status", Static).update(message)
 
-    def _sync_approval(self) -> None:
-        actions = self.session.pending_actions()
+    def _sync_runtime_status(self, projection: SessionProjection) -> None:
+        if self._busy:
+            return
+        status = self.query_one("#status", Static)
+        status.remove_class("working", "waiting", "error")
+        if projection.lifecycle.status == "running":
+            status.add_class("working")
+            if self._activity_timer is not None:
+                self._activity_timer.resume()
+            self._activity = interaction_activity("")
+            self._refresh_working_status()
+        elif projection.lifecycle.status == "error":
+            status.add_class("error")
+            status.update(f"Session {self.session.session_id} · error")
+        elif projection.pending_approval is None:
+            if self._activity_timer is not None:
+                self._activity_timer.pause()
+            status.update(f"Session {self.session.session_id} · {projection.lifecycle.status}")
+
+    def _sync_approval(self, projection: SessionProjection) -> None:
+        approval = projection.pending_approval
         panel = self.query_one("#approval", Vertical)
         composer = self.query_one("#composer", Input)
         status = self.query_one("#status", Static)
-        if not actions:
+        if approval is None:
             panel.display = False
             composer.disabled = self._busy
             composer.placeholder = "Ask Heartwood or enter /help"
             if not self._busy:
                 composer.focus()
             return
+        actions = approval.actions
         panel.display = True
         label = "action" if len(actions) == 1 else "actions"
         self.query_one("#approval-title", Static).update(
@@ -204,8 +265,8 @@ class HeartwoodTerminalApp(App[None]):
         action_log.clear()
         for index, action in enumerate(actions, 1):
             details = [
-                f"{index}. {action.summary}",
-                f"   {action.tool_name} · {action.risk.title()} risk",
+                f"{index}. {action.summary or action.tool_name}",
+                f"   {action.tool_name} · {(action.risk or 'unknown').title()} risk",
             ]
             if action.arguments:
                 details.extend(("   Arguments:", *format_action_arguments(action.arguments)))
@@ -243,11 +304,9 @@ class HeartwoodTerminalApp(App[None]):
 
 def run_terminal(
     session: InteractiveSession,
-    *,
-    format_events: Callable[[Sequence[SessionEvent]], Sequence[str]],
 ) -> int:
     """Run the full-screen terminal client."""
-    HeartwoodTerminalApp(session, format_events=format_events).run()
+    HeartwoodTerminalApp(session).run()
     return 0
 
 

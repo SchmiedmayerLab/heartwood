@@ -33,8 +33,6 @@ import {
 import type {
   ActionConfirmationMode,
   ActionSettings,
-  ApprovalControl,
-  ConversationMessage,
   JsonValue,
   LocalModelImportRequest,
   ModelArtifacts,
@@ -45,22 +43,18 @@ import type {
   ModelSettings,
   ModelValidation,
   ProjectReadiness,
+  ProjectionApprovalGroup,
   SessionCommand,
-  SessionEvent,
+  SessionProjection,
   SessionSummary,
   SkillSettings,
   SkillSummary,
   StartupPlan,
 } from "./types";
-import { buildViewModel } from "./viewModel";
 
 interface AppProps {
   client?: HeartwoodClient;
   initialSessionId?: string;
-}
-
-interface LocalConversationMessage extends ConversationMessage {
-  sessionId: string;
 }
 
 interface InitialState {
@@ -88,11 +82,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const initialization = useRef<Promise<InitialState> | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [projection, setProjection] = useState<SessionProjection | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [localConversation, setLocalConversation] = useState<
-    LocalConversationMessage[]
-  >([]);
   const [requestStatus, setRequestStatus] = useState<"idle" | "busy" | "error">(
     "idle",
   );
@@ -197,13 +188,34 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     if (sessionId === null) return;
     let active = true;
     let refreshTimer: number | null = null;
-    resolvedClient
+    let closeStream = (): void => undefined;
+    void resolvedClient
       .replayEvents(sessionId)
-      .then(({ events: replayed }) => {
-        if (active) {
-          setEvents(replayed);
-          setRequestStatus("idle");
-        }
+      .then(({ projection: replayed }) => {
+        if (!active) return;
+        setProjection(replayed);
+        setRequestStatus("idle");
+        closeStream = resolvedClient.streamSession(
+          sessionId,
+          replayed.revision,
+          (streamed) => {
+            if (!active) return;
+            setProjection((current) =>
+              selectProjection(current, streamed, sessionId),
+            );
+            refreshTimer ??= window.setTimeout(() => {
+              refreshTimer = null;
+              void refreshSessions().catch((caught: unknown) =>
+                setError(errorMessage(caught)),
+              );
+            }, 250);
+          },
+          (streamError) => {
+            if (!active) return;
+            setError(`Live session updates stopped: ${streamError.message}`);
+            setRequestStatus("error");
+          },
+        );
       })
       .catch((caught: unknown) => {
         if (active) {
@@ -211,24 +223,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           setRequestStatus("error");
         }
       });
-    const cleanup = resolvedClient.streamEvents(
-      sessionId,
-      undefined,
-      (streamed) => {
-        if (!active) return;
-        setEvents((current) => mergeEvents(current, streamed));
-        refreshTimer ??= window.setTimeout(() => {
-          refreshTimer = null;
-          void refreshSessions().catch((caught: unknown) =>
-            setError(errorMessage(caught)),
-          );
-        }, 250);
-      },
-    );
     return () => {
       active = false;
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-      cleanup();
+      closeStream();
     };
   }, [refreshSessions, resolvedClient, sessionId]);
 
@@ -325,7 +323,6 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     };
   }, [modelDownloadActive, refreshProjectState, resolvedClient]);
 
-  const viewModel = useMemo(() => buildViewModel(events), [events]);
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === sessionId) ?? null,
     [sessionId, sessions],
@@ -421,22 +418,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     modelSettings === null ? "Loading"
     : activeProfile === null ? "Not configured"
     : modelProfileLabel(activeProfile, modelSettings);
-  const conversation = useMemo(
-    () =>
-      mergeConversationMessages(
-        localConversation.filter((message) => message.sessionId === sessionId),
-        viewModel.conversation,
-      ),
-    [localConversation, sessionId, viewModel.conversation],
-  );
-  const pendingActions = viewModel.approvalControls.filter(
-    (control) =>
-      control.targetType === "tool-call" && control.decision === null,
-  );
+  const conversation = projection?.conversation ?? [];
 
   useEffect(() => {
     scrollConversationEnd(conversationEndRef.current);
-  }, [conversation.length, requestStatus]);
+  }, [conversation.length, projection?.streamingText, requestStatus]);
 
   useEffect(() => {
     if (
@@ -482,32 +468,20 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     setRequestStatus("busy");
     setError(null);
     try {
-      const submittedPrompt = promptContent(payload);
-      if (kind === "chat" && submittedPrompt) {
-        setLocalConversation((current) =>
-          (
-            current.some(
-              (message) => message.id === `local-${command.command_id}`,
-            )
-          ) ?
-            current
-          : [
-              ...current,
-              {
-                id: `local-${command.command_id}`,
-                sequence: (events.at(-1)?.sequence ?? -1) + 0.5,
-                role: "user",
-                label: "You",
-                content: submittedPrompt,
-                detail: null,
-                sessionId,
-              },
-            ],
-        );
-      }
       const response = await resolvedClient.postCommand(command);
-      setEvents((current) => mergeEvents(current, response.events));
+      setProjection((current) =>
+        selectProjection(current, response.projection, sessionId),
+      );
       await refreshSessions();
+      const outcome = response.projection.lastCommandOutcome;
+      if (
+        outcome?.commandId === command.command_id &&
+        outcome.status === "rejected"
+      ) {
+        setError(outcome.message ?? "The command was rejected.");
+        setRequestStatus("error");
+        return false;
+      }
       setRetryCommand(null);
       setRequestStatus("idle");
       return true;
@@ -535,7 +509,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   const submitPrompt = () => {
     const value = prompt.trim();
-    if (!value || !modelReady || requestStatus === "busy" || sessionId === null)
+    if (
+      !value ||
+      !modelReady ||
+      !projection?.availableCommands.includes("chat") ||
+      requestStatus === "busy" ||
+      sessionId === null
+    )
       return;
     setPrompt("");
     void send("chat", { prompt: value });
@@ -548,7 +528,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       const created = await resolvedClient.createSession();
       setSessions((current) => mergeSessionSummaries(current, [created]));
       if (selectionGeneration.current !== generation) return;
-      setEvents([]);
+      setProjection(null);
       setPrompt("");
       setSessionId(created.session_id);
       setMobileSessionsOpen(false);
@@ -569,7 +549,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   const selectSession = (nextSessionId: string) => {
     selectionGeneration.current += 1;
-    setEvents([]);
+    setProjection(null);
     setPrompt("");
     setSessionId(nextSessionId);
     setMobileSessionsOpen(false);
@@ -592,11 +572,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   const decideAction = (
     decision: "approve" | "deny",
-    control: ApprovalControl,
+    approval: ProjectionApprovalGroup,
   ) =>
     send(decision, {
-      target_id: control.targetId,
-      target_type: "tool-call",
+      target_id: approval.groupId,
+      target_type: "action-set",
     });
 
   const selectActionMode = async (mode: ActionConfirmationMode) => {
@@ -759,22 +739,24 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           : null}
 
           <ConversationWorkspace
-            conversation={conversation}
             conversationEndRef={conversationEndRef}
             modelConfigured={modelReady}
             modelMessage={modelStatus.message}
-            paused={viewModel.paused}
-            pendingActions={pendingActions}
+            projection={projection}
             prompt={prompt}
             requestActivity={requestActivity}
             requestStatus={requestStatus}
-            onDecision={(decision, control) =>
-              void decideAction(decision, control)
+            onDecision={(decision, approval) =>
+              void decideAction(decision, approval)
             }
             onOpenSettings={() => openPanel("settings")}
-            onPauseToggle={() =>
-              void send(viewModel.paused ? "resume" : "pause")
-            }
+            onPauseToggle={() => {
+              if (projection?.lifecycle.canResume) {
+                void send("resume");
+              } else if (projection?.lifecycle.canPause) {
+                void send("pause");
+              }
+            }}
             onPrompt={setPrompt}
             onSubmit={submitPrompt}
           />
@@ -795,9 +777,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         <UtilitySheet
           actions={actionSettings}
           artifacts={modelArtifacts}
-          events={events}
           panel={panel}
           profileDraft={profileDraft}
+          projection={projection}
           projectReadiness={projectReadiness}
           startupPlan={startupPlan}
           settings={modelSettings}
@@ -886,7 +868,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             sessionId === null ? undefined : (
               void resolvedClient
                 .replayEvents(sessionId)
-                .then(({ events: replayed }) => setEvents(replayed))
+                .then(({ projection: replayed }) => setProjection(replayed))
                 .catch((caught: unknown) => setError(errorMessage(caught)))
             )
           }
@@ -949,24 +931,6 @@ const initializeSessions = async (
   return { selectedSessionId: created.session_id, sessions: [created] };
 };
 
-const promptContent = (payload: Record<string, JsonValue>): string => {
-  const value = payload.prompt;
-  return typeof value === "string" ? value.trim() : "";
-};
-
-const mergeConversationMessages = (
-  localMessages: ConversationMessage[],
-  eventMessages: ConversationMessage[],
-): ConversationMessage[] => {
-  const messages = new Map<string, ConversationMessage>();
-  for (const message of [...localMessages, ...eventMessages])
-    messages.set(message.id, message);
-  return [...messages.values()].sort(
-    (left, right) =>
-      left.sequence - right.sequence || left.id.localeCompare(right.id),
-  );
-};
-
 const mergeSessionSummaries = (
   current: SessionSummary[],
   next: SessionSummary[],
@@ -994,15 +958,22 @@ const hasScrollIntoView = (
   "scrollIntoView" in value &&
   typeof value.scrollIntoView === "function";
 
-const mergeEvents = (
-  current: SessionEvent[],
-  next: SessionEvent[],
-): SessionEvent[] => {
-  const events = new Map(current.map((event) => [event.event_id, event]));
-  for (const event of next) events.set(event.event_id, event);
-  return [...events.values()].sort(
-    (left, right) => left.sequence - right.sequence,
-  );
+const selectProjection = (
+  current: SessionProjection | null,
+  next: SessionProjection,
+  sessionId: string,
+): SessionProjection | null => {
+  if (next.sessionId !== sessionId) return current;
+  if (
+    current?.sessionId !== sessionId ||
+    next.streamEpoch !== current.streamEpoch ||
+    next.revision > current.revision ||
+    (next.revision === current.revision &&
+      next.streamRevision > current.streamRevision)
+  ) {
+    return next;
+  }
+  return current;
 };
 
 const modelValidationKey = (

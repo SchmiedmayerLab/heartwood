@@ -12,22 +12,26 @@ import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
 from threading import RLock
 from typing import Any, Concatenate, Protocol, cast
+from uuid import uuid4
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.core_adapter import (
     AgentBackend,
+    BackendErrorCode,
+    BackendErrorEvent,
     BackendEvent,
-    BackendEventKind,
+    BackendEventSink,
     DeterministicAgentBackend,
     FileSessionStore,
-    ProposedToolCall,
+    PendingActionGroup,
     SessionResult,
     SessionService,
+    TokenDeltaSink,
 )
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -115,16 +119,41 @@ from heartwood.gateway._session_catalog import (
     SessionCatalog,
     SessionCatalogError,
 )
+from heartwood.gateway._session_projection import SessionProjection, project_session
 from heartwood.gateway._skill_settings import SkillManager
 from heartwood.gateway._startup import InterfaceKind, StartupPlan, plan_startup
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import PolicyProfile
-from heartwood.session import SessionCommand, SessionEvent
+from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
+_PROJECTED_COMMANDS = frozenset(
+    {
+        CommandKind.APPROVE.value,
+        CommandKind.CHAT.value,
+        CommandKind.DENY.value,
+        CommandKind.PAUSE.value,
+        CommandKind.RESUME.value,
+    }
+)
+_STREAMING_COMMANDS = frozenset(
+    {
+        CommandKind.APPROVE.value,
+        CommandKind.CHAT.value,
+        CommandKind.RESUME.value,
+    }
+)
 
 SessionServiceFactory = Callable[[Path, str], SessionService]
+
+
+@dataclass(frozen=True, slots=True)
+class GatewaySessionSnapshot:
+    """One coherent durable-event and interface-projection snapshot."""
+
+    events: tuple[SessionEvent, ...]
+    projection: SessionProjection
 
 
 class _SerializedStateOwner(Protocol):
@@ -203,6 +232,29 @@ class _UnconfiguredAgentBackend:
     def continuation_requires_model_authorization(self) -> bool:
         return False
 
+    def bind_runtime(
+        self,
+        *,
+        event_sink: BackendEventSink,  # noqa: ARG002
+        token_sink: TokenDeltaSink,  # noqa: ARG002
+    ) -> None:
+        return None
+
+    def reconcile(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+        known_source_event_ids: frozenset[str],  # noqa: ARG002
+    ) -> tuple[BackendEvent, ...]:
+        return ()
+
+    def pending_action_group(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+    ) -> PendingActionGroup | None:
+        return None
+
     def submit_turn(
         self,
         *,
@@ -210,29 +262,21 @@ class _UnconfiguredAgentBackend:
         prompt: str,  # noqa: ARG002
     ) -> tuple[BackendEvent, ...]:
         return (
-            BackendEvent(
-                kind=BackendEventKind.ERROR,
-                message=self.configuration_error,
+            BackendErrorEvent(
+                error_code=BackendErrorCode.RUNTIME_UNAVAILABLE,
             ),
         )
-
-    def restore_pending(
-        self,
-        tool_calls: tuple[ProposedToolCall, ...],  # noqa: ARG002
-    ) -> None:
-        return None
 
     def resolve_confirmation(
         self,
         *,
         session_id: str,  # noqa: ARG002
-        tool_call_id: str,  # noqa: ARG002
+        action_group_id: str,  # noqa: ARG002
         approved: bool,  # noqa: ARG002
     ) -> tuple[BackendEvent, ...]:
         return (
-            BackendEvent(
-                kind=BackendEventKind.ERROR,
-                message="no OpenHands conversation is configured",
+            BackendErrorEvent(
+                error_code=BackendErrorCode.RUNTIME_UNAVAILABLE,
             ),
         )
 
@@ -270,6 +314,8 @@ class SessionGateway:
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
         self._state_lock: AbstractContextManager[object] = RLock()
+        self._stream_lock = RLock()
+        self._stream_epoch = uuid4().hex
         self._gpu_environment: GpuEnvironment | None = None
         adapter = select_platform_adapter(self.env)
         self.config_store = ProjectConfigStore(
@@ -359,6 +405,9 @@ class SessionGateway:
         self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
         self._streams = EventStreamHub()
+        self._streaming_text: dict[str, str] = {}
+        self._stream_revisions: dict[str, int] = {}
+        self._streaming_active: set[str] = set()
 
     def start(self) -> None:
         """Start the interface lifecycle without requiring an agent dependency import."""
@@ -380,16 +429,40 @@ class SessionGateway:
     @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
-        self.project.initialize()
-        if command.session_id == DEFAULT_SESSION_ID:
-            self.session_catalog.default()
-        else:
-            self.session_catalog.ensure(command.session_id)
-        service = self._service(command.session_id)
-        result = service.handle(command)
-        if not result.replayed:
-            self._streams.publish(session_id=command.session_id, events=result.events)
-        return result
+        with self._stream_lock:
+            self.project.initialize()
+            if command.session_id == DEFAULT_SESSION_ID:
+                self.session_catalog.default()
+            else:
+                self.session_catalog.ensure(command.session_id)
+            service = self._service(command.session_id)
+            projection = self._session_snapshot_locked(
+                session_id=command.session_id,
+            ).projection
+            command_kind = str(command.kind)
+            unavailable_reason = (
+                None
+                if command_kind not in _PROJECTED_COMMANDS
+                or command_kind in projection.available_commands
+                else (
+                    f"{command_kind} is unavailable while the agent is "
+                    f"{projection.lifecycle.status}"
+                )
+            )
+            if unavailable_reason is None and command_kind in _STREAMING_COMMANDS:
+                self._streaming_active.add(command.session_id)
+            result = (
+                service.handle(command)
+                if unavailable_reason is None
+                else service.handle(command, unavailable_reason=unavailable_reason)
+            )
+            if not result.replayed:
+                self._update_streaming_state(
+                    session_id=command.session_id,
+                    events=result.events,
+                )
+                self._streams.publish(session_id=command.session_id, events=result.events)
+            return result
 
     def sessions(self) -> dict[str, object]:
         """Return persisted sessions ordered by recent activity."""
@@ -435,11 +508,30 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Replay persisted events for a session."""
-        events = self._service(session_id).replay_events()
-        if after_sequence is None:
-            return events
-        return tuple(event for event in events if event.sequence > after_sequence)
+        return self._session_snapshot_locked(
+            session_id=session_id,
+            after_sequence=after_sequence,
+        ).events
 
+    @_serialized_state
+    def session_projection(self, *, session_id: str) -> SessionProjection:
+        """Return the sole interface projection for one session."""
+        return self._session_snapshot_locked(session_id=session_id).projection
+
+    @_serialized_state
+    def session_snapshot(
+        self,
+        *,
+        session_id: str,
+        after_sequence: int | None = None,
+    ) -> GatewaySessionSnapshot:
+        """Return events and projection from one serialized gateway snapshot."""
+        return self._session_snapshot_locked(
+            session_id=session_id,
+            after_sequence=after_sequence,
+        )
+
+    @_serialized_state
     def websocket(
         self,
         *,
@@ -447,13 +539,33 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> GatewayEventStream:
         """Connect an event stream with replay."""
-        return self._streams.connect(
-            session_id=session_id,
-            replay_events=self.replay_events(
+        with self._stream_lock:
+            return self._streams.connect(
+                session_id=session_id,
+                replay_events=self.replay_events(
+                    session_id=session_id,
+                    after_sequence=after_sequence,
+                ),
+            )
+
+    @_serialized_state
+    def open_event_stream(
+        self,
+        *,
+        session_id: str,
+        after_sequence: int | None = None,
+    ) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
+        """Connect a stream and capture its first coherent snapshot atomically."""
+        with self._stream_lock:
+            snapshot = self._session_snapshot_locked(
                 session_id=session_id,
                 after_sequence=after_sequence,
-            ),
-        )
+            )
+            stream = self._streams.connect(
+                session_id=session_id,
+                initial_changed=False,
+            )
+            return stream, snapshot
 
     def model_settings(self) -> dict[str, object]:
         """Return API-safe settings, connections, and advanced presets."""
@@ -1082,6 +1194,14 @@ class SessionGateway:
             backend=backend,
             policy_profile=self._policy_profile(),
             env=self.env,
+            event_sink=lambda events: self._publish_background_events(
+                session_id=session_id,
+                events=events,
+            ),
+            token_sink=lambda delta: self._publish_token_delta(
+                session_id=session_id,
+                delta=delta,
+            ),
         )
 
     def _backend(
@@ -1094,7 +1214,8 @@ class SessionGateway:
         backend_id = self.backend_id
         if backend_id in {"deterministic", "deterministic-local"}:
             return DeterministicAgentBackend(
-                action_confirmation_mode=action_settings.confirmation_mode
+                action_confirmation_mode=action_settings.confirmation_mode,
+                persistence_path=(self.sessions_root / session_id / ".deterministic-backend.json"),
             )
         if backend_id not in {"auto", "openhands", "openhands-sdk"}:
             msg = f"unsupported agent backend: {backend_id}"
@@ -1109,6 +1230,7 @@ class SessionGateway:
             workspace=self.project.root,
             skills_dir=self.skill_manager.bundled_dir,
             additional_skills_dirs=(self.installed_skills_dir,),
+            agents_dir=_repository_root() / "agents" / "verified",
             persistence_dir=self.sessions_root / session_id / "openhands",
             conversation_key=f"{self.project.root}#{session_id}",
             credential_environment_names=tuple(
@@ -1128,6 +1250,73 @@ class SessionGateway:
                 else None
             ),
         )
+
+    def _publish_background_events(
+        self,
+        *,
+        session_id: str,
+        events: tuple[SessionEvent, ...],
+    ) -> None:
+        """Publish events committed by the supervised OpenHands worker."""
+        if not events:
+            return
+        with self._stream_lock:
+            self._update_streaming_state(session_id=session_id, events=events)
+            self._streams.publish(session_id=session_id, events=events)
+
+    def _publish_token_delta(self, *, session_id: str, delta: str) -> None:
+        """Update transient visible model text without writing the event log."""
+        if not delta:
+            return
+        with self._stream_lock:
+            if session_id not in self._streaming_active:
+                return
+            self._streaming_text[session_id] = self._streaming_text.get(session_id, "") + delta
+            self._advance_stream_revision(session_id)
+            self._streams.notify(session_id=session_id)
+
+    def _session_snapshot_locked(
+        self,
+        *,
+        session_id: str,
+        after_sequence: int | None = None,
+    ) -> GatewaySessionSnapshot:
+        with self._stream_lock:
+            self.project.initialize()
+            service = self._service(session_id)
+            service.reconcile()
+            all_events = service.replay_events()
+            events = (
+                all_events
+                if after_sequence is None
+                else tuple(event for event in all_events if event.sequence > after_sequence)
+            )
+            return GatewaySessionSnapshot(
+                events=events,
+                projection=project_session(
+                    all_events,
+                    session_id=session_id,
+                    streaming_text=self._streaming_text.get(session_id, ""),
+                    stream_epoch=self._stream_epoch,
+                    stream_revision=self._stream_revisions.get(session_id, 0),
+                ),
+            )
+
+    def _update_streaming_state(
+        self,
+        *,
+        session_id: str,
+        events: tuple[SessionEvent, ...],
+    ) -> None:
+        if any(_starts_streaming_text(event) for event in events):
+            self._streaming_active.add(session_id)
+        if any(_clears_streaming_text(event) for event in events):
+            self._streaming_active.discard(session_id)
+            if self._streaming_text.pop(session_id, None) is not None:
+                self._advance_stream_revision(session_id)
+
+    def _advance_stream_revision(self, session_id: str) -> None:
+        self._stream_revisions[session_id] = self._stream_revisions.get(session_id, 0) + 1
 
     def _policy_profile(self) -> PolicyProfile:
         return self.config_store.load().policy
@@ -1269,14 +1458,27 @@ class SessionGateway:
 
     @_serialized_state
     def _reset_services(self) -> None:
-        services = tuple(self._services.values())
-        self._services.clear()
+        services = tuple(self._services.items())
+        failed: dict[str, SessionService] = {}
         errors: list[Exception] = []
-        for service in services:
+        for session_id, service in services:
             try:
                 service.close()
             except Exception as error:
+                failed[session_id] = service
                 errors.append(error)
+            else:
+                with self._stream_lock:
+                    had_transient_state = (
+                        session_id in self._streaming_active
+                        or session_id in self._streaming_text
+                    )
+                    self._streaming_active.discard(session_id)
+                    self._streaming_text.pop(session_id, None)
+                    if had_transient_state:
+                        self._advance_stream_revision(session_id)
+                        self._streams.notify(session_id=session_id)
+        self._services = failed
         if errors:
             raise ExceptionGroup("unable to close all session services", errors)
 
@@ -1566,6 +1768,29 @@ class SessionGateway:
 
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[5]
+
+
+def _clears_streaming_text(event: SessionEvent) -> bool:
+    kind = str(event.kind)
+    if kind == EventKind.AGENT_MESSAGE_EMITTED.value:
+        return True
+    if kind == EventKind.ERROR_RECORDED.value:
+        return event.payload.get("affects_lifecycle") is not False
+    if kind in {
+        EventKind.CONFIRMATION_REQUESTED.value,
+        EventKind.SESSION_PAUSED.value,
+    }:
+        return True
+    if kind != EventKind.AGENT_LIFECYCLE_UPDATED.value:
+        return False
+    return event.payload.get("status") != "running"
+
+
+def _starts_streaming_text(event: SessionEvent) -> bool:
+    return (
+        str(event.kind) == EventKind.AGENT_LIFECYCLE_UPDATED.value
+        and event.payload.get("status") == "running"
+    )
 
 
 def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelChoice:

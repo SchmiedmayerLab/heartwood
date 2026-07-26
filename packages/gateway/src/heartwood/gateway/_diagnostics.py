@@ -91,6 +91,42 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Repair or reinstall Heartwood, then run `heartwood doctor` again.",
         "/reference/troubleshooting/#agent-runtime",
     ),
+    "agent-action": DiagnosticDefinition(
+        "HW-AGENT-002",
+        "An agent action failed",
+        "Review the action set and model connection, then try the task again.",
+        "/reference/troubleshooting/#hw-agent-002-an-agent-action-failed",
+    ),
+    "agent-conversation": DiagnosticDefinition(
+        "HW-AGENT-003",
+        "The agent conversation stopped",
+        "Review Activity & audit and the model connection, then start the task again.",
+        "/reference/troubleshooting/#hw-agent-003-the-agent-conversation-stopped",
+    ),
+    "agent-worker": DiagnosticDefinition(
+        "HW-AGENT-004",
+        "The agent worker stopped",
+        "Review Activity & audit, run `heartwood doctor`, and try the task again.",
+        "/reference/troubleshooting/#hw-agent-004-the-agent-worker-stopped",
+    ),
+    "agent-state": DiagnosticDefinition(
+        "HW-AGENT-005",
+        "The agent cannot perform that operation in its current state",
+        "Review the current task or action set before trying the operation again.",
+        "/reference/troubleshooting/#hw-agent-005-the-agent-cannot-perform-that-operation",
+    ),
+    "agent-action-outcome": DiagnosticDefinition(
+        "HW-AGENT-006",
+        "An approved action has an unknown outcome",
+        "Verify the project files and continue in a new session; do not repeat the action blindly.",
+        "/reference/troubleshooting/#hw-agent-006-an-approved-action-has-an-unknown-outcome",
+    ),
+    "agent-unknown": DiagnosticDefinition(
+        "HW-AGENT-999",
+        "The agent runtime reported an error",
+        "Review Activity & audit, run `heartwood doctor`, and try the task again.",
+        "/reference/troubleshooting/#hw-agent-999-the-agent-runtime-reported-an-error",
+    ),
     "slurm-allocation": DiagnosticDefinition(
         "HW-COMPUTE-001",
         "A compute allocation may be required",

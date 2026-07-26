@@ -136,6 +136,7 @@ COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 COPY fixtures ./fixtures
 COPY skills ./skills
+COPY agents ./agents
 COPY evals ./evals
 COPY images ./images
 COPY README.md NOTICE ./

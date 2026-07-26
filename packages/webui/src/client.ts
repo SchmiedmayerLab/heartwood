@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { sessionProjectionResponseSchema } from "./projectionSchema";
 import type {
   ActionConfirmationMode,
   ActionSettings,
@@ -32,6 +33,7 @@ import type {
   SessionCommand,
   SessionEvent,
   SessionList,
+  SessionProjection,
   SessionSummary,
   SkillSettings,
   SkillSummary,
@@ -39,8 +41,9 @@ import type {
 
 const noopCleanup = (): void => undefined;
 
-export interface SessionEventResponse {
+export interface SessionProjectionResponse {
   events: SessionEvent[];
+  projection: SessionProjection;
 }
 
 export interface HeartwoodClient {
@@ -53,15 +56,16 @@ export interface HeartwoodClient {
   getSession(sessionId: string): Promise<SessionSummary>;
   renameSession(sessionId: string, title: string): Promise<SessionSummary>;
   getAuditExport(sessionId: string): Promise<AuditExport>;
-  postCommand(command: SessionCommand): Promise<SessionEventResponse>;
+  postCommand(command: SessionCommand): Promise<SessionProjectionResponse>;
   replayEvents(
     sessionId: string,
     afterSequence?: number,
-  ): Promise<SessionEventResponse>;
-  streamEvents(
+  ): Promise<SessionProjectionResponse>;
+  streamSession(
     sessionId: string,
     afterSequence: number | undefined,
-    onEvents: (events: SessionEvent[]) => void,
+    onProjection: (projection: SessionProjection) => void,
+    onError?: (error: Error) => void,
   ): () => void;
   getActionSettings(): Promise<ActionSettings>;
   selectActionConfirmationMode(
@@ -175,7 +179,9 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async postCommand(command: SessionCommand): Promise<SessionEventResponse> {
+  async postCommand(
+    command: SessionCommand,
+  ): Promise<SessionProjectionResponse> {
     const response = await fetch(
       this.url(`/sessions/${command.session_id}/commands`),
       {
@@ -190,7 +196,7 @@ export class GatewayClient implements HeartwoodClient {
   async replayEvents(
     sessionId: string,
     afterSequence?: number,
-  ): Promise<SessionEventResponse> {
+  ): Promise<SessionProjectionResponse> {
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
     const response = await fetch(
       this.url(`/sessions/${sessionId}/events${query}`),
@@ -386,10 +392,11 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  streamEvents(
+  streamSession(
     sessionId: string,
     afterSequence: number | undefined,
-    onEvents: (events: SessionEvent[]) => void,
+    onProjection: (projection: SessionProjection) => void,
+    onError: (error: Error) => void = noopCleanup,
   ): () => void {
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
     const path = `/sessions/${sessionId}/events${query}`;
@@ -405,10 +412,21 @@ export class GatewayClient implements HeartwoodClient {
           return;
         }
         fallbackOpen = true;
-        cleanup = this.openSse(sessionId, afterSequence, onEvents);
+        cleanup = this.openSse(
+          sessionId,
+          afterSequence,
+          onProjection,
+          onError,
+        );
       };
       socket.onmessage = (message): void => {
-        onEvents(parseEventPayload(String(message.data)).events);
+        try {
+          onProjection(parseProjectionPayload(String(message.data)).projection);
+        } catch (caught) {
+          onError(asError(caught));
+          socket.close(1002, "invalid Heartwood projection");
+          openFallback();
+        }
       };
       socket.onclose = (event): void => {
         if (event.code !== 1000) {
@@ -428,7 +446,7 @@ export class GatewayClient implements HeartwoodClient {
         cleanup();
       };
     }
-    cleanup = this.openSse(sessionId, afterSequence, onEvents);
+    cleanup = this.openSse(sessionId, afterSequence, onProjection, onError);
     return (): void => {
       closed = true;
       cleanup();
@@ -438,7 +456,8 @@ export class GatewayClient implements HeartwoodClient {
   private openSse(
     sessionId: string,
     afterSequence: number | undefined,
-    onEvents: (events: SessionEvent[]) => void,
+    onProjection: (projection: SessionProjection) => void,
+    onError: (error: Error) => void,
   ): () => void {
     if (!("EventSource" in window)) {
       return noopCleanup;
@@ -448,9 +467,15 @@ export class GatewayClient implements HeartwoodClient {
       this.url(`/sessions/${sessionId}/events/stream${query}`),
     );
     source.addEventListener("heartwood-session-events", (message): void => {
-      onEvents(
-        parseEventPayload((message as MessageEvent<string>).data).events,
-      );
+      try {
+        onProjection(
+          parseProjectionPayload((message as MessageEvent<string>).data)
+            .projection,
+        );
+      } catch (caught) {
+        source.close();
+        onError(asError(caught));
+      }
     });
     return (): void => {
       source.close();
@@ -470,7 +495,7 @@ export class GatewayClient implements HeartwoodClient {
 
 const parseResponse = async (
   response: Response,
-): Promise<SessionEventResponse> => {
+): Promise<SessionProjectionResponse> => {
   if (!response.ok) {
     let error = `Gateway request failed with status ${response.status}`;
     try {
@@ -481,11 +506,11 @@ const parseResponse = async (
     }
     throw new Error(error);
   }
-  const payload = (await response.json()) as Partial<SessionEventResponse> & {
-    error?: string;
-  };
-  return { events: payload.events ?? [] };
+  return parseProjectionPayload(await response.text());
 };
+
+const asError = (value: unknown): Error =>
+  value instanceof Error ? value : new Error(String(value));
 
 const parseJsonResponse = async <Value>(response: Response): Promise<Value> => {
   if (!response.ok) {
@@ -501,9 +526,12 @@ const parseJsonResponse = async <Value>(response: Response): Promise<Value> => {
   return (await response.json()) as Value;
 };
 
-const parseEventPayload = (payload: string): SessionEventResponse => {
-  const parsed = JSON.parse(payload) as Partial<SessionEventResponse>;
-  return { events: parsed.events ?? [] };
+const parseProjectionPayload = (payload: string): SessionProjectionResponse => {
+  const parsed = sessionProjectionResponseSchema.safeParse(JSON.parse(payload));
+  if (!parsed.success) {
+    throw new Error("Gateway response included an invalid session projection");
+  }
+  return parsed.data;
 };
 
 const gatewayBasePath = (): string => {

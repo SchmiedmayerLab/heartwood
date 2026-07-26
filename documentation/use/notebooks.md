@@ -52,32 +52,58 @@ view = session.chat(
     "Inspect the analysis code and explain the existing data-quality checks. "
     "Do not modify files."
 )
-view.chat
+view.lifecycle.status
 ```
 
-Pending actions appear in `view.approval_controls`.
-Inspect every `actions` member before resolving the group:
+`chat()` returns immediately after the background OpenHands run starts.
+Poll the shared projection when a notebook cell should wait for the next interactive boundary:
 
 ```python
-pending = view.approval_controls[0]
+import time
+
+while view.lifecycle.status == "running":
+    time.sleep(0.5)
+    view = session.replay()
+
+[(message.label, message.content) for message in view.conversation]
+```
+
+You can submit guidance with another `session.chat(...)` call while the task is running.
+Use `session.pause()` and `session.resume()` to control the background run.
+
+## Review an Action Set
+
+A pending action set appears in `view.pending_approval`.
+Inspect every member before resolving the group:
+
+```python
+pending = view.pending_approval
+assert pending is not None
 [(action.tool_name, action.summary, action.arguments) for action in pending.actions]
 ```
 
-Allow or reject the complete set with one member identifier:
+Allow or reject the complete set with its group identifier:
 
 ```python
-view = session.approve(tool_call_id=pending.target_id)
-# Or: view = session.deny(tool_call_id=pending.target_id)
+view = session.approve(group_id=pending.group_id)
+# Or: view = session.deny(group_id=pending.group_id)
 ```
 
-The identifier selects the pending OpenHands callback; the decision applies to the complete displayed action set.
+The decision applies to every action displayed in that OpenHands action set.
+
+Task progress is available through `view.task_plan`.
+Combined model usage is available through `view.usage`, and agent and condenser usage are separated in `view.usage_by_purpose`.
+Sequential specialist work and parent lineage are available through `view.subagents`.
 
 ## Export the Audit Record
 
 ```python
-view = session.audit_export()
-view.export_actions
+export = session.audit_export()
+export["filename"]
+export["content"]
 ```
+
+The returned JSON Lines content is the same scrubbed export downloaded by the browser.
 
 ## Keep Required Services Running
 

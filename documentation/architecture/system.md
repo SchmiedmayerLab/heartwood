@@ -37,18 +37,33 @@ Terminal, browser, and notebook clients consume the same projection.
 
 ### Session Commands and Events
 
-Interfaces submit typed commands and render typed durable events.
-The gateway publishes live events while retaining the same sequence for replay.
+Interfaces submit typed commands to the gateway.
+OpenHands work runs in a supervised background thread so an interface can send guidance, pause, resume, or review an action set while the task is active.
+Final messages, actions, lifecycle changes, task plans, usage snapshots, specialist lineage, and errors become typed durable events.
+Incremental token text is transient and is never appended to the session or audit log.
 
 ### Interface Projections
 
+The gateway reduces durable events and current transient text into one session projection.
+That projection contains the conversation, lifecycle, complete pending action set, task plan, total and per-purpose model usage, specialist lineage, activity, and available commands.
+The gateway enforces those available commands before dispatch, so terminal, browser, and notebook clients share the same lifecycle rules.
+REST and streaming transports return events and that projection from one serialized snapshot; a transient revision orders token-only updates between durable events.
+The terminal, browser, and notebook bridge render the projection without maintaining their own event reducers.
+
 The gateway also owns researcher-facing setup choices, model-connection categories, readiness diagnostics, and action settings.
-The terminal, browser, and notebook bridge may render these differently, but they do not infer separate labels, capabilities, or persistence behavior.
+Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
 
 ### OpenHands Adapter
 
-The adapter creates an OpenHands conversation with the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and action-confirmation callback.
-Heartwood translates OpenHands messages, tool proposals, decisions, and results into its stable event contract rather than duplicating the agent loop.
+The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
+It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
+OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
+Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
+Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
+
+The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
+Tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled unless a future reviewed contract enables them.
+The verified `research-planner` specialist is tool-free and can produce a bounded analysis plan before the parent agent changes project files.
 
 ### Platform Adapter
 

@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Optional widget rendering for notebook view models."""
+"""Optional widget rendering for the shared session projection."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
     """Build deterministic widget section specifications."""
     return (
         WidgetSpec(
-            "Chat",
-            tuple(f"{message.role}: {message.content}" for message in view_model.chat),
+            "Conversation",
+            _conversation_items(view_model),
         ),
         WidgetSpec(
             "Activity",
@@ -45,43 +45,74 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
             ),
         ),
         WidgetSpec(
-            "Skills",
-            tuple(
-                f"{proposal.target_id}: {proposal.status}"
-                for proposal in view_model.skill_proposals
-            ),
-        ),
-        WidgetSpec(
-            "Approvals",
+            "Approval",
             _approval_items(view_model),
         ),
         WidgetSpec(
-            "Policy",
-            tuple(
-                f"{status.decision} {status.endpoint}: {status.reason}"
-                for status in view_model.policy_status
-            ),
+            "Tasks",
+            tuple(f"{task.status}: {task.title}" for task in view_model.task_plan),
         ),
         WidgetSpec(
-            "Exports",
-            tuple(f"{action.label}: {action.path}" for action in view_model.export_actions),
+            "Runtime",
+            _runtime_items(view_model),
+        ),
+        WidgetSpec(
+            "Specialists",
+            tuple(
+                f"{agent.agent_name}: {agent.status} ({agent.invocation_id})"
+                for agent in view_model.subagents
+            ),
         ),
     )
 
 
+def _conversation_items(view_model: NotebookViewModel) -> tuple[str, ...]:
+    items = [
+        f"{message.label}: {message.content}" + (f"\n{message.detail}" if message.detail else "")
+        for message in view_model.conversation
+    ]
+    if view_model.streaming_text:
+        items.append(f"Agent (working): {view_model.streaming_text}")
+    return tuple(items)
+
+
 def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
-    items: list[str] = []
-    for control in view_model.approval_controls:
-        items.append(f"{control.label}: {control.decision or 'pending'}")
-        items.extend(
-            f"{index}. {action.summary} ({action.tool_name}, {action.risk} risk)"
-            + (
-                f"\nArguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}"
-                if action.arguments
-                else ""
-            )
-            for index, action in enumerate(control.actions, 1)
+    group = view_model.pending_approval
+    if group is None:
+        return ()
+    action_label = "action" if len(group.actions) == 1 else "actions"
+    items = [(f"Review action set {group.group_id} ({len(group.actions)} {action_label}): pending")]
+    items.extend(
+        f"{index}. {action.summary or action.tool_name} "
+        f"({action.tool_name}, {action.risk or 'unknown'} risk)"
+        + (
+            f"\nArguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}"
+            if action.arguments
+            else ""
         )
+        for index, action in enumerate(group.actions, 1)
+    )
+    return tuple(items)
+
+
+def _runtime_items(view_model: NotebookViewModel) -> tuple[str, ...]:
+    items = [f"Lifecycle: {view_model.lifecycle.status}"]
+    if view_model.context.model_endpoint:
+        items.append(f"Model route: {view_model.context.model_endpoint}")
+    if view_model.context.model_decision:
+        items.append(f"Route decision: {view_model.context.model_decision}")
+    if view_model.usage is not None:
+        usage = view_model.usage
+        items.append(
+            f"Usage: {usage.prompt_tokens} input, "
+            f"{usage.completion_tokens} output tokens across "
+            f"{usage.call_count} calls ({usage.model_name})"
+        )
+    items.extend(
+        f"{usage.usage_id}: {usage.call_count} calls, "
+        f"{usage.prompt_tokens + usage.completion_tokens} tokens"
+        for usage in view_model.usage_by_purpose
+    )
     return tuple(items)
 
 
