@@ -157,12 +157,20 @@ def verify_run(
         raise ValueError("direct model inference did not return content")
 
     replay = replay_path.read_text(encoding="utf-8")
-    if (
-        "Tool terminal exit=0" not in replay
-        or "Action set approved" not in replay
-        or "Action set denied" not in replay
-    ):
-        raise ValueError("fresh-process replay is missing the approved or denied action set")
+    replay_markers = {
+        "approved action set": "Action set approved",
+        "rejected action set": "Action set rejected",
+        "terminal completion": "terminal completed",
+        "terminal tool": "Tool: Ran Terminal Command",
+    }
+    missing_replay_markers = sorted(
+        label for label, marker in replay_markers.items() if marker not in replay
+    )
+    if missing_replay_markers:
+        raise ValueError(
+            "fresh-process replay is missing projection markers: "
+            f"{', '.join(missing_replay_markers)}"
+        )
 
     audit = AuditLog(audit_path)
     audit_events = audit.read()

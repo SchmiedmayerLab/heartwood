@@ -20,6 +20,8 @@ from typing import Any, cast
 import pytest
 
 from heartwood.audit import AuditLog
+from heartwood.cli._interactive import format_projection_lines
+from heartwood.gateway import project_session
 from heartwood.session import SessionEvent
 
 
@@ -65,17 +67,31 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         _event(
             2,
             "confirmation.requested",
-            {"request": {"tool_call_id": "tool-1"}},
+            {
+                "request": {
+                    "group_id": "group-1",
+                    "tool_call_id": "tool-1",
+                    "tool_name": "terminal",
+                }
+            },
         ),
         _event(
             3,
             "confirmation.resolved",
-            {"tool_call_id": "tool-1", "decision": "approved"},
+            {
+                "group_id": "group-1",
+                "tool_call_id": "tool-1",
+                "decision": "approved",
+            },
         ),
         _event(
             4,
             "tool.execution.recorded",
-            {"tool_name": "terminal", "exit_code": 0},
+            {
+                "tool_name": "terminal",
+                "exit_code": 0,
+                "summary": "terminal completed",
+            },
         ),
         _event(
             5,
@@ -98,12 +114,22 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         _event(
             8,
             "confirmation.requested",
-            {"request": {"tool_call_id": "tool-2"}},
+            {
+                "request": {
+                    "group_id": "group-2",
+                    "tool_call_id": "tool-2",
+                    "tool_name": "terminal",
+                }
+            },
         ),
         _event(
             9,
             "confirmation.resolved",
-            {"tool_call_id": "tool-2", "decision": "denied"},
+            {
+                "group_id": "group-2",
+                "tool_call_id": "tool-2",
+                "decision": "denied",
+            },
         ),
         _event(10, "audit.export.recorded", {"scrubbed": True}),
     )
@@ -140,8 +166,9 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     )
     (tmp_path / "heartwood-exact-output.txt").write_bytes(b"heartwood-agent-exact-ok\n")
     replay_path = tmp_path / "replay.txt"
+    replay_lines = format_projection_lines(project_session(events, session_id="qualification"))
     replay_path.write_text(
-        "Action set approved (1 action)\nTool terminal exit=0\nAction set denied (1 action)\n",
+        "\n".join(replay_lines) + "\n",
         encoding="utf-8",
     )
     inference_path = tmp_path / "inference.json"
@@ -251,6 +278,40 @@ def test_coding_agent_qualification_rejects_incomplete_replay(tmp_path: Path) ->
     replay.write_text("Action set approved (1 action)\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="fresh-process replay"):
+        verify(
+            events_path=events,
+            audit_path=audit,
+            artifact_path=artifact,
+            replay_path=replay,
+            inference_path=inference,
+        )
+
+
+@pytest.mark.parametrize(
+    ("current_marker", "legacy_marker", "missing_label"),
+    [
+        ("Action set rejected", "Action set denied", "rejected action set"),
+        ("Tool: Ran Terminal Command", "Tool terminal exit=0", "terminal tool"),
+    ],
+)
+def test_coding_agent_qualification_requires_current_shared_projection(
+    tmp_path: Path,
+    current_marker: str,
+    legacy_marker: str,
+    missing_label: str,
+) -> None:
+    module = _module(
+        f"verify_coding_agent_e2e_projection_{missing_label.replace(' ', '_')}",
+        _root() / "images/generic/scripts/verify_coding_agent_e2e.py",
+    )
+    verify = cast(Callable[..., dict[str, object]], module.verify_run)
+    events, audit, artifact, replay, inference = _acceptance_files(tmp_path)
+    replay.write_text(
+        replay.read_text(encoding="utf-8").replace(current_marker, legacy_marker),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=missing_label):
         verify(
             events_path=events,
             audit_path=audit,

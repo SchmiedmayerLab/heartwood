@@ -21,12 +21,13 @@ import pytest
 
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
-    _MODEL_DOWNLOAD_ACTIVITY,
+    _MODEL_PREPARATION_ACTIVITY,
     __version__,
     _consume_prompt,
     _float_payload,
     _handle_replay,
     _mapping_payload,
+    _run_with_progress,
     _submit_and_wait,
     _submit_with_progress,
     _supports_full_screen_terminal,
@@ -188,12 +189,33 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_model_preparation_progress_explains_long_running_work() -> None:
-    assert _MODEL_DOWNLOAD_ACTIVITY.label == "Preparing and verifying the model"
-    assert _MODEL_DOWNLOAD_ACTIVITY.waiting_label == "Still preparing and verifying the model"
-    assert _MODEL_DOWNLOAD_ACTIVITY.guidance == (
+    assert _MODEL_PREPARATION_ACTIVITY.label == "Preparing and verifying the model"
+    assert _MODEL_PREPARATION_ACTIVITY.waiting_label == "Still preparing and verifying the model"
+    assert _MODEL_PREPARATION_ACTIVITY.guidance == (
         "Large downloads and full verification of existing model files can take several minutes. "
         "Keep this process running."
     )
+
+
+def test_line_mode_reports_progress_during_slow_model_preparation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def prepare_model() -> str:
+        time.sleep(0.03)
+        return "ready"
+
+    result = _run_with_progress(
+        prepare_model,
+        activity=_MODEL_PREPARATION_ACTIVITY,
+        update_interval=0.005,
+    )
+
+    assert result == "ready"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Preparing and verifying the model..." in captured.err
+    assert "Still preparing and verifying the model" in captured.err
+    assert "Keep this process running." in captured.err
 
 
 def test_line_mode_reports_elapsed_progress_for_a_slow_turn(

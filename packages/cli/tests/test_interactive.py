@@ -638,7 +638,9 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert _line_style("[001] Agent: complete") == "green"
     assert _line_style("[001] You: inspect") == "cyan"
     assert _line_style("[001] Action set approved") == "yellow"
-    assert _line_style("[001] Tool terminal exit=0") == "blue"
+    assert _line_style("[001] Tool: Ran Terminal Command") == "blue"
+    assert _line_style("[002] Tool: Ran File Change") == "blue"
+    assert _line_style("[003] Tool terminal exit=0") is None
     assert _line_style("[001] Model route allow") is None
     assert _risk_presentation("low") == ("Low Risk", "green")
     assert _risk_presentation("other") == ("Not Classified", "bold yellow")

@@ -960,7 +960,9 @@ const CustomLocalModelSetup = ({
   const [repository, setRepository] = useState("");
   const [revision, setRevision] = useState("");
   const [plan, setPlan] = useState<ModelRepositoryPlan | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<
+    "inspect" | "download" | "import" | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importRepository, setImportRepository] = useState("");
@@ -968,6 +970,7 @@ const CustomLocalModelSetup = ({
   const [importLicense, setImportLicense] = useState("");
   const [importComplete, setImportComplete] = useState(false);
   const [confirmDownload, setConfirmDownload] = useState(false);
+  const pending = pendingOperation !== null;
   const modelDownload =
     plan === null ? undefined : (
       downloads.find((item) => item.model_id === plan.model.model_id)
@@ -975,7 +978,7 @@ const CustomLocalModelSetup = ({
 
   const inspect = async () => {
     if (!repository.trim()) return;
-    setPending(true);
+    setPendingOperation("inspect");
     setError(null);
     setPlan(null);
     try {
@@ -988,13 +991,13 @@ const CustomLocalModelSetup = ({
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setPending(false);
+      setPendingOperation(null);
     }
   };
 
   const download = async () => {
     if (!plan) return;
-    setPending(true);
+    setPendingOperation("download");
     setError(null);
     try {
       await onDownload({
@@ -1004,7 +1007,7 @@ const CustomLocalModelSetup = ({
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setPending(false);
+      setPendingOperation(null);
     }
   };
 
@@ -1016,7 +1019,7 @@ const CustomLocalModelSetup = ({
       !importLicense.trim()
     )
       return;
-    setPending(true);
+    setPendingOperation("import");
     setError(null);
     setImportComplete(false);
     try {
@@ -1030,7 +1033,7 @@ const CustomLocalModelSetup = ({
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setPending(false);
+      setPendingOperation(null);
     }
   };
 
@@ -1073,7 +1076,7 @@ const CustomLocalModelSetup = ({
         </details>
         <Button
           disabled={pending || !repository.trim()}
-          isPending={pending && plan === null}
+          isPending={pendingOperation === "inspect"}
           variant="outline"
           onClick={() => void inspect()}
         >
@@ -1119,7 +1122,10 @@ const CustomLocalModelSetup = ({
                 modelDownload?.status === "downloading" ||
                 modelDownload?.status === "ready"
               }
-              isPending={pending || modelDownload?.status === "downloading"}
+              isPending={
+                pendingOperation === "download" ||
+                modelDownload?.status === "downloading"
+              }
               onClick={() => setConfirmDownload(true)}
             >
               {modelDownload?.status === "ready" ?
@@ -1185,13 +1191,17 @@ const CustomLocalModelSetup = ({
                 !importRevision.trim() ||
                 !importLicense.trim()
               }
-              isPending={pending}
+              isPending={pendingOperation === "import"}
               variant="outline"
               onClick={() => void importModel()}
             >
               Import model
             </Button>
-            {importComplete ?
+            {pendingOperation === "import" ?
+              <span role="status">
+                Copying and verifying model files. Keep this page open.
+              </span>
+            : importComplete ?
               <span role="status">Model imported and selected</span>
             : null}
           </div>

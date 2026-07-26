@@ -113,3 +113,6 @@ heartwood models import /approved/path/model.gguf \
 Heartwood accepts a valid GGUF file or standard vLLM safetensors directory, rejects symbolic links and executable Python, records provenance, and copies the artifact atomically into `.heartwood/models/`.
 The path must be visible to the Heartwood process.
 The browser uses this same server-side import and does not upload multi-gigabyte model files through the page.
+The destination needs enough free space for a complete copy plus Heartwood's enforced runtime reserve.
+Directory imports also create and verify a complete SHA-256 manifest before the model becomes selectable.
+Large imports can therefore be limited by shared or persistent-disk throughput; keep the command or browser page open while Heartwood reports that the import is still in progress.

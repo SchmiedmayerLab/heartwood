@@ -902,6 +902,25 @@ class DeferredCommandClient extends FakeClient {
   }
 }
 
+class DeferredModelImportClient extends FakeClient {
+  private releaseImport: (() => void) | null = null;
+
+  override async importLocalModel(
+    request: LocalModelImportRequest,
+  ): Promise<LocalModelImportResult> {
+    this.localImportRequest = request;
+    await new Promise<void>((resolve) => {
+      this.releaseImport = resolve;
+    });
+    return super.importLocalModel(request);
+  }
+
+  completeImport(): void {
+    this.releaseImport?.();
+    this.releaseImport = null;
+  }
+}
+
 class DeferredActivityClient extends FakeClient {
   private deferReplay = false;
   private completeReplay:
@@ -2110,6 +2129,49 @@ describe("App", () => {
     expect(
       await screen.findByText("Model imported and selected"),
     ).toHaveAttribute("role", "status");
+  });
+
+  it("keeps a long-running model import visibly pending", async () => {
+    const client = new DeferredModelImportClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByText("Other model"));
+    fireEvent.click(screen.getByText("Import an existing model"));
+    fireEvent.change(screen.getByLabelText("Server path"), {
+      target: { value: "/models/research-model.gguf" },
+    });
+    fireEvent.change(screen.getByLabelText("Source repository"), {
+      target: { value: "research/research-model" },
+    });
+    fireEvent.change(screen.getByLabelText("Source revision"), {
+      target: { value: "2".repeat(40) },
+    });
+    fireEvent.change(screen.getByLabelText("License"), {
+      target: { value: "Apache-2.0" },
+    });
+    const importButton = screen.getByRole("button", { name: "Import model" });
+    fireEvent.click(importButton);
+
+    await waitFor(() => expect(client.localImportRequest).not.toBeNull());
+    expect(importButton).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Check model" }),
+    ).not.toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.getByText(
+        "Copying and verifying model files. Keep this page open.",
+      ),
+    ).toHaveAttribute("role", "status");
+    expect(
+      screen.queryByText("Model imported and selected"),
+    ).not.toBeInTheDocument();
+
+    act(() => client.completeImport());
+
+    expect(
+      await screen.findByText("Model imported and selected"),
+    ).toHaveAttribute("role", "status");
+    expect(importButton).not.toBeDisabled();
   });
 
   it("labels user-selected models without qualification evidence", async () => {

@@ -1012,18 +1012,19 @@ def test_active_worker_hides_transitional_non_running_sdk_state(
     with backend._run_lock:
         backend._execution_active = True
 
-    events = backend.reconcile(
-        session_id="session-1",
-        known_source_event_ids=frozenset(),
-    )
-    lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
+    try:
+        events = backend.reconcile(
+            session_id="session-1",
+            known_source_event_ids=frozenset(),
+        )
+        lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
 
-    assert lifecycle_events
-    assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
-
-    with backend._run_lock:
-        backend._execution_active = False
-    backend.close()
+        assert lifecycle_events
+        assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
+    finally:
+        with backend._run_lock:
+            backend._execution_active = False
+        backend.close()
 
 
 def test_real_sdk_task_tracker_updates_the_shared_task_plan(tmp_path: Path) -> None:
@@ -1709,37 +1710,41 @@ def test_internal_view_repair_remains_one_running_interface_operation(
         return conversation
 
     backend = _backend(tmp_path, cast(ConversationFactory, factory))
-    group = backend.pending_action_group(session_id="session-1")
-    assert group is not None
-    backend.resolve_confirmation(
-        session_id="session-1",
-        action_group_id=group.group_id,
-        approved=True,
-    )
-    assert conversation is not None
-    assert conversation.view_repair_boundary.wait(timeout=2)
-
-    events = backend.reconcile(
-        session_id="session-1",
-        known_source_event_ids=frozenset(),
-    )
-    lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
-
-    assert lifecycle_events
-    assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
-    assert not any(event.lifecycle == BackendLifecycle.PAUSED for event in lifecycle_events)
-    assert (
-        backend._translate_event(
-            PauseEvent(id="internal-view-repair-pause"),
+    try:
+        group = backend.pending_action_group(session_id="session-1")
+        assert group is not None
+        backend.resolve_confirmation(
             session_id="session-1",
+            action_group_id=group.group_id,
+            approved=True,
         )
-        == ()
-    )
+        assert conversation is not None
+        assert conversation.view_repair_boundary.wait(timeout=2)
 
-    conversation.release.set()
-    assert conversation.stopped.wait(timeout=2)
-    assert conversation.second_run_started.wait(timeout=2)
-    backend.close()
+        events = backend.reconcile(
+            session_id="session-1",
+            known_source_event_ids=frozenset(),
+        )
+        lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
+
+        assert lifecycle_events
+        assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
+        assert not any(event.lifecycle == BackendLifecycle.PAUSED for event in lifecycle_events)
+        assert (
+            backend._translate_event(
+                PauseEvent(id="internal-view-repair-pause"),
+                session_id="session-1",
+            )
+            == ()
+        )
+
+        conversation.release.set()
+        assert conversation.stopped.wait(timeout=2)
+        assert conversation.second_run_started.wait(timeout=2)
+    finally:
+        if conversation is not None:
+            conversation.release.set()
+        backend.close()
 
 
 def test_pause_wins_before_an_automatic_run_is_admitted(

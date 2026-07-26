@@ -55,7 +55,7 @@ The GPU path exposes one release-pinned Terra recommendation.
 The qualified two-T4 recommendation is Qwen3 Coder 30B W4A16 AWQ with a conservative 18,432-token context.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
 It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
-For the first model download and startup, set auto-pause to at least 120 minutes; image creation, model verification, and inference startup can each take several minutes without terminal output from the model itself.
+For the first model download, import, or startup, set auto-pause to at least 120 minutes; image creation, model copying and verification, and inference startup can each take several minutes without terminal output from the model itself.
 After setup is complete, shorten auto-pause to match the normal research workflow.
 
 Heartwood inspects model size and available memory before launch, chooses a context capacity with response headroom, and warns when the selected compute is below its conservative estimate.
@@ -124,7 +124,8 @@ Heartwood inspects its metadata and reports a clear unsupported-model error when
 The pinned Qwen3 Coder 30B W4A16 AWQ snapshot downloads about 16.8 GiB; use at least 96 GB RAM, retain a 200 GB persistent disk, and keep the catalog's 18,432-token context so the two T4 GPUs retain key/value-cache headroom.
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
-Depending on the model and persistent-disk throughput, the first verification and inference startup is planned for approximately 2-15 minutes while Heartwood verifies the snapshot and vLLM prepares GPU memory.
+After the model is available in the project, the first verification and inference startup is planned for approximately 2-15 minutes while Heartwood verifies the snapshot and vLLM prepares GPU memory.
+Importing an existing model directory is a separate copy and integrity-verification operation; it needs another model-sized block of free space and can take considerably longer on a standard persistent disk.
 Heartwood reports the active stage, elapsed time, selected context capacity, and memory assessment while you wait.
 
 Use `heartwood --plain` when the full-screen terminal is not rendered correctly.

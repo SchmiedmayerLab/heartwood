@@ -279,8 +279,9 @@ async function main() {
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/Tool terminal exit=0/gu)?.length !== 4 ||
-      replay.match(/Tool terminal exit=1/gu)?.length !== 1 ||
+      replay.match(/Tool: Ran Terminal Command/gu)?.length !== 5 ||
+      replay.match(/terminal completed/gu)?.length !== 4 ||
+      replay.match(/terminal failed/gu)?.length !== 1 ||
       !replay.includes(
         "Agent: The synthetic target-condition cohort summary is ready for review.",
       ) ||

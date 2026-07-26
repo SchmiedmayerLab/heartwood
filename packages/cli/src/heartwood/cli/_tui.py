@@ -785,7 +785,7 @@ def _line_style(line: str) -> str | None:
         return "cyan"
     if "Action set " in line or " Action:" in line:
         return "yellow"
-    if " Tool " in line:
+    if " Tool:" in line:
         return "blue"
     return None
 

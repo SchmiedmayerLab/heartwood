@@ -112,7 +112,7 @@ _MODEL_SOURCE_ARGUMENTS = {
     "custom": "custom",
     "stanford-ai-api-gateway": "stanford-ai-api-gateway",
 }
-_MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
+_MODEL_PREPARATION_ACTIVITY = InteractionActivity(
     label="Preparing and verifying the model",
     waiting_label="Still preparing and verifying the model",
     guidance=(
@@ -1055,7 +1055,7 @@ def _configure_local_model(
         )
         _run_with_progress(
             lambda: gateway.download_local_model_now(model_id),
-            activity=_MODEL_DOWNLOAD_ACTIVITY,
+            activity=_MODEL_PREPARATION_ACTIVITY,
         )
         return
     if model_id in service_models:
@@ -1073,7 +1073,7 @@ def _configure_local_model(
         )
         _run_with_progress(
             lambda: gateway.download_custom_local_model_now(model_id),
-            activity=_MODEL_DOWNLOAD_ACTIVITY,
+            activity=_MODEL_PREPARATION_ACTIVITY,
         )
         return
     qualifier = " in non-interactive setup" if non_interactive else ""
@@ -1216,7 +1216,7 @@ def _handle_models(
                     license_posture=args.license_posture,
                     context_window=args.context_window,
                 ),
-                activity=_MODEL_DOWNLOAD_ACTIVITY,
+                activity=_MODEL_PREPARATION_ACTIVITY,
             )
             print(f"{imported['model']['label']} is ready in this project.")
             print(f"Location: {imported['path']}")
@@ -1261,7 +1261,7 @@ def _handle_models(
                     parser.error("--revision requires a Hugging Face owner/model identifier")
                 path = _run_with_progress(
                     lambda: gateway.download_local_model_now(args.model),
-                    activity=_MODEL_DOWNLOAD_ACTIVITY,
+                    activity=_MODEL_PREPARATION_ACTIVITY,
                 )
             else:
                 path = _run_with_progress(
@@ -1269,7 +1269,7 @@ def _handle_models(
                         args.model,
                         revision=args.revision,
                     ),
-                    activity=_MODEL_DOWNLOAD_ACTIVITY,
+                    activity=_MODEL_PREPARATION_ACTIVITY,
                 )
             print(f"Model files are ready: {path}")
             print("Run `heartwood` to continue setup or open Heartwood.")

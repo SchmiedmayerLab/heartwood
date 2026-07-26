@@ -1020,6 +1020,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     capable = _read("images/generic/scripts/capable_model_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
     model_stub = _read("images/generic/scripts/local_model_stub.py")
+    reference_smoke = _read("packages/webui/scripts/smoke-reference-analysis.cjs")
 
     assert "network_mode: none" in compose
     assert "read_only: true" in compose
@@ -1055,6 +1056,10 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert " reject " in smoke
     assert "Action set approved" in smoke
     assert "Action set rejected" in smoke
+    assert "Tool: Ran Terminal Command" in reference_smoke
+    assert "terminal completed" in reference_smoke
+    assert "terminal failed" in reference_smoke
+    assert "Tool terminal exit=" not in reference_smoke
     assert "audit export" in smoke
     assert "load_skills_from_dir" in smoke
     assert "start_agent_server" not in smoke
