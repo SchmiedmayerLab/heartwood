@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable, Iterable, Sequence
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from rich.text import Text
 from textual import work
@@ -34,6 +34,11 @@ from heartwood.gateway import (
     action_mode_label,
     action_risk_label,
     action_tool_label,
+)
+from heartwood.schemas import (
+    ActionConfirmationMode,
+    ActionModeOptionResponse,
+    ActionSettingsResponse,
 )
 from heartwood.session import SessionEvent
 
@@ -85,36 +90,28 @@ class ActionModeScreen(ModalScreen[str | None]):
 
     def __init__(
         self,
-        settings: dict[str, object],
+        settings: ActionSettingsResponse,
         *,
         locked_reason: str | None = None,
     ) -> None:
         super().__init__()
         self.settings = settings
         self.locked_reason = locked_reason
-        modes = settings.get("modes", [])
-        self.modes = (
-            tuple(cast(dict[str, object], item) for item in modes if isinstance(item, dict))
-            if isinstance(modes, list)
-            else ()
-        )
+        self.modes = tuple(settings["modes"])
 
     def compose(self) -> ComposeResult:
-        selected = self.settings.get("confirmation_mode")
+        selected = self.settings["confirmation_mode"]
         with Vertical(id="action-mode-dialog"):
             yield Static("Action Review", id="action-mode-title")
-            yield Static(
-                str(self.settings.get("scope_description", "")),
-                id="action-mode-scope",
-            )
+            yield Static(self.settings["scope_description"], id="action-mode-scope")
             yield OptionList(
                 *(
                     Option(
                         _mode_option_prompt(item, selected=selected),
-                        id=str(item.get("command_value", item.get("mode", ""))),
+                        id=item["command_value"],
                         disabled=(
-                            not bool(item.get("allowed"))
-                            or (self.locked_reason is not None and item.get("mode") != selected)
+                            not item["allowed"]
+                            or (self.locked_reason is not None and item["mode"] != selected)
                         ),
                     )
                     for item in self.modes
@@ -136,10 +133,10 @@ class ActionModeScreen(ModalScreen[str | None]):
 
     def on_mount(self) -> None:
         """Focus the active mode and show its complete behavior."""
-        selected = self.settings.get("confirmation_mode")
+        selected = self.settings["confirmation_mode"]
         options = self.query_one("#action-mode-options", OptionList)
         for index, item in enumerate(self.modes):
-            if item.get("mode") == selected:
+            if item["mode"] == selected:
                 options.highlighted = index
                 break
         options.focus()
@@ -157,13 +154,13 @@ class ActionModeScreen(ModalScreen[str | None]):
         """Return the selected public command value."""
         if event.option_list.id != "action-mode-options":
             return
-        selected = self.settings.get("confirmation_mode")
+        selected = self.settings["confirmation_mode"]
         item = self.modes[event.option_index]
-        if item.get("mode") == selected:
+        if item["mode"] == selected:
             self.dismiss(None)
             return
-        if self.locked_reason is None and item.get("allowed"):
-            self.dismiss(str(item.get("command_value", "")))
+        if self.locked_reason is None and item["allowed"]:
+            self.dismiss(item["command_value"])
 
     def action_cancel(self) -> None:
         """Close without changing the project setting."""
@@ -173,8 +170,8 @@ class ActionModeScreen(ModalScreen[str | None]):
         if index is None or not 0 <= index < len(self.modes):
             return
         item = self.modes[index]
-        detail = str(item.get("description", ""))
-        if not item.get("allowed") and item.get("unavailable_reason"):
+        detail = item["description"]
+        if not item["allowed"] and item["unavailable_reason"]:
             detail = f"{detail}\n{item['unavailable_reason']}"
         self.query_one("#action-mode-detail", Static).update(detail)
 
@@ -507,7 +504,7 @@ class HeartwoodTerminalApp(App[None]):
 
     def _finish_action_mode_selection(
         self,
-        settings: dict[str, object] | None,
+        settings: ActionSettingsResponse | None,
         error: Exception | None,
     ) -> None:
         if error is not None:
@@ -515,7 +512,7 @@ class HeartwoodTerminalApp(App[None]):
             self.notify(str(error), title="Action Review", severity="error")
             return
         assert settings is not None
-        self._mode_label = action_mode_label(settings.get("confirmation_mode"))
+        self._mode_label = action_mode_label(settings["confirmation_mode"])
         self._set_busy(False)
         self.notify(
             f"Using {self._mode_label} for future action sets.",
@@ -531,7 +528,7 @@ class HeartwoodTerminalApp(App[None]):
 
     def _selected_mode_label(self) -> str:
         try:
-            return action_mode_label(self.session.action_settings().get("confirmation_mode"))
+            return action_mode_label(self.session.action_settings()["confirmation_mode"])
         except Exception:
             return "Action Review Unavailable"
 
@@ -564,25 +561,26 @@ def _line_style(line: str) -> str | None:
     return None
 
 
-def _mode_option_prompt(item: dict[str, object], *, selected: object) -> Text:
+def _mode_option_prompt(
+    item: ActionModeOptionResponse,
+    *,
+    selected: ActionConfirmationMode,
+) -> Text:
     prompt = Text()
-    prompt.append("● " if item.get("mode") == selected else "  ", style="green")
-    prompt.append(str(item.get("label", item.get("mode", ""))), style="bold")
-    if item.get("recommended"):
+    prompt.append("● " if item["mode"] == selected else "  ", style="green")
+    prompt.append(item["label"], style="bold")
+    if item["recommended"]:
         prompt.append(" · Recommended", style="green")
-    if not item.get("allowed"):
+    if not item["allowed"]:
         prompt.append(" · Unavailable", style="dim")
     return prompt
 
 
-def _unavailable_mode_summary(modes: Sequence[dict[str, object]]) -> str:
+def _unavailable_mode_summary(modes: Sequence[ActionModeOptionResponse]) -> str:
     lines = [
-        (
-            f"{item.get('label', item.get('mode', 'Mode'))} unavailable: "
-            f"{item.get('unavailable_reason', 'Blocked by the active platform policy.')}"
-        )
+        f"{item['label']} unavailable: {item['unavailable_reason']}"
         for item in modes
-        if not item.get("allowed")
+        if not item["allowed"]
     ]
     return "\n".join(lines)
 

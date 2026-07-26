@@ -89,11 +89,11 @@ class ArtifactDownloader(Protocol):
     def __call__(
         self,
         *,
-        repo_id: str,
+        repo_id: str,  # noqa: F841, RUF100
         filename: str,
         revision: str,
         local_dir: Path,
-        tqdm_class: type[_DownloadProgress] | None = None,
+        tqdm_class: type[_DownloadProgress] | None = None,  # noqa: F841, RUF100
     ) -> str: ...
 
 

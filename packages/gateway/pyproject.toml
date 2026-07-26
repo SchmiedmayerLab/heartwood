@@ -26,6 +26,8 @@ dependencies = [
     "openhands-sdk==1.36.1",
     "openhands-tools==1.36.1",
     "openai==2.47.0",
+    "packaging==26.2",
+    "pydantic>=2.12",
     "tomli-w==1.2.0",
 ]
 

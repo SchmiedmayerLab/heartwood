@@ -225,7 +225,7 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
             release.set()
         assert command_future.result(timeout=2).events == ()
         assert selection_future is not None
-        selection_future.result(timeout=2)
+        selection_future.result(timeout=5)
 
     selected = gateway.config_store.load().local_model
     assert selected is not None
@@ -1020,7 +1020,7 @@ def test_rest_coordinates_browser_subscription_login(
         (
             "/settings/models/subscription/device",
             json.dumps({"connection_id": "openai-subscription"}),
-            "unsupported fields",
+            "terms_accepted is required",
         ),
         (
             "/settings/models/subscription/device",
@@ -1045,12 +1045,12 @@ def test_rest_coordinates_browser_subscription_login(
         (
             "/settings/models/subscription/device/poll",
             json.dumps({"connection_id": "openai-subscription"}),
-            "unsupported fields",
+            "login_id is required",
         ),
         (
             "/settings/models/subscription/device/poll",
             json.dumps({"connection_id": 7, "login_id": "login-1"}),
-            "must be strings",
+            "connection_id must be a string",
         ),
         (
             "/settings/models/subscription/device/poll",

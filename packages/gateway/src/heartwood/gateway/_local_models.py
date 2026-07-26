@@ -73,10 +73,10 @@ class ModelInfoProvider(Protocol):
 
     def __call__(
         self,
-        repo_id: str,
+        repo_id: str,  # noqa: F841, RUF100
         *,
         revision: str | None = None,
-        files_metadata: bool = False,
+        files_metadata: bool = False,  # noqa: F841, RUF100
         token: str | bool | None = None,
     ) -> object:
         raise NotImplementedError

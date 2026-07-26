@@ -388,6 +388,12 @@ def test_rest_import_selects_the_model_without_exposing_the_source_path(tmp_path
 
     assert response.status_code == 201
     assert response.body["status"] == "ready"
+    model = response.body["model"]
+    assert isinstance(model, dict)
+    assert model["selected"] is True
+    assert model["active"] is False
+    assert isinstance(model["available"], bool)
+    assert model["availability_reason"]
     config = gateway.config_store.load()
     assert config.model_source == "heartwood"
     assert config.local_model is not None

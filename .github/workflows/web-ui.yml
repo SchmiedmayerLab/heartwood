@@ -41,12 +41,22 @@ jobs:
       - name: Install dependencies
         working-directory: packages/webui
         run: npm ci
+      - name: Install the pinned Python toolchain
+        run: uv python install
+      - name: Install the Python workspace
+        run: uv sync --locked --all-extras
+      - name: Check generated API contracts
+        working-directory: packages/webui
+        run: npm run contracts:check
       - name: Check formatting
         working-directory: packages/webui
         run: npm run format:check
       - name: Lint
         working-directory: packages/webui
         run: npm run lint
+      - name: Check production duplication
+        working-directory: packages/webui
+        run: npm run duplicates:check
       - name: Type-check
         working-directory: packages/webui
         run: npm run typecheck
@@ -68,10 +78,6 @@ jobs:
       - name: Run browser smoke test
         working-directory: packages/webui
         run: npm run test:e2e
-      - name: Install the pinned Python toolchain
-        run: uv python install
-      - name: Install the Python workspace
-        run: uv sync --locked --all-extras
       - name: Run gateway-served proxy smoke test
         run: npm run test:gateway --prefix packages/webui
       - name: Run Jupyter proxy smoke test

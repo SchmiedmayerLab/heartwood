@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -773,14 +774,14 @@ def _catalog_project(root: Path) -> ProjectContext:
     return project
 
 
-def _records(value: dict[str, object], key: str) -> list[dict[str, object]]:
+def _records(value: Mapping[str, object], key: str) -> list[dict[str, object]]:
     records = value.get(key)
     assert isinstance(records, list)
     assert all(isinstance(item, dict) for item in records)
     return cast(list[dict[str, object]], records)
 
 
-def _record(value: dict[str, object], key: str) -> dict[str, object]:
+def _record(value: Mapping[str, object], key: str) -> dict[str, object]:
     record = value.get(key)
     assert isinstance(record, dict)
     return cast(dict[str, object], record)

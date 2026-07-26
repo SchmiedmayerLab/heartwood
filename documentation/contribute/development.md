@@ -48,9 +48,12 @@ Add a parameter, platform adapter, or validation target for a real platform diff
 
 ```bash
 uv run ruff check .
+uv run vulture
 uv run mypy packages
 uv run pytest
 npm run --prefix packages/webui lint
+npm run --prefix packages/webui duplicates:check
+npm run --prefix packages/webui contracts:check
 npm run --prefix packages/webui typecheck
 npm test --prefix packages/webui
 npm run --prefix packages/webui build
@@ -59,6 +62,32 @@ uv run zensical build --clean --strict
 
 Run focused tests while iterating, then run the complete affected suites before review.
 Container and capable-model checks have higher resource requirements and run through their documented workflows.
+
+## Static Analysis
+
+Python packages use strict mypy checking with the Pydantic plugin, and each published namespace subpackage includes a PEP 561 `py.typed` marker.
+Public REST requests use strict Pydantic models, while gateway responses use exact typed mappings that are validated before they cross an interface boundary.
+
+The browser API types are generated from those Python contracts.
+After changing a shared request or response, run:
+
+```bash
+npm run --prefix packages/webui contracts:generate
+```
+
+CI fails if the generated file is stale.
+Browser-only presentation models remain in TypeScript and must not duplicate gateway payload definitions.
+
+Ruff identifies unused imports, variables, arguments, and commented-out code.
+CI also runs Vulture at 100 percent confidence to detect unreachable or unused definitions beyond Ruff's local checks.
+Lower-confidence Vulture findings remain a review aid because framework callbacks and implicit fixtures can appear unused:
+
+```bash
+uv run vulture packages --min-confidence 80
+```
+
+The production duplication check uses a conservative threshold to detect growth without forcing unrelated platform adapters or interface forwarding into artificial abstractions.
+Review every reported clone and extract it only when the behavior has one clear owner.
 
 ## Change a Shared Contract
 

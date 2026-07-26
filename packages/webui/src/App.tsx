@@ -42,6 +42,7 @@ import type {
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelProfile,
+  ModelProfileDraft,
   ModelSource,
   ModelSettings,
   ModelValidation,
@@ -69,7 +70,7 @@ interface InitialState {
   sessions: SessionSummary[];
 }
 
-const emptyProfile = (): ModelProfile => ({
+const emptyProfile = (): ModelProfileDraft => ({
   profile_id: "custom-profile",
   model: "openai/",
   policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
@@ -117,7 +118,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [projectReadiness, setProjectReadiness] =
     useState<ProjectReadiness | null>(null);
   const [startupPlan, setStartupPlan] = useState<StartupPlan | null>(null);
-  const [profileDraft, setProfileDraft] = useState<ModelProfile>(emptyProfile);
+  const [profileDraft, setProfileDraft] =
+    useState<ModelProfileDraft>(emptyProfile);
   const [validation, setValidation] = useState<ModelValidation | null>(null);
   const [validationFailureKey, setValidationFailureKey] = useState<
     string | null

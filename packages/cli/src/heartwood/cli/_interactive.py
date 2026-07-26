@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import json
 import shlex
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
 
 from heartwood.gateway import (
     ACTION_MODE_OPTIONS,
@@ -22,14 +20,20 @@ from heartwood.gateway import (
     SessionGateway,
     action_mode_label,
 )
+from heartwood.schemas import ActionSettingsResponse
 from heartwood.session import (
     CommandKind,
     EventKind,
     JsonValue,
+    PendingToolAction,
     SessionCommand,
     SessionEvent,
     new_command_id,
+    pending_tool_actions,
 )
+
+PendingAction = PendingToolAction
+pending_actions = pending_tool_actions
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,18 +117,6 @@ _COMMAND_ACTIVITIES = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class PendingAction:
-    """One member of the current OpenHands confirmation batch."""
-
-    request_id: str
-    tool_call_id: str
-    tool_name: str
-    risk: str
-    summary: str
-    arguments: dict[str, JsonValue] = field(default_factory=dict)
-
-
 class InteractiveSession:
     """Translate terminal input into the shared gateway command contract."""
 
@@ -140,11 +132,11 @@ class InteractiveSession:
         """Return the unresolved members of the current OpenHands action batch."""
         return pending_actions(self.replay())
 
-    def action_settings(self) -> dict[str, object]:
+    def action_settings(self) -> ActionSettingsResponse:
         """Return the shared project action-confirmation settings."""
         return self.gateway.action_settings()
 
-    def select_action_mode(self, value: str) -> dict[str, object]:
+    def select_action_mode(self, value: str) -> ActionSettingsResponse:
         """Select an action-confirmation mode by its public command value."""
         mode = next(
             (
@@ -258,37 +250,6 @@ def interaction_activity(line: str) -> InteractionActivity:
     return _COMMAND_ACTIVITIES.get(directive, _DEFAULT_ACTIVITY)
 
 
-def pending_actions(events: Sequence[SessionEvent]) -> tuple[PendingAction, ...]:
-    """Project unresolved confirmation requests from a persisted event stream."""
-    pending: dict[str, PendingAction] = {}
-    for event in events:
-        kind = str(event.kind)
-        if kind == EventKind.CONFIRMATION_REQUESTED.value:
-            request = event.payload.get("request")
-            if not isinstance(request, dict):
-                continue
-            tool_call_id = request.get("tool_call_id")
-            if not isinstance(tool_call_id, str) or not tool_call_id:
-                continue
-            pending[tool_call_id] = PendingAction(
-                request_id=str(request.get("request_id", "")),
-                tool_call_id=tool_call_id,
-                tool_name=str(request.get("tool_name", "unknown-tool")),
-                risk=str(request.get("risk", "unknown")),
-                summary=str(request.get("summary", request.get("tool_name", "action"))),
-                arguments=(
-                    cast(dict[str, JsonValue], request["arguments"])
-                    if isinstance(request.get("arguments"), dict)
-                    else {}
-                ),
-            )
-        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
-            tool_call_id = event.payload.get("tool_call_id")
-            if isinstance(tool_call_id, str):
-                pending.pop(tool_call_id, None)
-    return tuple(pending.values())
-
-
 def format_action_arguments(arguments: dict[str, JsonValue]) -> tuple[str, ...]:
     """Render exact action arguments consistently across terminal clients."""
     if not arguments:
@@ -299,43 +260,32 @@ def format_action_arguments(arguments: dict[str, JsonValue]) -> tuple[str, ...]:
 def format_model_status(gateway: SessionGateway) -> str:
     """Format the active model route without exposing credentials."""
     validation = gateway.validate_model_profile()
-    profile = validation.get("profile", {})
-    decision = validation.get("policy_decision", {})
-    if not isinstance(profile, dict) or not isinstance(decision, dict):
-        return "Model profile validation returned malformed data."
+    profile = validation["profile"]
+    decision = validation["policy_decision"]
     return "\n".join(
         (
-            f"Model: {profile.get('model')}",
-            f"Credentials: {validation.get('credential_status')}",
-            f"Action review: {action_mode_label(validation.get('action_confirmation_mode'))}",
-            f"Policy: {decision.get('decision')} ({decision.get('reason')})",
+            f"Model: {profile['model']}",
+            f"Credentials: {validation['credential_status']}",
+            f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
+            f"Policy: {decision['decision']} ({decision['reason']})",
         )
     )
 
 
-def format_action_settings(settings: dict[str, object]) -> str:
+def format_action_settings(settings: ActionSettingsResponse) -> str:
     """Format gateway-owned action-mode metadata for terminal interfaces."""
-    lines = ["Action review", ""]
-    scope = settings.get("scope_description")
-    if isinstance(scope, str) and scope:
-        lines.extend((scope, ""))
-    selected = settings.get("confirmation_mode")
-    modes = settings.get("modes", [])
-    if not isinstance(modes, list):
-        return "\n".join(lines)
-    for item in modes:
-        if not isinstance(item, dict):
-            continue
-        marker = "*" if item.get("mode") == selected else " "
-        recommended = " (recommended)" if item.get("recommended") else ""
-        allowed = bool(item.get("allowed"))
+    lines = ["Action review", "", settings["scope_description"], ""]
+    selected = settings["confirmation_mode"]
+    for item in settings["modes"]:
+        marker = "*" if item["mode"] == selected else " "
+        recommended = " (recommended)" if item["recommended"] else ""
+        allowed = item["allowed"]
         availability = "" if allowed else " (unavailable)"
-        lines.append(f"{marker} {item.get('label')}{recommended}{availability}")
-        if description := item.get("description"):
-            lines.append(f"  {description}")
-        if not allowed and (reason := item.get("unavailable_reason")):
+        lines.append(f"{marker} {item['label']}{recommended}{availability}")
+        lines.append(f"  {item['description']}")
+        if not allowed and (reason := item["unavailable_reason"]):
             lines.append(f"  {reason}")
-        elif command_value := item.get("command_value"):
-            lines.append(f"  Select: /permissions {command_value}")
+        else:
+            lines.append(f"  Select: /permissions {item['command_value']}")
         lines.append("")
     return "\n".join(lines).rstrip()

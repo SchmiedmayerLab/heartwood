@@ -80,7 +80,10 @@ class _ModelGateway(_CountingGateway):
         assert base_url is None
         assert remember is False
         self.discovered = (connection_id, refresh)
-        return {"connection_id": connection_id, "models": []}
+        return {
+            "connection": {"connection_id": connection_id},
+            "models": [],
+        }
 
     def inspect_model_repository(
         self, repository: str, *, revision: str | None = None
@@ -262,7 +265,7 @@ def test_notebook_reuses_gateway_model_inspection_and_download_contract(tmp_path
     assert gateway.inspected == ("example/model", "main")
     assert gateway.downloaded == ("example/model", "1" * 40)
     assert gateway.discovered == ("heartwood", True)
-    assert discovered["connection_id"] == "heartwood"
+    assert discovered["connection"]["connection_id"] == "heartwood"
     assert cast(dict[str, object], plan["model"])["source_repository"] == "example/model"
     assert download["status"] == "downloading"
 
@@ -353,7 +356,7 @@ def test_notebook_imports_a_local_model_and_releases_gateway(tmp_path: Path) -> 
             license_posture="Apache-2.0",
         )
 
-    imported_path = Path(cast(str, imported["path"]))
+    imported_path = Path(imported["path"])
     assert imported_path.is_file()
     assert gateway.config_store.load().local_model is not None
 
