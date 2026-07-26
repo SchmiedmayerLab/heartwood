@@ -488,14 +488,14 @@ class SessionGateway:
                 self.session_catalog.ensure(command.session_id)
             command_kind = str(command.kind)
             storage_only = command_kind == CommandKind.AUDIT_EXPORT.value
-            service = self._services.get(command.session_id)
             close_service = False
-            if service is None:
-                if storage_only:
+            if storage_only:
+                service = self._services.get(command.session_id)
+                if service is None:
                     service = self._storage_service(command.session_id)
                     close_service = True
-                else:
-                    service = self._service(command.session_id)
+            else:
+                service = self._service(command.session_id)
             try:
                 all_events = (
                     service.replay_events()
