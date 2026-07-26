@@ -16,7 +16,7 @@ cd /path/to/project
 heartwood
 ```
 
-The full-screen interface provides command history, arrow-key navigation, colored status, elapsed-time activity, and an action-review panel.
+The full-screen interface provides arrow-key navigation, colored status, elapsed-time activity, an action-review panel, and a command palette.
 Heartwood automatically falls back to the plain interface when the terminal cannot support the full-screen application.
 
 Use a named session when you maintain more than one conversation in a project:
@@ -38,18 +38,21 @@ heartwood --prompt "Inspect this project and summarize its test failures. Do not
 
 ## Review Actions
 
-The default policy is **Ask Every Time**.
-When OpenHands proposes an action set, the interface lists every member and offers one **Allow all once** or **Reject all** decision because the current OpenHands confirmation callback resolves the group together.
+The default mode is **Review Every Action**.
+When OpenHands proposes an action set, the interface lists every member and makes clear that allowing runs the complete set once while rejecting runs none of it.
 
 Use arrow keys and Enter in the full-screen interface.
 In the plain interface, use `/allow` or `/reject`; you do not need to copy an internal tool-call identifier.
+
+Press `Ctrl-P` to open the command palette for action review, status, replay, and audit export.
 
 ## Conversation Commands
 
 | Command | Result |
 |---|---|
 | `/help` | Show available conversation commands |
-| `/status` | Show model, credential, policy, and action-confirmation status |
+| `/status` | Show model, credential, policy, and action-review status |
+| `/permissions` | Review or change when Heartwood pauses before actions |
 | `/allow` | Allow the complete pending action set once |
 | `/reject` | Reject the complete pending action set |
 | `/pause` | Pause the current session |

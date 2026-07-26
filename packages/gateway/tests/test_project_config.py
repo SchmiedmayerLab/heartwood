@@ -29,6 +29,7 @@ from heartwood.gateway import (
     ProjectContext,
 )
 from heartwood.gateway._project_config import _config_mapping, project_config_from_mapping
+from heartwood.schemas import PolicyProfile
 
 
 def _default_config(project: ProjectContext) -> ProjectConfig:
@@ -78,6 +79,40 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
     assert store.load() == default
     assert not project.state_root.exists()
     assert not store.configured
+
+
+def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    default = _default_config(project)
+    first = ProjectConfigStore(project, default)
+    second = ProjectConfigStore(project, default)
+
+    with first.locked():
+        updated = second.update(
+            lambda config: config.with_action_settings(
+                ActionSettings(confirmation_mode="confirm-risky")
+            )
+        )
+
+    assert updated.action_settings.confirmation_mode == "confirm-risky"
+    assert first.load() == updated
+
+
+def test_project_config_rejects_action_mode_outside_project_policy(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    restricted = ProjectConfig(
+        platform_id="generic",
+        policy=PolicyProfile(policy_id="restricted", platform_id="generic"),
+    )
+    store = ProjectConfigStore(project, restricted)
+
+    with pytest.raises(ProjectConfigError, match="not allowed by the project policy"):
+        store.save(
+            replace(
+                restricted,
+                action_settings=ActionSettings(confirmation_mode="confirm-risky"),
+            )
+        )
 
 
 def test_project_config_updates_serialize_across_store_instances(tmp_path: Path) -> None:

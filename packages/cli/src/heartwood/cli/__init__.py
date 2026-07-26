@@ -31,11 +31,13 @@ from heartwood.cli._interactive import (
     InteractiveSession,
     command_help,
     format_action_arguments,
+    format_action_settings,
     interaction_activity,
     pending_actions,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.gateway import (
+    ACTION_MODE_OPTIONS,
     BUILT_IN_MODEL_CONNECTIONS,
     DEFAULT_SESSION_ID,
     MODEL_SOURCE_OPTIONS,
@@ -60,6 +62,9 @@ from heartwood.gateway import (
     SessionRecoveryError,
     SkillSettingsError,
     StartupPlan,
+    action_mode_label,
+    action_risk_label,
+    action_tool_label,
     custom_model_connection_requires_token,
     inspect_deployment,
     model_source_options,
@@ -91,10 +96,7 @@ def _bundled_path(relative: Path) -> Path:
 
 _DEFAULT_WEB_ROOT = _bundled_path(Path("packages") / "webui" / "dist")
 _DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
-_ACTION_MODE_ARGUMENTS = {
-    "ask-every-time": "always-confirm",
-    "auto-approve-low-risk": "confirm-risky",
-}
+_ACTION_MODE_ARGUMENTS = {option.command_value: option.mode for option in ACTION_MODE_OPTIONS}
 _MODEL_SOURCE_ARGUMENTS = {
     "heartwood": "heartwood",
     "openai-subscription": "openai-subscription",
@@ -245,10 +247,10 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("resume", help="Resume the current session.")
     subparsers.add_parser("replay", help="Replay the persisted session event stream.")
 
-    actions = subparsers.add_parser("actions", help="Configure action confirmation.")
+    actions = subparsers.add_parser("actions", help="Configure action review.")
     action_subparsers = actions.add_subparsers(dest="actions_command", metavar="<actions-command>")
     action_set = action_subparsers.add_parser(
-        "set", help="Select an action-confirmation mode allowed by platform policy."
+        "set", help="Select an action-review mode allowed by platform policy."
     )
     action_set.add_argument("mode", choices=tuple(_ACTION_MODE_ARGUMENTS))
 
@@ -829,9 +831,9 @@ def _configure_setup(
     )
     print(f"  Model source: {source_option.label if source_option else source}")
     print(
-        "  Action confirmation: Existing project setting"
+        "  Action review: Existing project setting"
         if resume_existing
-        else "  Action confirmation: Ask Every Time"
+        else f"  Action review: {action_mode_label('always-confirm')}"
     )
     if not confirmed and not resume_existing:
         if non_interactive:
@@ -1328,7 +1330,7 @@ def _handle_actions(
     gateway: SessionGateway,
     args: argparse.Namespace,
 ) -> int:
-    """Show or update the shared OpenHands action-confirmation mode."""
+    """Show or update the shared OpenHands action-review mode."""
     try:
         if getattr(args, "actions_command", None) == "set":
             settings = gateway.select_action_confirmation_mode(_ACTION_MODE_ARGUMENTS[args.mode])
@@ -1336,22 +1338,8 @@ def _handle_actions(
             settings = gateway.action_settings()
     except ActionSettingsError as error:
         parser.error(str(error))
-    print(_format_action_settings(settings))
+    print(format_action_settings(settings))
     return 0
-
-
-def _format_action_settings(settings: dict[str, object]) -> str:
-    lines = ["Action confirmation", ""]
-    selected = settings.get("confirmation_mode")
-    modes = settings.get("modes", [])
-    if isinstance(modes, list):
-        for item in modes:
-            if not isinstance(item, dict):
-                continue
-            marker = "*" if item.get("mode") == selected else " "
-            availability = "" if item.get("allowed") else " (not allowed by policy)"
-            lines.append(f"{marker} {item.get('label')}{availability}")
-    return "\n".join(lines)
 
 
 def _format_model_settings(settings: dict[str, object]) -> str:
@@ -1417,7 +1405,7 @@ def _format_model_validation(validation: dict[str, object]) -> str:
             f"Profile: {profile.get('profile_id')}",
             f"Model: {profile.get('model')}",
             f"Credentials: {validation.get('credential_status')}",
-            f"Action confirmation: {validation.get('action_confirmation_mode')}",
+            f"Action review: {action_mode_label(validation.get('action_confirmation_mode'))}",
             f"Policy: {decision.get('decision')} ({decision.get('reason')})",
         )
     )
@@ -1761,13 +1749,19 @@ def _format_event_lines(
         label = "action" if len(pending) == 1 else "actions"
         lines.append(f"Review {len(pending)} {label} as one OpenHands action set:")
         for index, action in enumerate(pending, 1):
+            lines.append(f"  {index}. {action.summary}")
             lines.append(
-                f"  {index}. {action.summary} [tool={action.tool_name}, risk={action.risk}]"
+                f"     {action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}"
             )
             if argument_lines := format_action_arguments(action.arguments):
                 lines.append("     Arguments:")
                 lines.extend(f"       {line}" for line in argument_lines)
-        lines.extend(("Allow all once: /allow", "Reject all: /reject"))
+        lines.extend(
+            (
+                "Allow the complete set once: /allow",
+                "Reject the complete set: /reject",
+            )
+        )
     return tuple(lines)
 
 

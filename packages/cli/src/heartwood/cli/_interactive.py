@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 
-from heartwood.gateway import ModelSettingsError, SessionGateway
+from heartwood.gateway import (
+    ACTION_MODE_OPTIONS,
+    ActionSettingsError,
+    ModelSettingsError,
+    SessionGateway,
+    action_mode_label,
+)
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -99,6 +105,11 @@ _COMMAND_ACTIVITIES = {
         waiting_label="Still checking the session",
         guidance="Heartwood is waiting for the project services to respond.",
     ),
+    "/permissions": InteractionActivity(
+        label="Updating action review",
+        waiting_label="Still updating action review",
+        guidance="Heartwood is waiting for the active project services to close safely.",
+    ),
 }
 
 
@@ -128,6 +139,28 @@ class InteractiveSession:
     def pending_actions(self) -> tuple[PendingAction, ...]:
         """Return the unresolved members of the current OpenHands action batch."""
         return pending_actions(self.replay())
+
+    def action_settings(self) -> dict[str, object]:
+        """Return the shared project action-confirmation settings."""
+        return self.gateway.action_settings()
+
+    def select_action_mode(self, value: str) -> dict[str, object]:
+        """Select an action-confirmation mode by its public command value."""
+        mode = next(
+            (
+                option.mode
+                for option in ACTION_MODE_OPTIONS
+                if value in {option.command_value, option.mode}
+            ),
+            None,
+        )
+        if mode is None:
+            raise ActionSettingsError(f"unsupported action confirmation mode: {value}")
+        if self.pending_actions():
+            raise ActionSettingsError(
+                "resolve the pending action set before changing the action-review mode"
+            )
+        return self.gateway.select_action_confirmation_mode(mode)
 
     def submit(self, line: str) -> InteractionResult:
         """Submit a prompt or slash command."""
@@ -170,6 +203,14 @@ class InteractiveSession:
                 return InteractionResult(message=format_model_status(self.gateway))
             except ModelSettingsError as error:
                 return InteractionResult(message=str(error))
+        if directive == "/permissions" and len(parts) in {1, 2}:
+            try:
+                settings = (
+                    self.action_settings() if len(parts) == 1 else self.select_action_mode(parts[1])
+                )
+            except ActionSettingsError as error:
+                return InteractionResult(message=str(error), error=True)
+            return InteractionResult(message=format_action_settings(settings))
         if directive == "/help" and len(parts) == 1:
             return InteractionResult(message=command_help())
         return InteractionResult(message=f"Unknown command: {directive}")
@@ -203,7 +244,10 @@ class InteractiveSession:
 
 def command_help() -> str:
     """Return the commands common to terminal clients."""
-    return "/allow  /reject  /pause  /resume  /status  /replay  /audit-export  /help  /exit"
+    return (
+        "/allow  /reject  /permissions  /pause  /resume  /status  "
+        "/replay  /audit-export  /help  /exit"
+    )
 
 
 def interaction_activity(line: str) -> InteractionActivity:
@@ -263,7 +307,35 @@ def format_model_status(gateway: SessionGateway) -> str:
         (
             f"Model: {profile.get('model')}",
             f"Credentials: {validation.get('credential_status')}",
-            f"Action confirmation: {validation.get('action_confirmation_mode')}",
+            f"Action review: {action_mode_label(validation.get('action_confirmation_mode'))}",
             f"Policy: {decision.get('decision')} ({decision.get('reason')})",
         )
     )
+
+
+def format_action_settings(settings: dict[str, object]) -> str:
+    """Format gateway-owned action-mode metadata for terminal interfaces."""
+    lines = ["Action review", ""]
+    scope = settings.get("scope_description")
+    if isinstance(scope, str) and scope:
+        lines.extend((scope, ""))
+    selected = settings.get("confirmation_mode")
+    modes = settings.get("modes", [])
+    if not isinstance(modes, list):
+        return "\n".join(lines)
+    for item in modes:
+        if not isinstance(item, dict):
+            continue
+        marker = "*" if item.get("mode") == selected else " "
+        recommended = " (recommended)" if item.get("recommended") else ""
+        allowed = bool(item.get("allowed"))
+        availability = "" if allowed else " (unavailable)"
+        lines.append(f"{marker} {item.get('label')}{recommended}{availability}")
+        if description := item.get("description"):
+            lines.append(f"  {description}")
+        if not allowed and (reason := item.get("unavailable_reason")):
+            lines.append(f"  {reason}")
+        elif command_value := item.get("command_value"):
+            lines.append(f"  Select: /permissions {command_value}")
+        lines.append("")
+    return "\n".join(lines).rstrip()

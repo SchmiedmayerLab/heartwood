@@ -45,7 +45,7 @@ Heartwood asks the gateway for the models enabled for that key and presents the 
 2. Choose **Stanford AI API Gateway**.
 3. Enter the gateway key at the hidden prompt.
 4. Choose a model returned by the gateway.
-5. Review the route and action-confirmation setting.
+5. Review the route and action-review setting.
 
 The gateway is an institution-managed service, but using it does not by itself authorize a dataset or workflow.
 Stanford's current eligibility, data classification, Data Risk Assessment, and project approval requirements remain authoritative.
@@ -60,7 +60,7 @@ Run a synthetic tool task before using a newly enabled model or gateway configur
 2. Choose **OpenAI API** or **Anthropic**.
 3. Enter the provider API key when prompted.
 4. Choose a model returned by the provider API.
-5. Review the route and action-confirmation setting.
+5. Review the route and action-review setting.
 
 Heartwood validates that the credential binding, route, model profile, and platform policy agree before enabling requests.
 An OpenAI API key is separate from **Sign in with ChatGPT**.

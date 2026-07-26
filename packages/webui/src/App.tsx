@@ -16,6 +16,7 @@ import {
 import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { selectedActionMode } from "./actionPresentation";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import {
@@ -345,7 +346,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     };
   }, [modelDownloadActive, refreshProjectState, resolvedClient]);
 
-  const viewModel = useMemo(() => buildViewModel(events), [events]);
+  const viewModel = useMemo(
+    () => buildViewModel(events, actionSettings?.presentation ?? null),
+    [actionSettings?.presentation, events],
+  );
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === sessionId) ?? null,
     [sessionId, sessions],
@@ -453,6 +457,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     (control) =>
       control.targetType === "tool-call" && control.decision === null,
   );
+  const activeActionMode = selectedActionMode(actionSettings);
+  const actionModeLockedReason =
+    requestStatus === "busy" ?
+      "Wait for the active request to finish before changing this setting."
+    : pendingActions.length > 0 ?
+      "Resolve the pending action set before changing this setting."
+    : null;
 
   useEffect(() => {
     scrollConversationEnd(conversationEndRef.current);
@@ -731,7 +742,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         <SessionRail {...railProps} />
         <section className="workbench">
           <WorkspaceHeader
-            actionSettings={actionSettings}
+            actionModeLabel={activeActionMode?.label ?? "Loading"}
             modelDetail={activeProfile?.model ?? null}
             modelLabel={activeModelLabel}
             modelStatus={modelStatus.kind}
@@ -742,6 +753,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
+            onOpenActionReview={() => openPanel("action-review")}
             onOpenMenu={() => setMobileSessionsOpen(true)}
             onRename={(title) => void renameSession(title)}
           />
@@ -779,6 +791,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           : null}
 
           <ConversationWorkspace
+            actionModeLabel={activeActionMode?.label ?? null}
+            actionPresentation={actionSettings?.presentation ?? null}
             conversation={conversation}
             conversationEndRef={conversationEndRef}
             modelConfigured={modelReady}
@@ -813,6 +827,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         </Sheet>
 
         <UtilitySheet
+          actionModeLockedReason={actionModeLockedReason}
           actions={actionSettings}
           artifacts={modelArtifacts}
           events={events}
@@ -930,7 +945,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               .catch((caught: unknown) => setError(errorMessage(caught)))
           }
           onSaveProfile={() => void saveProfile()}
-          onSelectActionMode={(mode) => void selectActionMode(mode)}
+          onSelectActionMode={selectActionMode}
           onSelectProfile={(profileId) => void selectProfile(profileId)}
           onSetSkillApproved={setSkillApproved}
           onSetSkillSource={setSkillSource}

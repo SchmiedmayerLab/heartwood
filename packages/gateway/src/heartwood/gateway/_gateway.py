@@ -12,7 +12,7 @@ import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
 from threading import RLock
@@ -29,8 +29,10 @@ from heartwood.core_adapter import (
     SessionResult,
     SessionService,
 )
+from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
+    ACTION_MODE_SCOPE_DESCRIPTION,
     ActionSettings,
     ActionSettingsError,
 )
@@ -166,6 +168,16 @@ class _ActionSettingsStore(Protocol):
 
     def save(self, settings: ActionSettings) -> None:
         """Persist action settings."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ServiceConfiguration:
+    """Configuration snapshot that owns one cached agent service."""
+
+    model_settings: ModelSettings
+    action_settings: ActionSettings
+    policy_profile: PolicyProfile
+    local_model: LocalModelSelection | None
 
 
 class _UnconfiguredAgentBackend:
@@ -366,6 +378,7 @@ class SessionGateway:
         self._service_factory = service_factory
         self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
+        self._service_configurations: dict[str, _ServiceConfiguration] = {}
         self._streams = EventStreamHub()
 
     def start(self) -> None:
@@ -393,8 +406,9 @@ class SessionGateway:
             self.session_catalog.default()
         else:
             self.session_catalog.ensure(command.session_id)
-        service = self._service(command.session_id)
-        result = service.handle(command)
+        with self.config_store.locked():
+            service = self._service(command.session_id)
+            result = service.handle(command)
         if not result.replayed:
             self._streams.publish(session_id=command.session_id, events=result.events)
         return result
@@ -443,7 +457,8 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Replay persisted events for a session."""
-        events = self._service(session_id).replay_events()
+        with self.config_store.locked():
+            events = self._service(session_id).replay_events()
         if after_sequence is None:
             return events
         return tuple(event for event in events if event.sequence > after_sequence)
@@ -755,13 +770,31 @@ class SessionGateway:
 
     def action_settings(self) -> dict[str, object]:
         """Return the selected and deployment-allowed confirmation modes."""
-        settings = self.action_settings_store.load()
-        policy_profile = self._policy_profile()
+        try:
+            config = self.config_store.load()
+        except ProjectConfigError as error:
+            raise ActionSettingsError(str(error)) from error
+        settings = (
+            config.action_settings
+            if isinstance(self.action_settings_store, ProjectActionSettingsStore)
+            else self.action_settings_store.load()
+        )
+        policy_profile = config.policy
         allowed = set(policy_profile.allowed_action_confirmation_modes)
         return {
             **settings.safe_dict(),
+            "scope_description": ACTION_MODE_SCOPE_DESCRIPTION,
+            "presentation": action_presentation(),
             "modes": [
-                {**option.safe_dict(), "allowed": option.mode in allowed}
+                {
+                    **option.safe_dict(),
+                    "allowed": option.mode in allowed,
+                    "unavailable_reason": (
+                        None
+                        if option.mode in allowed
+                        else "Unavailable under the active platform policy."
+                    ),
+                }
                 for option in ACTION_MODE_OPTIONS
             ],
         }
@@ -769,12 +802,21 @@ class SessionGateway:
     @_serialized_state
     def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
         """Select a deployment-allowed OpenHands confirmation mode."""
-        policy_profile = self._policy_profile()
-        if mode not in policy_profile.allowed_action_confirmation_modes:
-            msg = f"action confirmation mode is not allowed by platform policy: {mode}"
-            raise ActionSettingsError(msg)
-        settings = self.action_settings_store.load().selecting(mode)
-        self.action_settings_store.save(settings)
+        if isinstance(self.action_settings_store, ProjectActionSettingsStore):
+            try:
+                self.config_store.update(
+                    lambda config: _select_action_confirmation_mode(config, mode)
+                )
+            except ProjectConfigError as error:
+                raise ActionSettingsError(str(error)) from error
+        else:
+            with self.config_store.locked():
+                config = self.config_store.load()
+                if mode not in config.policy.allowed_action_confirmation_modes:
+                    msg = f"action confirmation mode is not allowed by platform policy: {mode}"
+                    raise ActionSettingsError(msg)
+                settings = self.action_settings_store.load().selecting(mode)
+                self.action_settings_store.save(settings)
         self._reset_services()
         return self.action_settings()
 
@@ -1149,28 +1191,57 @@ class SessionGateway:
 
     @_serialized_state
     def _service(self, session_id: str) -> SessionService:
+        configuration = self._service_configuration()
         service = self._services.get(session_id)
+        if service is not None and self._service_configurations.get(session_id) != configuration:
+            self._services.pop(session_id, None)
+            self._service_configurations.pop(session_id, None)
+            service.close()
+            service = None
         if service is None:
             if self._service_factory is not None:
                 service = self._service_factory(self.sessions_root, session_id)
             else:
-                service = self._default_service(session_id)
+                service = self._default_service(session_id, configuration)
             self._services[session_id] = service
+            self._service_configurations[session_id] = configuration
         return service
 
-    def _default_service(self, session_id: str) -> SessionService:
-        model_settings = self.settings_store.load()
-        action_settings = self.action_settings_store.load()
-        backend = self._backend(
+    def _service_configuration(self) -> _ServiceConfiguration:
+        config = self.config_store.load()
+        model_settings = (
+            config.model_settings
+            if isinstance(self.settings_store, ProjectModelSettingsStore)
+            else self.settings_store.load()
+        )
+        action_settings = (
+            config.action_settings
+            if isinstance(self.action_settings_store, ProjectActionSettingsStore)
+            else self.action_settings_store.load()
+        )
+        return _ServiceConfiguration(
             model_settings=model_settings,
             action_settings=action_settings,
+            policy_profile=config.policy,
+            local_model=config.local_model,
+        )
+
+    def _default_service(
+        self,
+        session_id: str,
+        configuration: _ServiceConfiguration,
+    ) -> SessionService:
+        backend = self._backend(
+            model_settings=configuration.model_settings,
+            action_settings=configuration.action_settings,
+            selected_model=configuration.local_model,
             session_id=session_id,
         )
         return SessionService.local_default(
             self.sessions_root,
             session_id=session_id,
             backend=backend,
-            policy_profile=self._policy_profile(),
+            policy_profile=configuration.policy_profile,
             env=self.env,
         )
 
@@ -1179,6 +1250,7 @@ class SessionGateway:
         *,
         model_settings: ModelSettings,
         action_settings: ActionSettings,
+        selected_model: LocalModelSelection | None,
         session_id: str,
     ) -> AgentBackend:
         backend_id = self.backend_id
@@ -1193,7 +1265,7 @@ class SessionGateway:
             profile = model_settings.profile()
         except ModelSettingsError:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
-        selected_model = self.config_store.load().local_model if profile.is_local else None
+        selected_model = selected_model if profile.is_local else None
         return OpenHandsSdkBackend(
             profile=profile,
             workspace=self.project.root,
@@ -1399,6 +1471,7 @@ class SessionGateway:
     def _reset_services(self) -> None:
         services = tuple(self._services.values())
         self._services.clear()
+        self._service_configurations.clear()
         errors: list[Exception] = []
         for service in services:
             try:
@@ -1700,6 +1773,13 @@ class SessionGateway:
 
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[5]
+
+
+def _select_action_confirmation_mode(config: ProjectConfig, mode: str) -> ProjectConfig:
+    if mode not in config.policy.allowed_action_confirmation_modes:
+        msg = f"action confirmation mode is not allowed by platform policy: {mode}"
+        raise ActionSettingsError(msg)
+    return config.with_action_settings(config.action_settings.selecting(mode))
 
 
 def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelChoice:

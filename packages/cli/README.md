@@ -20,13 +20,14 @@ heartwood
 
 On first use, bare `heartwood` guides model selection and then opens the conversation. Later invocations resume the same project setup. OpenHands manages ChatGPT account sign-in and refresh. A provider API key entered at the prompt is held only for that process; platform-managed credential bindings can survive a restart without storing a secret in `.heartwood/`.
 
-Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
-
 Heartwood shows an animated activity message while a request is running. If a response takes longer than expected, it reports elapsed time without guessing which internal agent step is active. Model downloads and Heartwood-managed server startup use their own progress and readiness messages because those operations can take several minutes.
+
+Enter a request at the prompt. During the conversation, use `/help` to list available commands. Common commands include:
 
 ```text
 /allow        Allow the complete pending OpenHands action set once
 /reject       Reject the complete pending OpenHands action set
+/permissions  Review or change when Heartwood pauses before actions
 /pause        Pause the session
 /resume       Resume the session
 /status       Show the active model and policy status
@@ -62,4 +63,4 @@ heartwood models refresh heartwood
 heartwood models connect heartwood <model-id>
 ```
 
-`heartwood doctor` checks project, platform, model, credential-binding, and compute readiness without changing state. Additional commands manage model downloads, action confirmation, Skills, replay, audit export, platform detection, Heartwood-managed runtime launch, and the web interface. Run `heartwood --help` or `heartwood <command> --help` for the complete command reference.
+`heartwood doctor` checks project, platform, model, credential-binding, and compute readiness without changing state. Additional commands manage model downloads, action review, Skills, replay, audit export, platform detection, Heartwood-managed runtime launch, and the web interface. Run `heartwood --help` or `heartwood <command> --help` for the complete command reference.

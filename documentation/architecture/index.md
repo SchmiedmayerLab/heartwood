@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT
 # Product Boundaries
 
 Heartwood adds a researcher-oriented control plane around an OpenHands coding agent.
-It owns project setup, platform capabilities, model routing, action-confirmation policy, Skills, session presentation, and audit evidence while reusing OpenHands for the conversation loop and coding tools.
+It owns project setup, platform capabilities, model routing, action-review policy, Skills, session presentation, and audit evidence while reusing OpenHands for the conversation loop and coding tools.
 Heartwood does not fork the OpenHands agent loop or maintain a parallel coding-tool implementation.
 
 ## In Scope

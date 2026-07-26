@@ -93,7 +93,7 @@ export interface ApprovalControl {
   targetId: string;
   label: string;
   toolName: string;
-  risk: string | null;
+  risk: ActionRisk | null;
   summary: string | null;
   arguments: Record<string, JsonValue>;
   decision: string | null;
@@ -119,16 +119,33 @@ export type CredentialKind =
   "environment" | "file" | "managed-identity" | "none";
 export type CredentialStatus = "available" | "configured" | "missing";
 export type ActionConfirmationMode = "always-confirm" | "confirm-risky";
+export type ActionRisk = "high" | "low" | "medium" | "unknown";
 
 export interface ActionModeOption {
   mode: ActionConfirmationMode;
+  command_value: string;
   label: string;
+  description: string;
+  automatic_risks: ActionRisk[];
+  reviewed_risks: ActionRisk[];
+  recommended: boolean;
   allowed: boolean;
+  unavailable_reason: string | null;
+}
+
+export interface ActionPresentation {
+  risk_labels: Record<string, string>;
+  tool_labels: Record<string, string>;
+  other_tool_label_template: string;
+  unknown_risk_label: string;
+  unknown_tool_label: string;
 }
 
 export interface ActionSettings {
   schema_version: "heartwood.action-settings.v1";
   confirmation_mode: ActionConfirmationMode;
+  scope_description: string;
+  presentation: ActionPresentation;
   modes: ActionModeOption[];
 }
 

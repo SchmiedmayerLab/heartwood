@@ -198,7 +198,9 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     view_model = build_view_model(events)
     pending = view_model.approval_controls
     approval_items = next(
-        section.items for section in build_widget_spec(view_model) if section.title == "Approvals"
+        section.items
+        for section in build_widget_spec(view_model)
+        if section.title == "Action Review"
     )
 
     assert len(pending) == 1
@@ -207,12 +209,13 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     assert approval_items == (
         "Review complete action set (2 actions): pending",
         (
-            "1. Run the synthetic cohort command (terminal, medium risk)\n"
+            "1. Run the synthetic cohort command\n"
+            "Terminal Command · Medium Risk\n"
             "Arguments:\n{\n"
             '  "command": "python run.py --output cohort-summary.json"\n'
             "}"
         ),
-        "2. Write the aggregate result (file_editor, unknown risk)",
+        "2. Write the aggregate result\nFile Change · Not Classified",
     )
 
 
@@ -483,7 +486,7 @@ def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
         "Chat",
         "Activity",
         "Skills",
-        "Approvals",
+        "Action Review",
         "Policy",
         "Exports",
     ]

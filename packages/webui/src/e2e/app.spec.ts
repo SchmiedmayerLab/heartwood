@@ -55,18 +55,18 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
 
   const approval = page.getByRole("region", {
-    name: "Approval required for OpenHands action set",
+    name: "One Decision for This Action Set",
   });
   await expect(
     approval.getByText(
-      "OpenHands proposed these actions together. One decision applies to every action below.",
+      "These actions were proposed together. Allowing runs every action once; rejecting runs none of them.",
     ),
   ).toBeVisible();
-  await expect(approval.getByText("low risk")).toBeVisible();
+  await expect(approval.getByText("Low Risk")).toBeVisible();
   await expect(
     approval.getByText("build the aggregate synthetic target-condition cohort"),
   ).toBeVisible();
-  const allowActions = page.getByLabel("Allow all 1 action once");
+  const allowActions = page.getByLabel("Allow 1 action once");
   await expect(allowActions).toBeVisible();
   await allowActions.click();
 
@@ -112,14 +112,14 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByLabel("Active model profile", { exact: true }),
   ).toContainText("OpenAI · research-coder");
   await expect(page.getByText("Authorized", { exact: true })).toBeVisible();
-  const approvalsTab = page.getByRole("tab", { name: "Approvals" });
+  const approvalsTab = page.getByRole("tab", { name: "Action Review" });
   const modelsTab = page.getByRole("tab", { name: "Models" });
   await approvalsTab.click();
   await expect(
-    page.getByRole("button", { name: "Ask Every Time" }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("radio", { name: /Review Every Action/u }),
+  ).toBeChecked();
   await expect(
-    page.getByRole("button", { name: "Auto-Approve Low Risk" }),
+    page.getByRole("radio", { name: /Low-Risk Automation/u }),
   ).toBeVisible();
   await approvalsTab.press("ArrowLeft");
   await expect(modelsTab).toHaveAttribute("aria-selected", "true");
@@ -179,10 +179,22 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(
     page.getByRole("button", {
-      name: /Synthetic cohort analysis, Approval needed/u,
+      name: /Synthetic cohort analysis, Action review needed/u,
     }),
   ).toBeVisible();
-  await expect(page.getByText("Ask Every Time", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Review Every Action", { exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  const approval = page.getByRole("region", {
+    name: "One Decision for This Action Set",
+  });
+  await expect(approval).toBeVisible();
+  await expect(page.getByLabel("Allow 1 action once")).toBeVisible();
+  await page.getByLabel("Open action review settings").click();
+  await expect(
+    page.getByRole("radio", { name: /Review Every Action/u }),
+  ).toBeDisabled();
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
 });
 
@@ -631,12 +643,47 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     json(route, {
       schema_version: "heartwood.action-settings.v1",
       confirmation_mode: "always-confirm",
+      scope_description:
+        "Shared by every Heartwood interface in this project and applied to future action sets.",
+      presentation: {
+        risk_labels: {
+          high: "High Risk",
+          low: "Low Risk",
+          medium: "Medium Risk",
+          unknown: "Not Classified",
+        },
+        tool_labels: {
+          file_editor: "File Change",
+          terminal: "Terminal Command",
+        },
+        other_tool_label_template: "{tool_name} Action",
+        unknown_risk_label: "Not Classified",
+        unknown_tool_label: "Tool Action",
+      },
       modes: [
-        { mode: "always-confirm", label: "Ask Every Time", allowed: true },
+        {
+          mode: "always-confirm",
+          command_value: "ask-every-time",
+          label: "Review Every Action",
+          description:
+            "Heartwood pauses before every proposed action set so you can inspect it before anything runs.",
+          automatic_risks: [],
+          reviewed_risks: ["low", "medium", "high", "unknown"],
+          recommended: true,
+          allowed: true,
+          unavailable_reason: null,
+        },
         {
           mode: "confirm-risky",
-          label: "Auto-Approve Low Risk",
+          command_value: "auto-approve-low-risk",
+          label: "Low-Risk Automation",
+          description:
+            "An action set continues automatically only when every action is low risk. Any medium-, high-, or unclassified-risk action pauses the complete set for review.",
+          automatic_risks: ["low"],
+          reviewed_risks: ["medium", "high", "unknown"],
+          recommended: false,
           allowed: true,
+          unavailable_reason: null,
         },
       ],
     }),

@@ -23,7 +23,6 @@ from heartwood.cli import (
     __version__,
     _consume_prompt,
     _float_payload,
-    _format_action_settings,
     _format_model_artifacts,
     _format_model_catalog,
     _format_model_repository,
@@ -35,7 +34,11 @@ from heartwood.cli import (
     _supports_full_screen_terminal,
     main,
 )
-from heartwood.cli._interactive import InteractionResult, InteractiveSession
+from heartwood.cli._interactive import (
+    InteractionResult,
+    InteractiveSession,
+    format_action_settings,
+)
 from heartwood.gateway import (
     CredentialStore,
     LocalModelChoice,
@@ -1225,7 +1228,7 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     assert 'active_profile = "local-test"' in contents
     assert 'confirmation_mode = "confirm-risky"' in contents
     assert "Profile: local-test" in output
-    assert "Auto-Approve Low Risk" in output
+    assert "Low-Risk Automation" in output
 
 
 def test_cli_and_browser_gateway_observe_the_same_project_configuration(
@@ -1283,7 +1286,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     assert _run(project, monkeypatch, ["actions"]) == 0
     assert _run(project, monkeypatch, ["models", "list"]) == 0
     output = capsys.readouterr().out
-    assert "* Ask Every Time" in output
+    assert "* Review Every Action" in output
     assert "* heartwood  openai/local-model" in output
 
 
@@ -1641,7 +1644,7 @@ def test_cli_formatters_fail_closed_on_malformed_projection_data(
         "Model profile validation returned"
     )
     assert _format_skill_settings({"skills": "invalid"}).endswith("No Skills available.")
-    assert "not allowed by policy" in _format_action_settings(
+    assert "(unavailable)" in format_action_settings(
         {
             "confirmation_mode": "always-confirm",
             "modes": [None, {"mode": "confirm-risky", "label": "Automatic", "allowed": False}],
