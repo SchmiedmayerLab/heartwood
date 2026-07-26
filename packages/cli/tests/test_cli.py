@@ -81,20 +81,7 @@ def test_cli_import_keeps_openhands_runtime_lazy() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-@pytest.mark.parametrize(
-    ("platform", "slurm_job_id", "expected_call", "expects_note"),
-    [
-        ("generic", None, "reconciled", False),
-        ("carina", None, "committed", True),
-        ("carina", "synthetic-allocation", "reconciled", False),
-    ],
-)
-def test_replay_defers_runtime_reconciliation_only_on_carina_login_nodes(
-    platform: str,
-    slurm_job_id: str | None,
-    expected_call: str,
-    expects_note: bool,
-    monkeypatch: pytest.MonkeyPatch,
+def test_replay_reads_the_committed_stream_without_initializing_the_runtime(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[str] = []
@@ -102,27 +89,19 @@ def test_replay_defers_runtime_reconciliation_only_on_carina_login_nodes(
 
     class ReplayGateway:
         def session_projection(self, *, session_id: str) -> SessionProjection:
-            assert session_id == "synthetic-session"
-            calls.append("reconciled")
-            return projection
+            raise AssertionError(f"runtime projection requested for {session_id}")
 
         def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
             assert session_id == "synthetic-session"
             calls.append("committed")
             return projection
 
-    monkeypatch.setenv("HEARTWOOD_PLATFORM", platform)
-    if slurm_job_id is None:
-        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-    else:
-        monkeypatch.setenv("SLURM_JOB_ID", slurm_job_id)
-
     gateway = cast(RealSessionGateway, ReplayGateway())
     assert _handle_replay(gateway, session_id="synthetic-session") == 0
 
     captured = capsys.readouterr()
-    assert calls == [expected_call]
-    assert ("runtime recovery reconciliation" in captured.err) is expects_note
+    assert calls == ["committed"]
+    assert captured.err == ""
 
 
 def _run(

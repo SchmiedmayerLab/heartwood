@@ -177,9 +177,14 @@ class SessionService:
         with self._command_lock:
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
+            command_kind = _kind_value(command.kind)
             reconciled = (
-                *self._reconcile_locked(),
-                *self._recover_approval_commands_locked(),
+                ()
+                if command_kind == CommandKind.AUDIT_EXPORT.value
+                else (
+                    *self._reconcile_locked(),
+                    *self._recover_approval_commands_locked(),
+                )
             )
             if reconciled:
                 self._event_sink(reconciled)

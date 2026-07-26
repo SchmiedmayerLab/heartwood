@@ -486,56 +486,72 @@ class SessionGateway:
                 self.session_catalog.default()
             else:
                 self.session_catalog.ensure(command.session_id)
-            service = self._service(command.session_id)
-            all_events = self._reconciled_session_events(
-                session_id=command.session_id,
-                service=service,
-            )
-            with self._stream_lock:
-                projection = self._snapshot_from_events_locked(
-                    session_id=command.session_id,
-                    all_events=all_events,
-                ).projection
-                command_kind = str(command.kind)
-                unavailable_reason = (
-                    None
-                    if command_kind not in _PROJECTED_COMMANDS
-                    or command_kind in projection.available_commands
-                    else (
-                        f"{command_kind} is unavailable while the agent is "
-                        f"{projection.lifecycle.status}"
+            command_kind = str(command.kind)
+            storage_only = command_kind == CommandKind.AUDIT_EXPORT.value
+            service = self._services.get(command.session_id)
+            close_service = False
+            if service is None:
+                if storage_only:
+                    service = self._storage_service(command.session_id)
+                    close_service = True
+                else:
+                    service = self._service(command.session_id)
+            try:
+                all_events = (
+                    service.replay_events()
+                    if storage_only
+                    else self._reconciled_session_events(
+                        session_id=command.session_id,
+                        service=service,
                     )
                 )
-                streaming_started = (
-                    unavailable_reason is None and command_kind in _STREAMING_COMMANDS
-                )
-                streaming_was_active = command.session_id in self._streaming_active
-                if streaming_started:
-                    self._streaming_active.add(command.session_id)
-            try:
-                result = (
-                    service.handle(command)
-                    if unavailable_reason is None
-                    else service.handle(command, unavailable_reason=unavailable_reason)
-                )
-            except Exception:
-                if streaming_started and not streaming_was_active:
-                    with self._stream_lock:
-                        self._streaming_active.discard(command.session_id)
-                        if self._streaming_text.pop(command.session_id, None) is not None:
-                            self._advance_stream_revision(command.session_id)
-                            self._streams.notify(session_id=command.session_id)
-                raise
-            if result.replayed:
-                if streaming_started and not streaming_was_active:
-                    with self._stream_lock:
-                        self._streaming_active.discard(command.session_id)
-            else:
-                self._publish_committed_events(
-                    session_id=command.session_id,
-                    events=result.events,
-                )
-            return result
+                with self._stream_lock:
+                    projection = self._snapshot_from_events_locked(
+                        session_id=command.session_id,
+                        all_events=all_events,
+                    ).projection
+                    unavailable_reason = (
+                        None
+                        if command_kind not in _PROJECTED_COMMANDS
+                        or command_kind in projection.available_commands
+                        else (
+                            f"{command_kind} is unavailable while the agent is "
+                            f"{projection.lifecycle.status}"
+                        )
+                    )
+                    streaming_started = (
+                        unavailable_reason is None and command_kind in _STREAMING_COMMANDS
+                    )
+                    streaming_was_active = command.session_id in self._streaming_active
+                    if streaming_started:
+                        self._streaming_active.add(command.session_id)
+                try:
+                    result = (
+                        service.handle(command)
+                        if unavailable_reason is None
+                        else service.handle(command, unavailable_reason=unavailable_reason)
+                    )
+                except Exception:
+                    if streaming_started and not streaming_was_active:
+                        with self._stream_lock:
+                            self._streaming_active.discard(command.session_id)
+                            if self._streaming_text.pop(command.session_id, None) is not None:
+                                self._advance_stream_revision(command.session_id)
+                                self._streams.notify(session_id=command.session_id)
+                    raise
+                if result.replayed:
+                    if streaming_started and not streaming_was_active:
+                        with self._stream_lock:
+                            self._streaming_active.discard(command.session_id)
+                else:
+                    self._publish_committed_events(
+                        session_id=command.session_id,
+                        events=result.events,
+                    )
+                return result
+            finally:
+                if close_service:
+                    service.close()
 
     def sessions(self) -> SessionListResponse:
         """Return persisted sessions ordered by recent activity."""
@@ -593,10 +609,13 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Replay persisted events for a session."""
-        return self._session_snapshot_locked(
-            session_id=session_id,
-            after_sequence=after_sequence,
-        ).events
+        self.project.initialize()
+        events = FileSessionStore(self.sessions_root, session_id).replay_events()
+        return (
+            events
+            if after_sequence is None
+            else tuple(event for event in events if event.sequence > after_sequence)
+        )
 
     @_serialized_state
     def session_projection(self, *, session_id: str) -> SessionProjection:
@@ -1532,6 +1551,17 @@ class SessionGateway:
             ),
         )
 
+    def _storage_service(self, session_id: str) -> SessionService:
+        """Build an uncached service for commands that only access durable state."""
+        configuration = self._service_configuration()
+        return SessionService.local_default(
+            self.sessions_root,
+            session_id=session_id,
+            backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
+            policy_profile=configuration.policy_profile,
+            env=self.env,
+        )
+
     def _backend(
         self,
         *,
@@ -1571,7 +1601,7 @@ class SessionGateway:
                 and configured_profile.api_key_env is not None
             ),
             action_confirmation_mode=action_settings.confirmation_mode,
-            env=self._credential_environment(),
+            env=self._credential_environment(strict=False),
             llm_extra_body=managed_model_request_body(
                 selected_model.model_type if selected_model is not None else None
             ),

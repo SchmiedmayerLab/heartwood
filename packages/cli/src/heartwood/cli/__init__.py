@@ -1679,16 +1679,7 @@ def _supports_full_screen_terminal() -> bool:
 
 
 def _handle_replay(gateway: SessionGateway, *, session_id: str) -> int:
-    adapter = select_platform_adapter(os.environ)
-    if adapter.adapter_id == "carina" and not os.environ.get("SLURM_JOB_ID"):
-        projection = gateway.persisted_session_projection(session_id=session_id)
-        print(
-            "Note: replay shows committed session events on the Carina login node; "
-            "runtime recovery reconciliation runs inside the next compute allocation.",
-            file=sys.stderr,
-        )
-    else:
-        projection = gateway.session_projection(session_id=session_id)
+    projection = gateway.persisted_session_projection(session_id=session_id)
     lines = format_projection_lines(projection)
     print("\n".join(lines) if lines else "No session events recorded.")
     return 0

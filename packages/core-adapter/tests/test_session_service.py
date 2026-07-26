@@ -1966,6 +1966,8 @@ class _RecordingBackend:
         self.prompts: list[str] = []
         self.resolutions: list[tuple[str, bool]] = []
         self.resume_calls = 0
+        self.reconcile_calls = 0
+        self.pending_group_calls = 0
         self.event_sink: BackendEventSink = lambda _events: None
         self.token_sink: TokenDeltaSink = lambda _delta: None
 
@@ -2016,6 +2018,7 @@ class _RecordingBackend:
         session_id: str,  # noqa: ARG002
         known_source_event_ids: frozenset[str],
     ) -> tuple[BackendEvent, ...]:
+        self.reconcile_calls += 1
         return tuple(
             event
             for event in self._reconciled
@@ -2027,6 +2030,7 @@ class _RecordingBackend:
         *,
         session_id: str,  # noqa: ARG002
     ) -> PendingActionGroup | None:
+        self.pending_group_calls += 1
         return pending_action_group(self._pending_actions)
 
     def submit_turn(
@@ -2136,6 +2140,24 @@ class _FailingCloseBackend(_RecordingBackend):
     def close(self) -> None:
         if self.fail_close:
             raise RuntimeError("synthetic worker is still active")
+
+
+def test_audit_export_does_not_initialize_the_agent_backend(tmp_path: Path) -> None:
+    backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    service = SessionService.local_default(
+        tmp_path,
+        session_id="session-synthetic-001",
+        backend=backend,
+        env={},
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(_command(CommandKind.AUDIT_EXPORT))
+
+    assert result.events[-1].kind == EventKind.AUDIT_EXPORT_RECORDED
+    assert backend.reconcile_calls == 0
+    assert backend.pending_group_calls == 0
+    assert service.store.read_audit_export()
 
 
 def test_backend_shutdown_failure_retains_session_ownership(tmp_path: Path) -> None:
