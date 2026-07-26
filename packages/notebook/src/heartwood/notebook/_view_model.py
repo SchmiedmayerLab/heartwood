@@ -359,7 +359,9 @@ class NotebookSession:
         return self._view_model()
 
     def _view_model(self) -> NotebookViewModel:
-        return build_view_model(self.gateway.session_projection(session_id=self.session_id))
+        return build_view_model(
+            self.gateway.persisted_session_projection(session_id=self.session_id)
+        )
 
     def _command(
         self,

@@ -60,7 +60,7 @@ class _CountingGateway:
             revision=-1,
         )
 
-    def session_projection(self, *, session_id: str) -> SessionProjection:
+    def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
         self.projection_calls += 1
         return self.projection.model_copy(update={"session_id": session_id})
 
@@ -426,6 +426,53 @@ def test_notebook_and_browser_transport_share_the_exact_session_projection(
 
     assert response.status_code == 200
     assert response.body == notebook_projection.safe_dict()
+
+
+def test_notebook_replay_does_not_construct_a_backend_or_mutate_completed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "notebook-storage-replay"
+    writer = _deterministic_session(tmp_path, session_id)
+    pending = writer.chat("Create one synthetic output")
+    assert pending.pending_approval is not None
+    writer.approve(group_id=pending.pending_approval.group_id)
+    writer.gateway._service(session_id)._accept_backend_events(
+        (
+            BackendLifecycleEvent(
+                lifecycle=BackendLifecycle.FINISHED,
+                source_event_id="synthetic-completed-session",
+            ),
+        )
+    )
+    completed = writer.replay()
+    assert completed.lifecycle.status == SessionLifecycle.FINISHED
+    before = writer.gateway.replay_events(session_id=session_id)
+    writer.close()
+
+    reader_gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="auto",
+    )
+    monkeypatch.setattr(
+        reader_gateway,
+        "_service",
+        lambda _session_id: pytest.fail("notebook replay constructed an agent backend"),
+    )
+    reader = NotebookSession(
+        project=ProjectContext(tmp_path),
+        session_id=session_id,
+        gateway=reader_gateway,
+    )
+
+    replayed = reader.replay()
+    after = reader_gateway.replay_events(session_id=session_id)
+
+    assert replayed.lifecycle.status == SessionLifecycle.FINISHED
+    assert replayed.pending_approval is None
+    assert after == before
+    reader.close()
 
 
 def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None:

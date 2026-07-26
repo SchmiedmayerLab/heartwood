@@ -631,6 +631,7 @@ class SessionGateway:
             return project_session(
                 events,
                 session_id=session_id,
+                streaming_text=self._streaming_text.get(session_id, ""),
                 stream_epoch=self._stream_epoch,
                 stream_revision=self._stream_revisions.get(session_id, 0),
             )

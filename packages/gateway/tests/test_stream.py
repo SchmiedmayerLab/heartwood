@@ -94,6 +94,7 @@ def test_token_deltas_are_transient_and_clear_at_a_stable_boundary(tmp_path: Pat
     streaming = gateway.session_projection(session_id="session-1")
     assert streaming.streaming_text == "Working"
     assert streaming.stream_revision == 1
+    assert gateway.persisted_session_projection(session_id="session-1").streaming_text == "Working"
 
     service._accept_backend_events(
         (
@@ -107,6 +108,7 @@ def test_token_deltas_are_transient_and_clear_at_a_stable_boundary(tmp_path: Pat
     finished = gateway.session_projection(session_id="session-1")
     assert finished.streaming_text == ""
     assert finished.stream_revision == 2
+    assert gateway.persisted_session_projection(session_id="session-1").streaming_text == ""
     gateway._publish_token_delta(session_id="session-1", delta="late")
     assert gateway.session_projection(session_id="session-1") == finished
     gateway.stop()
