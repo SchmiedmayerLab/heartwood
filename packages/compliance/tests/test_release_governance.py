@@ -307,6 +307,7 @@ def test_runtime_changes_run_capable_model_acceptance_before_merge() -> None:
         ".github/workflows/capable-model-pr.yml",
         ".github/workflows/capable-model.yml",
         "docker-bake.hcl",
+        "agents/verified/**",
         "images/Dockerfile",
         "images/generic/**",
         "fixtures/synthetic/**",
@@ -318,6 +319,7 @@ def test_runtime_changes_run_capable_model_acceptance_before_merge() -> None:
         "packages/model-policy/**",
         "packages/schemas/**",
         "packages/session/**",
+        "packages/skills/**",
         "pyproject.toml",
         "uv.lock",
     }

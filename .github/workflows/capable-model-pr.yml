@@ -12,6 +12,7 @@ on:
       - ".github/workflows/capable-model-pr.yml"
       - ".github/workflows/capable-model.yml"
       - "docker-bake.hcl"
+      - "agents/verified/**"
       - "images/Dockerfile"
       - "images/generic/**"
       - "fixtures/synthetic/**"
@@ -23,6 +24,7 @@ on:
       - "packages/model-policy/**"
       - "packages/schemas/**"
       - "packages/session/**"
+      - "packages/skills/**"
       - "pyproject.toml"
       - "uv.lock"
 
