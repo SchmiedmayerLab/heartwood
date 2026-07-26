@@ -299,35 +299,11 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "cancel-in-progress: true" in dependency_review
 
 
-def test_runtime_changes_run_capable_model_acceptance_before_merge() -> None:
+def test_every_pull_request_runs_capable_model_acceptance_before_merge() -> None:
     workflow = _workflow(".github/workflows/capable-model-pr.yml")
     triggers = cast(dict[str, Any], workflow["on"])
-    pull_request = cast(dict[str, Any], triggers["pull_request"])
-    expected_paths = {
-        ".github/workflows/capable-model-pr.yml",
-        ".github/workflows/capable-model.yml",
-        "docker-bake.hcl",
-        "agents/verified/**",
-        "deploy/install-llama-cpp.sh",
-        "images/Dockerfile",
-        "images/generic/**",
-        "fixtures/synthetic/**",
-        "skills/verified/**",
-        "packages/adapters/**",
-        "packages/audit/**",
-        "packages/cli/**",
-        "packages/core-adapter/**",
-        "packages/detector/**",
-        "packages/gateway/**",
-        "packages/model-policy/**",
-        "packages/schemas/**",
-        "packages/session/**",
-        "packages/skills/**",
-        "pyproject.toml",
-        "uv.lock",
-    }
 
-    assert set(cast(list[str], pull_request["paths"])) == expected_paths
+    assert triggers["pull_request"] == ""
     assert "push" not in triggers
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["concurrency"] == {

@@ -42,8 +42,7 @@ Actual Terra and Carina qualification still requires the exact published artifac
 That qualification promotes one precise row in the [GPU compatibility matrix](../reference/gpu-compatibility.md); it does not qualify other drivers, model revisions, precisions, parsers, context sizes, or tensor-parallel layouts.
 
 Pull-request validation, main-branch image publication, capable-model acceptance, and protected GPU qualification are separate workflow entry points.
-Pull requests that change the agent, gateway, local runtime, shared acceptance scripts, or their locked dependencies also run the capable-model workflow before merge.
-Path filtering keeps that resource-intensive evaluation off documentation-only and unrelated interface changes, while `Release Candidate Ready` remains the stable aggregate gate.
+Every pull request runs the capable-model workflow before merge so changes cannot bypass the real model, OpenHands, approval, replay, and audit contract through an incomplete path filter.
 Registry writes, multi-platform manifest assembly, and moving-tag promotion remain main-only; pull requests build the same image stages and validate the promotion scripts without receiving package-write access.
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Compute-intensive container builds run on architecture-matched Blacksmith runners and reuse bounded GitHub Actions BuildKit caches; short policy and documentation checks remain on standard GitHub runners.
