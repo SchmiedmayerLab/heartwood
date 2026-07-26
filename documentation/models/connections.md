@@ -45,7 +45,7 @@ Heartwood asks the gateway for the models enabled for that key and presents the 
 2. Choose **Stanford AI API Gateway**.
 3. Enter the gateway key at the hidden prompt.
 4. Choose a model returned by the gateway.
-5. Review the route and action-confirmation setting.
+5. Review the route and action-review setting.
 
 The gateway is an institution-managed service, but using it does not by itself authorize a dataset or workflow.
 Stanford's current eligibility, data classification, Data Risk Assessment, and project approval requirements remain authoritative.
