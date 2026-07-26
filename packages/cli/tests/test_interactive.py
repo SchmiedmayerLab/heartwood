@@ -39,6 +39,7 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionSubagent,
+    ProjectionTask,
     ProjectionUsage,
     RestGateway,
     RestRequest,
@@ -539,6 +540,10 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
                 detail="Run the synthetic cohort command",
             ),
         ),
+        task_plan=(
+            ProjectionTask(title="Inspect the synthetic cohort", status="done"),
+            ProjectionTask(title="Write the aggregate result", status="in-progress"),
+        ),
         pending_approval=ProjectionApprovalGroup(
             group_id="action-set-synthetic",
             actions=(
@@ -600,6 +605,9 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert '"file_text": "heartwood-corrected-review-ok\\n"' in rendered
     assert "Model activity: 2 calls · 150 tokens · synthetic-model" in rendered
     assert "agent: 2 calls · 150 tokens" in rendered
+    assert "Task plan:" in rendered
+    assert "[x] Inspect the synthetic cohort" in rendered
+    assert "[·] Write the aggregate result" in rendered
     assert "research-planner: completed · invocation task-call-1 · task task-1" in rendered
     assert lines[-2:] == (
         "Allow the complete set once: /allow",
