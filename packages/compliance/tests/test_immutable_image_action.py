@@ -162,7 +162,7 @@ def test_existing_immutable_tag_rejects_conflicting_digest(tmp_path: Path) -> No
 
     assert result.process.returncode == 1
     assert "already exists with a different digest" in result.process.stderr
-    assert f"expected digest: {_DIGEST_A}; observed digest: {_DIGEST_B}" in (result.process.stderr)
+    assert f"expected digest: {_DIGEST_A}; observed digests: {_DIGEST_B}" in (result.process.stderr)
     assert result.state.get("created") is not True
     assert _publish_calls(result.calls) == ()
 
@@ -180,7 +180,7 @@ def test_new_tag_rejects_published_digest_mismatch(tmp_path: Path) -> None:
     assert "newly created test image does not match validated candidate digest" in (
         result.process.stderr
     )
-    assert f"expected digest: {_DIGEST_A}; observed digest: {_DIGEST_B}" in (result.process.stderr)
+    assert f"expected digest: {_DIGEST_A}; observed digests: {_DIGEST_B}" in (result.process.stderr)
     assert result.state["created"] is True
 
 
@@ -245,6 +245,21 @@ def test_linux_amd64_index_is_created_and_validated(tmp_path: Path) -> None:
     assert "--prefer-index=false" not in _publish_calls(result.calls)[0]
 
 
+def test_linux_amd64_index_accepts_an_index_candidate_digest(tmp_path: Path) -> None:
+    index = _image_index([_platform_manifest(_AMD64_DIGEST, "amd64")])
+    result = _run_action(
+        tmp_path,
+        references=f"registry.test/heartwood@{_DIGEST_A}",
+        candidate_digest=_DIGEST_A,
+        validation_mode="linux-amd64-index",
+        state=_state(published_raw=index, tag_digest=_DIGEST_A),
+    )
+
+    assert result.process.returncode == 0, result.process.stderr
+    assert result.output == {"digest": _DIGEST_A}
+    assert result.state["created"] is True
+
+
 def test_existing_linux_amd64_index_validates_the_wrapped_manifest_digest(
     tmp_path: Path,
 ) -> None:
@@ -280,7 +295,7 @@ def test_linux_amd64_index_rejects_a_different_wrapped_manifest_digest(
 
     assert result.process.returncode == 1
     assert "does not match validated candidate digest" in result.process.stderr
-    assert f"expected digest: {_AMD64_DIGEST}; observed digest: {_DIGEST_B}" in (
+    assert f"expected digest: {_AMD64_DIGEST}; observed digests: {_DIGEST_A}, {_DIGEST_B}" in (
         result.process.stderr
     )
 
