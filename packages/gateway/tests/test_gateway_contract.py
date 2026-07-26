@@ -130,6 +130,70 @@ def test_persisted_projection_does_not_construct_an_agent_backend(
     ]
 
 
+def test_browser_replay_of_a_finished_session_does_not_construct_a_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "browser-storage-replay"
+    writer = _gateway(tmp_path)
+    writer.handle(
+        SessionCommand.model_validate_json(
+            _command(
+                CommandKind.CHAT,
+                session_id=session_id,
+                prompt="Complete one synthetic task",
+            )
+        )
+    )
+    pending = writer.session_projection(session_id=session_id).pending_approval
+    assert pending is not None
+    writer.handle(
+        SessionCommand.model_validate_json(
+            _command(
+                CommandKind.APPROVE,
+                session_id=session_id,
+                target_type="action-set",
+                target_id=pending.group_id,
+            )
+        )
+    )
+    writer._service(session_id)._accept_backend_events(
+        (
+            BackendLifecycleEvent(
+                lifecycle=BackendLifecycle.FINISHED,
+                source_event_id="synthetic-browser-completed-session",
+            ),
+        )
+    )
+    before = writer.replay_events(session_id=session_id)
+    writer.stop()
+
+    reader = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="auto",
+    )
+    monkeypatch.setattr(
+        reader,
+        "_service",
+        lambda _session_id: pytest.fail("browser replay constructed an agent backend"),
+    )
+    rest = RestGateway(reader)
+
+    projection_response = rest.handle(
+        RestRequest(method="GET", path=f"/sessions/{session_id}/projection")
+    )
+    events_response = rest.handle(RestRequest(method="GET", path=f"/sessions/{session_id}/events"))
+
+    assert projection_response.status_code == 200
+    lifecycle = projection_response.body["lifecycle"]
+    assert isinstance(lifecycle, dict)
+    assert lifecycle["status"] == "finished"
+    assert events_response.status_code == 200
+    assert reader.replay_events(session_id=session_id) == before
+    reader.stop()
+
+
 def test_deterministic_gateway_does_not_load_openhands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -601,7 +665,7 @@ def test_configuration_handoff_closes_a_worker_without_holding_the_stream_lock(
         service_factory=lambda _root, _session_id: cast(Any, service),
     )
     writer = SessionGateway(project=project, env={}, backend_id="deterministic")
-    reader.session_projection(session_id="session-one")
+    reader._service("session-one")
     writer.select_action_confirmation_mode("confirm-risky")
 
     with ThreadPoolExecutor(max_workers=1) as executor:

@@ -1657,7 +1657,28 @@ class SessionGateway:
     ) -> tuple[SessionEvent, ...]:
         """Resolve the service and reconcile durable state without holding the stream lock."""
         self.project.initialize()
-        active_service = self._service(session_id) if service is None else service
+        if service is None:
+            persisted_events = FileSessionStore(
+                self.sessions_root,
+                session_id,
+            ).replay_events()
+            lifecycle = project_session(
+                persisted_events,
+                session_id=session_id,
+            ).lifecycle.status
+            if (
+                lifecycle
+                not in {
+                    SessionLifecycle.RUNNING,
+                    SessionLifecycle.PAUSED,
+                    SessionLifecycle.WAITING_FOR_CONFIRMATION,
+                }
+                and session_id not in self._services
+            ):
+                return persisted_events
+            active_service = self._service(session_id)
+        else:
+            active_service = service
         active_service.reconcile()
         return active_service.replay_events()
 
