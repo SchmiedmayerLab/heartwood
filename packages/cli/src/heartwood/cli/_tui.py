@@ -29,7 +29,12 @@ from heartwood.cli._interactive import (
     format_action_arguments,
     interaction_activity,
 )
-from heartwood.gateway import action_mode_label, action_risk_label, action_tool_label
+from heartwood.gateway import (
+    ActionSettingsError,
+    action_mode_label,
+    action_risk_label,
+    action_tool_label,
+)
 from heartwood.session import SessionEvent
 
 
@@ -436,9 +441,14 @@ class HeartwoodTerminalApp(App[None]):
                 else None
             )
         )
+        try:
+            settings = self.session.action_settings()
+        except ActionSettingsError as error:
+            self.notify(str(error), title="Action Review", severity="error")
+            return
         self.push_screen(
             ActionModeScreen(
-                self.session.action_settings(),
+                settings,
                 locked_reason=locked_reason,
             ),
             self._action_mode_selected,

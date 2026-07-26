@@ -833,7 +833,7 @@ def _configure_setup(
     print(
         "  Action review: Existing project setting"
         if resume_existing
-        else "  Action review: Review Every Action"
+        else f"  Action review: {action_mode_label('always-confirm')}"
     )
     if not confirmed and not resume_existing:
         if non_interactive:

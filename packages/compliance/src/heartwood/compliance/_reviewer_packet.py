@@ -145,9 +145,9 @@ class ReviewerPacketGenerator:
                     "model capability and unattended operation remain deployment-specific gates."
                 ),
                 (
-                    "- `always-confirm` is the default action policy. `confirm-risky` remains a "
-                    "deployment-policy opt-in and continues only sets made entirely of low-risk "
-                    "actions."
+                    "- `always-confirm` is the default action policy. `confirm-risky` is a "
+                    "deployment-policy opt-in that automatically allows only action sets made "
+                    "entirely of low-risk actions."
                 ),
                 (
                     "- Published documentation and artifacts are release-scoped; development "

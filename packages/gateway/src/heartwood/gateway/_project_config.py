@@ -387,9 +387,13 @@ class ProjectConfigStore:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        """Prevent project configuration changes across one dependent operation."""
+        """Hold the reentrant cross-process project-configuration lock."""
         self.project.initialize()
-        with FileLock(self.project.config_lock_path, mode=0o600):
+        with FileLock(
+            self.project.config_lock_path,
+            mode=0o600,
+            is_singleton=True,
+        ):
             yield
 
     def _save_unlocked(self, config: ProjectConfig) -> None:

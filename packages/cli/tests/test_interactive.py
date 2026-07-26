@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
 from textual.containers import Vertical
 from textual.widgets import Input, OptionList, RichLog, Static
@@ -28,6 +29,7 @@ from heartwood.cli._tui import (
     _unavailable_mode_summary,
 )
 from heartwood.gateway import (
+    ActionSettingsError,
     ProjectContext,
     SessionGateway,
     action_mode_label,
@@ -345,6 +347,35 @@ def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
         asyncio.run(exercise())
     finally:
         gateway.stop()
+
+
+def test_textual_terminal_reports_action_settings_load_failure() -> None:
+    class InvalidSettingsSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "invalid-settings"
+
+        def replay(self) -> tuple[SessionEvent, ...]:
+            return ()
+
+        def pending_actions(self) -> tuple[PendingAction, ...]:
+            return ()
+
+        def action_settings(self) -> dict[str, object]:
+            raise ActionSettingsError("project action settings are invalid")
+
+    app = HeartwoodTerminalApp(
+        InvalidSettingsSession(),
+        format_events=_format_tui_event_lines,
+    )
+
+    with patch.object(app, "notify") as notify:
+        app.action_show_permissions()
+
+    notify.assert_called_once_with(
+        "project action settings are invalid",
+        title="Action Review",
+        severity="error",
+    )
 
 
 def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() -> None:

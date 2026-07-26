@@ -287,10 +287,11 @@ const ApprovalRequest = ({
 }) => {
   // The gateway resolves the complete OpenHands action set from any member identifier.
   const setRepresentative = controls[0];
+  const representativeId = setRepresentative?.targetId ?? null;
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
-    if (setRepresentative) headingRef.current?.focus();
-  }, [setRepresentative]);
+    if (representativeId !== null) headingRef.current?.focus();
+  }, [representativeId]);
   if (!setRepresentative) return null;
   const countLabel = actionCountLabel(controls.length);
   const allowLabel = controls.length === 1 ? "Allow Once" : "Allow All Once";

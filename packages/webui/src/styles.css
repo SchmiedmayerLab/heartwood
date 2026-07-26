@@ -697,7 +697,7 @@ summary:focus-visible {
   font-weight: 700;
 }
 
-.approval-introduction h2:focus {
+.approval-introduction h2:focus:not(:focus-visible) {
   outline: none;
 }
 

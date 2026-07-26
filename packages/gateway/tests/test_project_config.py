@@ -81,6 +81,23 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
     assert not store.configured
 
 
+def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    default = _default_config(project)
+    first = ProjectConfigStore(project, default)
+    second = ProjectConfigStore(project, default)
+
+    with first.locked():
+        updated = second.update(
+            lambda config: config.with_action_settings(
+                ActionSettings(confirmation_mode="confirm-risky")
+            )
+        )
+
+    assert updated.action_settings.confirmation_mode == "confirm-risky"
+    assert first.load() == updated
+
+
 def test_project_config_rejects_action_mode_outside_project_policy(tmp_path: Path) -> None:
     project = ProjectContext(tmp_path)
     restricted = ProjectConfig(

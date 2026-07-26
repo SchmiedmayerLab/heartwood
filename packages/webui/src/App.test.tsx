@@ -1899,6 +1899,20 @@ describe("App", () => {
       screen.getByRole("button", { name: "Allow 2 actions once" }),
     ).toBeVisible();
 
+    const argumentDisclosure = screen.getAllByText("Review Exact Arguments")[0];
+    if (!argumentDisclosure)
+      throw new Error("action argument disclosure is missing");
+    argumentDisclosure.focus();
+    expect(argumentDisclosure).toHaveFocus();
+    act(() => {
+      client.emitStream([
+        event(7, "agent_message.emitted", {
+          content: "The action set is still awaiting review.",
+        }),
+      ]);
+    });
+    expect(argumentDisclosure).toHaveFocus();
+
     fireEvent.click(screen.getByLabelText("Open action review settings"));
     expect(
       await screen.findByText(
