@@ -42,7 +42,8 @@ Actual Terra and Carina qualification still requires the exact published artifac
 That qualification promotes one precise row in the [GPU compatibility matrix](../reference/gpu-compatibility.md); it does not qualify other drivers, model revisions, precisions, parsers, context sizes, or tensor-parallel layouts.
 
 Pull-request validation, main-branch image publication, capable-model acceptance, and protected GPU qualification are separate workflow entry points.
-This keeps pull-request checks limited to work that actually runs, while preserving `Release Candidate Ready` as the stable aggregate gate.
+Pull requests that change the agent, gateway, local runtime, shared acceptance scripts, or their locked dependencies also run the capable-model workflow before merge.
+Path filtering keeps that resource-intensive evaluation off documentation-only and unrelated interface changes, while `Release Candidate Ready` remains the stable aggregate gate.
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Compute-intensive container builds run on architecture-matched Blacksmith runners and reuse bounded GitHub Actions BuildKit caches; short policy and documentation checks remain on standard GitHub runners.
 

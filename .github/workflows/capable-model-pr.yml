@@ -1,0 +1,39 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Capable Model Pull Request Validation
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/capable-model-pr.yml"
+      - ".github/workflows/capable-model.yml"
+      - "docker-bake.hcl"
+      - "images/Dockerfile"
+      - "images/generic/**"
+      - "fixtures/synthetic/**"
+      - "skills/verified/**"
+      - "packages/audit/**"
+      - "packages/cli/**"
+      - "packages/core-adapter/**"
+      - "packages/gateway/**"
+      - "packages/model-policy/**"
+      - "packages/schemas/**"
+      - "packages/session/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+concurrency:
+  group: capable-model-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  capable-model:
+    name: Capable Model Acceptance
+    uses: ./.github/workflows/capable-model.yml

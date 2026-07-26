@@ -288,6 +288,27 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "cancel-in-progress: true" in dependency_review
 
 
+def test_runtime_changes_run_capable_model_acceptance_before_merge() -> None:
+    workflow = Path(".github/workflows/capable-model-pr.yml").read_text(encoding="utf-8")
+
+    assert "  pull_request:" in workflow
+    assert "  push:" not in workflow
+    assert "uses: ./.github/workflows/capable-model.yml" in workflow
+    assert "group: capable-model-pr-${{ github.ref }}" in workflow
+    assert "cancel-in-progress: true" in workflow
+    for path in (
+        ".github/workflows/capable-model.yml",
+        "images/generic/**",
+        "packages/cli/**",
+        "packages/core-adapter/**",
+        "packages/gateway/**",
+        "packages/session/**",
+        "pyproject.toml",
+        "uv.lock",
+    ):
+        assert f'      - "{path}"' in workflow
+
+
 def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
     validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
     entrypoints = (

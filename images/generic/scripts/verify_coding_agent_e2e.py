@@ -146,7 +146,7 @@ def verify_run(
     if not artifact_path.read_bytes().endswith(b"\n"):
         raise ValueError("coding-agent artifact does not end with a newline")
     exact_path = artifact_path.with_name("heartwood-exact-output.txt")
-    if not exact_path.is_file() or exact_path.read_bytes() != b"heartwood-agent-exact-ok\n":
+    if not exact_path.is_file() or exact_path.read_bytes() != b"heartwood-agent-exact-ok":
         raise ValueError("coding-agent exact-content artifact is incorrect")
     rejected_path = artifact_path.with_name("heartwood-rejected-output.txt")
     if rejected_path.exists():
