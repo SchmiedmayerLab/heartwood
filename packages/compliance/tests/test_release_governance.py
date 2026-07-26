@@ -15,8 +15,19 @@ import sys
 import tomllib
 from pathlib import Path
 from types import ModuleType
+from typing import Any, cast
 
 import pytest
+
+
+def _workflow(path: str) -> dict[str, Any]:
+    yaml = importlib.import_module("yaml")
+    document = yaml.load(
+        Path(path).read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assert isinstance(document, dict)
+    return cast(dict[str, Any], document)
 
 
 def _release_verifier() -> ModuleType:
@@ -289,24 +300,42 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
 
 
 def test_runtime_changes_run_capable_model_acceptance_before_merge() -> None:
-    workflow = Path(".github/workflows/capable-model-pr.yml").read_text(encoding="utf-8")
-
-    assert "  pull_request:" in workflow
-    assert "  push:" not in workflow
-    assert "uses: ./.github/workflows/capable-model.yml" in workflow
-    assert "group: capable-model-pr-${{ github.ref }}" in workflow
-    assert "cancel-in-progress: true" in workflow
-    for path in (
+    workflow = _workflow(".github/workflows/capable-model-pr.yml")
+    triggers = cast(dict[str, Any], workflow["on"])
+    pull_request = cast(dict[str, Any], triggers["pull_request"])
+    expected_paths = {
+        ".github/workflows/capable-model-pr.yml",
         ".github/workflows/capable-model.yml",
+        "docker-bake.hcl",
+        "images/Dockerfile",
         "images/generic/**",
+        "fixtures/synthetic/**",
+        "skills/verified/**",
+        "packages/audit/**",
         "packages/cli/**",
         "packages/core-adapter/**",
         "packages/gateway/**",
+        "packages/model-policy/**",
+        "packages/schemas/**",
         "packages/session/**",
         "pyproject.toml",
         "uv.lock",
-    ):
-        assert f'      - "{path}"' in workflow
+    }
+
+    assert set(cast(list[str], pull_request["paths"])) == expected_paths
+    assert "push" not in triggers
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {
+        "group": "capable-model-pr-${{ github.ref }}",
+        "cancel-in-progress": "true",
+    }
+    jobs = cast(dict[str, Any], workflow["jobs"])
+    assert jobs == {
+        "capable-model": {
+            "name": "Capable Model Acceptance",
+            "uses": "./.github/workflows/capable-model.yml",
+        }
+    }
 
 
 def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
