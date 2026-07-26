@@ -320,7 +320,7 @@ def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
         await _wait_for_sent(sent, 3)
         await incoming.put({"type": "websocket.disconnect"})
-        await task
+        assert await task is None
         return sent
 
     sent = asyncio.run(scenario())

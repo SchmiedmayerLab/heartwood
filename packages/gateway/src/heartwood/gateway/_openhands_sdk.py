@@ -731,7 +731,7 @@ class OpenHandsSdkBackend:
                         for event in events
                         if event.source_event_id is not None
                     )
-        await run
+        run.result()
         return frozenset(published_source_event_ids)
 
     def _wait_for_run_boundary(self, timeout: float) -> bool:
