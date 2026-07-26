@@ -77,7 +77,8 @@ class _SnapshotDownloadArguments(TypedDict):
 class SnapshotDownloader(Protocol):
     """Callable contract implemented by ``huggingface_hub.snapshot_download``."""
 
-    def __call__(self, **_kwargs: Unpack[_SnapshotDownloadArguments]) -> str: ...
+    def __call__(self, **_kwargs: Unpack[_SnapshotDownloadArguments]) -> str:
+        raise NotImplementedError
 
 
 class ModelSnapshotError(ValueError):

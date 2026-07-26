@@ -124,7 +124,7 @@ class _MockProviderHandler(BaseHTTPRequestHandler):
             self.wfile.write(response.body)
             self.wfile.flush()
         except BrokenPipeError:
-            pass
+            return
         finally:
             if response.declared_length is not None:
                 with suppress(OSError):
@@ -433,7 +433,7 @@ def _wait_for_terminal_events(
             return events
         time.sleep(0.01)
     kinds = [str(event.kind) for event in events]
-    pytest.fail(
+    raise AssertionError(
         f"provider scenario did not reach {expected_status}; "
         f"observed statuses={statuses!r}, kinds={kinds!r}"
     )
