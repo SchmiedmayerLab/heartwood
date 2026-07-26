@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -16,6 +17,8 @@ import textwrap
 import time
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway import (
@@ -43,6 +46,15 @@ def _write_model_snapshot(root: Path) -> None:
     weights.write_bytes(b"synthetic-carina-model")
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     (root / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
+
+
+def _read_pty(fd: int) -> bytes:
+    try:
+        return os.read(fd, 65_536)
+    except OSError as error:
+        if error.errno == errno.EIO:
+            return b""
+        raise
 
 
 def _run_with_pty(
@@ -75,7 +87,7 @@ def _run_with_pty(
                 raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
             readable, _, _ = select.select([master], [], [], 0.1)
             if readable:
-                chunk = os.read(master, 65_536)
+                chunk = _read_pty(master)
                 if not chunk:
                     break
                 output.extend(chunk)
@@ -85,10 +97,7 @@ def _run_with_pty(
             readable, _, _ = select.select([master], [], [], 0)
             if not readable:
                 break
-            try:
-                chunk = os.read(master, 65_536)
-            except OSError:
-                break
+            chunk = _read_pty(master)
             if not chunk:
                 break
             output.extend(chunk)
@@ -100,6 +109,29 @@ def _run_with_pty(
         stdout=output.decode(errors="replace"),
         stderr="",
     )
+
+
+def test_read_pty_treats_linux_end_of_file_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_end_of_file(_fd: int, _size: int) -> bytes:
+        raise OSError(errno.EIO, "synthetic PTY end of file")
+
+    monkeypatch.setattr(os, "read", raise_end_of_file)
+
+    assert _read_pty(1) == b""
+
+
+def test_read_pty_preserves_unexpected_io_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_bad_descriptor(_fd: int, _size: int) -> bytes:
+        raise OSError(errno.EBADF, "synthetic bad descriptor")
+
+    monkeypatch.setattr(os, "read", raise_bad_descriptor)
+
+    with pytest.raises(OSError, match="synthetic bad descriptor"):
+        _read_pty(1)
 
 
 def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
