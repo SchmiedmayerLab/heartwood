@@ -55,7 +55,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
@@ -78,22 +78,21 @@ import type {
   ModelSettings,
   ModelValidation,
   ProjectReadiness,
-  SessionEvent,
+  SessionProjection,
   SkillSettings,
   SkillSummary,
   StartupPlan,
   SubscriptionDeviceLogin,
 } from "../types";
-import { buildViewModel } from "../viewModel";
 import type { UtilityPanel } from "./SessionRail";
 
 interface UtilitySheetProps {
   actionModeLockedReason: string | null;
   actions: ActionSettings | null;
   artifacts: ModelArtifacts | null;
-  events: SessionEvent[];
   panel: UtilityPanel;
   profileDraft: ModelProfileDraft;
+  projection: SessionProjection | null;
   projectReadiness: ProjectReadiness | null;
   startupPlan: StartupPlan | null;
   skillApproved: boolean;
@@ -173,21 +172,16 @@ const profileDraftFrom = ({
 };
 
 const ActivityContent = ({
-  actions,
-  events,
   onExportAudit,
   onRefreshActivity,
+  projection,
 }: UtilitySheetProps) => {
-  const viewModel = useMemo(
-    () => buildViewModel(events, actions?.presentation ?? null),
-    [actions?.presentation, events],
-  );
   return (
     <>
       <SheetHeader>
         <SheetTitle>Activity &amp; audit</SheetTitle>
         <SheetDescription>
-          {viewModel.eventCount} persisted session events
+          {projection?.eventCount ?? 0} persisted session events
         </SheetDescription>
       </SheetHeader>
       <div className="sheet-toolbar">
@@ -201,9 +195,9 @@ const ActivityContent = ({
         </Button>
       </div>
       <div className="activity-list">
-        {viewModel.activity.length === 0 ?
+        {!projection || projection.activity.length === 0 ?
           <p className="panel-empty">No events recorded</p>
-        : viewModel.activity.map((item) => (
+        : projection.activity.map((item) => (
             <div className="activity-row" key={`${item.sequence}-${item.kind}`}>
               <small>{String(item.sequence).padStart(3, "0")}</small>
               <div>
@@ -701,7 +695,13 @@ const ActionReviewSettings = ({
   }
   const available = actions.modes.filter((option) => option.allowed);
   const unavailable = actions.modes.filter((option) => !option.allowed);
-  const disabled = lockedReason !== null || pendingMode !== null;
+  const effectiveLockedReason =
+    lockedReason ??
+    (actions.change_allowed ? null : actions.change_blocked_reason);
+  const disabled =
+    !actions.change_allowed ||
+    effectiveLockedReason !== null ||
+    pendingMode !== null;
   const select = async (mode: ActionConfirmationMode) => {
     if (mode === actions.confirmation_mode || disabled) return;
     setPendingMode(mode);
@@ -726,10 +726,10 @@ const ActionReviewSettings = ({
           />
         : null}
       </div>
-      {lockedReason ?
+      {effectiveLockedReason ?
         <div className="action-mode-notice" role="status">
           <ShieldCheck size={16} aria-hidden="true" />
-          <span>{lockedReason}</span>
+          <span>{effectiveLockedReason}</span>
         </div>
       : null}
       <RadioGroup<ActionConfirmationMode>
@@ -960,7 +960,9 @@ const CustomLocalModelSetup = ({
   const [repository, setRepository] = useState("");
   const [revision, setRevision] = useState("");
   const [plan, setPlan] = useState<ModelRepositoryPlan | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pendingOperation, setPendingOperation] = useState<
+    "inspect" | "download" | "import" | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importRepository, setImportRepository] = useState("");
@@ -968,6 +970,7 @@ const CustomLocalModelSetup = ({
   const [importLicense, setImportLicense] = useState("");
   const [importComplete, setImportComplete] = useState(false);
   const [confirmDownload, setConfirmDownload] = useState(false);
+  const pending = pendingOperation !== null;
   const modelDownload =
     plan === null ? undefined : (
       downloads.find((item) => item.model_id === plan.model.model_id)
@@ -975,7 +978,7 @@ const CustomLocalModelSetup = ({
 
   const inspect = async () => {
     if (!repository.trim()) return;
-    setPending(true);
+    setPendingOperation("inspect");
     setError(null);
     setPlan(null);
     try {
@@ -988,13 +991,13 @@ const CustomLocalModelSetup = ({
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setPending(false);
+      setPendingOperation(null);
     }
   };
 
   const download = async () => {
     if (!plan) return;
-    setPending(true);
+    setPendingOperation("download");
     setError(null);
     try {
       await onDownload({
@@ -1004,7 +1007,7 @@ const CustomLocalModelSetup = ({
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setPending(false);
+      setPendingOperation(null);
     }
   };
 
@@ -1016,7 +1019,7 @@ const CustomLocalModelSetup = ({
       !importLicense.trim()
     )
       return;
-    setPending(true);
+    setPendingOperation("import");
     setError(null);
     setImportComplete(false);
     try {
@@ -1030,7 +1033,7 @@ const CustomLocalModelSetup = ({
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setPending(false);
+      setPendingOperation(null);
     }
   };
 
@@ -1073,7 +1076,7 @@ const CustomLocalModelSetup = ({
         </details>
         <Button
           disabled={pending || !repository.trim()}
-          isPending={pending && plan === null}
+          isPending={pendingOperation === "inspect"}
           variant="outline"
           onClick={() => void inspect()}
         >
@@ -1119,7 +1122,10 @@ const CustomLocalModelSetup = ({
                 modelDownload?.status === "downloading" ||
                 modelDownload?.status === "ready"
               }
-              isPending={pending || modelDownload?.status === "downloading"}
+              isPending={
+                pendingOperation === "download" ||
+                modelDownload?.status === "downloading"
+              }
               onClick={() => setConfirmDownload(true)}
             >
               {modelDownload?.status === "ready" ?
@@ -1185,13 +1191,17 @@ const CustomLocalModelSetup = ({
                 !importRevision.trim() ||
                 !importLicense.trim()
               }
-              isPending={pending}
+              isPending={pendingOperation === "import"}
               variant="outline"
               onClick={() => void importModel()}
             >
               Import model
             </Button>
-            {importComplete ?
+            {pendingOperation === "import" ?
+              <span role="status">
+                Copying and verifying model files. Keep this page open.
+              </span>
+            : importComplete ?
               <span role="status">Model imported and selected</span>
             : null}
           </div>

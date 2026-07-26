@@ -7,6 +7,7 @@
  */
 
 import type * as Api from "./apiTypes.generated";
+import type * as Projection from "./sessionProjection.generated";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -28,6 +29,10 @@ export type EventKind =
   | "tool.execution.recorded"
   | "session.paused"
   | "session.resumed"
+  | "agent.lifecycle.updated"
+  | "task.plan.updated"
+  | "model.usage.updated"
+  | "subagent.updated"
   | "audit.export.recorded"
   | "error.recorded";
 
@@ -52,58 +57,27 @@ export interface SessionEvent {
   previous_event_hash: string | null;
 }
 
-export interface ActivityItem {
-  sequence: number;
-  kind: EventKind;
-  label: string;
-  detail: string;
-}
-
-export interface ConversationMessage {
-  id: string;
-  sequence: number;
-  role: "user" | "agent" | "trace";
-  label: string;
-  content: string;
-  detail: string | null;
-  technicalDetail?: string | null;
-}
-
 export type ActionRisk = Api.ActionRisk;
-
-export interface ApprovalControl {
-  targetType: string;
-  targetId: string;
-  label: string;
-  toolName: string;
-  risk: ActionRisk | null;
-  summary: string | null;
-  arguments: Record<string, JsonValue>;
-  decision: string | null;
-}
-
-export interface SessionContext {
-  modelEndpoint: string | null;
-  modelDecision: string | null;
-  modelReason: string | null;
-}
-
-export interface SessionViewModel {
-  sessionId: string;
-  eventCount: number;
-  activity: ActivityItem[];
-  conversation: ConversationMessage[];
-  approvalControls: ApprovalControl[];
-  context: SessionContext;
-  paused: boolean;
-}
+export type ActivityItem = Projection.ProjectionActivity;
+export type ConversationMessage = Projection.ProjectionMessage;
+export type ProjectionApprovalAction = Projection.ProjectionApprovalAction;
+export type ProjectionApprovalGroup = Projection.ProjectionApprovalGroup;
+export type ProjectionModelContext = Projection.ProjectionModelContext;
+export type ProjectionLifecycle = Projection.ProjectionLifecycleState;
+export type ProjectionLifecycleStatus = ProjectionLifecycle["status"];
+export type ProjectionTask = Projection.ProjectionTask;
+export type ProjectionUsage = Projection.ProjectionUsage;
+export type ProjectionSubagent = Projection.ProjectionSubagent;
+export type ProjectionCommandOutcome = Projection.ProjectionCommandOutcome;
+export type SessionProjection = Projection.SessionProjection;
+export type ProjectionCommand = SessionProjection["availableCommands"][number];
 
 export type {
   ActionConfirmationMode,
   ActionConfirmationRequest,
-  CustomLocalModelDownloadRequest,
   CredentialKind,
   CredentialStatus,
+  CustomLocalModelDownloadRequest,
   InterfaceKind,
   LocalModelImportRequest,
   LocalModelQualification,

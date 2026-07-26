@@ -44,6 +44,7 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "LITELLM_LOCAL_MODEL_COST_MAP=True" in dockerfile
     assert "OPENHANDS_SUPPRESS_BANNER=1" in dockerfile
     assert "COPY deploy/install-llama-cpp.sh" in dockerfile
+    assert "COPY agents ./agents" in dockerfile
     assert "heartwood-install-llama-cpp /opt/llama.cpp" in dockerfile
     assert "llama-${version}-bin-ubuntu-x64.tar.gz" in llama_installer
     assert "llama-${version}-bin-ubuntu-arm64.tar.gz" in llama_installer
@@ -113,6 +114,7 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "packages",
         "fixtures",
         "skills",
+        "agents",
         "evals",
         "images",
         "README.md NOTICE",
@@ -207,7 +209,7 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
         if Requirement(requirement).name.startswith("openhands-")
     )
 
-    assert pins == {"openhands-sdk": "1.36.1", "openhands-tools": "1.36.1"}
+    assert pins == {"openhands-sdk": "1.37.1", "openhands-tools": "1.37.1"}
     assert "optional-dependencies" not in gateway["project"]
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
     assert "openhands-agent-server" not in _read("uv.lock")
@@ -216,12 +218,34 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
 def test_runtime_image_sets_the_release_version_label() -> None:
     dockerfile = _read("images/Dockerfile")
     bake = _read("docker-bake.hcl")
+    workflow = _read(".github/workflows/container-image.yml")
+    revision_verifier = _read("images/scripts/verify_image_revision.sh")
 
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
+    assert "ARG HEARTWOOD_REVISION=unknown" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
+    assert 'org.opencontainers.image.revision="${HEARTWOOD_REVISION}"' in dockerfile
+    assert "HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION}" in dockerfile
+    assert "FROM heartwood-runtime-base AS heartwood-image-metadata" in dockerfile
+    assert "FROM heartwood-image-metadata AS platform-runtime-image" in dockerfile
+    assert "FROM heartwood-image-metadata AS runtime-image" in dockerfile
+    assert dockerfile.index("uv sync --locked") < dockerfile.index("ARG HEARTWOOD_REVISION=unknown")
     assert 'variable "HEARTWOOD_VERSION"' in bake
     assert 'default = "0.2.0"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
+    assert bake.count('HEARTWOOD_REVISION = "${GIT_SHA}"') == 2
+    generic_build = workflow.split("      - name: Build and stage image by digest\n", maxsplit=1)[
+        1
+    ].split("      - name: Record staged image digest\n", maxsplit=1)[0]
+    terra_build = workflow.split(
+        "      - name: Build and stage Terra image by digest\n", maxsplit=1
+    )[1].split("      - name: Record staged Terra image digest\n", maxsplit=1)[0]
+    assert "GIT_SHA: ${{ github.sha }}" in generic_build
+    assert "GIT_SHA: ${{ github.sha }}" in terra_build
+    assert workflow.count("bash images/scripts/verify_image_revision.sh") == 2
+    assert "HEARTWOOD_IMAGE_REVISION" in revision_verifier
+    assert "org.opencontainers.image.revision" in revision_verifier
+    assert os.access(_repo_root() / "images/scripts/verify_image_revision.sh", os.X_OK)
 
 
 def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
@@ -762,6 +786,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "npm ci --no-audit --fund=false" in packager
     assert "npm run build" in packager
     assert "packages/webui/dist/index.html" in packager
+    assert 'test -f "${source}/agents/verified/research-planner.md"' in real_smoke
     assert '"${installation}/bin/heartwood-jupyter" --version' in real_smoke
     assert '"${installation}/bin/heartwood" --interface web' in real_smoke
     assert "installer accepted a corrupted checksum" in smoke
@@ -775,10 +800,14 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "heartwood-source-tamper-test" in real_smoke
 
 
-def test_gpu_publication_builds_only_explicit_main_variants() -> None:
+def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
-    pull_request_workflow = _read(".github/workflows/gpu-container-pr.yml")
+    manual_workflow = _read(".github/workflows/gpu-container-pr.yml")
+    immutable_tag_action = _read(".github/actions/create-immutable-image-tag/action.yml")
+    pull_request_workflow = _read(".github/workflows/gpu-container-pr-validation.yml")
+    pull_request_validation = _read(".github/workflows/pull-request-validation.yml")
     qualification = _read(".github/workflows/gpu-qualification.yml")
+    candidate_validation = _read("images/gpu/validate_image_candidate.sh")
     runner_cleanup = _read("deploy/reclaim-github-runner-space.sh")
     dependency_review = _read(".github/workflows/dependency-review.yml")
     main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
@@ -787,12 +816,22 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in pull_request_workflow
     assert ".target=gpu-ci-validate" in pull_request_workflow
+    assert "candidate-sha-${GITHUB_SHA}-terra-gpu-nvidia" in manual_workflow
     contract_action = _read(".github/actions/validate-gpu-contract/action.yml")
     assert workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
     assert pull_request_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
+    assert manual_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
     assert "bash -n images/gpu/install_runtime.sh" in contract_action
     assert "test -x images/gpu/install_runtime.sh" in contract_action
+    assert "bash -n images/gpu/validate_image_candidate.sh" in contract_action
+    assert "test -x images/gpu/validate_image_candidate.sh" in contract_action
+    assert "bash -n images/scripts/verify_image_revision.sh" in contract_action
+    assert "test -x images/scripts/verify_image_revision.sh" in contract_action
     assert ".output=type=cacheonly" in pull_request_workflow
+    assert "push-by-digest=true" not in pull_request_workflow
+    assert "packages: write" not in pull_request_workflow
+    assert "workflow_call:" in pull_request_workflow
+    assert "workflow_dispatch:" not in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
     assert "runner: ubuntu-24.04" in pull_request_workflow
@@ -801,6 +840,15 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "cache-from=type=gha" not in pull_request_workflow
     assert "cache-to=type=gha" not in pull_request_workflow
     assert "uses: docker/bake-action@v7" in workflow
+    assert "workflow_dispatch:" in manual_workflow
+    assert "workflow_call:" not in manual_workflow
+    assert "packages: write" in manual_workflow
+    workflow_header = manual_workflow.split("jobs:", maxsplit=1)[0]
+    assert "packages: write" not in workflow_header
+    publish_job = manual_workflow.split("  publish:\n", maxsplit=1)[1]
+    assert "packages: write" in publish_job
+    assert "push-by-digest=true" in manual_workflow
+    assert "targets: runtime-gpu-nvidia" not in manual_workflow
     assert "mode=max" not in pull_request_workflow
     assert "mode=max" not in main_build
     assert "cache-from=type=gha" not in main_build
@@ -818,25 +866,52 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "runs-on: [self-hosted, linux, x64, gpu]" in qualification
     assert "inputs.qualification_configuration" not in pull_request_workflow
     assert "inputs.qualification_configuration" not in main_build
-    assert "if:" not in pull_request_workflow
+    gpu_caller = pull_request_validation.split("  gpu-containers:\n", maxsplit=1)[1].split(
+        "\n  native-assets:\n", maxsplit=1
+    )[0]
+    assert "gpu-container-pr-validation.yml" in gpu_caller
+    assert "packages: write" not in gpu_caller
     assert "push-by-digest=true" in workflow
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
     assert "deploy/reclaim-github-runner-space.sh" not in main_build
     assert main_build.index("Build candidate by digest") < main_build.index(
         "Verify candidate contents"
     )
-    assert "--prefer-index=false" in workflow
-    assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
-    assert "observed media type:" in workflow
-    assert "Linux platforms:" in workflow
-    assert 'docker pull --platform linux/amd64 "${CANDIDATE}"' in main_build
-    assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in main_build
-    assert "Verify shared agent and platform interfaces" in main_build
-    assert "terra_jupyter_contract_smoke.sh" in main_build
-    assert "terra_image_smoke.sh" in main_build
-    assert "offline_stack_smoke.sh" in main_build
-    assert "immutable GPU commit tag does not match" in workflow
-    assert "sha-${GIT_SHA}-${COMMIT_SUFFIX}" in main_build
+    assert workflow.count("uses: ./.github/actions/create-immutable-image-tag") == 1
+    assert manual_workflow.count("uses: ./.github/actions/create-immutable-image-tag") == 1
+    assert "--prefer-index=false" in immutable_tag_action
+    assert "application/vnd.docker.distribution.manifest.v2+json" in immutable_tag_action
+    assert "observed media type:" in immutable_tag_action
+    assert "config media type:" in immutable_tag_action
+    assert "Linux platforms:" in immutable_tag_action
+    assert "validate_image_candidate.sh" in main_build
+    assert "validate_image_candidate.sh" in manual_workflow
+    assert manual_workflow.index("Validate staged Terra candidate") < manual_workflow.index(
+        "Create immutable Terra candidate tag"
+    )
+    assert "diagnostic-name: Terra qualification candidate tag" in manual_workflow
+    assert 'docker pull --platform linux/amd64 "${candidate}"' in candidate_validation
+    assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in (candidate_validation)
+    assert "terra_jupyter_contract_smoke.sh" in candidate_validation
+    assert "terra_image_smoke.sh" in candidate_validation
+    assert "offline_stack_smoke.sh" in candidate_validation
+    assert os.access(_repo_root() / "images/gpu/validate_image_candidate.sh", os.X_OK)
+    assert "validation-mode: docker-v2" in manual_workflow
+    assert "edge-gpu-nvidia" not in manual_workflow
+    assert "edge-terra-gpu-nvidia" not in manual_workflow
+    assert "diagnostic_name: generic GPU commit tag" in workflow
+    assert "diagnostic_name: Terra GPU commit tag" in workflow
+    assert "diagnostic-name: ${{ matrix.diagnostic_name }}" in workflow
+    assert (
+        "candidate-tag: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}-"
+        "${{ matrix.commit_suffix }}"
+    ) in main_build
+    assert "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" in (
+        immutable_tag_action
+    )
+    assert "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" in (
+        immutable_tag_action
+    )
     assert "edge-gpu-nvidia" not in main_build
     assert "edge-terra-gpu-nvidia" not in main_build
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
@@ -945,6 +1020,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     capable = _read("images/generic/scripts/capable_model_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
     model_stub = _read("images/generic/scripts/local_model_stub.py")
+    reference_smoke = _read("packages/webui/scripts/smoke-reference-analysis.cjs")
 
     assert "network_mode: none" in compose
     assert "read_only: true" in compose
@@ -979,7 +1055,11 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert " allow " in smoke
     assert " reject " in smoke
     assert "Action set approved" in smoke
-    assert "Action set denied" in smoke
+    assert "Action set rejected" in smoke
+    assert "Tool: Ran Terminal Command" in reference_smoke
+    assert "terminal completed" in reference_smoke
+    assert "terminal failed" in reference_smoke
+    assert "Tool terminal exit=" not in reference_smoke
     assert "audit export" in smoke
     assert "load_skills_from_dir" in smoke
     assert "start_agent_server" not in smoke
@@ -1019,6 +1099,63 @@ def test_local_model_stub_preserves_explicit_action_risk() -> None:
     assert "<parameter=command>printf heartwood-openhands-action</parameter>" in prompt_call
     assert "<parameter=security_risk>LOW</parameter>" in prompt_call
     assert prompt_call.endswith("</function>")
+
+
+def test_local_model_stub_streams_typed_tool_calls_and_final_text() -> None:
+    path = _repo_root() / "images/generic/scripts/local_model_stub.py"
+    spec = importlib.util.spec_from_file_location("heartwood_local_model_stub_stream", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    tool_call = module._terminal_call(
+        "call-stream",
+        "printf safe",
+        "run the synthetic command",
+    )
+    tool_chunks = module._stream_chunks(
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion",
+            "model": "heartwood-managed-runtime",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call],
+                    },
+                }
+            ],
+        }
+    )
+    first_tool_choice = tool_chunks[0]["choices"][0]
+    assert first_tool_choice["delta"]["tool_calls"][0]["index"] == 0
+    assert first_tool_choice["delta"]["tool_calls"][0]["id"] == "call-stream"
+    assert tool_chunks[1]["choices"][0]["finish_reason"] == "tool_calls"
+
+    text_chunks = module._stream_chunks(
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion",
+            "model": "heartwood-managed-runtime",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "Synthetic task complete.",
+                    },
+                }
+            ],
+        }
+    )
+    assert text_chunks[0]["choices"][0]["delta"]["content"] == "Synthetic task complete."
+    assert text_chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
 def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
@@ -1069,7 +1206,10 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
         '[\n            "heartwood",\n            "gateway",\n            "serve",' in jupyter_smoke
     )
     assert 'RUNTIME_ROOT / "packages" / "webui" / "dist"' in jupyter_smoke
-    assert '"confirmation.requested"' in jupyter_smoke
+    assert '"waiting-for-confirmation"' in jupyter_smoke
+    assert '"pendingApproval"' in jupyter_smoke
+    assert '"target_type": "action-set"' in jupyter_smoke
+    assert '"confirmation.resolved"' in jupyter_smoke
     assert '"tool.execution.recorded"' in jupyter_smoke
     assert "os.chdir(PROJECT_ROOT)" in jupyter_smoke
     assert "NotebookSession(session_id=" in jupyter_smoke
@@ -1093,7 +1233,8 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     terra_persistence = _read("images/platform/scripts/terra_project_persistence_smoke.sh")
     assert '--volume "${state_volume}:/home/jupyter"' in terra_persistence
     assert terra_persistence.count("terra_image_smoke.sh") == 2
-    assert "terra-project-persistence replay" in terra_persistence
+    assert terra_persistence.count("terra-project-persistence audit export") == 2
+    assert ".heartwood/sessions/terra-project-persistence/audit-export.jsonl" in terra_persistence
     assert "heartwood doctor --json" in terra_persistence
     assert " terra-project-persistence detect" not in terra_persistence
     assert "test ! -e /home/jupyter/.heartwood" in terra_persistence
@@ -1101,6 +1242,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
+    immutable_tag_action = _read(".github/actions/create-immutable-image-tag/action.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
     capable_workflow = _read(".github/workflows/capable-model.yml")
     compose = _read("images/generic/compose.yaml")
@@ -1126,9 +1268,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"' in publish
     assert publish.count("uid=10001,gid=10001,mode=0700") == 4
     assert "verify_registry_manifest.py" in publish
-    assert "--prefer-index=false" in publish
+    assert "--prefer-index=false" in immutable_tag_action
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
-    assert publish.count("^sha256:[0-9a-f]{64}$") == 2
+    assert immutable_tag_action.count("^sha256:[0-9a-f]{64}$") == 2
     assert "if: github.ref == 'refs/heads/main'" not in publish
     assert "runner: ubuntu-24.04" in publish
     assert "runner: ubuntu-24.04-arm" in publish
@@ -1136,17 +1278,27 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "cache-to=type=gha" in publish
     assert publish.count("uses: docker/bake-action@v7") == 2
     assert "mode=max" not in publish
-    assert "immutable generic commit tag already exists with a different manifest" in publish
-    assert "newly created generic commit tag does not match validated candidate manifest" in publish
-    assert "immutable Terra commit tag already exists with a different digest" in publish
-    assert "newly created Terra commit tag does not match staged candidate digest" in publish
+    assert publish.count("uses: ./.github/actions/create-immutable-image-tag") == 2
+    assert "diagnostic-name: generic commit tag" in publish
+    assert "diagnostic-name: Terra commit tag" in publish
+    assert "immutable ${DIAGNOSTIC_NAME} already exists with a different manifest" in (
+        immutable_tag_action
+    )
+    assert "newly created ${DIAGNOSTIC_NAME} does not match validated candidate manifest" in (
+        immutable_tag_action
+    )
+    assert "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" in (
+        immutable_tag_action
+    )
+    assert "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" in (
+        immutable_tag_action
+    )
     assert "promoted generic channel digest does not match the immutable commit tag" in publish
     assert "promoted Terra channel digest does not match the immutable commit tag" in publish
     assert (
-        'if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then'
-        in publish
+        'if raw="$(docker buildx imagetools inspect --raw "${CANDIDATE_TAG}" 2>/dev/null)"; then'
+        in immutable_tag_action
     )
-    assert 'if commit_digest="$(docker buildx imagetools inspect' not in publish
     assert "refusing to move the generic channel tag from a stale main workflow" in publish
     assert "refusing to move the Terra channel tag from a stale main workflow" in publish
     assert publish.index("Build and stage image by digest") < publish.index(

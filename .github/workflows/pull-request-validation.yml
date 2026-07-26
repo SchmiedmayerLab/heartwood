@@ -25,18 +25,24 @@ jobs:
     uses: ./.github/workflows/container-smoke.yml
   gpu-containers:
     name: GPU Container Candidates
-    uses: ./.github/workflows/gpu-container-pr.yml
+    uses: ./.github/workflows/gpu-container-pr-validation.yml
   native-assets:
     name: Native Release Assets
     uses: ./.github/workflows/native-release.yml
   python:
     name: Python
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/python.yml
   secrets:
     name: Secret Scan
     uses: ./.github/workflows/gitleaks.yml
   validation:
     name: Repository Validation
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/validate.yml
   web-ui:
     name: Web UI

@@ -12,8 +12,9 @@ import asyncio
 import json
 import mimetypes
 from collections.abc import Awaitable, Callable, Mapping
+from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Literal, cast
 from urllib.parse import parse_qs
 
 from heartwood.gateway._gateway import SessionGateway
@@ -131,31 +132,45 @@ class GatewayAsgiApp:
                 ],
             }
         )
-        stream = self.gateway.websocket(session_id=session_id, after_sequence=after_sequence)
-        await _send_sse_events(send, stream.receive())
-
-        while not stream.closed:
-            next_events = cast(asyncio.Future[Any], asyncio.create_task(stream.receive_next()))
-            next_message = cast(asyncio.Future[Any], asyncio.ensure_future(receive()))
-            done, pending = await asyncio.wait(
-                {next_events, next_message},
-                return_when=asyncio.FIRST_COMPLETED,
+        stream, snapshot = await asyncio.to_thread(
+            partial(
+                self.gateway.open_event_stream,
+                session_id=session_id,
+                after_sequence=after_sequence,
             )
-            if next_message in done:
-                message = cast(AsgiMessage, next_message.result())
-                next_events.cancel()
-                await _drain_cancelled(next_events)
-                if _message_type(message) == "http.disconnect":
-                    stream.close()
+        )
+        try:
+            last_sequence = snapshot.projection.revision
+            await _send_sse_events(
+                send,
+                snapshot.events,
+                projection=snapshot.projection.safe_dict(),
+            )
+
+            while not stream.closed:
+                signal = await _wait_for_stream_signal(
+                    stream.receive_next,
+                    receive,
+                    disconnect_type="http.disconnect",
+                )
+                if signal == "disconnect":
                     return
-            if next_events in done:
-                events = cast(tuple[SessionEvent, ...], next_events.result())
-                next_message.cancel()
-                await _drain_cancelled(next_message)
-                await _send_sse_events(send, events)
-            for task in pending:
-                task.cancel()
-                await _drain_cancelled(task)
+                if signal == "update":
+                    snapshot = await asyncio.to_thread(
+                        partial(
+                            self.gateway.session_snapshot,
+                            session_id=session_id,
+                            after_sequence=last_sequence,
+                        )
+                    )
+                    last_sequence = snapshot.projection.revision
+                    await _send_sse_events(
+                        send,
+                        snapshot.events,
+                        projection=snapshot.projection.safe_dict(),
+                    )
+        finally:
+            stream.close()
 
     async def _handle_websocket(
         self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend
@@ -176,35 +191,45 @@ class GatewayAsgiApp:
             return
 
         await send({"type": "websocket.accept"})
-        stream = self.gateway.websocket(session_id=route, after_sequence=after)
-        await _send_websocket_events(send, stream.receive())
+        stream, snapshot = await asyncio.to_thread(
+            partial(
+                self.gateway.open_event_stream,
+                session_id=route,
+                after_sequence=after,
+            )
+        )
+        try:
+            last_sequence = snapshot.projection.revision
+            await _send_websocket_events(
+                send,
+                snapshot.events,
+                projection=snapshot.projection.safe_dict(),
+            )
 
-        while not stream.closed:
-            next_events = cast(
-                asyncio.Future[Any],
-                asyncio.create_task(stream.receive_next()),
-            )
-            next_message = cast(asyncio.Future[Any], asyncio.ensure_future(receive()))
-            tasks = {next_events, next_message}
-            done, pending = await asyncio.wait(
-                tasks,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if next_message in done:
-                message = cast(AsgiMessage, next_message.result())
-                next_events.cancel()
-                await _drain_cancelled(next_events)
-                if _message_type(message) == "websocket.disconnect":
-                    stream.close()
+            while not stream.closed:
+                signal = await _wait_for_stream_signal(
+                    stream.receive_next,
+                    receive,
+                    disconnect_type="websocket.disconnect",
+                )
+                if signal == "disconnect":
                     return
-            if next_events in done:
-                events = cast(tuple[SessionEvent, ...], next_events.result())
-                next_message.cancel()
-                await _drain_cancelled(next_message)
-                await _send_websocket_events(send, events)
-            for task in pending:
-                task.cancel()
-                await _drain_cancelled(task)
+                if signal == "update":
+                    snapshot = await asyncio.to_thread(
+                        partial(
+                            self.gateway.session_snapshot,
+                            session_id=route,
+                            after_sequence=last_sequence,
+                        )
+                    )
+                    last_sequence = snapshot.projection.revision
+                    await _send_websocket_events(
+                        send,
+                        snapshot.events,
+                        projection=snapshot.projection.safe_dict(),
+                    )
+        finally:
+            stream.close()
 
 
 async def _read_http_body(receive: AsgiReceive) -> bytes:
@@ -219,10 +244,16 @@ async def _read_http_body(receive: AsgiReceive) -> bytes:
     return b"".join(chunks)
 
 
-async def _send_websocket_events(send: AsgiSend, events: tuple[SessionEvent, ...]) -> None:
-    if not events:
-        return
-    payload = {"events": [event.model_dump(mode="json") for event in events]}
+async def _send_websocket_events(
+    send: AsgiSend,
+    events: tuple[SessionEvent, ...],
+    *,
+    projection: Mapping[str, object],
+) -> None:
+    payload = {
+        "events": [event.model_dump(mode="json") for event in events],
+        "projection": projection,
+    }
     await send(
         {
             "type": "websocket.send",
@@ -231,8 +262,16 @@ async def _send_websocket_events(send: AsgiSend, events: tuple[SessionEvent, ...
     )
 
 
-async def _send_sse_events(send: AsgiSend, events: tuple[SessionEvent, ...]) -> None:
-    payload = {"events": [event.model_dump(mode="json") for event in events]}
+async def _send_sse_events(
+    send: AsgiSend,
+    events: tuple[SessionEvent, ...],
+    *,
+    projection: Mapping[str, object],
+) -> None:
+    payload = {
+        "events": [event.model_dump(mode="json") for event in events],
+        "projection": projection,
+    }
     body = (
         f"event: heartwood-session-events\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
     ).encode()
@@ -286,11 +325,33 @@ async def _send_static_response(
     await send({"type": "http.response.body", "body": body})
 
 
-async def _drain_cancelled(task: asyncio.Future[Any]) -> None:
+async def _wait_for_stream_signal(
+    receive_update: Callable[[], Awaitable[object]],
+    receive_message: AsgiReceive,
+    *,
+    disconnect_type: str,
+) -> Literal["disconnect", "message", "update"]:
+    update_task: asyncio.Future[object] = asyncio.ensure_future(receive_update())
+    message_task: asyncio.Future[AsgiMessage] = asyncio.ensure_future(receive_message())
+    tasks = (update_task, message_task)
     try:
-        await task
-    except asyncio.CancelledError:
-        return
+        done, _pending = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if message_task in done:
+            message = message_task.result()
+            if _message_type(message) == disconnect_type:
+                return "disconnect"
+        if update_task in done:
+            update_task.result()
+            return "update"
+        return "message"
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _path_with_query(scope: AsgiScope, *, path: str | None = None) -> str:

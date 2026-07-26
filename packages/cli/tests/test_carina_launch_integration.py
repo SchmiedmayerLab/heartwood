@@ -6,14 +6,19 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import select
 import subprocess
 import sys
 import textwrap
+import time
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway import (
@@ -41,6 +46,92 @@ def _write_model_snapshot(root: Path) -> None:
     weights.write_bytes(b"synthetic-carina-model")
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     (root / "SHA256SUMS").write_text(f"{digest}  weights.safetensors\n", encoding="utf-8")
+
+
+def _read_pty(fd: int) -> bytes:
+    try:
+        return os.read(fd, 65_536)
+    except OSError as error:
+        if error.errno == errno.EIO:
+            return b""
+        raise
+
+
+def _run_with_pty(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    user_input: str,
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    master, slave = os.openpty()
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+    output = bytearray()
+    deadline = time.monotonic() + timeout
+    try:
+        os.write(master, user_input.encode())
+        while process.poll() is None:
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
+            readable, _, _ = select.select([master], [], [], 0.1)
+            if readable:
+                chunk = _read_pty(master)
+                if not chunk:
+                    break
+                output.extend(chunk)
+        if process.poll() is None:
+            process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        while True:
+            readable, _, _ = select.select([master], [], [], 0)
+            if not readable:
+                break
+            chunk = _read_pty(master)
+            if not chunk:
+                break
+            output.extend(chunk)
+    finally:
+        os.close(master)
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        stdout=output.decode(errors="replace"),
+        stderr="",
+    )
+
+
+def test_read_pty_treats_linux_end_of_file_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_end_of_file(_fd: int, _size: int) -> bytes:
+        raise OSError(errno.EIO, "synthetic PTY end of file")
+
+    monkeypatch.setattr(os, "read", raise_end_of_file)
+
+    assert _read_pty(1) == b""
+
+
+def test_read_pty_preserves_unexpected_io_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_bad_descriptor(_fd: int, _size: int) -> bytes:
+        raise OSError(errno.EBADF, "synthetic bad descriptor")
+
+    monkeypatch.setattr(os, "read", raise_bad_descriptor)
+
+    with pytest.raises(OSError, match="synthetic bad descriptor"):
+        _read_pty(1)
 
 
 def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
@@ -180,13 +271,135 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         )
 
         class Handler(BaseHTTPRequestHandler):
+            call_count = 0
+
             def do_GET(self):
-                if self.path != "/v1/models":
+                if self.path == "/health":
+                    payload = b"ok"
+                elif self.path == "/v1/models":
+                    payload = json.dumps({"data": [{"id": model_id}]}).encode()
+                else:
                     self.send_error(404)
                     return
-                payload = json.dumps({"data": [{"id": model_id}]}).encode()
                 self.send_response(200)
-                self.send_header("Content-Type", "application/json")
+                self.send_header(
+                    "Content-Type",
+                    "application/json" if self.path == "/v1/models" else "text/plain",
+                )
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_POST(self):
+                if self.path != "/v1/chat/completions":
+                    self.send_error(404)
+                    return
+                content_length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(content_length)
+                type(self).call_count += 1
+                (runtime / "synthetic-vllm-call-count").write_text(
+                    f"{type(self).call_count}\n",
+                    encoding="utf-8",
+                )
+                if type(self).call_count == 1:
+                    arguments = json.dumps(
+                        {
+                            "command": "create",
+                            "path": str(Path.cwd() / "carina-agent-e2e.txt"),
+                            "file_text": "carina-agent-e2e-ok\n",
+                            "security_risk": "LOW",
+                            "summary": "Create the synthetic Carina acceptance file",
+                        }
+                    )
+                    chunks = [
+                        {
+                            "id": "chatcmpl-carina-tool",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": model_id,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "role": "assistant",
+                                        "tool_calls": [
+                                            {
+                                                "index": 0,
+                                                "id": "call-carina-file",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "file_editor",
+                                                    "arguments": arguments,
+                                                },
+                                            }
+                                        ],
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ],
+                        },
+                        {
+                            "id": "chatcmpl-carina-tool",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": model_id,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "tool_calls",
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": 32,
+                                "completion_tokens": 8,
+                                "total_tokens": 40,
+                            },
+                        },
+                    ]
+                else:
+                    chunks = [
+                        {
+                            "id": "chatcmpl-carina-finish",
+                            "object": "chat.completion.chunk",
+                            "created": 2,
+                            "model": model_id,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "role": "assistant",
+                                        "content": "The synthetic Carina file was created.",
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ],
+                        },
+                        {
+                            "id": "chatcmpl-carina-finish",
+                            "object": "chat.completion.chunk",
+                            "created": 2,
+                            "model": model_id,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "usage": {
+                                "prompt_tokens": 48,
+                                "completion_tokens": 8,
+                                "total_tokens": 56,
+                            },
+                        },
+                    ]
+                body = "".join(
+                    f"data: {json.dumps(chunk)}\n\n" for chunk in chunks
+                ) + "data: [DONE]\n\n"
+                payload = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
@@ -214,7 +427,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         "HEARTWOOD_TEST_SCRATCH": str(scratch),
         "HEARTWOOD_TEST_SECRET": "must-not-cross-allocation",
     }
-    completed = subprocess.run(
+    completed = _run_with_pty(
         (
             str(heartwood_python),
             "-m",
@@ -228,11 +441,14 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
             "--startup-timeout",
             "10",
         ),
-        check=False,
-        capture_output=True,
-        text=True,
-        input="/status\n/exit\n",
-        timeout=30,
+        user_input=(
+            "Create carina-agent-e2e.txt with the exact requested synthetic marker.\n"
+            "/allow\n"
+            "/replay\n"
+            "/audit-export\n"
+            "/exit\n"
+        ),
+        timeout=90,
         env=env,
         cwd=project_root,
     )
@@ -243,6 +459,19 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
     assert "[6/6] Open session carina-integration" in completed.stdout
     assert "Readiness: ready" in completed.stdout
     assert "recovery-required" not in completed.stdout
+    assert "Review 1 action as one OpenHands action set" in completed.stdout
+    assert "Action set approved (1 action)" in completed.stdout
+    assert "The synthetic Carina file was created." in completed.stdout
+    assert (project_root / "carina-agent-e2e.txt").read_text(
+        encoding="utf-8"
+    ) == "carina-agent-e2e-ok\n"
+    audit_export = project.sessions_dir / "carina-integration" / "audit-export.jsonl"
+    assert audit_export.is_file()
+    assert all(
+        json.loads(line)["session_id"] == "carina-integration"
+        for line in audit_export.read_text(encoding="utf-8").splitlines()
+    )
+    assert (project.runtime_dir / "synthetic-vllm-call-count").read_text(encoding="utf-8") == "2\n"
     export_value = srun_log.read_text(encoding="utf-8")
     assert "HEARTWOOD_HOME" not in export_value
     assert "HEARTWOOD_MODEL_CACHE" not in export_value

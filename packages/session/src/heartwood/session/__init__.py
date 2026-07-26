@@ -26,19 +26,16 @@ from heartwood.session._contracts import (
     new_command_id,
     validate_session_id,
 )
-from heartwood.session._projections import PendingToolAction, pending_tool_actions
 
 __all__ = [
     "CommandKind",
     "EventKind",
     "JsonValue",
-    "PendingToolAction",
     "SessionCommand",
     "SessionEvent",
     "__version__",
     "compute_session_event_hash",
     "new_command_id",
-    "pending_tool_actions",
     "validate_session_id",
 ]
 

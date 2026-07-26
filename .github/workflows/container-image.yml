@@ -55,6 +55,7 @@ jobs:
         uses: docker/bake-action@v7
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
+          GIT_SHA: ${{ github.sha }}
         with:
           files: docker-bake.hcl
           source: .
@@ -82,6 +83,16 @@ jobs:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
           DOCKER_PLATFORM: ${{ matrix.platform }}
         run: docker pull --platform "${DOCKER_PLATFORM}" "${CANDIDATE_REFERENCE}"
+      - name: Verify staged generic candidate revision
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          DOCKER_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          bash images/scripts/verify_image_revision.sh
+          "${CANDIDATE_REFERENCE}"
+          "${DOCKER_PLATFORM}"
+          "${EXPECTED_REVISION}"
       - name: Run staged host-user bind-mount smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
@@ -139,6 +150,10 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Set image name
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
@@ -156,10 +171,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create and verify immutable generic commit tag
-        id: commit
+      - name: Collect validated generic image references
+        id: candidates
         env:
-          GIT_SHA: ${{ github.sha }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
           sources=()
@@ -169,68 +183,15 @@ jobs:
             sources+=("${IMAGE_NAME}@sha256:${digest_value}")
           done
           test "${#sources[@]}" -eq 2
-          docker buildx imagetools create --progress=none --dry-run \
-            "${sources[@]}" > /tmp/generic-candidate-index.json
-          jq -e '
-            (([
-              .manifests[]
-              | select(
-                  .platform.os != "unknown"
-                  or .platform.architecture != "unknown"
-                )
-              | "\(.platform.os)/\(.platform.architecture)"
-            ] | sort) == ["linux/amd64", "linux/arm64"])
-            and all(
-              .manifests[];
-              (
-                .platform.os == "linux"
-                and (
-                  .platform.architecture == "amd64"
-                  or .platform.architecture == "arm64"
-                )
-              )
-              or (
-                .platform.os == "unknown"
-                and .platform.architecture == "unknown"
-                and .annotations["vnd.docker.reference.type"] == "attestation-manifest"
-              )
-            )
-          ' /tmp/generic-candidate-index.json
-          proposed_manifest="$(jq -cS '.manifests |= sort_by(.digest)' /tmp/generic-candidate-index.json)"
-          commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}"
-          if raw="$(docker buildx imagetools inspect --raw "${commit_ref}" 2>/dev/null)"; then
-            existing_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
-            if [ "${existing_manifest}" != "${proposed_manifest}" ]; then
-              echo "immutable generic commit tag already exists with a different manifest" >&2
-              exit 1
-            fi
-            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
-            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
-          else
-            docker buildx imagetools create \
-              --tag "${commit_ref}" \
-              "${sources[@]}"
-            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
-            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
-            raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
-            published_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
-            if [ "${published_manifest}" != "${proposed_manifest}" ]; then
-              echo "newly created generic commit tag does not match validated candidate manifest" >&2
-              exit 1
-            fi
-          fi
-          if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "generic commit tag returned an invalid image digest: ${commit_digest}" >&2
-            exit 1
-          fi
-          jq -e '
-            ([
-              .manifests[]
-              | select(.platform.os == "linux")
-              | "\(.platform.os)/\(.platform.architecture)"
-            ] | sort) == ["linux/amd64", "linux/arm64"]
-          ' <<<"${raw}"
-          echo "digest=${commit_digest}" >> "${GITHUB_OUTPUT}"
+          echo "references=${sources[*]}" >> "${GITHUB_OUTPUT}"
+      - name: Create and verify immutable generic commit tag
+        id: commit
+        uses: ./.github/actions/create-immutable-image-tag
+        with:
+          candidate-tag: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          candidate-references: ${{ steps.candidates.outputs.references }}
+          diagnostic-name: generic commit tag
+          validation-mode: linux-multi-platform-index
       - name: Promote generic moving tag
         env:
           COMMIT_DIGEST: ${{ steps.commit.outputs.digest }}
@@ -279,6 +240,7 @@ jobs:
         env:
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
           DOCKER_BUILD_RECORD_UPLOAD: false
+          GIT_SHA: ${{ github.sha }}
         with:
           files: docker-bake.hcl
           source: .
@@ -312,6 +274,15 @@ jobs:
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
         run: docker pull --platform linux/amd64 "${CANDIDATE_REFERENCE}"
+      - name: Verify staged Terra candidate revision
+        env:
+          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          bash images/scripts/verify_image_revision.sh
+          "${CANDIDATE_REFERENCE}"
+          linux/amd64
+          "${EXPECTED_REVISION}"
       - name: Run staged Terra Jupyter contract smoke
         env:
           CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
@@ -399,42 +370,24 @@ jobs:
           "${CANDIDATE_REFERENCE}"
       - name: Create and verify immutable Terra commit tag
         id: commit
+        uses: ./.github/actions/create-immutable-image-tag
+        with:
+          candidate-tag: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}-terra
+          candidate-references: ${{ steps.candidate.outputs.reference }}
+          candidate-digest: ${{ steps.candidate.outputs.digest }}
+          diagnostic-name: Terra commit tag
+          flatten: "true"
+          validation-mode: docker-v2
+      - name: Verify immutable Terra registry contract
         env:
-          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
-          CANDIDATE_REFERENCE: ${{ steps.candidate.outputs.reference }}
           GIT_SHA: ${{ github.sha }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-terra"
-          commit_tag_existed="false"
-          if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then
-            commit_tag_existed="true"
-            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
-          else
-            docker buildx imagetools create --prefer-index=false \
-              --tag "${commit_ref}" \
-              "${CANDIDATE_REFERENCE}"
-            inspect_output="$(docker buildx imagetools inspect "${commit_ref}")"
-            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
-          fi
-          if [[ ! "${commit_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Terra commit tag returned an invalid image digest: ${commit_digest}" >&2
-            exit 1
-          fi
-          if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
-            if [ "${commit_tag_existed}" = "true" ]; then
-              echo "immutable Terra commit tag already exists with a different digest" >&2
-            else
-              echo "newly created Terra commit tag does not match staged candidate digest" >&2
-            fi
-            exit 1
-          fi
           python3 images/platform/scripts/verify_registry_manifest.py \
             --manifest images/platforms.toml \
             --platform terra \
             --image-name "${IMAGE_NAME}" \
             --reference "sha-${GIT_SHA}-terra"
-          echo "digest=${commit_digest}" >> "${GITHUB_OUTPUT}"
       - name: Promote Terra moving tag
         env:
           COMMIT_DIGEST: ${{ steps.commit.outputs.digest }}

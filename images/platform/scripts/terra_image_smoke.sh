@@ -75,9 +75,10 @@ assert gateway.project_readiness()["project_root"] == str(expected)
 
 session = NotebookSession(session_id="terra-image-smoke")
 assert session.project.root == expected
-view = session.pause()
+view = session.replay()
 assert view.session_id == "terra-image-smoke"
-assert view.paused
+assert view.lifecycle.status == "idle"
+assert view.available_commands == ("chat",)
 capabilities = gateway.platform_capabilities()
 assert capabilities["interfaces"] == ["terminal", "notebook"]
 assert capabilities["browser_route"] == "unavailable"

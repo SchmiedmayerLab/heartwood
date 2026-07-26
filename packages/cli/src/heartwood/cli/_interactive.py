@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -17,23 +18,21 @@ from heartwood.gateway import (
     ACTION_MODE_OPTIONS,
     ActionSettingsError,
     ModelSettingsError,
+    ProjectionApprovalGroup,
     SessionGateway,
+    SessionProjection,
     action_mode_label,
+    action_risk_label,
+    action_tool_label,
 )
 from heartwood.schemas import ActionSettingsResponse
 from heartwood.session import (
     CommandKind,
-    EventKind,
     JsonValue,
-    PendingToolAction,
     SessionCommand,
     SessionEvent,
     new_command_id,
-    pending_tool_actions,
 )
-
-PendingAction = PendingToolAction
-pending_actions = pending_tool_actions
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +40,7 @@ class InteractionResult:
     """One user interaction projected for a terminal client."""
 
     events: tuple[SessionEvent, ...] = ()
+    projection: SessionProjection | None = None
     message: str | None = None
     exit_requested: bool = False
     error: bool = False
@@ -49,8 +49,11 @@ class InteractionResult:
     @property
     def failed(self) -> bool:
         """Return whether this interaction recorded an error."""
-        return self.error or any(
-            str(event.kind) == EventKind.ERROR_RECORDED.value for event in self.events
+        outcome = None if self.projection is None else self.projection.last_command_outcome
+        return (
+            self.error
+            or (self.projection is not None and self.projection.lifecycle.status == "error")
+            or (outcome is not None and outcome.status == "rejected")
         )
 
 
@@ -115,6 +118,7 @@ _COMMAND_ACTIVITIES = {
         guidance="Heartwood is waiting for the active project services to close safely.",
     ),
 }
+_STABLE_WAIT_TIMEOUT_SECONDS = 3600.0
 
 
 class InteractiveSession:
@@ -124,13 +128,36 @@ class InteractiveSession:
         self.gateway = gateway
         self.session_id = session_id
 
-    def replay(self) -> tuple[SessionEvent, ...]:
-        """Return the persisted conversation."""
-        return self.gateway.replay_events(session_id=self.session_id)
+    def replay(self) -> SessionProjection:
+        """Return the gateway-owned session projection."""
+        return self.gateway.session_projection(session_id=self.session_id)
 
-    def pending_actions(self) -> tuple[PendingAction, ...]:
-        """Return the unresolved members of the current OpenHands action batch."""
-        return pending_actions(self.replay())
+    def pending_approval(self) -> ProjectionApprovalGroup | None:
+        """Return the complete unresolved OpenHands action group."""
+        return self.replay().pending_approval
+
+    def wait_until_stable(
+        self,
+        *,
+        poll_interval: float = 0.1,
+        timeout: float = _STABLE_WAIT_TIMEOUT_SECONDS,
+    ) -> SessionProjection:
+        """Wait for a background run to reach an interactive boundary."""
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than zero")
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
+        deadline = time.monotonic() + timeout
+        while True:
+            projection = self.replay()
+            if projection.lifecycle.status != "running":
+                return projection
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"session {self.session_id} remained active for {timeout:g} seconds"
+                )
+            time.sleep(min(poll_interval, remaining))
 
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared project action-confirmation settings."""
@@ -148,9 +175,15 @@ class InteractiveSession:
         )
         if mode is None:
             raise ActionSettingsError(f"unsupported action confirmation mode: {value}")
-        if self.pending_actions():
+        projection = self.replay()
+        if projection.pending_approval is not None:
             raise ActionSettingsError(
                 "resolve the pending action set before changing the action-review mode"
+            )
+        if projection.lifecycle.status == "running":
+            raise ActionSettingsError(
+                "wait for the active task to reach a review point before changing "
+                "the action-review mode"
             )
         return self.gateway.select_action_confirmation_mode(mode)
 
@@ -160,7 +193,8 @@ class InteractiveSession:
         if not text:
             return InteractionResult()
         if not text.startswith("/"):
-            return InteractionResult(events=self._handle(CommandKind.CHAT, {"prompt": text}))
+            events = self._handle(CommandKind.CHAT, {"prompt": text})
+            return InteractionResult(events=events, projection=self.replay())
         try:
             parts = shlex.split(text)
         except ValueError:
@@ -176,20 +210,25 @@ class InteractiveSession:
                     error=True,
                 )
             kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
+            events = self._handle(
+                kind,
+                {"target_type": "action-set", "target_id": target},
+            )
             return InteractionResult(
-                events=self._handle(
-                    kind,
-                    {"target_type": "tool-call", "target_id": target},
-                )
+                events=events,
+                projection=self.replay(),
             )
         if directive == "/pause" and len(parts) == 1:
-            return InteractionResult(events=self._handle(CommandKind.PAUSE))
+            events = self._handle(CommandKind.PAUSE)
+            return InteractionResult(events=events, projection=self.replay())
         if directive == "/resume" and len(parts) == 1:
-            return InteractionResult(events=self._handle(CommandKind.RESUME))
+            events = self._handle(CommandKind.RESUME)
+            return InteractionResult(events=events, projection=self.replay())
         if directive == "/replay" and len(parts) == 1:
-            return InteractionResult(events=self.replay(), replace_transcript=True)
+            return InteractionResult(projection=self.replay(), replace_transcript=True)
         if directive == "/audit-export" and len(parts) == 1:
-            return InteractionResult(events=self._handle(CommandKind.AUDIT_EXPORT))
+            events = self._handle(CommandKind.AUDIT_EXPORT)
+            return InteractionResult(events=events, projection=self.replay())
         if directive == "/status" and len(parts) == 1:
             try:
                 return InteractionResult(message=format_model_status(self.gateway))
@@ -208,15 +247,10 @@ class InteractiveSession:
         return InteractionResult(message=f"Unknown command: {directive}")
 
     def _decision_target(self, requested_id: str | None) -> str | None:
-        actions = self.pending_actions()
-        if not actions:
+        approval = self.pending_approval()
+        if approval is None:
             return None
-        if requested_id is None:
-            return actions[0].tool_call_id
-        for action in actions:
-            if requested_id in {action.tool_call_id, action.request_id}:
-                return action.tool_call_id
-        return requested_id
+        return approval.group_id if requested_id is None else requested_id
 
     def _handle(
         self,
@@ -257,6 +291,96 @@ def format_action_arguments(arguments: dict[str, JsonValue]) -> tuple[str, ...]:
     return tuple(json.dumps(arguments, indent=2, sort_keys=True).splitlines())
 
 
+def format_projection_lines(
+    projection: SessionProjection,
+    *,
+    include_pending_review: bool = True,
+    after_sequence: int | None = None,
+) -> tuple[str, ...]:
+    """Render the shared projection without reconstructing session state.
+
+    ``after_sequence`` filters only persisted conversation messages. Transient
+    streaming text and current runtime state are always rendered in full.
+    """
+    lines = list(
+        format_conversation_lines(
+            projection,
+            after_sequence=after_sequence,
+        )
+    )
+    if projection.streaming_text:
+        lines.append(f"[...] Agent: {projection.streaming_text}")
+    lines.extend(format_runtime_lines(projection))
+    approval = projection.pending_approval
+    if approval is not None and include_pending_review:
+        label = "action" if len(approval.actions) == 1 else "actions"
+        lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
+        for index, action in enumerate(approval.actions, 1):
+            tool_label = action_tool_label(action.tool_name)
+            risk_label = action_risk_label(action.risk or "unknown")
+            lines.append(f"  {index}. {action.summary or tool_label} [{tool_label} · {risk_label}]")
+            if argument_lines := format_action_arguments(action.arguments):
+                lines.append("     Arguments:")
+                lines.extend(f"       {line}" for line in argument_lines)
+        lines.extend(
+            (
+                "Allow the complete set once: /allow",
+                "Reject the complete set: /reject",
+            )
+        )
+    return tuple(lines)
+
+
+def format_conversation_lines(
+    projection: SessionProjection,
+    *,
+    after_sequence: int | None = None,
+) -> tuple[str, ...]:
+    """Render persisted conversation messages after an optional sequence cursor."""
+    lines: list[str] = []
+    for message in projection.conversation:
+        if after_sequence is not None and message.sequence <= after_sequence:
+            continue
+        prefix = f"[{message.sequence:03d}]"
+        lines.append(f"{prefix} {message.label}: {message.content}")
+        if message.detail:
+            lines.append(f"  {message.detail}")
+        if message.technical_detail:
+            lines.extend(f"    {line}" for line in message.technical_detail.splitlines())
+    return tuple(lines)
+
+
+def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
+    """Render current task, usage, and specialist state from the projection."""
+    lines: list[str] = []
+    if projection.task_plan:
+        lines.append("Task plan:")
+        lines.extend(
+            f"  [{'x' if task.status == 'done' else '·'}] {task.title}"
+            for task in projection.task_plan
+        )
+    if projection.usage is not None:
+        usage = projection.usage
+        total_tokens = usage.prompt_tokens + usage.completion_tokens
+        lines.append(
+            f"Model activity: {usage.call_count} calls · "
+            f"{total_tokens:,} tokens · {usage.model_name}"
+        )
+        lines.extend(
+            f"  {item.usage_id}: {item.call_count} calls · "
+            f"{item.prompt_tokens + item.completion_tokens:,} tokens"
+            for item in projection.usage_by_purpose
+        )
+    if projection.subagents:
+        lines.append("Specialists:")
+        lines.extend(
+            f"  {item.agent_name}: {item.status} · invocation {item.invocation_id}"
+            f"{f' · task {item.task_id}' if item.task_id is not None else ''}"
+            for item in projection.subagents
+        )
+    return tuple(lines)
+
+
 def format_model_status(gateway: SessionGateway) -> str:
     """Format the active model route without exposing credentials."""
     validation = gateway.validate_model_profile()
@@ -275,6 +399,8 @@ def format_model_status(gateway: SessionGateway) -> str:
 def format_action_settings(settings: ActionSettingsResponse) -> str:
     """Format gateway-owned action-mode metadata for terminal interfaces."""
     lines = ["Action review", "", settings["scope_description"], ""]
+    if not settings["change_allowed"] and settings["change_blocked_reason"]:
+        lines.extend((settings["change_blocked_reason"], ""))
     selected = settings["confirmation_mode"]
     for item in settings["modes"]:
         marker = "*" if item["mode"] == selected else " "

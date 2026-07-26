@@ -15,16 +15,29 @@ from typing import cast
 import pytest
 
 from heartwood.adapters.platform import GenericPlatformAdapter
-from heartwood.core_adapter import SessionResult
+from heartwood.core_adapter import (
+    BackendLifecycle,
+    BackendLifecycleEvent,
+    SessionResult,
+)
 from heartwood.gateway import (
     CredentialStore,
     ModelCatalogService,
     ModelProfile,
     ProjectContext,
+    ProjectionApprovalAction,
+    ProjectionApprovalGroup,
+    ProjectionLifecycleState,
+    ProjectionMessage,
+    ProjectionSubagent,
+    ProjectionTask,
+    ProjectionUsage,
     ProviderModel,
     RestGateway,
     RestRequest,
     SessionGateway,
+    SessionLifecycle,
+    SessionProjection,
 )
 from heartwood.notebook import (
     NotebookSession,
@@ -33,24 +46,23 @@ from heartwood.notebook import (
     render_widgets,
 )
 from heartwood.notebook._widgets import WidgetSpec
-from heartwood.session import EventKind, SessionCommand, SessionEvent
+from heartwood.session import SessionCommand
 
 
 class _CountingGateway:
     def __init__(self) -> None:
         self.commands: list[SessionCommand] = []
-        self.replay_calls = 0
+        self.projection_calls = 0
         self.stopped = False
+        self.projection = SessionProjection(
+            session_id="notebook-counting",
+            event_count=0,
+            revision=-1,
+        )
 
-    def replay_events(
-        self,
-        *,
-        session_id: str,
-        after_sequence: int | None = None,
-    ) -> tuple[SessionEvent, ...]:
-        _ = (session_id, after_sequence)
-        self.replay_calls += 1
-        return ()
+    def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
+        self.projection_calls += 1
+        return self.projection.model_copy(update={"session_id": session_id})
 
     def handle(self, command: SessionCommand) -> SessionResult:
         self.commands.append(command)
@@ -101,23 +113,21 @@ class _ModelGateway(_CountingGateway):
 def test_notebook_session_observes_gateway_events(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path, "notebook-session")
 
-    paused = session.pause()
     turn = session.chat("inspect the synthetic workspace")
-    pending = turn.approval_controls[-1]
-    approved = session.approve(tool_call_id=pending.target_id)
+    pending = turn.pending_approval
+    assert pending is not None
+    approved = session.approve(group_id=pending.group_id)
     exported = session.audit_export()
 
-    assert paused.paused
-    assert turn.policy_status[-1].decision == "allow"
-    assert turn.chat[0].role == "user"
-    assert turn.chat[0].content == "inspect the synthetic workspace"
-    assert turn.chat[1].role == "assistant"
-    assert pending.target_type == "tool-call"
+    assert turn.context.model_decision == "allow"
+    assert turn.conversation[0].role == "user"
+    assert turn.conversation[0].content == "inspect the synthetic workspace"
+    assert any(message.role == "agent" for message in turn.conversation)
+    assert pending.decision_scope == "all"
     assert pending.decision is None
-    assert approved.approval_controls[-1].decision == "approved"
-    assert not any(control.target_type == "model-call" for control in turn.approval_controls)
-    assert exported.export_actions[-1].path.endswith("audit-export.jsonl")
-    assert exported.event_count == len(session.gateway.replay_events(session_id="notebook-session"))
+    assert approved.pending_approval is None
+    assert exported["filename"] == "notebook-session-audit.jsonl"
+    assert '"event_type":"audit.export.recorded"' in str(exported["content"])
 
 
 def test_notebook_session_adopts_and_validates_an_injected_gateway_project(
@@ -140,77 +150,57 @@ def test_notebook_session_adopts_and_validates_an_injected_gateway_project(
         NotebookSession(project=ProjectContext(other_root), gateway=gateway)
 
 
-def test_notebook_session_coalesces_approval_controls(tmp_path: Path) -> None:
+def test_notebook_session_uses_one_atomic_approval_group(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path, "notebook-approvals")
 
     run = session.chat("inspect the workspace")
+    approval = run.pending_approval
+    assert approval is not None
 
-    keys = [(control.target_type, control.target_id) for control in run.approval_controls]
-    assert len(keys) == len(set(keys))
-    tool_control = next(
-        control for control in run.approval_controls if control.target_type == "tool-call"
-    )
-    assert tool_control.label.startswith("Review")
+    denied = session.deny(group_id=approval.group_id)
 
-    approved = session.deny(tool_call_id=tool_control.target_id)
-    matching = [
-        control
-        for control in approved.approval_controls
-        if (
-            control.target_type == tool_control.target_type
-            and control.target_id == tool_control.target_id
-        )
-    ]
-
-    assert len(matching) == 1
-    assert matching[0].decision == "denied"
+    assert approval.decision_scope == "all"
+    assert denied.pending_approval is None
 
 
 def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
-    events = tuple(
-        SessionEvent(
-            event_id=f"event-{index}",
-            session_id="notebook-batch",
-            sequence=index,
-            kind=EventKind.CONFIRMATION_REQUESTED,
-            occurred_at="2026-07-13T00:00:00Z",
-            payload={
-                "request": {
-                    "request_id": f"request-{index}",
-                    "tool_call_id": f"tool-{index}",
-                    "tool_name": tool_name,
-                    "risk": risk,
-                    "summary": summary,
-                    "arguments": (
-                        {"command": "python run.py --output cohort-summary.json"}
-                        if tool_name == "terminal"
-                        else {}
-                    ),
-                }
-            },
-        )
-        for index, (tool_name, risk, summary) in enumerate(
-            (
-                ("terminal", "medium", "Run the synthetic cohort command"),
-                ("file_editor", "unknown", "Write the aggregate result"),
+    projection = SessionProjection(
+        session_id="notebook-batch",
+        event_count=4,
+        revision=3,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-synthetic",
+            actions=(
+                ProjectionApprovalAction(
+                    target_id="tool-1",
+                    tool_name="terminal",
+                    risk="medium",
+                    summary="Run the synthetic cohort command",
+                    arguments={"command": "python run.py --output cohort-summary.json"},
+                ),
+                ProjectionApprovalAction(
+                    target_id="tool-2",
+                    tool_name="file_editor",
+                    risk="unknown",
+                    summary="Write the aggregate result",
+                ),
             ),
-            1,
-        )
+        ),
     )
 
-    view_model = build_view_model(events)
-    pending = view_model.approval_controls
+    view_model = build_view_model(projection)
+    pending = view_model.pending_approval
+    assert pending is not None
     approval_items = next(
         section.items
         for section in build_widget_spec(view_model)
         if section.title == "Action Review"
     )
 
-    assert len(pending) == 1
-    assert pending[0].target_id == "tool-1"
-    assert [action.target_id for action in pending[0].actions] == ["tool-1", "tool-2"]
+    assert pending.group_id == "action-set-synthetic"
+    assert [action.target_id for action in pending.actions] == ["tool-1", "tool-2"]
     assert approval_items == (
-        "Review complete action set (2 actions): pending",
+        "Review action set action-set-synthetic (2 actions): pending",
         (
             "1. Run the synthetic cohort command\n"
             "Terminal Command · Medium Risk\n"
@@ -413,6 +403,141 @@ def test_notebook_and_browser_transport_share_gateway_setup_projections(tmp_path
         assert json.loads(json.dumps(gateway_value)) == response.body
 
 
+def test_notebook_and_browser_transport_share_the_exact_session_projection(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    gateway = SessionGateway(project=project, env={}, backend_id="deterministic")
+    notebook = NotebookSession(
+        project=project,
+        session_id="notebook-browser-parity",
+        gateway=gateway,
+    )
+    rest = RestGateway(gateway)
+
+    notebook.chat("inspect the synthetic workspace")
+    notebook_projection = notebook.replay().projection
+    response = rest.handle(
+        RestRequest(
+            method="GET",
+            path="/sessions/notebook-browser-parity/projection",
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.body == notebook_projection.safe_dict()
+
+
+def test_notebook_replay_does_not_construct_a_backend_or_mutate_completed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "notebook-storage-replay"
+    writer = _deterministic_session(tmp_path, session_id)
+    pending = writer.chat("Create one synthetic output")
+    assert pending.pending_approval is not None
+    writer.approve(group_id=pending.pending_approval.group_id)
+    writer.gateway._service(session_id)._accept_backend_events(
+        (
+            BackendLifecycleEvent(
+                lifecycle=BackendLifecycle.FINISHED,
+                source_event_id="synthetic-completed-session",
+            ),
+        )
+    )
+    completed = writer.replay()
+    assert completed.lifecycle.status == SessionLifecycle.FINISHED
+    before = writer.gateway.replay_events(session_id=session_id)
+    writer.close()
+
+    reader_gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="auto",
+    )
+    monkeypatch.setattr(
+        reader_gateway,
+        "_service",
+        lambda _session_id: pytest.fail("notebook replay constructed an agent backend"),
+    )
+    reader = NotebookSession(
+        project=ProjectContext(tmp_path),
+        session_id=session_id,
+        gateway=reader_gateway,
+    )
+
+    replayed = reader.replay()
+    after = reader_gateway.replay_events(session_id=session_id)
+
+    assert replayed.lifecycle.status == SessionLifecycle.FINISHED
+    assert replayed.pending_approval is None
+    assert after == before
+    reader.close()
+
+
+def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None:
+    projection = SessionProjection(
+        session_id="notebook-complete-projection",
+        event_count=8,
+        revision=7,
+        conversation=(
+            ProjectionMessage(
+                id="message-1",
+                sequence=1,
+                role="agent",
+                label="Agent",
+                content="I am checking the cohort.",
+            ),
+        ),
+        lifecycle=ProjectionLifecycleState(
+            status=SessionLifecycle.RUNNING,
+            can_pause=True,
+            can_steer=True,
+        ),
+        task_plan=(
+            ProjectionTask(
+                title="Validate the synthetic cohort",
+                status="in-progress",
+            ),
+        ),
+        usage=ProjectionUsage(
+            usage_id="total",
+            model_name="synthetic-model",
+            call_count=2,
+            prompt_tokens=128,
+            completion_tokens=32,
+        ),
+        subagents=(
+            ProjectionSubagent(
+                invocation_id="task-call-1",
+                task_id="task-1",
+                agent_name="research-planner",
+                status="running",
+                parent_session_id="notebook-complete-projection",
+                parent_action_id="action-1",
+            ),
+        ),
+        streaming_text="Checking column types",
+        available_commands=("chat", "pause"),
+    )
+
+    view_model = build_view_model(projection)
+    sections = {section.title: section.items for section in build_widget_spec(view_model)}
+
+    assert view_model.projection is projection
+    assert view_model.lifecycle is projection.lifecycle
+    assert view_model.task_plan is projection.task_plan
+    assert view_model.usage is projection.usage
+    assert view_model.subagents is projection.subagents
+    assert view_model.streaming_text == "Checking column types"
+    assert sections["Conversation"][-1] == "Agent (working): Checking column types"
+    assert sections["Tasks"] == ("in-progress: Validate the synthetic cohort",)
+    assert sections["Specialists"] == ("research-planner: running (task-call-1)",)
+    assert sections["Runtime"][-1] == (
+        "Usage: 128 input, 32 output tokens across 2 calls (synthetic-model)"
+    )
+
+
 def test_notebook_initialization_does_not_advertise_a_terra_web_route(
     tmp_path: Path,
 ) -> None:
@@ -443,15 +568,48 @@ def test_notebook_session_uses_unique_commands_without_duplicate_replay(
         gateway=cast(SessionGateway, gateway),
     )
 
-    assert gateway.replay_calls == 1
+    assert gateway.projection_calls == 0
     session.chat("summarize")
     session.pause()
 
-    assert gateway.replay_calls == 3
+    assert gateway.projection_calls == 2
     command_ids = [command.command_id for command in gateway.commands]
     assert command_ids[0].startswith("notebook-counting-chat-")
     assert command_ids[1].startswith("notebook-counting-pause-")
     assert len(set(command_ids)) == 2
+
+
+def test_notebook_approval_command_targets_the_projected_action_group(
+    tmp_path: Path,
+) -> None:
+    gateway = _CountingGateway()
+    gateway.projection = SessionProjection(
+        session_id="notebook-approval-command",
+        event_count=1,
+        revision=0,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-123",
+            actions=(
+                ProjectionApprovalAction(
+                    target_id="tool-123",
+                    tool_name="file_editor",
+                    summary="Write the requested file",
+                ),
+            ),
+        ),
+    )
+    session = NotebookSession(
+        project=ProjectContext(tmp_path),
+        session_id="notebook-approval-command",
+        gateway=cast(SessionGateway, gateway),
+    )
+
+    session.approve(group_id="action-set-123")
+
+    assert gateway.commands[-1].payload == {
+        "target_type": "action-set",
+        "target_id": "action-set-123",
+    }
 
 
 def test_notebook_context_releases_the_shared_gateway(tmp_path: Path) -> None:
@@ -467,33 +625,45 @@ def test_notebook_context_releases_the_shared_gateway(tmp_path: Path) -> None:
 
 
 def test_notebook_pause_resume_updates_view_state(tmp_path: Path) -> None:
-    session = NotebookSession(project=ProjectContext(tmp_path), session_id="notebook-lifecycle")
+    session = _deterministic_session(tmp_path, "notebook-lifecycle")
+    session.gateway.project.initialize()
+    session.gateway._service(session.session_id)._accept_backend_events(
+        (
+            BackendLifecycleEvent(
+                lifecycle=BackendLifecycle.RUNNING,
+                source_event_id="synthetic-running",
+            ),
+        )
+    )
 
     paused = session.pause()
     resumed = session.resume()
 
     assert paused.paused is True
     assert resumed.paused is False
+    assert paused.lifecycle.status == SessionLifecycle.PAUSED
+    assert resumed.lifecycle.status == SessionLifecycle.RUNNING
 
 
 def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path, "notebook-widgets")
     session.pause()
     session.chat("Build the synthetic target-condition cohort and report quality checks.")
-    view_model = session.audit_export()
+    session.audit_export()
+    view_model = session.replay()
 
     sections = build_widget_spec(view_model)
     rendered = render_widgets(view_model)
 
     assert [section.title for section in sections] == [
-        "Chat",
+        "Conversation",
         "Activity",
-        "Skills",
         "Action Review",
-        "Policy",
-        "Exports",
+        "Tasks",
+        "Runtime",
+        "Specialists",
     ]
-    assert sections[2].items == ()
+    assert sections[3].items == ()
     assert isinstance(rendered, object)
 
 

@@ -9,22 +9,37 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { compile } from "json-schema-to-typescript";
 import { format, resolveConfig } from "prettier";
 
 const scriptDirectory = dirname(resolve(process.argv[1]));
 const repositoryRoot = resolve(scriptDirectory, "../../..");
-const schemaExporter = join(
-  repositoryRoot,
-  "packages/schemas/scripts/export_api_schema.py",
-);
-const generatedTypes = join(
-  repositoryRoot,
-  "packages/webui/src/apiTypes.generated.ts",
-);
 const checkOnly = process.argv.includes("--check");
+const contracts = [
+  {
+    exporter: join(
+      repositoryRoot,
+      "packages/schemas/scripts/export_api_schema.py",
+    ),
+    output: join(repositoryRoot, "packages/webui/src/apiTypes.generated.ts"),
+    rootName: "HeartwoodApiContract",
+    sourceLabel: "public Pydantic API contract",
+  },
+  {
+    exporter: join(
+      repositoryRoot,
+      "packages/gateway/scripts/export_session_projection_schema.py",
+    ),
+    output: join(
+      repositoryRoot,
+      "packages/webui/src/sessionProjection.generated.ts",
+    ),
+    rootName: "SessionProjection",
+    sourceLabel: "gateway-owned Pydantic session projection",
+  },
+];
 
 const pythonCandidates = [
   process.env.HEARTWOOD_PYTHON,
@@ -37,19 +52,27 @@ const python =
   pythonCandidates.find(
     (candidate) => candidate === "python3" || existsSync(candidate),
   ) ?? "python3";
-const exported = spawnSync(python, [schemaExporter], {
-  cwd: repositoryRoot,
-  encoding: "utf8",
-});
+const staleOutputs = [];
 
-if (exported.error !== undefined || exported.status !== 0) {
-  const reason =
-    exported.error?.message ?? exported.stderr.trim() ?? "unknown error";
-  throw new Error(`Unable to export the Heartwood API schema: ${reason}`);
-}
+for (const contract of contracts) {
+  const exported = spawnSync(python, [contract.exporter], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  if (exported.error !== undefined || exported.status !== 0) {
+    const processReason =
+      exported.status === null ?
+        `terminated by ${exported.signal ?? "an unknown signal"}`
+      : `exited with status ${exported.status}`;
+    const reason =
+      exported.error?.message.trim() ||
+      exported.stderr?.trim() ||
+      processReason;
+    throw new Error(`Unable to export ${contract.sourceLabel}: ${reason}`);
+  }
 
-const schema = removeFieldTitles(JSON.parse(exported.stdout));
-const bannerComment = `/*
+  const schema = removeFieldTitles(JSON.parse(exported.stdout));
+  const bannerComment = `/*
  * This source file is part of the Heartwood open-source project
  *
  * SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
@@ -59,40 +82,46 @@ const bannerComment = `/*
 
 /* eslint-disable */
 /**
- * Generated from the public Pydantic API contract.
+ * Generated from the ${contract.sourceLabel}.
  * Run \`npm run contracts:generate\` after changing a shared request or response.
  */
 `;
-const compiled = await compile(schema, "HeartwoodApiContract", {
-  additionalProperties: false,
-  bannerComment,
-  declareExternallyReferenced: true,
-  enableConstEnums: false,
-  ignoreMinAndMaxItems: true,
-  style: {
-    printWidth: 100,
-    semi: true,
-    singleQuote: false,
-    trailingComma: "all",
-  },
-  unknownAny: false,
-  unreachableDefinitions: false,
-});
-const prettierConfig = (await resolveConfig(generatedTypes)) ?? {};
-const output = await format(compiled, {
-  ...prettierConfig,
-  filepath: generatedTypes,
-});
+  const compiled = await compile(schema, contract.rootName, {
+    additionalProperties: false,
+    bannerComment,
+    declareExternallyReferenced: true,
+    enableConstEnums: false,
+    ignoreMinAndMaxItems: true,
+    style: {
+      printWidth: 100,
+      semi: true,
+      singleQuote: false,
+      trailingComma: "all",
+    },
+    unknownAny: false,
+    unreachableDefinitions: false,
+  });
+  const prettierConfig = (await resolveConfig(contract.output)) ?? {};
+  const output = await format(compiled, {
+    ...prettierConfig,
+    filepath: contract.output,
+  });
 
-if (checkOnly) {
-  const current = await readFile(generatedTypes, "utf8").catch(() => "");
-  if (current !== output) {
-    throw new Error(
-      "Generated browser API types are stale. Run `npm run contracts:generate`.",
-    );
+  if (checkOnly) {
+    const current = await readFile(contract.output, "utf8").catch(() => "");
+    if (current !== output) {
+      staleOutputs.push(relative(repositoryRoot, contract.output));
+    }
+  } else {
+    await writeFile(contract.output, output, "utf8");
   }
-} else {
-  await writeFile(generatedTypes, output, "utf8");
+}
+
+if (staleOutputs.length > 0) {
+  throw new Error(
+    `Generated browser API types are stale: ${staleOutputs.join(", ")}. ` +
+      "Run `npm run contracts:generate`.",
+  );
 }
 
 function removeFieldTitles(value, propertyMap = false) {

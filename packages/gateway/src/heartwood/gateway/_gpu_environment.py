@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from packaging.version import InvalidVersion, Version
 
 _CUDA_12_MINIMUM_DRIVER = Version("525.60.13")
+_SLURM_DISCOVERY_ATTEMPTS = 2
 _KNOWN_GPU_MEMORY_BYTES = {
     "nvidia_l40s": 48_000_000_000,
     "l40s": 48_000_000_000,
@@ -275,18 +276,8 @@ def discover_visible_gpus(env: Mapping[str, str]) -> tuple[GpuDevice, ...]:
 
 def discover_slurm_gpu_partitions(env: Mapping[str, str]) -> tuple[SlurmGpuPartition, ...]:
     """Return available GPU partitions and their node-level capacity."""
-    try:
-        completed = subprocess.run(
-            ("sinfo", "--noheader", "--format=%P|%G|%a|%m|%c"),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            env=_scheduler_environment(env),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ()
-    if completed.returncode != 0:
+    completed = _run_sinfo(env)
+    if completed is None:
         return ()
     partitions: dict[tuple[str, str | None], SlurmGpuPartition] = {}
     for line in completed.stdout.splitlines():
@@ -314,6 +305,24 @@ def discover_slurm_gpu_partitions(env: Mapping[str, str]) -> tuple[SlurmGpuParti
         if previous is None or candidate.gpu_count > previous.gpu_count:
             partitions[key] = candidate
     return tuple(partitions.values())
+
+
+def _run_sinfo(env: Mapping[str, str]) -> subprocess.CompletedProcess[str] | None:
+    for _attempt in range(_SLURM_DISCOVERY_ATTEMPTS):
+        try:
+            completed = subprocess.run(
+                ("sinfo", "--noheader", "--format=%P|%G|%a|%m|%c"),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=_scheduler_environment(env),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode == 0:
+            return completed
+    return None
 
 
 def _visible_capacities(devices: tuple[GpuDevice, ...]) -> tuple[GpuCapacity, ...]:

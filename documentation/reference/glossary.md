@@ -90,6 +90,9 @@ SPDX-License-Identifier: MIT
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 
+**SHA-256**
+: A cryptographic hash function Heartwood uses to verify that model files and other artifacts have not changed.
+
 **Slurm**
 : A scheduler that allocates compute resources for jobs on platforms such as Stanford Carina.
 

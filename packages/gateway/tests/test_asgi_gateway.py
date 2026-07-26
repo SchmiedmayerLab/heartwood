@@ -18,7 +18,16 @@ from typing import cast
 
 import pytest
 
-from heartwood.gateway import GatewayAsgiApp, ProjectContext, RestResponse, SessionGateway
+from heartwood.core_adapter import BackendLifecycle, BackendLifecycleEvent
+from heartwood.gateway import (
+    GatewayAsgiApp,
+    GatewayEventStream,
+    ProjectContext,
+    RestResponse,
+    SessionGateway,
+)
+from heartwood.gateway._asgi import _wait_for_stream_signal
+from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -59,8 +68,9 @@ def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
     body = json.loads(cast(bytes, sent[1]["body"]).decode("utf-8"))
     assert [event["kind"] for event in body["events"]] == [
         EventKind.COMMAND_RECEIVED.value,
-        EventKind.SESSION_PAUSED.value,
+        EventKind.ERROR_RECORDED.value,
     ]
+    assert body["projection"]["lifecycle"]["status"] == "idle"
 
 
 def test_asgi_http_keeps_the_event_loop_responsive_during_blocking_gateway_work(
@@ -95,10 +105,92 @@ def test_asgi_http_keeps_the_event_loop_responsive_during_blocking_gateway_work(
     assert asyncio.run(scenario()) < 0.25
 
 
+def test_stream_wait_cancels_the_sibling_task_when_receive_fails() -> None:
+    async def scenario() -> None:
+        update_cancelled = asyncio.Event()
+
+        async def receive_update() -> object:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                update_cancelled.set()
+            return object()
+
+        async def receive_message() -> dict[str, object]:
+            raise RuntimeError("synthetic receive failure")
+
+        with pytest.raises(RuntimeError, match="synthetic receive failure"):
+            await _wait_for_stream_signal(
+                receive_update,
+                receive_message,
+                disconnect_type="websocket.disconnect",
+            )
+        assert update_cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_asgi_websocket_closes_gateway_stream_when_send_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> bool:
+        gateway = _gateway(tmp_path)
+        app = GatewayAsgiApp(gateway)
+        opened = []
+        original_open = gateway.open_event_stream
+
+        def open_event_stream(
+            *,
+            session_id: str,
+            after_sequence: int | None = None,
+        ) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
+            stream, snapshot = original_open(
+                session_id=session_id,
+                after_sequence=after_sequence,
+            )
+            opened.append(stream)
+            return stream, snapshot
+
+        monkeypatch.setattr(gateway, "open_event_stream", open_event_stream)
+
+        async def receive() -> dict[str, object]:
+            return {"type": "websocket.disconnect"}
+
+        async def send(message: dict[str, object]) -> None:
+            if message["type"] == "websocket.send":
+                raise RuntimeError("synthetic send failure")
+
+        with pytest.raises(RuntimeError, match="synthetic send failure"):
+            await app(
+                {
+                    "type": "websocket",
+                    "path": "/sessions/session-1/events",
+                    "query_string": b"",
+                },
+                receive,
+                send,
+            )
+        assert len(opened) == 1
+        return opened[0].closed
+
+    assert asyncio.run(scenario()) is True
+
+
 def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
+        gateway = _gateway(tmp_path)
+        gateway.project.initialize()
+        gateway._service("session-1")._accept_backend_events(
+            (
+                BackendLifecycleEvent(
+                    lifecycle=BackendLifecycle.RUNNING,
+                    source_event_id="synthetic-running",
+                ),
+            )
+        )
         app = GatewayAsgiApp(
-            _gateway(tmp_path),
+            gateway,
             static_base_path="/proxy/8767",
         )
         return await _http_call(
@@ -197,6 +289,7 @@ def test_asgi_http_replays_session_events(tmp_path: Path) -> None:
     assert sent[0]["status"] == 200
     body = json.loads(cast(bytes, sent[1]["body"]).decode("utf-8"))
     assert [event["sequence"] for event in body["events"]] == [1, 2, 3, 4, 5]
+    assert body["projection"]["revision"] == body["events"][-1]["sequence"]
 
 
 def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
@@ -225,15 +318,18 @@ def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
         )
         await _wait_for_sent(sent, 1)
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
-        await _wait_for_sent(sent, 2)
+        await _wait_for_sent(sent, 3)
         await incoming.put({"type": "websocket.disconnect"})
-        await task
+        await asyncio.wait_for(task, timeout=1)
         return sent
 
     sent = asyncio.run(scenario())
 
     assert sent[0]["type"] == "websocket.accept"
-    payload = json.loads(cast(str, sent[1]["text"]))
+    initial = json.loads(cast(str, sent[1]["text"]))
+    assert initial["events"] == []
+    assert initial["projection"]["sessionId"] == "session-1"
+    payload = json.loads(cast(str, sent[2]["text"]))
     assert [event["kind"] for event in payload["events"]] == [
         EventKind.COMMAND_RECEIVED.value,
         EventKind.USER_MESSAGE_RECORDED.value,
@@ -242,6 +338,77 @@ def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
         EventKind.TOOL_CALL_PROPOSED.value,
         EventKind.CONFIRMATION_REQUESTED.value,
     ]
+    assert payload["projection"]["pendingApproval"] is not None
+    assert payload["projection"]["revision"] == payload["events"][-1]["sequence"]
+
+
+def test_asgi_websocket_streams_transient_tokens_with_monotonic_snapshots(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        gateway = _gateway(tmp_path)
+        app = GatewayAsgiApp(gateway)
+        incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return await incoming.get()
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        task = asyncio.create_task(
+            app(
+                {
+                    "type": "websocket",
+                    "path": "/sessions/session-1/events",
+                    "query_string": b"",
+                },
+                receive,
+                send,
+            )
+        )
+        await _wait_for_sent(sent, 2)
+        service = gateway._service("session-1")
+        service._accept_backend_events(
+            (
+                BackendLifecycleEvent(
+                    lifecycle=BackendLifecycle.RUNNING,
+                    source_event_id="synthetic-running",
+                ),
+            )
+        )
+        await _wait_for_sent(sent, 3)
+        gateway._publish_token_delta(session_id="session-1", delta="Working")
+        await _wait_for_sent(sent, 4)
+        service._accept_backend_events(
+            (
+                BackendLifecycleEvent(
+                    lifecycle=BackendLifecycle.FINISHED,
+                    source_event_id="synthetic-finished",
+                ),
+            )
+        )
+        await _wait_for_sent(sent, 5)
+        gateway._publish_token_delta(session_id="session-1", delta="late")
+        await asyncio.sleep(0.05)
+        await incoming.put({"type": "websocket.disconnect"})
+        await asyncio.wait_for(task, timeout=1)
+        return sent
+
+    sent = asyncio.run(scenario())
+
+    running = json.loads(cast(str, sent[2]["text"]))
+    token = json.loads(cast(str, sent[3]["text"]))
+    finished = json.loads(cast(str, sent[4]["text"]))
+    assert running["projection"]["lifecycle"]["status"] == "running"
+    assert token["events"] == []
+    assert token["projection"]["streamingText"] == "Working"
+    assert token["projection"]["streamRevision"] == 1
+    assert finished["projection"]["lifecycle"]["status"] == "finished"
+    assert finished["projection"]["streamingText"] == ""
+    assert finished["projection"]["streamRevision"] == 2
+    assert len(sent) == 5
 
 
 def test_asgi_websocket_replays_events_after_sequence(tmp_path: Path) -> None:
@@ -350,6 +517,58 @@ def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
     assert body.startswith("event: heartwood-session-events\n")
     data = json.loads(body.split("data: ", maxsplit=1)[1])
     assert [event["sequence"] for event in data["events"]] == [1, 2, 3, 4, 5]
+
+
+def test_asgi_sse_streams_transient_projection_updates(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        gateway = _gateway(tmp_path)
+        app = GatewayAsgiApp(gateway)
+        incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return await incoming.get()
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        task = asyncio.create_task(
+            app(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/sessions/session-1/events/stream",
+                    "query_string": b"",
+                },
+                receive,
+                send,
+            )
+        )
+        await _wait_for_sent(sent, 2)
+        service = gateway._service("session-1")
+        service._accept_backend_events(
+            (
+                BackendLifecycleEvent(
+                    lifecycle=BackendLifecycle.RUNNING,
+                    source_event_id="synthetic-running",
+                ),
+            )
+        )
+        await _wait_for_sent(sent, 3)
+        gateway._publish_token_delta(session_id="session-1", delta="Working")
+        await _wait_for_sent(sent, 4)
+        await incoming.put({"type": "http.disconnect"})
+        await asyncio.wait_for(task, timeout=1)
+        return sent
+
+    sent = asyncio.run(scenario())
+
+    body = cast(bytes, sent[3]["body"]).decode("utf-8")
+    data = json.loads(body.split("data: ", maxsplit=1)[1])
+    assert data["events"] == []
+    assert data["projection"]["lifecycle"]["status"] == "running"
+    assert data["projection"]["streamingText"] == "Working"
+    assert data["projection"]["streamRevision"] == 1
 
 
 def test_asgi_sse_rejects_invalid_session_id(tmp_path: Path) -> None:
@@ -553,8 +772,9 @@ async def _http_call(
 
 
 async def _wait_for_sent(sent: list[dict[str, object]], count: int) -> None:
-    for _ in range(10):
+    deadline = asyncio.get_running_loop().time() + 2
+    while asyncio.get_running_loop().time() < deadline:
         if len(sent) >= count:
             return
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     assert len(sent) >= count

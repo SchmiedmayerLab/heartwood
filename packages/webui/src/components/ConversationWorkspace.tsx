@@ -15,6 +15,7 @@ import {
   Check,
   CirclePause,
   CirclePlay,
+  ListChecks,
   LoaderCircle,
   MessageSquareText,
   Send,
@@ -31,23 +32,25 @@ import {
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
 import type {
   ActionPresentation,
-  ApprovalControl,
   ConversationMessage,
+  ProjectionApprovalGroup,
+  SessionProjection,
 } from "../types";
 
 interface ConversationWorkspaceProps {
-  conversation: ConversationMessage[];
   conversationEndRef: RefObject<HTMLDivElement | null>;
   actionModeLabel: string | null;
   actionPresentation: ActionPresentation | null;
   modelConfigured: boolean;
   modelMessage: string;
-  paused: boolean;
-  pendingActions: ApprovalControl[];
+  projection: SessionProjection | null;
   prompt: string;
   requestActivity: RequestActivityState | null;
   requestStatus: "idle" | "busy" | "error";
-  onDecision: (decision: "approve" | "deny", control: ApprovalControl) => void;
+  onDecision: (
+    decision: "approve" | "deny",
+    approval: ProjectionApprovalGroup,
+  ) => void;
   onOpenSettings: () => void;
   onPauseToggle: () => void;
   onPrompt: (prompt: string) => void;
@@ -55,14 +58,12 @@ interface ConversationWorkspaceProps {
 }
 
 export const ConversationWorkspace = ({
-  conversation,
   conversationEndRef,
   actionModeLabel,
   actionPresentation,
   modelConfigured,
   modelMessage,
-  paused,
-  pendingActions,
+  projection,
   prompt,
   requestActivity,
   requestStatus,
@@ -71,107 +72,134 @@ export const ConversationWorkspace = ({
   onPauseToggle,
   onPrompt,
   onSubmit,
-}: ConversationWorkspaceProps) => (
-  <section className="conversation-workspace" aria-label="Agent conversation">
-    {!modelConfigured ?
-      <div className="configuration-banner" role="status">
-        <span>{modelMessage}</span>
-        <Button size="sm" variant="outline" onClick={onOpenSettings}>
-          <Settings size={15} />
-          Open settings
-        </Button>
+}: ConversationWorkspaceProps) => {
+  const conversation = projection?.conversation ?? [];
+  const pendingApproval =
+    projection?.pendingApproval?.decision === null ?
+      projection.pendingApproval
+    : null;
+  const paused = projection?.paused ?? false;
+  const availableCommands = projection?.availableCommands ?? [];
+  const canChat = availableCommands.includes("chat");
+  const canPause = availableCommands.includes("pause");
+  const canResume = availableCommands.includes("resume");
+  const running = projection?.lifecycle.status === "running";
+
+  return (
+    <section className="conversation-workspace" aria-label="Agent conversation">
+      {!modelConfigured ?
+        <div className="configuration-banner" role="status">
+          <span>{modelMessage}</span>
+          <Button size="sm" variant="outline" onClick={onOpenSettings}>
+            <Settings size={15} />
+            Open settings
+          </Button>
+        </div>
+      : null}
+
+      <div
+        aria-label="Conversation transcript"
+        className="conversation-list"
+        role="log"
+      >
+        {conversation.length === 0 && !projection?.streamingText ?
+          <EmptyConversation
+            disabled={!modelConfigured || !canChat}
+            onPrompt={onPrompt}
+          />
+        : conversation.map((message) => (
+            <ConversationItem key={message.id} message={message} />
+          ))
+        }
+        {projection?.streamingText ?
+          <StreamingMessage content={projection.streamingText} />
+        : null}
+        {requestStatus === "busy" && requestActivity !== null ?
+          <RequestActivity activity={requestActivity} />
+        : null}
+        <RuntimeStatus projection={projection} />
+        <div ref={conversationEndRef} aria-hidden="true" />
       </div>
-    : null}
 
-    <div
-      aria-label="Conversation transcript"
-      className="conversation-list"
-      role="log"
-    >
-      {conversation.length === 0 ?
-        <EmptyConversation disabled={!modelConfigured} onPrompt={onPrompt} />
-      : conversation.map((message) => (
-          <ConversationItem key={message.id} message={message} />
-        ))
-      }
-      {requestStatus === "busy" && requestActivity !== null ?
-        <RequestActivity activity={requestActivity} />
-      : null}
-      <div ref={conversationEndRef} aria-hidden="true" />
-    </div>
-
-    <div className="composer-area">
-      {pendingActions.length > 0 ?
-        <ApprovalRequest
-          actionModeLabel={actionModeLabel}
-          actionPresentation={actionPresentation}
-          busy={requestStatus === "busy"}
-          controls={pendingActions}
-          onDecision={onDecision}
-        />
-      : null}
-      <div className="composer">
-        <Textarea
-          aria-label="Task"
-          disabled={
-            paused ||
-            !modelConfigured ||
-            pendingActions.length > 0 ||
-            requestStatus === "busy"
-          }
-          placeholder={
-            paused ? "Resume the session to continue"
-            : !modelConfigured ?
-              "Choose an authorized model to start"
-            : requestStatus === "busy" ?
-              "Heartwood is working on the current request"
-            : "Ask Heartwood to work in this project"
-          }
-          value={prompt}
-          onChange={(event) => onPrompt(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              onSubmit();
+      <div className="composer-area">
+        {pendingApproval ?
+          <ApprovalRequest
+            actionModeLabel={actionModeLabel}
+            actionPresentation={actionPresentation}
+            approval={pendingApproval}
+            canApprove={availableCommands.includes("approve")}
+            canDeny={availableCommands.includes("deny")}
+            busy={requestStatus === "busy"}
+            onDecision={onDecision}
+          />
+        : null}
+        <div className="composer">
+          <Textarea
+            aria-label="Task"
+            disabled={
+              !modelConfigured ||
+              !canChat ||
+              pendingApproval !== null ||
+              requestStatus === "busy"
             }
-          }}
-        />
-        <div className="composer-actions">
-          <Tooltip tooltip={paused ? "Resume agent" : "Pause agent"}>
-            <Button
-              aria-label={paused ? "Resume agent" : "Pause agent"}
-              disabled={!modelConfigured || requestStatus === "busy"}
-              size="sm"
-              variant="ghost"
-              onClick={onPauseToggle}
-            >
-              {paused ?
-                <CirclePlay size={18} />
-              : <CirclePause size={18} />}
-            </Button>
-          </Tooltip>
-          <Tooltip tooltip="Send task">
-            <Button
-              aria-label="Send task"
-              disabled={
-                !prompt.trim() ||
-                paused ||
-                !modelConfigured ||
-                pendingActions.length > 0 ||
-                requestStatus === "busy"
+            placeholder={
+              paused ? "Resume the session to continue"
+              : !modelConfigured ?
+                "Choose an authorized model to start"
+              : running ?
+                "Send guidance while Heartwood is working"
+              : "Ask Heartwood to work in this project"
+            }
+            value={prompt}
+            onChange={(event) => onPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                onSubmit();
               }
-              isPending={requestStatus === "busy"}
-              size="sm"
-              onClick={onSubmit}
-            >
-              <Send size={17} />
-            </Button>
-          </Tooltip>
+            }}
+          />
+          <div className="composer-actions">
+            <Tooltip tooltip={canResume ? "Resume agent" : "Pause agent"}>
+              <Button
+                aria-label={canResume ? "Resume agent" : "Pause agent"}
+                disabled={
+                  !modelConfigured ||
+                  (!canPause && !canResume) ||
+                  requestStatus === "busy"
+                }
+                size="sm"
+                variant="ghost"
+                onClick={onPauseToggle}
+              >
+                {canResume ?
+                  <CirclePlay size={18} />
+                : <CirclePause size={18} />}
+              </Button>
+            </Tooltip>
+            <Tooltip tooltip={running ? "Send guidance" : "Send task"}>
+              <Button
+                aria-label={running ? "Send guidance" : "Send task"}
+                disabled={
+                  !prompt.trim() ||
+                  !modelConfigured ||
+                  !canChat ||
+                  pendingApproval !== null ||
+                  requestStatus === "busy"
+                }
+                isPending={requestStatus === "busy"}
+                size="sm"
+                onClick={onSubmit}
+              >
+                <Send size={17} />
+              </Button>
+            </Tooltip>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
-);
+    </section>
+  );
+};
 
 const RequestActivity = ({ activity }: { activity: RequestActivityState }) => {
   const [elapsed, setElapsed] = useState(0);
@@ -272,30 +300,155 @@ const ConversationItem = ({ message }: { message: ConversationMessage }) => {
   );
 };
 
+const StreamingMessage = ({ content }: { content: string }) => (
+  <article
+    aria-label="Agent response in progress"
+    className="conversation-message agent streaming-message"
+  >
+    <div className="conversation-meta">
+      <small>Agent</small>
+      <span>Responding</span>
+    </div>
+    <p>
+      {content}
+      <span aria-hidden="true" className="streaming-cursor" />
+    </p>
+  </article>
+);
+
+const RuntimeStatus = ({
+  projection,
+}: {
+  projection: SessionProjection | null;
+}) => {
+  if (
+    projection === null ||
+    (projection.lifecycle.status === "idle" &&
+      projection.taskPlan.length === 0 &&
+      projection.usage === null &&
+      projection.subagents.length === 0)
+  ) {
+    return null;
+  }
+  const completedTasks = projection.taskPlan.filter(
+    (task) => task.status === "done",
+  ).length;
+  const totalTokens =
+    (projection.usage?.promptTokens ?? 0) +
+    (projection.usage?.completionTokens ?? 0);
+  return (
+    <section aria-label="Agent status" className="runtime-status" role="status">
+      <div className="runtime-status-heading">
+        {projection.lifecycle.status === "running" ?
+          <LoaderCircle
+            aria-hidden="true"
+            className="request-activity-icon"
+            size={16}
+          />
+        : <ListChecks aria-hidden="true" size={16} />}
+        <strong>{lifecycleLabel(projection.lifecycle.status)}</strong>
+      </div>
+      {projection.taskPlan.length > 0 ?
+        <details>
+          <summary>
+            Plan: {completedTasks} of {projection.taskPlan.length} complete
+          </summary>
+          <ol>
+            {projection.taskPlan.map((task, index) => (
+              <li key={`${index}-${task.title}`}>
+                <span>{task.title}</span>
+                <small>{taskStatusLabel(task.status)}</small>
+              </li>
+            ))}
+          </ol>
+        </details>
+      : null}
+      <div className="runtime-status-metrics">
+        {projection.usage ?
+          <span>
+            {totalTokens.toLocaleString()} tokens · {projection.usage.modelName}
+            {projection.usage.contextWindow === null ?
+              ""
+            : ` · ${projection.usage.contextWindow.toLocaleString()} context`}
+            {projection.usage.accumulatedCost <= 0 ?
+              ""
+            : ` · $${projection.usage.accumulatedCost.toFixed(2)}`}
+            {` · ${projection.usage.callCount.toLocaleString()} calls`}
+          </span>
+        : null}
+      </div>
+      {projection.usageByPurpose.length > 0 ?
+        <details>
+          <summary>Model activity</summary>
+          <ul>
+            {projection.usageByPurpose.map((usage) => (
+              <li key={usage.usageId}>
+                <span>{usage.usageId}</span>
+                <small>
+                  {usage.callCount.toLocaleString()} calls ·{" "}
+                  {(
+                    usage.promptTokens + usage.completionTokens
+                  ).toLocaleString()}{" "}
+                  tokens
+                </small>
+              </li>
+            ))}
+          </ul>
+        </details>
+      : null}
+      {projection.subagents.length > 0 ?
+        <details className="runtime-subagents">
+          <summary>
+            {projection.subagents.length}{" "}
+            {projection.subagents.length === 1 ? "specialist" : "specialists"}
+          </summary>
+          <ul>
+            {projection.subagents.map((subagent) => (
+              <li key={subagent.invocationId}>
+                <span>
+                  {subagent.agentName} ({subagent.status.replace("-", " ")})
+                </span>
+                <small>
+                  Parent session {subagent.parentSessionId} · action{" "}
+                  {subagent.parentActionId}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </details>
+      : null}
+    </section>
+  );
+};
+
 const ApprovalRequest = ({
   actionModeLabel,
   actionPresentation,
+  approval,
   busy,
-  controls,
+  canApprove,
+  canDeny,
   onDecision,
 }: {
   actionModeLabel: string | null;
   actionPresentation: ActionPresentation | null;
+  approval: ProjectionApprovalGroup;
   busy: boolean;
-  controls: ApprovalControl[];
-  onDecision: (decision: "approve" | "deny", control: ApprovalControl) => void;
+  canApprove: boolean;
+  canDeny: boolean;
+  onDecision: (
+    decision: "approve" | "deny",
+    approval: ProjectionApprovalGroup,
+  ) => void;
 }) => {
-  // The gateway resolves the complete OpenHands action set from any member identifier.
-  const setRepresentative = controls[0];
-  const representativeId = setRepresentative?.targetId ?? null;
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
-    if (representativeId !== null) headingRef.current?.focus();
-  }, [representativeId]);
-  if (!setRepresentative) return null;
-  const countLabel = actionCountLabel(controls.length);
-  const allowLabel = controls.length === 1 ? "Allow Once" : "Allow All Once";
-  const rejectLabel = controls.length === 1 ? "Reject" : "Reject All";
+    headingRef.current?.focus();
+  }, [approval.groupId]);
+  const countLabel = actionCountLabel(approval.actions.length);
+  const allowLabel =
+    approval.actions.length === 1 ? "Allow Once" : "Allow All Once";
+  const rejectLabel = approval.actions.length === 1 ? "Reject" : "Reject All";
   return (
     <section
       className="approval-request"
@@ -325,7 +478,7 @@ const ApprovalRequest = ({
           </div>
         </div>
         <ol className="approval-batch-list" role="list">
-          {controls.map((control, index) => {
+          {approval.actions.map((control, index) => {
             const risk = actionRiskPresentation(
               control.risk,
               actionPresentation,
@@ -364,19 +517,19 @@ const ApprovalRequest = ({
         </span>
         <Button
           aria-label={`Reject ${countLabel}`}
-          disabled={busy}
+          disabled={busy || !canDeny}
           size="sm"
           variant="outline"
-          onClick={() => onDecision("deny", setRepresentative)}
+          onClick={() => onDecision("deny", approval)}
         >
           <Ban size={16} />
           {rejectLabel}
         </Button>
         <Button
           aria-label={`Allow ${countLabel} once`}
-          disabled={busy}
+          disabled={busy || !canApprove}
           size="sm"
-          onClick={() => onDecision("approve", setRepresentative)}
+          onClick={() => onDecision("approve", approval)}
         >
           <Check size={16} />
           {allowLabel}
@@ -385,6 +538,27 @@ const ApprovalRequest = ({
     </section>
   );
 };
+
+const lifecycleLabel = (
+  status: SessionProjection["lifecycle"]["status"],
+): string =>
+  ({
+    error: "Agent stopped with an error",
+    finished: "Task complete",
+    idle: "Ready",
+    paused: "Agent paused",
+    running: "Heartwood is working",
+    "waiting-for-confirmation": "Waiting for approval",
+  })[status];
+
+const taskStatusLabel = (
+  status: SessionProjection["taskPlan"][number]["status"],
+): string =>
+  ({
+    done: "Complete",
+    "in-progress": "In progress",
+    todo: "Not started",
+  })[status];
 
 const TASK_STARTERS = [
   "Inspect the project",

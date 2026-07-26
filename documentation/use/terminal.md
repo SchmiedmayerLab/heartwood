@@ -29,6 +29,8 @@ heartwood --session-id cohort-review
 
 Type the request at the prompt and press Enter.
 While the model is working, Heartwood displays an animated status and elapsed time without inventing progress that the model service does not expose.
+The full-screen interface can accept guidance for the active task and exposes pause as soon as OpenHands is running.
+Task Tracker progress, model activity, and sequential specialist status appear when OpenHands supplies them.
 
 For one non-interactive request:
 
@@ -55,7 +57,7 @@ Press `Ctrl-P` to open the command palette for action review, status, replay, an
 | `/permissions` | Review or change when Heartwood pauses before actions |
 | `/allow` | Allow the complete pending action set once |
 | `/reject` | Reject the complete pending action set |
-| `/pause` | Pause the current session |
+| `/pause` | Pause active OpenHands work |
 | `/resume` | Resume a paused session |
 | `/replay` | Render the persisted session events |
 | `/audit-export` | Write a scrubbed JSON Lines audit export |

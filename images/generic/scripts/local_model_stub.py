@@ -17,7 +17,7 @@ import shlex
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 
 def _tool_result_failed(messages: list[object]) -> bool:
@@ -79,6 +79,51 @@ def _prompt_terminal_call(command: str, summary: str, security_risk: str = "LOW"
             f"<parameter=summary>{summary}</parameter>",
             "</function>",
         )
+    )
+
+
+def _stream_chunks(response: dict[str, object]) -> tuple[dict[str, object], ...]:
+    choices = cast(list[dict[str, object]], response["choices"])
+    choice = choices[0]
+    message = cast(dict[str, object], choice["message"])
+    delta: dict[str, object] = {"role": "assistant"}
+    if message.get("content") is not None:
+        delta["content"] = message["content"]
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        delta["tool_calls"] = [
+            {
+                **cast(dict[str, object], tool_call),
+                "index": index,
+            }
+            for index, tool_call in enumerate(tool_calls)
+        ]
+    base = {
+        "id": response["id"],
+        "object": "chat.completion.chunk",
+        "model": response["model"],
+    }
+    return (
+        {
+            **base,
+            "choices": [
+                {
+                    "index": choice["index"],
+                    "finish_reason": None,
+                    "delta": delta,
+                }
+            ],
+        },
+        {
+            **base,
+            "choices": [
+                {
+                    "index": choice["index"],
+                    "finish_reason": choice["finish_reason"],
+                    "delta": {},
+                }
+            ],
+        },
     )
 
 
@@ -316,7 +361,21 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "total_tokens": 2,
             },
         }
-        self._send_json(response)
+        if payload.get("stream") is True:
+            self._send_stream(response)
+        else:
+            self._send_json(response)
+
+    def _send_stream(self, response: dict[str, object]) -> None:
+        """Write one OpenAI-compatible streaming chat completion."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        for chunk in _stream_chunks(response):
+            self.wfile.write(f"data: {json.dumps(chunk, sort_keys=True)}\n\n".encode())
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
 
     def _send_json(self, value: object) -> None:
         """Write one deterministic JSON response."""

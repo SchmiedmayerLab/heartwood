@@ -281,6 +281,8 @@ class ActionSettingsResponse(_ApiResponse):
     confirmation_mode: ActionConfirmationMode
     scope_description: str
     presentation: ActionPresentationResponse
+    change_allowed: bool
+    change_blocked_reason: str | None
     modes: list[ActionModeOptionResponse]
 
 

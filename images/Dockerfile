@@ -40,13 +40,11 @@ ARG HEARTWOOD_GID=10001
 ARG HEARTWOOD_JUPYTER_PREFIX=/usr/local
 ARG HEARTWOOD_INSTALL_JUPYTER_KERNEL=false
 ARG HEARTWOOD_UV_PYTHON_PREFERENCE=system
-ARG HEARTWOOD_VERSION=development
 
 LABEL org.opencontainers.image.title="Heartwood Runtime" \
     org.opencontainers.image.description="Heartwood CLI, web UI, notebook bridge, policy and audit controls, verified skills, OpenHands, and optional Heartwood-managed inference." \
     org.opencontainers.image.source="https://github.com/SchmiedmayerLab/heartwood" \
     org.opencontainers.image.licenses="MIT" \
-    org.opencontainers.image.version="${HEARTWOOD_VERSION}" \
     org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}" \
     org.heartwood.platform="${HEARTWOOD_PLATFORM}" \
     org.heartwood.platform.base="${HEARTWOOD_BASE_IMAGE}" \
@@ -136,6 +134,7 @@ COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 COPY fixtures ./fixtures
 COPY skills ./skills
+COPY agents ./agents
 COPY evals ./evals
 COPY images ./images
 COPY README.md NOTICE ./
@@ -163,12 +162,22 @@ WORKDIR ${HEARTWOOD_WORKDIR}
 
 USER ${HEARTWOOD_RUNTIME_USER}
 
-FROM heartwood-runtime-base AS gpu-ci-validate
+FROM heartwood-runtime-base AS heartwood-image-metadata
+
+ARG HEARTWOOD_VERSION=development
+ARG HEARTWOOD_REVISION=unknown
+
+LABEL org.opencontainers.image.version="${HEARTWOOD_VERSION}" \
+    org.opencontainers.image.revision="${HEARTWOOD_REVISION}"
+
+ENV HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION}
+
+FROM heartwood-image-metadata AS gpu-ci-validate
 
 RUN /opt/heartwood/images/gpu/verify_runtime.sh
 
-FROM heartwood-runtime-base AS platform-runtime-image
+FROM heartwood-image-metadata AS platform-runtime-image
 
-FROM heartwood-runtime-base AS runtime-image
+FROM heartwood-image-metadata AS runtime-image
 
 CMD ["heartwood", "--help"]

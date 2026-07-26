@@ -30,10 +30,9 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     command_help,
-    format_action_arguments,
     format_action_settings,
+    format_projection_lines,
     interaction_activity,
-    pending_actions,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.gateway import (
@@ -63,8 +62,6 @@ from heartwood.gateway import (
     SkillSettingsError,
     StartupPlan,
     action_mode_label,
-    action_risk_label,
-    action_tool_label,
     custom_model_connection_requires_token,
     inspect_deployment,
     model_source_options,
@@ -115,7 +112,7 @@ _MODEL_SOURCE_ARGUMENTS = {
     "custom": "custom",
     "stanford-ai-api-gateway": "stanford-ai-api-gateway",
 }
-_MODEL_DOWNLOAD_ACTIVITY = InteractionActivity(
+_MODEL_PREPARATION_ACTIVITY = InteractionActivity(
     label="Preparing and verifying the model",
     waiting_label="Still preparing and verifying the model",
     guidance=(
@@ -239,9 +236,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Allow the complete pending OpenHands action set once.",
     )
     allow.add_argument(
-        "tool_call_id",
+        "action_group_id",
         nargs="?",
-        help="Optional member id for automation compatibility.",
+        help="Optional action-set identifier for automation.",
     )
     reject = subparsers.add_parser(
         "reject",
@@ -249,9 +246,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reject the complete pending OpenHands action set.",
     )
     reject.add_argument(
-        "tool_call_id",
+        "action_group_id",
         nargs="?",
-        help="Optional member id for automation compatibility.",
+        help="Optional action-set identifier for automation.",
     )
     subparsers.add_parser("pause", help="Pause the current session.")
     subparsers.add_parser("resume", help="Resume the current session.")
@@ -549,13 +546,19 @@ def _main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command in {"allow", "approve", "reject", "deny"}:
             directive = "/allow" if args.command in {"allow", "approve"} else "/reject"
-            if args.tool_call_id:
-                directive = f"{directive} {shlex.quote(args.tool_call_id)}"
-            result = InteractiveSession(gateway, session_id=args.session_id).submit(directive)
+            if args.action_group_id:
+                directive = f"{directive} {shlex.quote(args.action_group_id)}"
+            result = _run_with_progress(
+                lambda: _submit_and_wait(
+                    InteractiveSession(gateway, session_id=args.session_id),
+                    directive,
+                ),
+                activity=interaction_activity(directive),
+            )
             if result.message:
                 print(result.message)
-            if result.events:
-                print(_format_transcript(result.events))
+            if result.projection is not None:
+                print("\n".join(format_projection_lines(result.projection)))
             return 1 if result.failed else 0
         if args.command == "pause":
             return _submit_simple(gateway, session_id=args.session_id, kind=CommandKind.PAUSE)
@@ -1052,7 +1055,7 @@ def _configure_local_model(
         )
         _run_with_progress(
             lambda: gateway.download_local_model_now(model_id),
-            activity=_MODEL_DOWNLOAD_ACTIVITY,
+            activity=_MODEL_PREPARATION_ACTIVITY,
         )
         return
     if model_id in service_models:
@@ -1070,7 +1073,7 @@ def _configure_local_model(
         )
         _run_with_progress(
             lambda: gateway.download_custom_local_model_now(model_id),
-            activity=_MODEL_DOWNLOAD_ACTIVITY,
+            activity=_MODEL_PREPARATION_ACTIVITY,
         )
         return
     qualifier = " in non-interactive setup" if non_interactive else ""
@@ -1194,12 +1197,6 @@ def _handle_models(
             print(_format_model_catalog(catalog))
             return 0
         if command == "connect":
-            if not args.manual:
-                gateway.discover_models(
-                    args.connection_id,
-                    base_url=args.base_url,
-                    refresh=True,
-                )
             settings = gateway.connect_model(
                 args.connection_id,
                 args.model_id,
@@ -1211,12 +1208,15 @@ def _handle_models(
             print(_format_model_validation(gateway.validate_model_profile()))
             return 0
         if command == "import":
-            imported = gateway.import_local_model(
-                args.path,
-                source_repository=args.source,
-                source_revision=args.revision,
-                license_posture=args.license_posture,
-                context_window=args.context_window,
+            imported = _run_with_progress(
+                lambda: gateway.import_local_model(
+                    args.path,
+                    source_repository=args.source,
+                    source_revision=args.revision,
+                    license_posture=args.license_posture,
+                    context_window=args.context_window,
+                ),
+                activity=_MODEL_PREPARATION_ACTIVITY,
             )
             print(f"{imported['model']['label']} is ready in this project.")
             print(f"Location: {imported['path']}")
@@ -1261,7 +1261,7 @@ def _handle_models(
                     parser.error("--revision requires a Hugging Face owner/model identifier")
                 path = _run_with_progress(
                     lambda: gateway.download_local_model_now(args.model),
-                    activity=_MODEL_DOWNLOAD_ACTIVITY,
+                    activity=_MODEL_PREPARATION_ACTIVITY,
                 )
             else:
                 path = _run_with_progress(
@@ -1269,7 +1269,7 @@ def _handle_models(
                         args.model,
                         revision=args.revision,
                     ),
-                    activity=_MODEL_DOWNLOAD_ACTIVITY,
+                    activity=_MODEL_PREPARATION_ACTIVITY,
                 )
             print(f"Model files are ready: {path}")
             print("Run `heartwood` to continue setup or open Heartwood.")
@@ -1494,29 +1494,40 @@ def _submit_task(
     *,
     session_id: str,
     prompt: str,
-    kind: CommandKind = CommandKind.CHAT,
 ) -> int:
-    command = _command(
-        session_id=session_id,
-        kind=kind,
-        payload={"prompt": prompt},
-    )
-    events = _run_with_progress(
-        lambda: gateway.handle(command).events,
+    session = InteractiveSession(gateway, session_id=session_id)
+    result = _run_with_progress(
+        lambda: _submit_and_wait(session, prompt),
         activity=interaction_activity(prompt),
     )
-    print(_format_transcript(events))
-    return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
+    if result.projection is not None:
+        print("\n".join(format_projection_lines(result.projection)))
+    return 1 if result.failed else 0
 
 
 def _submit_simple(gateway: SessionGateway, *, session_id: str, kind: CommandKind) -> int:
-    events = gateway.handle(_command(session_id=session_id, kind=kind)).events
-    print(_format_transcript(events))
-    return _event_exit_code(events)
-
-
-def _event_exit_code(events: Sequence[SessionEvent]) -> int:
-    return 1 if any(_event_kind(event) == EventKind.ERROR_RECORDED.value for event in events) else 0
+    directive = "/pause" if kind == CommandKind.PAUSE else "/resume"
+    result = _submit_and_wait(
+        InteractiveSession(gateway, session_id=session_id),
+        directive,
+    )
+    if result.message:
+        print(result.message)
+    if result.projection is not None:
+        # Show this command's events, or suppress prior history when it emitted none.
+        after_sequence = (
+            result.events[0].sequence - 1 if result.events else result.projection.revision
+        )
+        lines = format_projection_lines(
+            result.projection,
+            after_sequence=after_sequence,
+        )
+        print(
+            "\n".join(lines)
+            if lines
+            else ("Session paused" if kind == CommandKind.PAUSE else "Session resumed")
+        )
+    return 1 if result.failed else 0
 
 
 def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool = False) -> int:
@@ -1524,7 +1535,7 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
     if not plain and _supports_full_screen_terminal():
         from heartwood.cli._tui import run_terminal
 
-        return run_terminal(session, format_events=_format_tui_event_lines)
+        return run_terminal(session)
     print(f"Heartwood agent. Commands: {command_help()}.")
     while True:
         try:
@@ -1546,8 +1557,30 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
             return 0
         if result.message:
             print(result.message)
-        if result.events:
-            print(_format_transcript(result.events, live=not result.replace_transcript))
+        if result.projection is not None:
+            after_sequence = (
+                None
+                if result.replace_transcript or not result.events
+                else _live_projection_start(result.events)
+            )
+            print(
+                "\n".join(
+                    format_projection_lines(
+                        result.projection,
+                        after_sequence=after_sequence,
+                    )
+                )
+            )
+
+
+def _live_projection_start(events: tuple[SessionEvent, ...]) -> int:
+    """Skip a terminal-echoed user message while retaining new agent output."""
+    user_sequences = [
+        event.sequence
+        for event in events
+        if _event_kind(event) == EventKind.USER_MESSAGE_RECORDED.value
+    ]
+    return max(user_sequences) if user_sequences else events[0].sequence - 1
 
 
 def _submit_with_progress(
@@ -1558,9 +1591,24 @@ def _submit_with_progress(
 ) -> InteractionResult:
     """Submit one blocking line-mode turn while reporting honest elapsed time."""
     return _run_with_progress(
-        lambda: session.submit(line),
+        lambda: _submit_and_wait(session, line),
         activity=interaction_activity(line),
         update_interval=update_interval,
+    )
+
+
+def _submit_and_wait(session: InteractiveSession, line: str) -> InteractionResult:
+    result = session.submit(line)
+    projection = result.projection
+    if projection is not None and projection.lifecycle.status == "running":
+        projection = session.wait_until_stable()
+    return InteractionResult(
+        events=result.events,
+        projection=projection,
+        message=result.message,
+        exit_requested=result.exit_requested,
+        error=result.error,
+        replace_transcript=result.replace_transcript,
     )
 
 
@@ -1627,128 +1675,10 @@ def _supports_full_screen_terminal() -> bool:
     )
 
 
-def _format_transcript(events: Sequence[SessionEvent], *, live: bool = False) -> str:
-    return "\n".join(_format_event_lines(events, live=live))
-
-
-def _format_event_lines(
-    events: Sequence[SessionEvent],
-    *,
-    live: bool = False,
-    include_pending_review: bool = True,
-) -> tuple[str, ...]:
-    pending = pending_actions(list(events))
-    pending_ids = {action.tool_call_id for action in pending}
-    lines: list[str] = []
-    event_index = 0
-    while event_index < len(events):
-        event = events[event_index]
-        kind = _event_kind(event)
-        if live and kind == EventKind.USER_MESSAGE_RECORDED.value:
-            event_index += 1
-            continue
-        if (
-            kind == EventKind.TOOL_CALL_PROPOSED.value
-            and event.payload.get("tool_call_id") in pending_ids
-            and include_pending_review
-        ):
-            event_index += 1
-            continue
-        if kind == EventKind.CONFIRMATION_RESOLVED.value:
-            resolved = [event]
-            decision = str(event.payload.get("decision", "resolved"))
-            event_index += 1
-            while event_index < len(events):
-                sibling = events[event_index]
-                if (
-                    _event_kind(sibling) != EventKind.CONFIRMATION_RESOLVED.value
-                    or str(sibling.payload.get("decision", "resolved")) != decision
-                ):
-                    break
-                resolved.append(sibling)
-                event_index += 1
-            sequence = (
-                f"[{resolved[0].sequence:03d}]"
-                if len(resolved) == 1
-                else f"[{resolved[0].sequence:03d}-{resolved[-1].sequence:03d}]"
-            )
-            label = "action" if len(resolved) == 1 else "actions"
-            lines.append(f"{sequence} Action set {decision} ({len(resolved)} {label})")
-            continue
-        if line := _format_event(event):
-            lines.append(line)
-        event_index += 1
-    if pending and include_pending_review:
-        label = "action" if len(pending) == 1 else "actions"
-        lines.append(f"Review {len(pending)} {label} as one OpenHands action set:")
-        for index, action in enumerate(pending, 1):
-            lines.append(f"  {index}. {action.summary}")
-            lines.append(
-                f"     {action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}"
-            )
-            if argument_lines := format_action_arguments(action.arguments):
-                lines.append("     Arguments:")
-                lines.extend(f"       {line}" for line in argument_lines)
-        lines.extend(
-            (
-                "Allow the complete set once: /allow",
-                "Reject the complete set: /reject",
-            )
-        )
-    return tuple(lines)
-
-
-def _format_tui_event_lines(events: Sequence[SessionEvent]) -> tuple[str, ...]:
-    """Format durable transcript lines while the TUI owns pending-action controls."""
-    return _format_event_lines(events, include_pending_review=False)
-
-
-def _format_event(event: SessionEvent) -> str:
-    kind = _event_kind(event)
-    prefix = f"[{event.sequence:03d}]"
-    if kind == EventKind.COMMAND_RECEIVED.value:
-        return ""
-    if kind == EventKind.USER_MESSAGE_RECORDED.value:
-        return f"{prefix} You: {event.payload.get('content', '')}"
-    if kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
-        return ""
-    if kind == EventKind.AGENT_MESSAGE_EMITTED.value:
-        return f"{prefix} Agent: {event.payload.get('content', '')}"
-    if kind == EventKind.TOOL_CALL_PROPOSED.value:
-        line = (
-            f"{prefix} Action: {event.payload.get('summary', event.payload.get('tool_name', ''))} "
-            f"(risk={event.payload.get('risk', 'unknown')})"
-        )
-        arguments = event.payload.get("arguments")
-        if not isinstance(arguments, dict):
-            return line
-        argument_lines = format_action_arguments(arguments)
-        if not argument_lines:
-            return line
-        return "\n".join((line, "  Arguments:", *(f"    {item}" for item in argument_lines)))
-    if kind == EventKind.CONFIRMATION_REQUESTED.value:
-        return ""
-    if kind == EventKind.CONFIRMATION_RESOLVED.value:
-        return f"{prefix} Action {event.payload.get('decision', '')}"
-    if kind == EventKind.TOOL_EXECUTION_RECORDED.value:
-        return (
-            f"{prefix} Tool {event.payload.get('tool_name', '')} "
-            f"exit={event.payload.get('exit_code', '')}"
-        )
-    if kind == EventKind.SESSION_PAUSED.value:
-        return f"{prefix} Session paused"
-    if kind == EventKind.SESSION_RESUMED.value:
-        return f"{prefix} Session resumed"
-    if kind == EventKind.AUDIT_EXPORT_RECORDED.value:
-        return f"{prefix} Audit export: {event.payload.get('path', '')}"
-    if kind == EventKind.ERROR_RECORDED.value:
-        return f"{prefix} Error: {event.payload.get('reason', '')}"
-    return ""
-
-
 def _handle_replay(gateway: SessionGateway, *, session_id: str) -> int:
-    events = gateway.replay_events(session_id=session_id)
-    print(_format_transcript(events) if events else "No session events recorded.")
+    projection = gateway.persisted_session_projection(session_id=session_id)
+    lines = format_projection_lines(projection)
+    print("\n".join(lines) if lines else "No session events recorded.")
     return 0
 
 
@@ -1759,11 +1689,11 @@ def _handle_audit_export(
     output: Path | None,
 ) -> int:
     events = gateway.handle(_command(session_id=session_id, kind=CommandKind.AUDIT_EXPORT)).events
+    export_path = Path(str(events[-1].payload["path"]))
     if output is not None:
-        export_path = Path(str(events[-1].payload["path"]))
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(export_path, output)
-    print(_format_transcript(events))
+    print(f"Audit export: {output or export_path}")
     return 0
 
 

@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, assert_never
 
@@ -26,7 +28,6 @@ from heartwood.gateway._model_catalog import (
     model_connections_from_mapping,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
-from heartwood.gateway._openhands_sdk import prepare_openhands_sdk
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
     LocalModelSelection,
@@ -56,6 +57,7 @@ ModelSource = Literal[
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
 _MANAGED_MODEL_CATALOG_URL = "http://127.0.0.1:8765/v1/models"
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +177,36 @@ class DeploymentReadiness:
         }
 
 
+def prepare_openhands_sdk(env: Mapping[str, str]) -> None:
+    """Validate the full OpenHands import only when runtime resources are available."""
+    from heartwood.gateway._openhands_sdk import prepare_openhands_sdk as prepare
+
+    prepare(env)
+
+
+def _is_carina_login_node(env: Mapping[str, str], *, platform_id: str) -> bool:
+    return platform_id == "carina" and not env.get("SLURM_JOB_ID")
+
+
+def _agent_runtime_available(env: Mapping[str, str], *, platform_id: str) -> bool:
+    if _is_carina_login_node(env, platform_id=platform_id):
+        try:
+            version("openhands-sdk")
+            version("openhands-tools")
+        except PackageNotFoundError:
+            return False
+        return True
+    try:
+        prepare_openhands_sdk(env)
+    except Exception as error:
+        _LOGGER.warning(
+            "OpenHands runtime readiness probe failed (%s)",
+            type(error).__name__,
+        )
+        return False
+    return True
+
+
 def inspect_deployment(
     project: ProjectContext,
     env: Mapping[str, str] | None = None,
@@ -184,10 +216,12 @@ def inspect_deployment(
     adapter = select_platform_adapter(active_env)
     detection = adapter.detect(active_env)
     checks: list[ReadinessCheck] = []
+    carina_login_node = _is_carina_login_node(
+        active_env,
+        platform_id=adapter.adapter_id,
+    )
 
-    try:
-        prepare_openhands_sdk(active_env)
-    except Exception:
+    if not _agent_runtime_available(active_env, platform_id=adapter.adapter_id):
         checks.append(
             ReadinessCheck(
                 "agent-runtime",
@@ -196,11 +230,16 @@ def inspect_deployment(
             )
         )
     else:
+        summary = (
+            "OpenHands agent packages are installed; runtime validation follows in the allocation"
+            if carina_login_node
+            else "OpenHands agent dependencies are available"
+        )
         checks.append(
             ReadinessCheck(
                 "agent-runtime",
                 "pass",
-                "OpenHands agent dependencies are available",
+                summary,
             )
         )
 

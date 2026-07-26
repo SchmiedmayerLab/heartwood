@@ -4,18 +4,32 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Notebook view models derived from the shared session event stream."""
+"""Notebook presentation over the gateway-owned session projection."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
-from heartwood.gateway import DEFAULT_SESSION_ID, ModelProfile, ProjectContext, SessionGateway
+from heartwood.gateway import (
+    DEFAULT_SESSION_ID,
+    ModelProfile,
+    ProjectContext,
+    ProjectionActivity,
+    ProjectionApprovalGroup,
+    ProjectionLifecycleState,
+    ProjectionMessage,
+    ProjectionModelContext,
+    ProjectionSubagent,
+    ProjectionTask,
+    ProjectionUsage,
+    SessionGateway,
+    SessionProjection,
+)
 from heartwood.schemas import (
     ActionSettingsResponse,
+    AuditExportResponse,
     CredentialSettingsResponse,
     LocalModelImportResponse,
     ModelArtifactsResponse,
@@ -28,100 +42,95 @@ from heartwood.schemas import (
     ProjectReadinessResponse,
     StartupPlanResponse,
 )
-from heartwood.session import (
-    CommandKind,
-    EventKind,
-    JsonValue,
-    SessionCommand,
-    SessionEvent,
-    new_command_id,
-    pending_tool_actions,
-)
-
-
-@dataclass(frozen=True, slots=True)
-class ActivityItem:
-    """One visible session activity entry."""
-
-    sequence: int
-    kind: str
-    label: str
-    detail: str
-
-
-@dataclass(frozen=True, slots=True)
-class ChatMessage:
-    """One notebook chat message."""
-
-    role: Literal["assistant", "system", "user"]
-    content: str
-
-
-@dataclass(frozen=True, slots=True)
-class SkillProposal:
-    """Skill or tool proposal visible to notebook users."""
-
-    target_id: str
-    status: Literal["proposed", "approved", "denied"]
-    detail: str
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalAction:
-    """One visible member of a pending OpenHands action set."""
-
-    target_id: str
-    tool_name: str
-    risk: str
-    summary: str
-    arguments: dict[str, JsonValue] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalControl:
-    """One actionable whole-set decision rendered from session events."""
-
-    target_type: str
-    target_id: str
-    label: str
-    decision: str | None = None
-    actions: tuple[ApprovalAction, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyStatus:
-    """Policy decision status for one proposed model call."""
-
-    decision: str
-    endpoint: str
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class ExportAction:
-    """Available export action or completed export artifact."""
-
-    label: str
-    path: str
+from heartwood.session import CommandKind, JsonValue, SessionCommand, new_command_id
 
 
 @dataclass(frozen=True, slots=True)
 class NotebookViewModel:
-    """Notebook-ready projection of session state."""
+    """Notebook presentation of one authoritative gateway projection."""
 
-    session_id: str
-    event_count: int
-    activity: tuple[ActivityItem, ...]
-    chat: tuple[ChatMessage, ...]
-    skill_proposals: tuple[SkillProposal, ...]
-    approval_controls: tuple[ApprovalControl, ...]
-    policy_status: tuple[PolicyStatus, ...]
-    export_actions: tuple[ExportAction, ...]
-    paused: bool
+    projection: SessionProjection
+
+    @property
+    def session_id(self) -> str:
+        """Return the projected session identifier."""
+        return self.projection.session_id
+
+    @property
+    def event_count(self) -> int:
+        """Return the number of durable events represented by the projection."""
+        return self.projection.event_count
+
+    @property
+    def revision(self) -> int:
+        """Return the last durable event sequence represented by the projection."""
+        return self.projection.revision
+
+    @property
+    def activity(self) -> tuple[ProjectionActivity, ...]:
+        """Return gateway-labeled session activity."""
+        return self.projection.activity
+
+    @property
+    def conversation(self) -> tuple[ProjectionMessage, ...]:
+        """Return the shared conversation and trace presentation."""
+        return self.projection.conversation
+
+    @property
+    def pending_approval(self) -> ProjectionApprovalGroup | None:
+        """Return the one atomic action group awaiting a decision."""
+        return self.projection.pending_approval
+
+    @property
+    def context(self) -> ProjectionModelContext:
+        """Return the active model-routing context."""
+        return self.projection.context
+
+    @property
+    def lifecycle(self) -> ProjectionLifecycleState:
+        """Return the shared lifecycle and available transitions."""
+        return self.projection.lifecycle
+
+    @property
+    def task_plan(self) -> tuple[ProjectionTask, ...]:
+        """Return the shared task plan."""
+        return self.projection.task_plan
+
+    @property
+    def usage(self) -> ProjectionUsage | None:
+        """Return accumulated model usage when available."""
+        return self.projection.usage
+
+    @property
+    def usage_by_purpose(self) -> tuple[ProjectionUsage, ...]:
+        """Return OpenHands usage separated by runtime purpose."""
+        return self.projection.usage_by_purpose
+
+    @property
+    def subagents(self) -> tuple[ProjectionSubagent, ...]:
+        """Return projected parent and specialist-agent lineage."""
+        return self.projection.subagents
+
+    @property
+    def streaming_text(self) -> str:
+        """Return transient model output not yet represented by a final event."""
+        return self.projection.streaming_text
+
+    @property
+    def available_commands(
+        self,
+    ) -> tuple[str, ...]:
+        """Return commands allowed by the shared lifecycle projection."""
+        return self.projection.available_commands
+
+    @property
+    def paused(self) -> bool:
+        """Return whether the projected session is paused."""
+        return self.projection.paused
 
 
 class NotebookSession:
-    """Notebook API over the same gateway command and event stream as the CLI."""
+    """Notebook API over the same gateway state used by terminal and browser clients."""
 
     def __init__(
         self,
@@ -142,10 +151,9 @@ class NotebookSession:
             raise ValueError("notebook project must match the injected gateway project")
         self.session_id = session_id
         self.gateway = SessionGateway(project=self.project) if gateway is None else gateway
-        self.gateway.replay_events(session_id=session_id)
 
     def chat(self, prompt: str) -> NotebookViewModel:
-        """Run one chat turn and return the notebook view model."""
+        """Submit one message and return the current session projection."""
         return self._handle(CommandKind.CHAT, {"prompt": prompt})
 
     def model_settings(self) -> ModelSettingsResponse:
@@ -309,26 +317,18 @@ class NotebookSession:
         """Release resources when leaving a managed notebook context."""
         self.close()
 
-    def approve(
-        self,
-        *,
-        tool_call_id: str,
-    ) -> NotebookViewModel:
-        """Allow the complete pending OpenHands action set once."""
+    def approve(self, *, group_id: str) -> NotebookViewModel:
+        """Allow every action in the pending OpenHands action group once."""
         return self._handle(
             CommandKind.APPROVE,
-            {"target_type": "tool-call", "target_id": tool_call_id},
+            {"target_type": "action-set", "target_id": group_id},
         )
 
-    def deny(
-        self,
-        *,
-        tool_call_id: str,
-    ) -> NotebookViewModel:
-        """Reject the complete pending OpenHands action set."""
+    def deny(self, *, group_id: str) -> NotebookViewModel:
+        """Reject every action in the pending OpenHands action group."""
         return self._handle(
             CommandKind.DENY,
-            {"target_type": "tool-call", "target_id": tool_call_id},
+            {"target_type": "action-set", "target_id": group_id},
         )
 
     def pause(self) -> NotebookViewModel:
@@ -339,14 +339,15 @@ class NotebookSession:
         """Resume the session."""
         return self._handle(CommandKind.RESUME)
 
-    def audit_export(self) -> NotebookViewModel:
-        """Export the scrubbed audit log."""
-        return self._handle(CommandKind.AUDIT_EXPORT)
+    def audit_export(self) -> AuditExportResponse:
+        """Create and return the same scrubbed audit export used by the browser."""
+        self._handle(CommandKind.AUDIT_EXPORT)
+        return self.gateway.audit_export(self.session_id)
 
     def replay(self) -> NotebookViewModel:
-        """Replay persisted events as a notebook view model."""
-        events = self.gateway.replay_events(session_id=self.session_id)
-        return build_view_model(events)
+        """Return the gateway projection reconstructed from persisted state."""
+        self.project.initialize()
+        return self._view_model()
 
     def _handle(
         self,
@@ -355,7 +356,12 @@ class NotebookSession:
     ) -> NotebookViewModel:
         command = self._command(kind, payload)
         self.gateway.handle(command)
-        return self.replay()
+        return self._view_model()
+
+    def _view_model(self) -> NotebookViewModel:
+        return build_view_model(
+            self.gateway.persisted_session_projection(session_id=self.session_id)
+        )
 
     def _command(
         self,
@@ -372,177 +378,9 @@ class NotebookSession:
         )
 
 
-def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
-    """Build a notebook view model from shared session events."""
-    activity: list[ActivityItem] = []
-    chat: list[ChatMessage] = []
-    skills: list[SkillProposal] = []
-    approvals: list[ApprovalControl] = []
-    pending_actions = {
-        action.tool_call_id: ApprovalAction(
-            target_id=action.tool_call_id,
-            tool_name=action.tool_name,
-            risk=action.risk,
-            summary=action.summary,
-            arguments=action.arguments,
-        )
-        for action in pending_tool_actions(events)
-    }
-    policies: list[PolicyStatus] = []
-    exports: list[ExportAction] = []
-    paused = False
-    session_id = events[-1].session_id if events else ""
-    for event in events:
-        kind = _event_kind(event)
-        activity.append(_activity_item(event))
-        if kind == EventKind.USER_MESSAGE_RECORDED.value:
-            chat.append(ChatMessage(role="user", content=str(event.payload.get("content", ""))))
-        elif kind == EventKind.AGENT_MESSAGE_EMITTED.value:
-            chat.append(
-                ChatMessage(role="assistant", content=str(event.payload.get("content", "")))
-            )
-        elif kind == EventKind.APPROVAL_RECORDED.value:
-            approval = _mapping_payload(event.payload["approval"], "approval")
-            if approval["target_type"] == "skill":
-                skills.append(
-                    SkillProposal(
-                        target_id=str(approval["target_id"]),
-                        status=_skill_status(str(approval["decision"])),
-                        detail=str(approval.get("reason", "")),
-                    )
-                )
-            _upsert_approval(
-                approvals,
-                ApprovalControl(
-                    target_type=str(approval["target_type"]),
-                    target_id=str(approval["target_id"]),
-                    label=f"{approval['decision']} {approval['target_type']}",
-                    decision=str(approval["decision"]),
-                ),
-            )
-        elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
-            decision = _mapping_payload(event.payload["decision"], "decision")
-            policies.append(
-                PolicyStatus(
-                    decision=str(decision["decision"]),
-                    endpoint=str(decision["endpoint"]),
-                    reason=str(decision["reason"]),
-                )
-            )
-        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
-            target_id = str(event.payload["tool_call_id"])
-            pending_actions.pop(target_id, None)
-            _upsert_approval(
-                approvals,
-                ApprovalControl(
-                    target_type="tool-call",
-                    target_id=target_id,
-                    label=f"Action {event.payload['decision']}",
-                    decision=str(event.payload["decision"]),
-                ),
-            )
-        elif kind == EventKind.AUDIT_EXPORT_RECORDED.value:
-            exports.append(
-                ExportAction(
-                    label="Scrubbed audit JSONL",
-                    path=str(event.payload["path"]),
-                )
-            )
-        elif kind == EventKind.SESSION_PAUSED.value:
-            paused = True
-        elif kind == EventKind.SESSION_RESUMED.value:
-            paused = False
-    if pending_actions:
-        actions = tuple(pending_actions.values())
-        label = "action" if len(actions) == 1 else "actions"
-        approvals.append(
-            ApprovalControl(
-                target_type="tool-call",
-                target_id=actions[0].target_id,
-                label=f"Review complete action set ({len(actions)} {label})",
-                actions=actions,
-            )
-        )
-    return NotebookViewModel(
-        session_id=session_id,
-        event_count=len(events),
-        activity=tuple(activity),
-        chat=tuple(chat),
-        skill_proposals=tuple(skills),
-        approval_controls=tuple(approvals),
-        policy_status=tuple(policies),
-        export_actions=tuple(exports),
-        paused=paused,
-    )
-
-
-def _upsert_approval(approvals: list[ApprovalControl], control: ApprovalControl) -> None:
-    for index, existing in enumerate(approvals):
-        if existing.target_type == control.target_type and existing.target_id == control.target_id:
-            approvals[index] = control
-            return
-    approvals.append(control)
-
-
-def _activity_item(event: SessionEvent) -> ActivityItem:
-    return ActivityItem(
-        sequence=event.sequence,
-        kind=_event_kind(event),
-        label=_activity_label(_event_kind(event)),
-        detail=_activity_detail(event),
-    )
-
-
-def _activity_label(kind: str) -> str:
-    labels = {
-        EventKind.COMMAND_RECEIVED.value: "Command received",
-        EventKind.APPROVAL_RECORDED.value: "Approval recorded",
-        EventKind.MODEL_CALL_DECISION_RECORDED.value: "Model-call decision",
-        EventKind.USER_MESSAGE_RECORDED.value: "Researcher message",
-        EventKind.AGENT_MESSAGE_EMITTED.value: "Agent message",
-        EventKind.TOOL_CALL_PROPOSED.value: "Tool proposed",
-        EventKind.CONFIRMATION_REQUESTED.value: "Confirmation requested",
-        EventKind.CONFIRMATION_RESOLVED.value: "Confirmation resolved",
-        EventKind.TOOL_EXECUTION_RECORDED.value: "Tool execution",
-        EventKind.SESSION_PAUSED.value: "Session paused",
-        EventKind.SESSION_RESUMED.value: "Session resumed",
-        EventKind.AUDIT_EXPORT_RECORDED.value: "Audit export",
-        EventKind.ERROR_RECORDED.value: "Error",
-    }
-    return labels.get(kind, kind)
-
-
-def _activity_detail(event: SessionEvent) -> str:
-    kind = _event_kind(event)
-    if kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
-        decision = _mapping_payload(event.payload["decision"], "decision")
-        return f"{decision['decision']} {decision['endpoint']}"
-    if kind == EventKind.TOOL_CALL_PROPOSED.value:
-        return str(event.payload.get("tool_name", ""))
-    if kind == EventKind.TOOL_EXECUTION_RECORDED.value:
-        return f"exit={event.payload.get('exit_code', '')}"
-    if kind == EventKind.AUDIT_EXPORT_RECORDED.value:
-        return str(event.payload.get("path", ""))
-    return str(event.payload.get("command_id", ""))
-
-
-def _mapping_payload(value: JsonValue, name: str) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        msg = f"expected {name} payload to be an object"
-        raise TypeError(msg)
-    return value
-
-
-def _skill_status(value: str) -> Literal["proposed", "approved", "denied"]:
-    if value == "approved":
-        return "approved"
-    if value == "denied":
-        return "denied"
-    return "proposed"
-
-
-def _event_kind(event: SessionEvent) -> str:
-    return str(event.kind)
+def build_view_model(projection: SessionProjection) -> NotebookViewModel:
+    """Wrap the gateway-owned projection without reducing session events."""
+    return NotebookViewModel(projection=projection)
 
 
 def _utc_now() -> str:

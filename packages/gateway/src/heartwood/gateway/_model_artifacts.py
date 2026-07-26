@@ -92,7 +92,7 @@ class ArtifactDownloader(Protocol):
         repo_id: str,  # noqa: F841, RUF100
         filename: str,
         revision: str,
-        local_dir: Path,
+        local_dir: Path,  # noqa: F841, RUF100
         tqdm_class: type[_DownloadProgress] | None = None,  # noqa: F841, RUF100
     ) -> str: ...
 

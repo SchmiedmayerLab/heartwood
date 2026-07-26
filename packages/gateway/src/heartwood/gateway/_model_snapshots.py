@@ -13,14 +13,15 @@ import json
 import os
 import re
 import shutil
-import tempfile
 import threading
+import time
 import tomllib
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, TypedDict, Unpack, cast
 
 from filelock import FileLock
 
@@ -38,6 +39,9 @@ _ENTRY = re.compile(r"^([0-9a-fA-F]{64}) [ *](.+)$")
 _SNAPSHOT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SAFE_PATTERN = re.compile(r"^[A-Za-z0-9._*?/[\]-]+$")
 _SIZE_TOLERANCE = 0.20
+_DOWNLOAD_RETRY_DELAYS = (1.0, 4.0)
+_DOWNLOAD_RESUME_SCHEMA = "heartwood.model-snapshot-download.v1"
+_GENERATED_SNAPSHOT_FILES = frozenset({"HEARTWOOD-SOURCE.json", "SHA256SUMS"})
 
 type ProgressCallback = Callable[[int, int], None]
 type ModelTier = Literal["standard", "powerful", "maximum"]
@@ -60,20 +64,21 @@ def automatic_model_tier(platform_id: str) -> ModelTier:
     return "standard"
 
 
+class _SnapshotDownloadArguments(TypedDict):
+    repo_id: str
+    revision: str
+    local_dir: Path
+    cache_dir: Path
+    token: bool | str | None
+    allow_patterns: tuple[str, ...]
+    ignore_patterns: tuple[str, ...]
+
+
 class SnapshotDownloader(Protocol):
     """Callable contract implemented by ``huggingface_hub.snapshot_download``."""
 
-    def __call__(
-        self,
-        *,
-        repo_id: str,  # noqa: F841, RUF100
-        revision: str,
-        local_dir: Path,
-        cache_dir: Path,
-        token: bool,
-        allow_patterns: tuple[str, ...],
-        ignore_patterns: tuple[str, ...],
-    ) -> str: ...
+    def __call__(self, **_kwargs: Unpack[_SnapshotDownloadArguments]) -> str:
+        raise NotImplementedError
 
 
 class ModelSnapshotError(ValueError):
@@ -387,6 +392,8 @@ def download_model_snapshot(
     snapshot.validate()
     cache_dir = cache_dir.resolve()
     destination = (cache_dir / snapshot.snapshot_id).resolve()
+    staging = cache_dir / f".{snapshot.snapshot_id}.partial"
+    resume_record_path = cache_dir / f".{snapshot.snapshot_id}.partial.json"
     if cache_dir != destination and cache_dir not in destination.parents:
         raise ModelSnapshotError("model snapshot path escapes configured cache directory")
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -399,15 +406,40 @@ def download_model_snapshot(
                 raise ModelSnapshotError(
                     f"existing model snapshot is incomplete or modified: {destination}: {error}"
                 ) from error
+            shutil.rmtree(staging, ignore_errors=True)
+            with suppress(OSError):
+                resume_record_path.unlink(missing_ok=True)
+            if progress_callback is not None:
+                progress_callback(snapshot.expected_size_bytes, snapshot.expected_size_bytes)
+            return destination
+        resumed_bytes = _prepare_partial_download(
+            staging=staging,
+            resume_record_path=resume_record_path,
+            snapshot=snapshot,
+        )
+        if _partial_snapshot_is_finalized(staging, snapshot):
+            try:
+                _publish_partial_snapshot(staging, destination)
+            except OSError:
+                raise ModelSnapshotError(
+                    "downloaded model files could not be published atomically; "
+                    f"completed files remain in {staging}. Rerun the same command to retry."
+                ) from None
+            with suppress(OSError):
+                resume_record_path.unlink(missing_ok=True)
             if progress_callback is not None:
                 progress_callback(snapshot.expected_size_bytes, snapshot.expected_size_bytes)
             return destination
         available = shutil.disk_usage(cache_dir).free
-        if available < snapshot.minimum_free_bytes:
-            required_gib = snapshot.minimum_free_bytes / (1024**3)
+        required_bytes = max(
+            snapshot.minimum_free_bytes - min(resumed_bytes, snapshot.expected_size_bytes),
+            0,
+        )
+        if available < required_bytes:
+            required_gib = required_bytes / (1024**3)
             available_gib = available / (1024**3)
             raise ModelSnapshotError(
-                f"snapshot requires at least {required_gib:.0f} GiB free; "
+                f"snapshot requires at least {required_gib:.0f} GiB additional free; "
                 f"{available_gib:.1f} GiB is available under {cache_dir}"
             )
         if downloader is None:
@@ -415,11 +447,13 @@ def download_model_snapshot(
                 SnapshotDownloader,
                 import_module("huggingface_hub").snapshot_download,
             )
-        staging = Path(tempfile.mkdtemp(prefix=f".{snapshot.snapshot_id}.", dir=cache_dir))
         progress_stop = threading.Event()
         progress_thread: threading.Thread | None = None
         if progress_callback is not None:
-            progress_callback(0, snapshot.expected_size_bytes)
+            progress_callback(
+                min(resumed_bytes, snapshot.expected_size_bytes),
+                snapshot.expected_size_bytes,
+            )
             progress_thread = threading.Thread(
                 target=_monitor_download_progress,
                 args=(
@@ -434,14 +468,10 @@ def download_model_snapshot(
             progress_thread.start()
         try:
             try:
-                downloader(
-                    repo_id=snapshot.source_repository,
-                    revision=snapshot.source_revision,
-                    local_dir=staging,
-                    cache_dir=staging / ".cache" / "huggingface",
-                    token=False,
-                    allow_patterns=snapshot.allow_patterns,
-                    ignore_patterns=snapshot.ignore_patterns,
+                _download_with_retries(
+                    downloader=downloader,
+                    snapshot=snapshot,
+                    staging=staging,
                 )
             finally:
                 progress_stop.set()
@@ -449,36 +479,188 @@ def download_model_snapshot(
                     progress_thread.join()
                 if progress_callback is not None:
                     progress_callback(
-                        min(_directory_size(staging), snapshot.expected_size_bytes),
+                        min(
+                            _best_effort_payload_size(staging),
+                            snapshot.expected_size_bytes,
+                        ),
                         snapshot.expected_size_bytes,
                     )
-            shutil.rmtree(staging / ".cache", ignore_errors=True)
-            _verify_download_size(staging, snapshot)
-            source_record = {
-                "schema_version": "heartwood.model-snapshot-source.v2",
-                "snapshot_id": snapshot.snapshot_id,
-                "source_repository": snapshot.source_repository,
-                "source_revision": snapshot.source_revision,
-                "download_policy": snapshot.download_policy,
-                "allow_patterns": list(snapshot.allow_patterns),
-                "ignore_patterns": list(snapshot.ignore_patterns),
-            }
-            (staging / "HEARTWOOD-SOURCE.json").write_text(
-                json.dumps(source_record, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            write_model_snapshot_manifest(staging)
-            verify_model_snapshot(staging)
-            _verify_source_record(staging, snapshot)
-            staging.replace(destination)
+            try:
+                _verify_download_size(staging, snapshot)
+            except ModelSnapshotError:
+                _discard_partial_snapshot(staging, resume_record_path)
+                raise
+            try:
+                _remove_snapshot_transfer_cache(staging)
+                _write_snapshot_source_record(staging, snapshot)
+                write_model_snapshot_manifest(staging)
+                verify_model_snapshot(staging)
+                _verify_source_record(staging, snapshot)
+            except UnicodeError:
+                raise ModelSnapshotError(
+                    "downloaded model files could not be finalized yet; completed files "
+                    f"remain in {staging}. Rerun the same command to retry."
+                ) from None
+            except OSError:
+                raise ModelSnapshotError(
+                    "downloaded model files could not be finalized yet; completed files "
+                    f"remain in {staging}. Rerun the same command to retry."
+                ) from None
+            except ModelSnapshotError:
+                raise ModelSnapshotError(
+                    "downloaded model files could not be finalized yet; completed files "
+                    f"remain in {staging}. Rerun the same command to retry."
+                ) from None
+            except ValueError:
+                _discard_partial_snapshot(staging, resume_record_path)
+                raise ModelSnapshotError(
+                    "downloaded model files did not pass Heartwood integrity verification; "
+                    "the incomplete snapshot was removed"
+                ) from None
+            try:
+                _publish_partial_snapshot(staging, destination)
+            except OSError:
+                raise ModelSnapshotError(
+                    "downloaded model files could not be published atomically; "
+                    f"completed files remain in {staging}. Rerun the same command to retry."
+                ) from None
+            with suppress(OSError):
+                resume_record_path.unlink(missing_ok=True)
             if progress_callback is not None:
                 progress_callback(snapshot.expected_size_bytes, snapshot.expected_size_bytes)
         finally:
             progress_stop.set()
             if progress_thread is not None and progress_thread.is_alive():
                 progress_thread.join()
-            shutil.rmtree(staging, ignore_errors=True)
         return destination
+
+
+def _prepare_partial_download(
+    *,
+    staging: Path,
+    resume_record_path: Path,
+    snapshot: ModelSnapshot,
+) -> int:
+    expected = _download_resume_record(snapshot)
+    if staging.exists() or staging.is_symlink():
+        if staging.is_symlink() or not staging.is_dir():
+            raise ModelSnapshotError(
+                f"model download staging path is not a private directory: {staging}"
+            )
+        try:
+            observed = json.loads(resume_record_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            _discard_partial_snapshot(staging, resume_record_path)
+            return _initialize_partial_download(
+                staging=staging,
+                resume_record_path=resume_record_path,
+                expected=expected,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ModelSnapshotError(
+                f"model download resume record is unavailable: {resume_record_path}"
+            ) from error
+        if observed != expected:
+            raise ModelSnapshotError(
+                "model download resume record does not match the requested snapshot: "
+                f"{resume_record_path}"
+            )
+        staging.chmod(0o700)
+        resume_record_path.chmod(0o600)
+        try:
+            return _payload_directory_size(staging)
+        except OSError:
+            raise ModelSnapshotError(
+                "model download payload could not be inspected; completed files remain "
+                f"in {staging}. Rerun the same command to retry."
+            ) from None
+    return _initialize_partial_download(
+        staging=staging,
+        resume_record_path=resume_record_path,
+        expected=expected,
+    )
+
+
+def _initialize_partial_download(
+    *,
+    staging: Path,
+    resume_record_path: Path,
+    expected: dict[str, object],
+) -> int:
+    resume_record_path.unlink(missing_ok=True)
+    staging.mkdir(mode=0o700)
+    try:
+        _write_download_resume_record(resume_record_path, expected)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return 0
+
+
+def _write_download_resume_record(path: Path, record: dict[str, object]) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            json.dump(record, file, indent=2, sort_keys=True)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _download_with_retries(
+    *,
+    downloader: SnapshotDownloader,
+    snapshot: ModelSnapshot,
+    staging: Path,
+) -> None:
+    for attempt in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
+        try:
+            downloader(
+                repo_id=snapshot.source_repository,
+                revision=snapshot.source_revision,
+                local_dir=staging,
+                cache_dir=staging / ".cache" / "huggingface",
+                token=None,
+                allow_patterns=snapshot.allow_patterns,
+                ignore_patterns=snapshot.ignore_patterns,
+            )
+        except Exception:
+            if attempt == len(_DOWNLOAD_RETRY_DELAYS):
+                raise ModelSnapshotError(
+                    "Hugging Face model transfer did not complete after "
+                    f"{attempt + 1} attempts. Completed files remain in {staging}; "
+                    "rerun the same command to resume."
+                ) from None
+            time.sleep(_DOWNLOAD_RETRY_DELAYS[attempt])
+        else:
+            return
+
+
+def _download_resume_record(snapshot: ModelSnapshot) -> dict[str, object]:
+    return {
+        "schema_version": _DOWNLOAD_RESUME_SCHEMA,
+        "snapshot_id": snapshot.snapshot_id,
+        "source_repository": snapshot.source_repository,
+        "source_revision": snapshot.source_revision,
+        "download_policy": snapshot.download_policy,
+        "allow_patterns": list(snapshot.allow_patterns),
+        "ignore_patterns": list(snapshot.ignore_patterns),
+    }
+
+
+def _snapshot_source_record(snapshot: ModelSnapshot) -> dict[str, object]:
+    return {
+        "schema_version": "heartwood.model-snapshot-source.v2",
+        "snapshot_id": snapshot.snapshot_id,
+        "source_repository": snapshot.source_repository,
+        "source_revision": snapshot.source_revision,
+        "download_policy": snapshot.download_policy,
+        "allow_patterns": list(snapshot.allow_patterns),
+        "ignore_patterns": list(snapshot.ignore_patterns),
+    }
 
 
 def _monitor_download_progress(
@@ -488,14 +670,68 @@ def _monitor_download_progress(
     stop: threading.Event,
 ) -> None:
     while not stop.wait(0.25):
-        callback(min(_directory_size(root), total), total)
+        callback(min(_best_effort_payload_size(root), total), total)
 
 
-def _directory_size(root: Path) -> int:
+def _payload_directory_size(root: Path) -> int:
+    return sum(
+        path.stat().st_size
+        for path in root.rglob("*")
+        if path.is_file() and _is_snapshot_payload(root, path)
+    )
+
+
+def _best_effort_payload_size(root: Path) -> int:
     try:
-        return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+        return _payload_directory_size(root)
     except OSError:
         return 0
+
+
+def _is_snapshot_payload(root: Path, path: Path) -> bool:
+    relative = path.relative_to(root)
+    return (
+        relative.parts[:1] != (".cache",) and relative.as_posix() not in _GENERATED_SNAPSHOT_FILES
+    )
+
+
+def _partial_snapshot_is_finalized(
+    staging: Path,
+    snapshot: ModelSnapshot,
+) -> bool:
+    if not all((staging / name).is_file() for name in _GENERATED_SNAPSHOT_FILES):
+        return False
+    try:
+        _verify_download_size(staging, snapshot)
+        verify_model_snapshot(staging)
+        _verify_source_record(staging, snapshot)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _write_snapshot_source_record(root: Path, snapshot: ModelSnapshot) -> None:
+    (root / "HEARTWOOD-SOURCE.json").write_text(
+        json.dumps(_snapshot_source_record(snapshot), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _remove_snapshot_transfer_cache(root: Path) -> None:
+    cache = root / ".cache"
+    if cache.is_symlink():
+        raise ValueError("model snapshot transfer cache must not be a symbolic link")
+    if cache.exists():
+        shutil.rmtree(cache)
+
+
+def _publish_partial_snapshot(staging: Path, destination: Path) -> None:
+    staging.replace(destination)
+
+
+def _discard_partial_snapshot(staging: Path, resume_record_path: Path) -> None:
+    shutil.rmtree(staging, ignore_errors=True)
+    resume_record_path.unlink(missing_ok=True)
 
 
 def verify_model_snapshot(root: Path) -> None:
@@ -567,7 +803,7 @@ def write_model_snapshot_manifest(root: Path) -> None:
 
 
 def _verify_download_size(root: Path, snapshot: ModelSnapshot) -> None:
-    actual = sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+    actual = _payload_directory_size(root)
     lower = int(snapshot.expected_size_bytes * (1 - _SIZE_TOLERANCE))
     upper = int(snapshot.expected_size_bytes * (1 + _SIZE_TOLERANCE))
     if not lower <= actual <= upper:
@@ -583,15 +819,7 @@ def _verify_source_record(root: Path, snapshot: ModelSnapshot) -> None:
         source = json.loads(source_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ModelSnapshotError("model snapshot source record is unavailable") from error
-    expected = {
-        "schema_version": "heartwood.model-snapshot-source.v2",
-        "snapshot_id": snapshot.snapshot_id,
-        "source_repository": snapshot.source_repository,
-        "source_revision": snapshot.source_revision,
-        "download_policy": snapshot.download_policy,
-        "allow_patterns": list(snapshot.allow_patterns),
-        "ignore_patterns": list(snapshot.ignore_patterns),
-    }
+    expected = _snapshot_source_record(snapshot)
     if source != expected:
         raise ModelSnapshotError("model snapshot source record does not match the reviewed source")
 

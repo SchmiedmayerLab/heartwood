@@ -32,13 +32,16 @@ jobs:
         run: python3 deploy/verify_model_sources.py --source-root . --allow-unavailable
   reuse:
     name: REUSE Compliance
-    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.2
+    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.3
   actionlint:
     name: Lint GitHub Actions Workflows
-    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@v0.2
+    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@v0.3
   markdown-links:
     name: Check Markdown Links
-    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@v0.2
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@v0.3
   yamllint:
     name: Lint YAML
     runs-on: ubuntu-latest

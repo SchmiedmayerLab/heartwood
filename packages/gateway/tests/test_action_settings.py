@@ -101,6 +101,37 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
     assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
 
 
+def test_gateway_rejects_confirmation_mode_changes_while_work_is_active(
+    tmp_path: Path,
+) -> None:
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    try:
+        gateway.handle(
+            SessionCommand(
+                command_id="chat",
+                session_id="session-main",
+                kind=CommandKind.CHAT,
+                actor_id="test-user",
+                created_at="2026-07-25T00:00:00Z",
+                payload={"prompt": "Propose one action"},
+            )
+        )
+
+        settings = gateway.action_settings()
+        with pytest.raises(ActionSettingsError, match="while a session is active"):
+            gateway.select_action_confirmation_mode("confirm-risky")
+
+        assert settings["change_allowed"] is False
+        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
+        assert "session-main" in gateway._services
+    finally:
+        gateway.stop()
+
+
 def test_gateway_rejects_confirmation_mode_blocked_by_deployment_policy(
     tmp_path: Path,
 ) -> None:

@@ -109,6 +109,44 @@ The installed OpenHands dependency set cannot be loaded.
 Run `heartwood --version`, reinstall the same Heartwood release through its documented installation route, and rerun `heartwood doctor`.
 Model download, import, and inspection commands remain available so a broken agent runtime does not block project recovery.
 
+### `HW-AGENT-002` — An Agent Action Failed
+
+Heartwood received a failed action from the OpenHands runtime.
+Review the proposed action set and model connection in Activity & audit, then try the task again.
+Heartwood deliberately omits provider and project content from this diagnostic.
+
+### `HW-AGENT-003` — The Agent Conversation Stopped
+
+OpenHands stopped the conversation before the task completed.
+Review Activity & audit, verify the model connection, and start the task again.
+
+### `HW-AGENT-004` — The Agent Worker Stopped
+
+The background OpenHands worker stopped unexpectedly.
+Run `heartwood doctor`, review Activity & audit, and try the task again.
+
+### `HW-AGENT-005` — The Agent Cannot Perform That Operation
+
+The requested operation does not match the conversation's current state.
+Review the active task or pending action set before trying the operation again.
+
+### `HW-AGENT-006` — An Approved Action Has an Unknown Outcome
+
+Heartwood stopped after an action was approved but before OpenHands recorded whether it completed.
+Do not approve or repeat the action blindly.
+Inspect the project files and Activity & audit, then continue in a new session once you understand the project state.
+
+### `HW-AGENT-007` — An Agent Turn Has an Unknown Outcome
+
+Heartwood stopped during a model turn before OpenHands recorded a stable completion boundary.
+Do not repeat the task blindly because the provider may already have processed the request.
+Inspect the session replay and Activity & audit, then continue in a new session.
+
+### `HW-AGENT-999` — The Agent Runtime Reported an Error
+
+An execution backend returned an error without a more specific stable code.
+Review Activity & audit, run `heartwood doctor`, and try the task again.
+
 ## Managed Compute
 
 ### `HW-COMPUTE-001` — A Compute Allocation May Be Required

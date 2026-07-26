@@ -151,6 +151,8 @@ The interactive Slurm allocation and supervised vLLM process end with the Heartw
 - If Slurm reports `QOSMaxGRESPerUser` or `QOSMaxMemoryPerUser`, the account cannot request the planned GPU or RAM total; choose the strongest qualified lower tier or ask the Carina project owner to review the account limits.
 - If the requested model does not fit the available GPU count or memory, choose the strongest compatible lower tier instead of changing tensor parallelism or precision manually.
 - If startup reports a driver or CUDA incompatibility, retain the released CUDA 12.9 environment and report the detected driver; do not install CUDA 13 into the Heartwood runtime.
+- If a Hugging Face transfer is interrupted, rerun the same Heartwood command from the project directory.
+  The Carina installer uses the regular HTTP transfer path on shared project storage, and Heartwood reuses completed files from the private partial snapshot.
 - If model startup fails, inspect `.heartwood/logs/` and the `HW-COMPUTE-*` checks from `heartwood doctor` without sharing project content or secrets.
 - If an interactive allocation disconnects, the process ends with the terminal; Carina recommends `tmux`, `screen`, or a batch job for work that must survive a connection loss.
 - Use Carina's [troubleshooting guide](https://docs.carina.stanford.edu/troubleshooting) for platform and Slurm failures.

@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
+from importlib.metadata import PackageNotFoundError
 from io import BytesIO
 from pathlib import Path
 
@@ -81,16 +83,118 @@ def test_managed_runtime_activity_uses_exact_launch_state_or_loopback_catalog(
 def test_readiness_reports_agent_dependency_failure_without_raising(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    secret = "synthetic-secret-value"
+
     def fail(_env: object) -> object:
-        raise RuntimeError("synthetic import failure")
+        raise RuntimeError(f"synthetic import failure: {secret}")
 
     monkeypatch.setattr("heartwood.gateway._readiness.prepare_openhands_sdk", fail)
 
-    readiness = inspect_deployment(ProjectContext(tmp_path), env={})
+    with caplog.at_level(logging.WARNING, logger="heartwood.gateway._readiness"):
+        readiness = inspect_deployment(ProjectContext(tmp_path), env={})
     check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
 
     assert readiness.state == "recovery-required"
+    assert check.status == "fail"
+    assert check.safe_dict()["code"] == "HW-AGENT-001"
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_carina_login_readiness_defers_full_agent_import_until_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packages: list[str] = []
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.prepare_openhands_sdk",
+        lambda _env: pytest.fail("Carina login readiness loaded the full agent runtime"),
+    )
+
+    def record_package(package: str) -> str:
+        packages.append(package)
+        return "synthetic-version"
+
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.version",
+        record_package,
+    )
+
+    readiness = inspect_deployment(
+        ProjectContext(tmp_path),
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert check.status == "pass"
+    assert "allocation" in check.summary
+    assert packages == ["openhands-sdk", "openhands-tools"]
+
+
+def test_carina_login_readiness_reports_missing_agent_packages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(_package: str) -> str:
+        raise PackageNotFoundError
+
+    monkeypatch.setattr("heartwood.gateway._readiness.version", missing)
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.prepare_openhands_sdk",
+        lambda _env: pytest.fail("Carina login readiness loaded the full agent runtime"),
+    )
+
+    readiness = inspect_deployment(
+        ProjectContext(tmp_path),
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert check.status == "fail"
+    assert check.safe_dict()["code"] == "HW-AGENT-001"
+
+
+def test_carina_allocation_readiness_validates_full_agent_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, str]] = []
+    env = {
+        "HEARTWOOD_PLATFORM": "carina",
+        "SLURM_JOB_ID": "synthetic-allocation",
+    }
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.prepare_openhands_sdk",
+        lambda active_env: observed.append(dict(active_env)),
+    )
+
+    readiness = inspect_deployment(ProjectContext(tmp_path), env=env)
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert check.status == "pass"
+    assert observed == [env]
+
+
+def test_carina_allocation_readiness_reports_agent_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(_env: object) -> None:
+        raise RuntimeError("synthetic allocation import failure")
+
+    monkeypatch.setattr("heartwood.gateway._readiness.prepare_openhands_sdk", fail)
+
+    readiness = inspect_deployment(
+        ProjectContext(tmp_path),
+        env={
+            "HEARTWOOD_PLATFORM": "carina",
+            "SLURM_JOB_ID": "synthetic-allocation",
+        },
+    )
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
     assert check.status == "fail"
     assert check.safe_dict()["code"] == "HW-AGENT-001"
 
@@ -604,3 +708,39 @@ def test_stanford_catalog_uses_external_key_and_exact_connection(tmp_path: Path)
             "supports_tools": True,
         }
     ]
+
+
+def test_connect_model_prepares_stanford_source_in_a_fresh_project(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    observed: list[tuple[str, str | None]] = []
+
+    def list_models(connection: ModelConnection, api_key: str | None) -> tuple[ProviderModel, ...]:
+        observed.append((connection.connection_id, api_key))
+        return (ProviderModel(model_id="gpt-synthetic"),)
+
+    gateway = SessionGateway(
+        project=project,
+        env={"STANFORD_AI_API_KEY": "external-secret"},
+        backend_id="deterministic",
+        model_catalog_service=ModelCatalogService(
+            openai_lister=list_models,
+            compatibility=lambda _connection, _model: (
+                "available",
+                "verified",
+                32_768,
+                True,
+            ),
+        ),
+    )
+
+    settings = gateway.connect_model("stanford-ai-api-gateway", "gpt-synthetic")
+
+    assert observed == [("stanford-ai-api-gateway", "external-secret")]
+    assert settings["model_source"] == "stanford-ai-api-gateway"
+    assert settings["active_profile"] == "stanford-ai-api-gateway"
+    config = gateway.config_store.load()
+    assert config.policy.policy_id == "generic-stanford-ai-api-gateway"
+    assert config.additional_connections[0].connection_id == "stanford-ai-api-gateway"
+    assert "external-secret" not in project.config_path.read_text(encoding="utf-8")

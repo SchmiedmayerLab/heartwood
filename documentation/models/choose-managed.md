@@ -77,6 +77,8 @@ Heartwood evaluates GPU count and memory separately when planning runtime startu
 
 Large public snapshots can encounter Hugging Face's anonymous download limits.
 When an approved Hugging Face token is available, expose `HF_TOKEN` only to the download process and do not store it in the project or `.heartwood/` configuration.
+If a transfer stops, rerun the same Heartwood command from the project directory.
+Heartwood retains completed files in a private partial snapshot, verifies that it belongs to the same immutable model revision, and publishes it into `.heartwood/models/` only after full verification.
 
 In the browser, expand **Advanced options** to request a particular tag, branch, or commit.
 In the terminal, pass `--revision REVISION` to `models inspect` or `models download`.
@@ -111,3 +113,6 @@ heartwood models import /approved/path/model.gguf \
 Heartwood accepts a valid GGUF file or standard vLLM safetensors directory, rejects symbolic links and executable Python, records provenance, and copies the artifact atomically into `.heartwood/models/`.
 The path must be visible to the Heartwood process.
 The browser uses this same server-side import and does not upload multi-gigabyte model files through the page.
+The destination needs enough free space for a complete copy plus Heartwood's enforced runtime reserve.
+Directory imports also create and verify a complete SHA-256 manifest before the model becomes selectable.
+Large imports can therefore be limited by shared or persistent-disk throughput; keep the command or browser page open while Heartwood reports that the import is still in progress.

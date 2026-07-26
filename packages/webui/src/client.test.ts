@@ -8,8 +8,17 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient, createCommand } from "./client";
-import { syntheticEvents } from "./test/fixtures";
-import type { SessionEvent } from "./types";
+import {
+  emptyProjection,
+  syntheticEvents,
+  syntheticProjection,
+} from "./test/fixtures";
+import type { SessionEvent, SessionProjection } from "./types";
+
+const projectionResponse = (
+  events: SessionEvent[] = [],
+  projection: SessionProjection = syntheticProjection(),
+) => ({ events, projection });
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -31,10 +40,14 @@ class FakeWebSocket {
     this.onclose?.(new CloseEvent("close", { code }));
   }
 
-  emit(events: SessionEvent[]): void {
+  emit(projection: SessionProjection): void {
+    this.emitRaw(JSON.stringify(projectionResponse([], projection)));
+  }
+
+  emitRaw(data: string): void {
     this.onmessage?.(
       new MessageEvent("message", {
-        data: JSON.stringify({ events }),
+        data,
       }),
     );
   }
@@ -59,10 +72,14 @@ class FakeEventSource {
     }
   }
 
-  emit(events: SessionEvent[]): void {
+  emit(projection: SessionProjection): void {
+    this.emitRaw(JSON.stringify(projectionResponse([], projection)));
+  }
+
+  emitRaw(data: string): void {
     this.listener?.(
       new MessageEvent("heartwood-session-events", {
-        data: JSON.stringify({ events }),
+        data,
       }),
     );
   }
@@ -183,11 +200,14 @@ describe("GatewayClient", () => {
   });
 
   it("posts commands through the configured base path", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ events: syntheticEvents().slice(0, 1) }), {
-        status: 200,
-      }),
-    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify(projectionResponse(syntheticEvents().slice(0, 1))),
+          { status: 200 },
+        ),
+      );
     vi.stubGlobal("fetch", fetch);
 
     const client = new GatewayClient("/proxy/8767");
@@ -199,6 +219,59 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/proxy/8767/sessions/session-test/commands",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("rejects session payloads that omit the gateway projection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ events: syntheticEvents() })),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Gateway response included an invalid session projection",
+    );
+  });
+
+  it("rejects malformed fields in a versioned gateway projection", async () => {
+    const malformed = {
+      ...syntheticProjection(),
+      lifecycle: { status: "running" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify(projectionResponse([], malformed as never)),
+          ),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Gateway response included an invalid session projection",
+    );
+  });
+
+  it("reports malformed projection JSON with recovery guidance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{not-json", { status: 200 })),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Heartwood could not read the session update. Refresh the page to reconnect.",
     );
   });
 
@@ -220,7 +293,9 @@ describe("GatewayClient", () => {
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(session)))
       .mockResolvedValueOnce(new Response(JSON.stringify(validation)))
-      .mockResolvedValueOnce(new Response(JSON.stringify({})));
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(projectionResponse([], emptyProjection()))),
+      );
     vi.stubGlobal("fetch", fetch);
     const client = new GatewayClient("/proxy/8767/");
 
@@ -605,6 +680,8 @@ describe("GatewayClient", () => {
         unknown_risk_label: "Not Classified",
         unknown_tool_label: "Tool Action",
       },
+      change_allowed: true,
+      change_blocked_reason: null,
       modes: [],
     };
     const fetch = vi
@@ -745,11 +822,14 @@ describe("GatewayClient", () => {
 
   it("infers the Jupyter proxy base path from the browser location", async () => {
     window.history.pushState({}, "", "/user/synthetic/proxy/8767/");
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ events: syntheticEvents().slice(0, 1) }), {
-        status: 200,
-      }),
-    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify(projectionResponse(syntheticEvents().slice(0, 1))),
+          { status: 200 },
+        ),
+      );
     vi.stubGlobal("fetch", fetch);
 
     const client = new GatewayClient();
@@ -766,11 +846,14 @@ describe("GatewayClient", () => {
       "",
       "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/",
     );
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ events: syntheticEvents().slice(0, 1) }), {
-        status: 200,
-      }),
-    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify(projectionResponse(syntheticEvents().slice(0, 1))),
+          { status: 200 },
+        ),
+      );
     vi.stubGlobal("fetch", fetch);
 
     const client = new GatewayClient();
@@ -786,7 +869,10 @@ describe("GatewayClient", () => {
     const fetch = vi
       .fn()
       .mockResolvedValue(
-        new Response(JSON.stringify({ events: [] }), { status: 200 }),
+        new Response(
+          JSON.stringify(projectionResponse([], emptyProjection())),
+          { status: 200 },
+        ),
       );
     vi.stubGlobal("fetch", fetch);
 
@@ -800,14 +886,16 @@ describe("GatewayClient", () => {
   it("falls back to server-sent events after a WebSocket error", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("EventSource", FakeEventSource);
-    const received: SessionEvent[][] = [];
+    const received: SessionProjection[] = [];
     const client = new GatewayClient("/proxy/8767");
 
-    const cleanup = client.streamEvents("session-test", 2, (events) => {
-      received.push(events);
+    const cleanup = client.streamSession("session-test", 2, (projection) => {
+      received.push(projection);
     });
     FakeWebSocket.instances[0]?.fail();
-    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(3, 4));
+    FakeEventSource.instances[0]?.emit(
+      syntheticProjection({ streamingText: "First streamed response" }),
+    );
     cleanup();
 
     expect(FakeWebSocket.instances[0]?.url).toContain(
@@ -816,27 +904,27 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances[0]?.url).toBe(
       "/proxy/8767/sessions/session-test/events/stream?after=2",
     );
-    expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");
+    expect(received[0]?.streamingText).toBe("First streamed response");
     expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
   });
 
   it("falls back to server-sent events after an abnormal WebSocket close", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("EventSource", FakeEventSource);
-    const received: SessionEvent[][] = [];
+    const received: SessionProjection[] = [];
     const client = new GatewayClient("/proxy/8767");
 
-    const cleanup = client.streamEvents("session-test", 2, (events) => {
-      received.push(events);
+    const cleanup = client.streamSession("session-test", 2, (projection) => {
+      received.push(projection);
     });
     FakeWebSocket.instances[0]?.closeWith(1011);
-    FakeEventSource.instances[0]?.emit(syntheticEvents().slice(3, 4));
+    FakeEventSource.instances[0]?.emit(syntheticProjection({ revision: 6 }));
     cleanup();
 
     expect(FakeEventSource.instances[0]?.url).toBe(
       "/proxy/8767/sessions/session-test/events/stream?after=2",
     );
-    expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");
+    expect(received[0]?.revision).toBe(6);
   });
 
   it("opens the fallback only once for repeated WebSocket failures", () => {
@@ -844,7 +932,7 @@ describe("GatewayClient", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     const client = new GatewayClient("/proxy/8767");
 
-    const cleanup = client.streamEvents("session-test", undefined, vi.fn());
+    const cleanup = client.streamSession("session-test", undefined, vi.fn());
     FakeWebSocket.instances[0]?.closeWith(1011);
     FakeWebSocket.instances[0]?.fail();
     FakeWebSocket.instances[0]?.closeWith(1000);
@@ -853,31 +941,31 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
-  it("streams directly over server-sent events without WebSocket support", () => {
+  it("streams complete projections over server-sent events without WebSocket support", () => {
     const websocketDescriptor = Object.getOwnPropertyDescriptor(
       globalThis,
       "WebSocket",
     );
     Reflect.deleteProperty(globalThis, "WebSocket");
     vi.stubGlobal("EventSource", FakeEventSource);
-    const received: SessionEvent[][] = [];
+    const received: SessionProjection[] = [];
 
     try {
       const client = new GatewayClient("/proxy/8767");
-      const cleanup = client.streamEvents(
+      const cleanup = client.streamSession(
         "session-test",
         undefined,
-        (events) => {
-          received.push(events);
+        (projection) => {
+          received.push(projection);
         },
       );
-      FakeEventSource.instances[0]?.emit([]);
+      FakeEventSource.instances[0]?.emit(emptyProjection());
       cleanup();
 
       expect(FakeEventSource.instances[0]?.url).toBe(
         "/proxy/8767/sessions/session-test/events/stream",
       );
-      expect(received).toEqual([[]]);
+      expect(received).toEqual([emptyProjection()]);
     } finally {
       if (websocketDescriptor !== undefined) {
         Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
@@ -898,7 +986,7 @@ describe("GatewayClient", () => {
     Reflect.deleteProperty(globalThis, "EventSource");
 
     try {
-      const cleanup = new GatewayClient().streamEvents(
+      const cleanup = new GatewayClient().streamSession(
         "session-test",
         undefined,
         vi.fn(),
@@ -914,18 +1002,102 @@ describe("GatewayClient", () => {
     }
   });
 
-  it("streams events over WebSocket when the upgrade succeeds", () => {
+  it("streams complete projections over WebSocket when the upgrade succeeds", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const received: SessionEvent[][] = [];
+    const received: SessionProjection[] = [];
     const client = new GatewayClient();
 
-    const cleanup = client.streamEvents("session-test", undefined, (events) => {
-      received.push(events);
-    });
-    FakeWebSocket.instances[0]?.emit(syntheticEvents().slice(3, 4));
+    const cleanup = client.streamSession(
+      "session-test",
+      undefined,
+      (projection) => {
+        received.push(projection);
+      },
+    );
+    FakeWebSocket.instances[0]?.emit(
+      syntheticProjection({ streamingText: "Working" }),
+    );
     cleanup();
 
-    expect(received[0]?.[0]?.kind).toBe("agent_message.emitted");
+    expect(received[0]?.streamingText).toBe("Working");
     expect(FakeWebSocket.instances[0]?.close).toHaveBeenCalled();
+  });
+
+  it("reports malformed WebSocket projections and falls back to SSE", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onError = vi.fn();
+    const client = new GatewayClient();
+
+    const cleanup = client.streamSession(
+      "session-test",
+      undefined,
+      vi.fn(),
+      onError,
+    );
+    FakeWebSocket.instances[0]?.emitRaw(
+      JSON.stringify({ projection: emptyProjection() }),
+    );
+    cleanup();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(FakeWebSocket.instances[0]?.close).toHaveBeenCalledWith(
+      1002,
+      "invalid Heartwood projection",
+    );
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("reports malformed streamed JSON with recovery guidance", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onError = vi.fn();
+    const client = new GatewayClient();
+
+    const cleanup = client.streamSession(
+      "session-test",
+      undefined,
+      vi.fn(),
+      onError,
+    );
+    FakeWebSocket.instances[0]?.emitRaw("{not-json");
+    cleanup();
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Heartwood could not read the session update. Refresh the page to reconnect.",
+      }),
+    );
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("reports malformed SSE projections and closes the stale stream", () => {
+    const websocketDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    Reflect.deleteProperty(globalThis, "WebSocket");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onError = vi.fn();
+
+    try {
+      new GatewayClient().streamSession(
+        "session-test",
+        undefined,
+        vi.fn(),
+        onError,
+      );
+      FakeEventSource.instances[0]?.emitRaw(
+        JSON.stringify({ projection: emptyProjection() }),
+      );
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
+    } finally {
+      if (websocketDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
+      }
+    }
   });
 });

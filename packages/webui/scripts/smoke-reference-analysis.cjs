@@ -98,7 +98,7 @@ async function main() {
     runCli("models", "refresh", "heartwood");
     runCli("models", "connect", "heartwood", "heartwood-managed-runtime");
 
-    startProcess(heartwoodExecutable, [
+    const gateway = startProcess(heartwoodExecutable, [
       "--interface",
       "web",
       "--host",
@@ -241,8 +241,12 @@ async function main() {
     await expect(page.getByText("Tool execution", { exact: true })).toHaveCount(
       5,
     );
-    await expect(page.getByText("exit=0", { exact: true })).toHaveCount(4);
-    await expect(page.getByText("exit=1", { exact: true })).toHaveCount(1);
+    await expect(
+      page.getByText("terminal · exit=0", { exact: true }),
+    ).toHaveCount(4);
+    await expect(
+      page.getByText("terminal · exit=1", { exact: true }),
+    ).toHaveCount(1);
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     const downloadPromise = page.waitForEvent("download");
@@ -270,11 +274,14 @@ async function main() {
       );
     }
 
+    terminateProcessGroup(gateway);
+    await waitForExit(gateway);
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/Tool terminal exit=0/gu)?.length !== 4 ||
-      replay.match(/Tool terminal exit=1/gu)?.length !== 1 ||
+      replay.match(/Tool: Ran Terminal Command/gu)?.length !== 5 ||
+      replay.match(/terminal completed/gu)?.length !== 4 ||
+      replay.match(/terminal failed/gu)?.length !== 1 ||
       !replay.includes(
         "Agent: The synthetic target-condition cohort summary is ready for review.",
       ) ||
@@ -290,7 +297,38 @@ async function main() {
     ) {
       throw new Error(`CLI did not replay the browser session:\n${replay}`);
     }
-    console.log("Reference analysis browser and CLI system test: ok");
+    const cliAudit = runCli("--session-id", sessionId, "audit", "export");
+    if (!cliAudit.includes("Audit export:")) {
+      throw new Error(
+        `CLI did not export the browser session audit:\n${cliAudit}`,
+      );
+    }
+
+    startProcess(heartwoodExecutable, [
+      "--interface",
+      "web",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      gatewayPort,
+    ]);
+    await waitForUrl(origin);
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: "Synthetic Cohort Analysis" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await page
+      .getByRole("button", { name: "Activity & audit", exact: true })
+      .click();
+    await expect(page.getByText("Audit export", { exact: true })).toHaveCount(
+      2,
+    );
+
+    const handedBack = await fetchJson(
+      `${origin}/sessions/${sessionId}/events`,
+    );
+    assertAuthoritativeSequence(handedBack, sessionId);
+    console.log("Reference analysis bidirectional interface handoff: ok");
   } finally {
     if (browser) await browser.close();
     for (const child of processes.reverse()) terminateProcessGroup(child);
@@ -304,6 +342,7 @@ async function main() {
 }
 
 async function runApprovedTask(page, task, taskSpec) {
+  await expect(task).toBeEnabled({ timeout: 60_000 });
   await task.fill(taskSpec.prompt);
   await task.press("Enter");
   const approval = page
@@ -454,6 +493,33 @@ function listFiles(root) {
     }
   }
   return files.sort();
+}
+
+function assertAuthoritativeSequence(response, sessionId) {
+  const events = response.events;
+  const projection = response.projection;
+  if (!Array.isArray(events) || projection?.sessionId !== sessionId) {
+    throw new Error(`invalid handoff projection: ${JSON.stringify(response)}`);
+  }
+  const sequences = events.map((event) => event.sequence);
+  if (
+    sequences.some((sequence, index) => sequence !== index) ||
+    projection.revision !== sequences.at(-1)
+  ) {
+    throw new Error(
+      `handoff did not preserve one authoritative sequence: ${JSON.stringify(
+        sequences,
+      )}`,
+    );
+  }
+  const auditExports = events.filter(
+    (event) => event.kind === "audit.export.recorded",
+  );
+  if (auditExports.length !== 2) {
+    throw new Error(
+      `expected browser and CLI audit exports: ${JSON.stringify(auditExports)}`,
+    );
+  }
 }
 
 function optionValue(name) {

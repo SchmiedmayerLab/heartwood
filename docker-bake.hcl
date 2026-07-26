@@ -52,6 +52,7 @@ target "_runtime_common" {
   pull = true
   attest = ["type=sbom", "type=provenance,mode=max"]
   args = {
+    HEARTWOOD_REVISION = "${GIT_SHA}"
     HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"
   }
 }
@@ -86,6 +87,7 @@ target "_terra_common" {
     HEARTWOOD_CREATE_USER = "false"
     HEARTWOOD_JUPYTER_PREFIX = "/opt/conda"
     HEARTWOOD_INSTALL_JUPYTER_KERNEL = "true"
+    HEARTWOOD_REVISION = "${GIT_SHA}"
     HEARTWOOD_UV_PYTHON_PREFERENCE = "managed"
     HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"
   }

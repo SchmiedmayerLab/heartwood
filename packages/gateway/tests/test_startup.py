@@ -107,7 +107,8 @@ def test_diagnostic_catalog_is_unique_and_sorted() -> None:
     assert all(item.documentation_path.startswith("/") for item in diagnostics)
     assert all(re.fullmatch(r"HW-[A-Z]+-[0-9]{3}", code) for code in codes)
     assert all(
-        1 <= int(code.rsplit("-", 1)[1]) <= 899 for code in codes if not code.startswith("HW-ENV-")
+        1 <= int(code.rsplit("-", 1)[1]) <= 899 or int(code.rsplit("-", 1)[1]) == 999
+        for code in codes
     )
     assert diagnostic_for("unclassified-check").code == "HW-ENV-999"
     assert diagnostic_for("model-source").code == "HW-MODEL-001"

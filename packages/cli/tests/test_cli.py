@@ -11,6 +11,8 @@ import hashlib
 import io
 import json
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -19,11 +21,14 @@ import pytest
 
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
-    _MODEL_DOWNLOAD_ACTIVITY,
+    _MODEL_PREPARATION_ACTIVITY,
     __version__,
     _consume_prompt,
     _float_payload,
+    _handle_replay,
     _mapping_payload,
+    _run_with_progress,
+    _submit_and_wait,
     _submit_with_progress,
     _supports_full_screen_terminal,
     main,
@@ -42,10 +47,14 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    ProjectionLifecycleState,
     ProviderModel,
     RestGateway,
     RestRequest,
+    SessionLifecycle,
+    SessionProjection,
     SubscriptionDeviceLogin,
+    project_session,
 )
 from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
@@ -56,6 +65,44 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.session import EventKind, SessionEvent
+
+
+def test_cli_import_keeps_openhands_runtime_lazy() -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import sys; import heartwood.cli; assert 'openhands.sdk' not in sys.modules",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_replay_reads_the_committed_stream_without_initializing_the_runtime(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str] = []
+    projection = project_session((), session_id="synthetic-session")
+
+    class ReplayGateway:
+        def session_projection(self, *, session_id: str) -> SessionProjection:
+            raise AssertionError(f"runtime projection requested for {session_id}")
+
+        def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
+            assert session_id == "synthetic-session"
+            calls.append("committed")
+            return projection
+
+    gateway = cast(RealSessionGateway, ReplayGateway())
+    assert _handle_replay(gateway, session_id="synthetic-session") == 0
+
+    captured = capsys.readouterr()
+    assert calls == ["committed"]
+    assert captured.err == ""
 
 
 def _run(
@@ -142,12 +189,33 @@ def test_version_is_available(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_model_preparation_progress_explains_long_running_work() -> None:
-    assert _MODEL_DOWNLOAD_ACTIVITY.label == "Preparing and verifying the model"
-    assert _MODEL_DOWNLOAD_ACTIVITY.waiting_label == "Still preparing and verifying the model"
-    assert _MODEL_DOWNLOAD_ACTIVITY.guidance == (
+    assert _MODEL_PREPARATION_ACTIVITY.label == "Preparing and verifying the model"
+    assert _MODEL_PREPARATION_ACTIVITY.waiting_label == "Still preparing and verifying the model"
+    assert _MODEL_PREPARATION_ACTIVITY.guidance == (
         "Large downloads and full verification of existing model files can take several minutes. "
         "Keep this process running."
     )
+
+
+def test_line_mode_reports_progress_during_slow_model_preparation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def prepare_model() -> str:
+        time.sleep(0.03)
+        return "ready"
+
+    result = _run_with_progress(
+        prepare_model,
+        activity=_MODEL_PREPARATION_ACTIVITY,
+        update_interval=0.005,
+    )
+
+    assert result == "ready"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Preparing and verifying the model..." in captured.err
+    assert "Still preparing and verifying the model" in captured.err
+    assert "Keep this process running." in captured.err
 
 
 def test_line_mode_reports_elapsed_progress_for_a_slow_turn(
@@ -1107,15 +1175,15 @@ def test_one_shot_aliases_and_unknown_action_return_meaningful_status(
     assert _run(project, monkeypatch, ["--prompt", "inspect the project"]) == 0
     assert _run(project, monkeypatch, ["allow", "missing-action"]) == 1
     assert _run(project, monkeypatch, ["reject"]) == 0
-    assert _run(project, monkeypatch, ["pause"]) == 0
-    assert _run(project, monkeypatch, ["resume"]) == 0
+    assert _run(project, monkeypatch, ["pause"]) == 1
+    assert _run(project, monkeypatch, ["resume"]) == 1
 
     output = capsys.readouterr().out
     assert "Review 1 action as one OpenHands action set" in output
     assert "no matching pending action" in output
-    assert "Action set denied" in output
-    assert "Session paused" in output
-    assert "Session resumed" in output
+    assert "Action set rejected" in output
+    assert "pause is unavailable while the agent is idle" in output
+    assert "resume is unavailable while the agent is idle" in output
 
 
 def test_action_alias_reports_gateway_error_event(
@@ -1135,11 +1203,49 @@ def test_action_alias_reports_gateway_error_event(
     monkeypatch.setattr(
         InteractiveSession,
         "submit",
-        lambda _session, _directive: InteractionResult(events=(error_event,)),
+        lambda _session, _directive: InteractionResult(
+            events=(error_event,),
+            projection=project_session((error_event,), session_id="gateway-error"),
+        ),
     )
 
     assert _run(tmp_path, monkeypatch, ["--session-id", "gateway-error", "approve"]) == 1
-    assert "Error: synthetic gateway failure" in capsys.readouterr().out
+    assert "synthetic gateway failure" in capsys.readouterr().out
+
+
+def test_one_shot_interaction_waits_for_background_work() -> None:
+    class BackgroundSession:
+        waited = False
+
+        def submit(self, line: str) -> InteractionResult:
+            assert line == "/allow"
+            return InteractionResult(
+                projection=SessionProjection(
+                    session_id="background",
+                    event_count=1,
+                    revision=0,
+                    lifecycle=ProjectionLifecycleState(
+                        status=SessionLifecycle.RUNNING,
+                        can_pause=True,
+                    ),
+                )
+            )
+
+        def wait_until_stable(self) -> SessionProjection:
+            self.waited = True
+            return SessionProjection(
+                session_id="background",
+                event_count=2,
+                revision=1,
+                lifecycle=ProjectionLifecycleState(status=SessionLifecycle.FINISHED),
+            )
+
+    session = BackgroundSession()
+    result = _submit_and_wait(cast(InteractiveSession, session), "/allow")
+
+    assert session.waited
+    assert result.projection is not None
+    assert result.projection.lifecycle.status == "finished"
 
 
 def test_interactive_chat_does_not_repeat_live_user_message(
@@ -1184,7 +1290,7 @@ def test_interactive_chat_does_not_repeat_live_user_message(
     assert "Heartwood agent." in output
     assert "You: summarize" not in output
     assert "Review 1 action as one OpenHands action set" in output
-    assert "Action set denied (1 action)" in output
+    assert "Action set rejected (1 action)" in output
 
 
 def test_actions_and_advanced_model_profile_persist_in_config_toml(
@@ -1329,6 +1435,53 @@ def test_models_list_select_remove_and_artifacts_use_one_configuration(
     assert "No model profiles configured" not in output
 
 
+def test_models_connect_prepares_stanford_source_in_a_fresh_project(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    observed: list[tuple[str, str | None]] = []
+
+    def models(
+        connection: ModelConnection,
+        api_key: str | None,
+    ) -> tuple[ProviderModel, ...]:
+        observed.append((connection.connection_id, api_key))
+        return (ProviderModel(model_id="gpt-synthetic"),)
+
+    _install_deterministic_gateway(
+        monkeypatch,
+        env={"STANFORD_AI_API_KEY": "external-secret"},
+        model_catalog_service=ModelCatalogService(
+            openai_lister=models,
+            compatibility=lambda _connection, _model: (
+                "available",
+                "verified",
+                32_768,
+                True,
+            ),
+        ),
+    )
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            ["models", "connect", "stanford-ai-api-gateway", "gpt-synthetic"],
+        )
+        == 0
+    )
+
+    assert observed == [("stanford-ai-api-gateway", "external-secret")]
+    output = capsys.readouterr().out
+    assert "* stanford-ai-api-gateway  openai/gpt-synthetic" in output
+    assert "Policy: allow" in output
+    config = (project / ".heartwood" / "config.toml").read_text(encoding="utf-8")
+    assert 'model_source = "stanford-ai-api-gateway"' in config
+    assert "external-secret" not in config
+
+
 def test_cli_imports_a_local_model_and_forgets_provider_credentials(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1359,9 +1512,10 @@ def test_cli_imports_a_local_model_and_forgets_provider_credentials(
     )
     assert _run(project, monkeypatch, ["models", "forget", "openai"]) == 0
 
-    output = capsys.readouterr().out
-    assert "research-model is ready in this project" in output
-    assert "Forgot the saved credential for openai" in output
+    captured = capsys.readouterr()
+    assert "research-model is ready in this project" in captured.out
+    assert "Forgot the saved credential for openai" in captured.out
+    assert "Preparing and verifying the model" in captured.err
     assert (project / ".heartwood" / "models").is_dir()
 
 
@@ -1507,8 +1661,9 @@ def test_audit_export_uses_project_sessions(
     project = tmp_path / "analysis"
     audit = tmp_path / "audit.jsonl"
     _install_deterministic_gateway(monkeypatch)
+    project.mkdir()
+    ProjectContext(project).initialize()
 
-    assert _run(project, monkeypatch, ["--session-id", "review", "pause"]) == 0
     assert (
         _run(
             project,

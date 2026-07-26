@@ -252,6 +252,15 @@ class RestGateway:
             return RestResponse(status_code=200, body=_json_object(export))
         if request.method == "POST" and resource == "commands":
             return self._handle_command(session_id=session_id, body=request.body)
+        if request.method == "GET" and resource == "projection":
+            try:
+                projection = self.gateway.session_projection(session_id=session_id)
+            except (SessionOwnershipError, SessionRecoveryError) as error:
+                return _error(409, error)
+            return RestResponse(
+                status_code=200,
+                body=_json_object(projection.safe_dict()),
+            )
         if request.method == "GET" and resource == "events":
             query = parse_qs(parsed.query)
             try:
@@ -259,7 +268,7 @@ class RestGateway:
             except ValueError:
                 return _error(400, "after query parameter must be an integer")
             try:
-                events = self.gateway.replay_events(
+                snapshot = self.gateway.session_snapshot(
                     session_id=session_id,
                     after_sequence=after,
                 )
@@ -267,7 +276,10 @@ class RestGateway:
                 return _error(409, error)
             return RestResponse(
                 status_code=200,
-                body={"events": [event.model_dump(mode="json") for event in events]},
+                body={
+                    "events": [event.model_dump(mode="json") for event in snapshot.events],
+                    "projection": _json_object(snapshot.projection.safe_dict()),
+                },
             )
         return _error(405, "method is not allowed for gateway route")
 
@@ -308,9 +320,13 @@ class RestGateway:
             result = self.gateway.handle(command)
         except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
             return _error(409, error)
+        snapshot = self.gateway.session_snapshot(session_id=session_id)
         return RestResponse(
             status_code=200,
-            body={"events": [event.model_dump(mode="json") for event in result.events]},
+            body={
+                "events": [event.model_dump(mode="json") for event in result.events],
+                "projection": _json_object(snapshot.projection.safe_dict()),
+            },
         )
 
     def _handle_action_confirmation(self, *, body: str) -> RestResponse:

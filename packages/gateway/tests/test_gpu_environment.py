@@ -431,6 +431,47 @@ def test_slurm_discovery_returns_empty_when_sinfo_fails(
     assert discover_slurm_gpu_partitions({"PATH": "/usr/bin"}) == ()
 
 
+@pytest.mark.parametrize(
+    "first_result",
+    [
+        OSError("temporary scheduler failure"),
+        subprocess.TimeoutExpired("sinfo", 15),
+        subprocess.CompletedProcess(("sinfo",), 1, stdout=""),
+    ],
+)
+def test_slurm_discovery_retries_transient_scheduler_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    first_result: object,
+) -> None:
+    calls = 0
+
+    def run(
+        command: tuple[str, ...],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if isinstance(first_result, BaseException):
+                raise first_result
+            assert isinstance(first_result, subprocess.CompletedProcess)
+            return first_result
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="dev*|gpu:nvidia_l40s:8|up|515000|64\n",
+        )
+
+    monkeypatch.setattr("heartwood.gateway._gpu_environment.subprocess.run", run)
+
+    partitions = discover_slurm_gpu_partitions({"PATH": "/usr/bin"})
+
+    assert calls == 2
+    assert len(partitions) == 1
+    assert partitions[0].name == "dev"
+    assert partitions[0].gpu_count == 8
+
+
 def test_visible_gpu_discovery_handles_missing_malformed_and_failed_queries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

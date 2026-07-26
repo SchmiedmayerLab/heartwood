@@ -220,8 +220,23 @@ async function verifySessionRoutes(baseUrl) {
   const commandEvents =
     Array.isArray(commandResponse.events) ? commandResponse.events : [];
   const commandKinds = commandEvents.map((event) => event.kind);
-  if (!commandKinds.includes("session.paused")) {
-    throw new Error("Jupyter proxy command route did not return session state");
+  if (
+    !commandKinds.includes("command.received") ||
+    !commandKinds.includes("error.recorded")
+  ) {
+    throw new Error(
+      "Jupyter proxy did not reject an unavailable idle-session command",
+    );
+  }
+  const projection = commandResponse.projection;
+  if (
+    projection?.lifecycle?.status !== "idle" ||
+    projection?.revision !== commandEvents.at(-1)?.sequence ||
+    projection?.availableCommands?.join(",") !== "chat"
+  ) {
+    throw new Error(
+      "Jupyter proxy command route did not return its authoritative projection",
+    );
   }
 
   const replayResponse = await fetchJson(
@@ -266,9 +281,12 @@ async function verifySessionRoutes(baseUrl) {
   );
   if (
     !stream.includes("event: heartwood-session-events") ||
-    !stream.includes("session.paused")
+    !stream.includes("error.recorded") ||
+    !stream.includes('"projection"')
   ) {
-    throw new Error("Jupyter proxy SSE route did not stream persisted events");
+    throw new Error(
+      "Jupyter proxy SSE route did not stream events with their projection",
+    );
   }
 }
 

@@ -72,6 +72,8 @@ export type InterfaceKind = "terminal" | "web" | "notebook";
  * Shared action-confirmation settings.
  */
 export interface ActionSettingsResponse {
+  change_allowed: boolean;
+  change_blocked_reason: string | null;
   confirmation_mode: ActionConfirmationMode;
   modes: ActionModeOptionResponse[];
   presentation: ActionPresentationResponse;

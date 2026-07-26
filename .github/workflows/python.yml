@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: python-${{ github.workflow }}-${{ github.ref }}
@@ -51,5 +52,6 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
+          fail_ci_if_error: true
           files: coverage.xml
-          fail_ci_if_error: false
+          use_oidc: true

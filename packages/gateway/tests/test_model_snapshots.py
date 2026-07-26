@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import heartwood.gateway._model_snapshots as model_snapshots_module
 from heartwood.gateway import (
     ModelSnapshot,
     ModelSnapshotCatalog,
@@ -241,7 +244,7 @@ def test_snapshot_download_is_atomic_and_creates_exact_provenance(tmp_path: Path
         (local_dir / "config.json").write_text("{}\n", encoding="utf-8")
         (local_dir / "weights.safetensors").write_bytes(b"synthetic-weights")
         (local_dir / ".cache" / "huggingface").mkdir(parents=True)
-        (local_dir / ".cache" / "huggingface" / "download.lock").touch()
+        (local_dir / ".cache" / "huggingface" / "download.lock").write_bytes(b"x" * 100)
         return str(local_dir)
 
     destination = download_model_snapshot(
@@ -283,6 +286,231 @@ def test_snapshot_download_reuses_verified_content_and_rejects_tampering(tmp_pat
     (destination / "weights.safetensors").write_bytes(b"modified")
     with pytest.raises(ModelSnapshotError, match="incomplete or modified"):
         download_model_snapshot(snapshot, cache_dir=tmp_path, downloader=downloader)
+
+
+def test_snapshot_download_retries_and_resumes_a_private_partial_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+    calls = 0
+    sleeps: list[float] = []
+    private_failure = "https://signed.example.invalid/private-transfer-token"
+
+    def interrupted_downloader(**kwargs: object) -> str:
+        nonlocal calls
+        calls += 1
+        local_dir = Path(str(kwargs["local_dir"]))
+        (local_dir / "completed.safetensors").write_bytes(b"a" * 10)
+        raise RuntimeError(private_failure)
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_snapshots.time.sleep",
+        sleeps.append,
+    )
+    with pytest.raises(ModelSnapshotError, match="after 3 attempts") as caught:
+        download_model_snapshot(
+            snapshot,
+            cache_dir=tmp_path,
+            downloader=interrupted_downloader,
+        )
+
+    partial = tmp_path / f".{snapshot.snapshot_id}.partial"
+    resume_record = tmp_path / f".{snapshot.snapshot_id}.partial.json"
+    assert calls == 3
+    assert sleeps == [1.0, 4.0]
+    assert private_failure not in str(caught.value)
+    formatted = "".join(traceback.format_exception(caught.type, caught.value, caught.tb))
+    assert private_failure not in formatted
+    assert (partial / "completed.safetensors").read_bytes() == b"a" * 10
+    assert stat.S_IMODE(partial.stat().st_mode) == 0o700
+    assert stat.S_IMODE(resume_record.stat().st_mode) == 0o600
+
+    progress: list[tuple[int, int]] = []
+
+    def resumed_downloader(**kwargs: object) -> str:
+        local_dir = Path(str(kwargs["local_dir"]))
+        assert (local_dir / "completed.safetensors").read_bytes() == b"a" * 10
+        (local_dir / "remaining.safetensors").write_bytes(b"b" * 10)
+        return str(local_dir)
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_snapshots.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=20, used=10, free=10),
+    )
+    destination = download_model_snapshot(
+        snapshot,
+        cache_dir=tmp_path,
+        downloader=resumed_downloader,
+        progress_callback=lambda downloaded, total: progress.append((downloaded, total)),
+    )
+
+    assert progress[0] == (10, 20)
+    assert destination == tmp_path / snapshot.snapshot_id
+    assert not partial.exists()
+    assert not resume_record.exists()
+    verify_model_snapshot(destination)
+
+
+def test_snapshot_download_recovers_a_partial_directory_without_a_resume_record(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    partial = tmp_path / f".{snapshot.snapshot_id}.partial"
+    partial.mkdir()
+    (partial / "untrusted-partial.safetensors").write_bytes(b"untrusted")
+
+    def downloader(**kwargs: object) -> str:
+        local_dir = Path(str(kwargs["local_dir"]))
+        assert not (local_dir / "untrusted-partial.safetensors").exists()
+        (local_dir / "weights.safetensors").write_bytes(b"x" * snapshot.expected_size_bytes)
+        return str(local_dir)
+
+    destination = download_model_snapshot(
+        snapshot,
+        cache_dir=tmp_path,
+        downloader=downloader,
+    )
+
+    assert destination == tmp_path / snapshot.snapshot_id
+    assert not partial.exists()
+    assert not (tmp_path / f".{snapshot.snapshot_id}.partial.json").exists()
+    verify_model_snapshot(destination)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "_remove_snapshot_transfer_cache",
+        "_write_snapshot_source_record",
+        "write_model_snapshot_manifest",
+        "verify_model_snapshot",
+        "_verify_source_record",
+        "_publish_partial_snapshot",
+    ],
+)
+def test_snapshot_download_preserves_payload_across_finalization_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    snapshot = _snapshot()
+    downloader_invocations = 0
+    transfers = 0
+
+    def downloader(**kwargs: object) -> str:
+        nonlocal downloader_invocations, transfers
+        downloader_invocations += 1
+        local_dir = Path(str(kwargs["local_dir"]))
+        payload = local_dir / "weights.safetensors"
+        if not payload.exists():
+            transfers += 1
+            payload.write_bytes(b"x" * snapshot.expected_size_bytes)
+        assert payload.read_bytes() == b"x" * snapshot.expected_size_bytes
+        return str(local_dir)
+
+    original = getattr(model_snapshots_module, target)
+    should_fail = True
+
+    def fail_once(*args: object, **kwargs: object) -> object:
+        nonlocal should_fail
+        if should_fail:
+            should_fail = False
+            raise OSError("synthetic finalization failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(model_snapshots_module, target, fail_once)
+
+    with pytest.raises(ModelSnapshotError, match="completed files remain"):
+        download_model_snapshot(snapshot, cache_dir=tmp_path, downloader=downloader)
+
+    partial = tmp_path / f".{snapshot.snapshot_id}.partial"
+    resume_record = tmp_path / f".{snapshot.snapshot_id}.partial.json"
+    assert (partial / "weights.safetensors").read_bytes() == (b"x" * snapshot.expected_size_bytes)
+    assert resume_record.is_file()
+
+    destination = download_model_snapshot(
+        snapshot,
+        cache_dir=tmp_path,
+        downloader=downloader,
+    )
+
+    assert destination == tmp_path / snapshot.snapshot_id
+    assert transfers == 1
+    assert downloader_invocations <= 2
+    assert not partial.exists()
+    assert not resume_record.exists()
+    verify_model_snapshot(destination)
+
+
+def test_snapshot_resume_capacity_ignores_hugging_face_cache_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot()
+
+    def interrupted_downloader(**kwargs: object) -> str:
+        local_dir = Path(str(kwargs["local_dir"]))
+        (local_dir / "payload.safetensors").write_bytes(b"x" * 5)
+        (local_dir / ".cache").mkdir(exist_ok=True)
+        (local_dir / ".cache" / "transfer.lock").write_bytes(b"x" * 100)
+        raise RuntimeError("synthetic interruption")
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_snapshots.time.sleep",
+        lambda _seconds: None,
+    )
+    with pytest.raises(ModelSnapshotError, match="after 3 attempts"):
+        download_model_snapshot(
+            snapshot,
+            cache_dir=tmp_path,
+            downloader=interrupted_downloader,
+        )
+
+    monkeypatch.setattr(
+        "heartwood.gateway._model_snapshots.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=120, used=106, free=14),
+    )
+    with pytest.raises(ModelSnapshotError, match="requires at least"):
+        download_model_snapshot(
+            snapshot,
+            cache_dir=tmp_path,
+            downloader=lambda **_kwargs: pytest.fail("capacity check must run first"),
+        )
+
+
+def test_snapshot_download_rejects_mismatched_partial_provenance(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    partial = tmp_path / f".{snapshot.snapshot_id}.partial"
+    partial.mkdir()
+    (partial / "completed.safetensors").write_bytes(b"a" * 10)
+    resume_record = tmp_path / f".{snapshot.snapshot_id}.partial.json"
+    resume_record.write_text(
+        json.dumps(
+            {
+                "schema_version": "heartwood.model-snapshot-download.v1",
+                "snapshot_id": snapshot.snapshot_id,
+                "source_repository": snapshot.source_repository,
+                "source_revision": "f" * 40,
+                "download_policy": snapshot.download_policy,
+                "allow_patterns": list(snapshot.allow_patterns),
+                "ignore_patterns": list(snapshot.ignore_patterns),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelSnapshotError, match="does not match the requested snapshot"):
+        download_model_snapshot(
+            snapshot,
+            cache_dir=tmp_path,
+            downloader=lambda **_kwargs: pytest.fail("download must not start"),
+        )
+
+    assert (partial / "completed.safetensors").is_file()
+    assert resume_record.is_file()
 
 
 def test_snapshot_download_serializes_concurrent_callers(tmp_path: Path) -> None:
@@ -500,7 +728,7 @@ def test_snapshot_download_checks_capacity_and_uses_hugging_face_downloader(
     assert calls[0]["revision"] == snapshot.source_revision
     local_dir = Path(str(calls[0]["local_dir"]))
     assert calls[0]["cache_dir"] == local_dir / ".cache" / "huggingface"
-    assert calls[0]["token"] is False
+    assert calls[0]["token"] is None
 
 
 def test_snapshot_download_rejects_existing_content_without_source_record(

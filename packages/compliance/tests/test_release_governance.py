@@ -281,17 +281,62 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "uses: ./.github/workflows/codeql.yml" not in pull_request_workflow
     assert "uses: ./.github/workflows/container-image.yml" not in pull_request_workflow
     assert "uses: ./.github/workflows/capable-model.yml" not in pull_request_workflow
-    assert "uses: ./.github/workflows/gpu-container-pr.yml" in pull_request_workflow
+    assert "uses: ./.github/workflows/gpu-container-pr-validation.yml" in pull_request_workflow
     assert 'to_entries | all(.value.result == "success")' in pull_request_workflow
     assert '.result == "skipped"' not in pull_request_workflow
     assert "group: dependency-review-${{ github.ref }}" in dependency_review
     assert "cancel-in-progress: true" in dependency_review
 
 
+def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
+    validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
+    entrypoints = (
+        Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8"),
+        Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8"),
+    )
+
+    assert validation.count("SchmiedmayerLab/.github/.github/workflows/") == 3
+    assert validation.count("@v0.3") == 3
+    markdown_job = validation.split("  markdown-links:\n", maxsplit=1)[1].split(
+        "\n  yamllint:\n", maxsplit=1
+    )[0]
+    assert "contents: read" in markdown_job
+    assert "pull-requests: read" in markdown_job
+    for entrypoint in entrypoints:
+        validation_job = entrypoint.split("  validation:\n", maxsplit=1)[1].split(
+            "\n  web-ui:\n", maxsplit=1
+        )[0]
+        assert "contents: read" in validation_job
+        assert "pull-requests: read" in validation_job
+
+
+def test_python_coverage_upload_uses_oidc_and_fails_closed() -> None:
+    python = Path(".github/workflows/python.yml").read_text(encoding="utf-8")
+    entrypoints = (
+        Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8"),
+        Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8"),
+    )
+
+    assert "  id-token: write" in python.split("jobs:", maxsplit=1)[0]
+    codecov = python.split("      - name: Upload coverage to Codecov\n", maxsplit=1)[1]
+    assert "          fail_ci_if_error: true" in codecov
+    assert "          use_oidc: true" in codecov
+    assert "token:" not in codecov
+    expected_job = """  python:
+    name: Python
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/python.yml
+"""
+    for entrypoint in entrypoints:
+        assert expected_job in entrypoint
+
+
 def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     pull_request = Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8")
     smoke = Path(".github/workflows/container-smoke.yml").read_text(encoding="utf-8")
-    gpu = Path(".github/workflows/gpu-container-pr.yml").read_text(encoding="utf-8")
+    gpu = Path(".github/workflows/gpu-container-pr-validation.yml").read_text(encoding="utf-8")
     capable = Path(".github/workflows/capable-model.yml").read_text(encoding="utf-8")
     dependabot = Path(".github/dependabot.yml").read_text(encoding="utf-8")
 
@@ -329,14 +374,24 @@ def test_blacksmith_runners_are_reserved_for_terra_gpu_image_builds() -> None:
         if "blacksmith-" in path.read_text(encoding="utf-8")
     }
 
-    assert blacksmith_workflows == {"gpu-container-image.yml", "gpu-container-pr.yml"}
+    assert blacksmith_workflows == {
+        "gpu-container-image.yml",
+        "gpu-container-pr-validation.yml",
+        "gpu-container-pr.yml",
+    }
     for workflow_name in blacksmith_workflows:
         workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
         assert workflow.count("blacksmith-16vcpu-ubuntu-2404") == 1
+    for workflow_name in blacksmith_workflows - {"gpu-container-pr.yml"}:
+        workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
         assert "target: runtime-gpu-nvidia\n            runner: ubuntu-24.04" in workflow
         assert (
             "target: terra-runtime-gpu-nvidia\n            runner: blacksmith-16vcpu-ubuntu-2404"
         ) in workflow
+    manual = (workflow_root / "gpu-container-pr.yml").read_text(encoding="utf-8")
+    assert "runs-on: blacksmith-16vcpu-ubuntu-2404" in manual
+    assert "targets: terra-runtime-gpu-nvidia" in manual
+    assert "targets: runtime-gpu-nvidia" not in manual
 
 
 def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:

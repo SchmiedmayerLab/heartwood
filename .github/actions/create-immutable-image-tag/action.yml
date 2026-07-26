@@ -1,0 +1,238 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Create And Verify Immutable Image Tag
+description: Create an immutable image tag and verify its digest and manifest contract.
+
+inputs:
+  candidate-tag:
+    description: Fully qualified immutable tag to create or verify.
+    required: true
+  candidate-references:
+    description: Space-separated digest references used to construct the tag.
+    required: true
+  candidate-digest:
+    description: Expected digest for a single-reference tag.
+    required: false
+    default: ""
+  diagnostic-name:
+    description: Human-readable image tag name used in failure diagnostics.
+    required: true
+  flatten:
+    description: Whether Buildx should publish a single manifest instead of an image index.
+    required: false
+    default: "false"
+  validation-mode:
+    description: "Manifest contract: docker-v2, linux-amd64-index, or linux-multi-platform-index."
+    required: true
+
+outputs:
+  digest:
+    description: Digest of the verified immutable tag.
+    value: ${{ steps.publish.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create and verify immutable image tag
+      id: publish
+      shell: bash
+      env:
+        CANDIDATE_DIGEST: ${{ inputs.candidate-digest }}
+        CANDIDATE_REFERENCES: ${{ inputs.candidate-references }}
+        CANDIDATE_TAG: ${{ inputs.candidate-tag }}
+        DIAGNOSTIC_NAME: ${{ inputs.diagnostic-name }}
+        FLATTEN: ${{ inputs.flatten }}
+        VALIDATION_MODE: ${{ inputs.validation-mode }}
+      run: |
+        set -euo pipefail
+
+        read -r -a sources <<<"${CANDIDATE_REFERENCES}"
+        if [ "${#sources[@]}" -eq 0 ]; then
+          echo "${DIAGNOSTIC_NAME} has no candidate references" >&2
+          exit 1
+        fi
+        case "${FLATTEN}" in
+          true|false) ;;
+          *)
+            echo "unsupported flatten setting for ${DIAGNOSTIC_NAME}: ${FLATTEN}" >&2
+            exit 1
+            ;;
+        esac
+        case "${VALIDATION_MODE}" in
+          docker-v2|linux-amd64-index)
+            if [ "${#sources[@]}" -ne 1 ]; then
+              echo "${DIAGNOSTIC_NAME} requires exactly one candidate reference" >&2
+              exit 1
+            fi
+            if [[ ! "${CANDIDATE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "${DIAGNOSTIC_NAME} received an invalid candidate digest: ${CANDIDATE_DIGEST}" >&2
+              exit 1
+            fi
+            ;;
+          linux-multi-platform-index)
+            if [ "${#sources[@]}" -ne 2 ]; then
+              echo "${DIAGNOSTIC_NAME} requires exactly two candidate references" >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "unsupported manifest validation mode: ${VALIDATION_MODE}" >&2
+            exit 1
+            ;;
+        esac
+
+        proposed_manifest=""
+        proposed_index=""
+        if [ "${VALIDATION_MODE}" = "linux-multi-platform-index" ]; then
+          proposed_index="$(mktemp)"
+          trap 'rm -f "${proposed_index}"' EXIT
+          docker buildx imagetools create --progress=none --dry-run \
+            "${sources[@]}" > "${proposed_index}"
+          if ! jq --exit-status '
+            (([
+              .manifests[]
+              | select(
+                  .platform.os != "unknown"
+                  or .platform.architecture != "unknown"
+                )
+              | "\(.platform.os)/\(.platform.architecture)"
+            ] | sort) == ["linux/amd64", "linux/arm64"])
+            and all(
+              .manifests[];
+              (
+                .platform.os == "linux"
+                and (
+                  .platform.architecture == "amd64"
+                  or .platform.architecture == "arm64"
+                )
+              )
+              or (
+                .platform.os == "unknown"
+                and .platform.architecture == "unknown"
+                and .annotations["vnd.docker.reference.type"] == "attestation-manifest"
+              )
+            )
+          ' "${proposed_index}" >/dev/null; then
+            echo "${DIAGNOSTIC_NAME} candidate sources have an incompatible platform index" >&2
+            exit 1
+          fi
+          proposed_manifest="$(jq -cS '.manifests |= sort_by(.digest)' "${proposed_index}")"
+        fi
+
+        tag_existed="false"
+        if raw="$(docker buildx imagetools inspect --raw "${CANDIDATE_TAG}" 2>/dev/null)"; then
+          tag_existed="true"
+          if [ "${VALIDATION_MODE}" = "linux-multi-platform-index" ]; then
+            existing_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
+            if [ "${existing_manifest}" != "${proposed_manifest}" ]; then
+              echo "immutable ${DIAGNOSTIC_NAME} already exists with a different manifest" >&2
+              exit 1
+            fi
+          fi
+        else
+          if [ "${FLATTEN}" = "true" ]; then
+            docker buildx imagetools create --prefer-index=false \
+              --tag "${CANDIDATE_TAG}" "${sources[@]}"
+          else
+            docker buildx imagetools create \
+              --tag "${CANDIDATE_TAG}" "${sources[@]}"
+          fi
+          raw="$(docker buildx imagetools inspect --raw "${CANDIDATE_TAG}")"
+          if [ "${VALIDATION_MODE}" = "linux-multi-platform-index" ]; then
+            published_manifest="$(jq -cS '.manifests |= sort_by(.digest)' <<<"${raw}")"
+            if [ "${published_manifest}" != "${proposed_manifest}" ]; then
+              echo "newly created ${DIAGNOSTIC_NAME} does not match validated candidate manifest" >&2
+              exit 1
+            fi
+          fi
+        fi
+
+        inspect_output="$(docker buildx imagetools inspect "${CANDIDATE_TAG}")"
+        tag_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
+        if [[ ! "${tag_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "${DIAGNOSTIC_NAME} returned an invalid image digest: ${tag_digest}" >&2
+          exit 1
+        fi
+
+        case "${VALIDATION_MODE}" in
+          docker-v2)
+            if ! jq --exit-status '
+              .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
+              and .config.mediaType == "application/vnd.docker.container.image.v1+json"
+            ' <<<"${raw}" >/dev/null; then
+              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
+              config_media_type="$(jq -r '.config.mediaType // "<missing>"' <<<"${raw}")"
+              echo "${DIAGNOSTIC_NAME} has incompatible media types: ${CANDIDATE_TAG}" >&2
+              echo "observed media type: ${media_type}; config media type: ${config_media_type}" >&2
+              exit 1
+            fi
+            ;;
+          linux-amd64-index)
+            if ! jq --exit-status '
+              [.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
+              == ["linux/amd64"]
+            ' <<<"${raw}" >/dev/null; then
+              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
+              platforms="$(
+                jq -r '
+                  [.manifests[]? | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
+                  | join(", ")
+                ' <<<"${raw}"
+              )"
+              echo "${DIAGNOSTIC_NAME} has an incompatible index: ${CANDIDATE_TAG}" >&2
+              echo "observed media type: ${media_type}; Linux platforms: ${platforms:-<none>}" >&2
+              exit 1
+            fi
+            ;;
+          linux-multi-platform-index)
+            if ! jq --exit-status '
+              ([
+                .manifests[]
+                | select(.platform.os == "linux")
+                | "\(.platform.os)/\(.platform.architecture)"
+              ] | sort) == ["linux/amd64", "linux/arm64"]
+            ' <<<"${raw}" >/dev/null; then
+              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
+              platforms="$(
+                jq -r '
+                  [.manifests[]? | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
+                  | sort
+                  | join(", ")
+                ' <<<"${raw}"
+              )"
+              echo "${DIAGNOSTIC_NAME} has an incompatible index: ${CANDIDATE_TAG}" >&2
+              echo "observed media type: ${media_type}; Linux platforms: ${platforms:-<none>}" >&2
+              exit 1
+            fi
+            ;;
+        esac
+
+        validated_candidate_digest="${tag_digest}"
+        if [ "${VALIDATION_MODE}" = "linux-amd64-index" ]; then
+          validated_candidate_digest="$(
+            jq -r '
+              .manifests[]
+              | select(
+                  .platform.os == "linux"
+                  and .platform.architecture == "amd64"
+                )
+              | .digest
+            ' <<<"${raw}"
+          )"
+        fi
+        if [ -n "${CANDIDATE_DIGEST}" ] \
+          && [ "${validated_candidate_digest}" != "${CANDIDATE_DIGEST}" ]; then
+          if [ "${tag_existed}" = "true" ]; then
+            echo "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" >&2
+          else
+            echo "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" >&2
+          fi
+          echo "expected digest: ${CANDIDATE_DIGEST}; observed digest: ${validated_candidate_digest}" >&2
+          exit 1
+        fi
+
+        echo "digest=${tag_digest}" >> "${GITHUB_OUTPUT}"
