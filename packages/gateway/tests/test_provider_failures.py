@@ -21,7 +21,7 @@ from typing import cast
 import pytest
 
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
-from heartwood.core_adapter import SessionResult, SessionService
+from heartwood.core_adapter import PendingActionGroup, SessionResult, SessionService
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
@@ -45,6 +45,7 @@ class _ScriptedResponse:
     content_type: str
     delay: float = 0.0
     declared_length: int | None = None
+    required_function_call_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +69,13 @@ class _MockProviderState:
         with self._lock:
             self._requests.append(request)
             if self._responses:
-                return self._responses.popleft()
+                response = self._responses.popleft()
+                if response.required_function_call_ids and not _has_matched_tool_history(
+                    request,
+                    response.required_function_call_ids,
+                ):
+                    return _strict_history_error()
+                return response
         return _json_error(500)
 
     @property
@@ -92,6 +99,10 @@ class _MockProviderServer(ThreadingHTTPServer):
     @property
     def completion_endpoint(self) -> str:
         return f"{self.base_url}/chat/completions"
+
+    @property
+    def responses_endpoint(self) -> str:
+        return f"{self.base_url}/responses"
 
 
 class _MockProviderHandler(BaseHTTPRequestHandler):
@@ -362,6 +373,118 @@ def test_malformed_or_interrupted_streams_fail_closed_without_leaking_content(
         service.close()
 
 
+@pytest.mark.parametrize(
+    "calls",
+    [
+        (
+            (
+                "call-response-restart",
+                "printf restored > response-restart.txt",
+                "response-restart.txt",
+                "restored",
+            ),
+        ),
+        (
+            (
+                "call-response-first",
+                "printf first > response-first.txt",
+                "response-first.txt",
+                "first",
+            ),
+            (
+                "call-response-second",
+                "printf second > response-second.txt",
+                "response-second.txt",
+                "second",
+            ),
+        ),
+    ],
+    ids=["single-action", "grouped-actions"],
+)
+def test_responses_api_restart_preserves_matched_tool_history(
+    tmp_path: Path,
+    mock_provider: _MockProviderServer,
+    calls: tuple[tuple[str, str, str, str], ...],
+) -> None:
+    call_ids = tuple(call_id for call_id, *_rest in calls)
+    mock_provider.state.enqueue(
+        _responses_tool_stream(calls),
+        _responses_text_stream(
+            "The synthetic files were created once.",
+            required_function_call_ids=call_ids,
+        ),
+    )
+    first = _responses_service(tmp_path, mock_provider)
+
+    try:
+        first.handle(_responses_command(command_id="responses-start"))
+        original_group = _wait_for_pending_action_group(first)
+
+        assert tuple(action.tool_call_id for action in original_group.actions) == call_ids
+        assert len(mock_provider.state.requests) == 1
+        assert not any(
+            (tmp_path / "project" / filename).exists()
+            for _call_id, _command_text, filename, _content in calls
+        )
+    finally:
+        first.close()
+
+    restored = _responses_service(tmp_path, mock_provider)
+    try:
+        restored_group = _wait_for_pending_action_group(restored)
+        assert restored_group == original_group
+        approve = SessionCommand(
+            command_id="responses-approve",
+            session_id=_SESSION_ID,
+            kind=CommandKind.APPROVE,
+            actor_id="synthetic-user",
+            created_at="2026-07-26T00:00:01Z",
+            payload={"target_type": "action-set", "target_id": restored_group.group_id},
+        )
+
+        approved = restored.handle(approve)
+        events = _wait_for_terminal_events(restored, expected_status="finished")
+        replayed_approval = restored.handle(approve)
+
+        assert replayed_approval == SessionResult(events=approved.events, replayed=True)
+        requests = list(mock_provider.state.requests)
+        assert len(requests) == 2
+        _assert_matched_responses_history(requests[1], call_ids)
+        for _call_id, _command_text, filename, expected in calls:
+            assert (tmp_path / "project" / filename).read_text(encoding="utf-8") == expected
+        assert _event_count(events, EventKind.USER_MESSAGE_RECORDED) == 1
+        assert _event_count(events, EventKind.TOOL_CALL_PROPOSED) == len(calls)
+        assert _event_count(events, EventKind.CONFIRMATION_REQUESTED) == len(calls)
+        assert _event_count(events, EventKind.APPROVAL_RECORDED) == 1
+        assert _event_count(events, EventKind.CONFIRMATION_RESOLVED) == len(calls)
+        assert _event_count(events, EventKind.TOOL_EXECUTION_RECORDED) == len(calls)
+        assert _agent_messages(events) == ["The synthetic files were created once."]
+        assert not _error_events(events)
+
+        restored.handle(
+            SessionCommand(
+                command_id="responses-audit-export",
+                session_id=_SESSION_ID,
+                kind=CommandKind.AUDIT_EXPORT,
+                actor_id="synthetic-user",
+                created_at="2026-07-26T00:00:02Z",
+            )
+        )
+        replay = restored.replay_events()
+        assert restored.replay_events() == replay
+        audit_events = restored.audit_log.read()
+        restored.audit_log.verify(audit_events)
+        assert len(audit_events) == len(replay)
+        assert [event.event_type for event in audit_events] == [str(event.kind) for event in replay]
+        audit_export = restored.store.read_audit_export()
+        assert all(
+            command_text not in audit_export
+            for _call_id, command_text, _filename, _content in calls
+        )
+    finally:
+        restored.close()
+
+
 def _service(
     tmp_path: Path,
     provider: _MockProviderServer,
@@ -376,19 +499,53 @@ def _service(
         max_input_tokens=16_384,
         max_output_tokens=256,
     )
+    return _service_for_profile(
+        tmp_path,
+        profile=profile,
+        conversation_key=f"provider-failure:{tmp_path.name}",
+    )
+
+
+def _responses_service(
+    tmp_path: Path,
+    provider: _MockProviderServer,
+) -> SessionService:
+    profile = ModelProfile(
+        profile_id="mock-responses-provider",
+        model="openai/gpt-5-mini",
+        policy_endpoint=provider.responses_endpoint,
+        base_url=provider.base_url,
+        credential_kind="environment",
+        api_key_env=_API_KEY_NAME,
+        max_input_tokens=16_384,
+        max_output_tokens=256,
+    )
+    return _service_for_profile(
+        tmp_path,
+        profile=profile,
+        conversation_key=f"responses-restart:{tmp_path.name}",
+    )
+
+
+def _service_for_profile(
+    tmp_path: Path,
+    *,
+    profile: ModelProfile,
+    conversation_key: str,
+) -> SessionService:
     backend = OpenHandsSdkBackend(
         profile=profile,
         workspace=tmp_path / "project",
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
-        conversation_key=f"provider-failure:{tmp_path.name}",
+        conversation_key=conversation_key,
         credential_environment_names=(_API_KEY_NAME,),
         env={_API_KEY_NAME: _API_KEY},
     )
     policy = PolicyProfile(
-        policy_id="mock-provider",
+        policy_id=profile.profile_id,
         platform_id="generic",
-        allowed_model_endpoints=(provider.completion_endpoint,),
+        allowed_model_endpoints=(profile.policy_endpoint,),
         allowed_capability_tiers=("supervised",),
         allowed_action_confirmation_modes=("always-confirm",),
         credential_allowlist=(_API_KEY_NAME,),
@@ -411,6 +568,17 @@ def _command(*, command_id: str) -> SessionCommand:
         actor_id="synthetic-user",
         created_at="2026-07-26T00:00:00Z",
         payload={"prompt": "Return one short synthetic result without using tools."},
+    )
+
+
+def _responses_command(*, command_id: str) -> SessionCommand:
+    return SessionCommand(
+        command_id=command_id,
+        session_id=_SESSION_ID,
+        kind=CommandKind.CHAT,
+        actor_id="synthetic-user",
+        created_at="2026-07-26T00:00:00Z",
+        payload={"prompt": "Create the requested synthetic files using terminal commands."},
     )
 
 
@@ -437,6 +605,16 @@ def _wait_for_terminal_events(
         f"provider scenario did not reach {expected_status}; "
         f"observed statuses={statuses!r}, kinds={kinds!r}"
     )
+
+
+def _wait_for_pending_action_group(service: SessionService) -> PendingActionGroup:
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        group = service.backend.pending_action_group(session_id=_SESSION_ID)
+        if group is not None:
+            return group
+        time.sleep(0.01)
+    raise AssertionError("provider scenario did not request confirmation")
 
 
 def _assert_request_uses_credential(request: _RecordedRequest) -> None:
@@ -485,6 +663,10 @@ def _agent_messages(events: tuple[SessionEvent, ...]) -> list[object]:
         for event in events
         if event.kind == EventKind.AGENT_MESSAGE_EMITTED
     ]
+
+
+def _event_count(events: tuple[SessionEvent, ...], kind: EventKind) -> int:
+    return sum(event.kind == kind for event in events)
 
 
 def _serialized_events(events: tuple[SessionEvent, ...]) -> str:
@@ -555,4 +737,132 @@ def _successful_stream(content: str) -> _ScriptedResponse:
         status=200,
         body=f"{body}data: [DONE]\n\n".encode(),
         content_type="text/event-stream",
+    )
+
+
+def _responses_tool_stream(
+    calls: tuple[tuple[str, str, str, str], ...],
+) -> _ScriptedResponse:
+    return _responses_stream(
+        response_id="response-tool-calls",
+        output=[
+            {
+                "id": f"fc_{call_id}",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": "terminal",
+                "arguments": json.dumps({"command": command_text}),
+            }
+            for call_id, command_text, _filename, _content in calls
+        ],
+    )
+
+
+def _responses_text_stream(
+    content: str,
+    *,
+    required_function_call_ids: tuple[str, ...],
+) -> _ScriptedResponse:
+    return _responses_stream(
+        response_id="response-finished",
+        output=[
+            {
+                "id": "message-finished",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "text": content,
+                    }
+                ],
+            }
+        ],
+        required_function_call_ids=required_function_call_ids,
+    )
+
+
+def _responses_stream(
+    *,
+    response_id: str,
+    output: list[dict[str, object]],
+    required_function_call_ids: tuple[str, ...] = (),
+) -> _ScriptedResponse:
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "id": response_id,
+            "created_at": 1,
+            "model": "gpt-5-mini",
+            "object": "response",
+            "output": output,
+            "status": "completed",
+        },
+    }
+    return _ScriptedResponse(
+        status=200,
+        body=f"data: {json.dumps(completed)}\n\ndata: [DONE]\n\n".encode(),
+        content_type="text/event-stream",
+        required_function_call_ids=required_function_call_ids,
+    )
+
+
+def _has_matched_tool_history(
+    request: _RecordedRequest,
+    required_function_call_ids: tuple[str, ...],
+) -> bool:
+    try:
+        payload = json.loads(request.body)
+    except (TypeError, ValueError):
+        return False
+    input_items = payload.get("input")
+    if request.path != "/v1/responses" or not isinstance(input_items, list):
+        return False
+    call_positions: dict[str, int] = {}
+    output_positions: dict[str, int] = {}
+    for index, item in enumerate(input_items):
+        if not isinstance(item, dict):
+            continue
+        call_id = item.get("call_id")
+        if not isinstance(call_id, str):
+            continue
+        if item.get("type") == "function_call":
+            if call_id in call_positions or item.get("id") != f"fc_{call_id}":
+                return False
+            call_positions[call_id] = index
+        elif item.get("type") == "function_call_output":
+            if call_id in output_positions or call_id not in call_positions:
+                return False
+            output_positions[call_id] = index
+    return all(
+        call_id in call_positions
+        and call_id in output_positions
+        and call_positions[call_id] < output_positions[call_id]
+        for call_id in required_function_call_ids
+    )
+
+
+def _assert_matched_responses_history(
+    request: _RecordedRequest,
+    required_function_call_ids: tuple[str, ...],
+) -> None:
+    assert request.authorization == f"Bearer {_API_KEY}"
+    assert _has_matched_tool_history(request, required_function_call_ids)
+
+
+def _strict_history_error() -> _ScriptedResponse:
+    return _ScriptedResponse(
+        status=400,
+        body=json.dumps(
+            {
+                "error": {
+                    "message": "No tool call found for function call output",
+                    "type": "invalid_request_error",
+                }
+            }
+        ).encode(),
+        content_type="application/json",
     )
