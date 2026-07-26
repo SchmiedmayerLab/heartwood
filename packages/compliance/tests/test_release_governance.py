@@ -308,6 +308,7 @@ def test_runtime_changes_run_capable_model_acceptance_before_merge() -> None:
         ".github/workflows/capable-model.yml",
         "docker-bake.hcl",
         "agents/verified/**",
+        "deploy/install-llama-cpp.sh",
         "images/Dockerfile",
         "images/generic/**",
         "fixtures/synthetic/**",
