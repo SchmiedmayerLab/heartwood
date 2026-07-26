@@ -1644,6 +1644,7 @@ def test_user_pause_does_not_resume_an_internal_pending_view_repair(
     )
     assert conversation is not None
     assert conversation.view_repair_boundary.wait(timeout=2)
+    assert conversation.pause_calls == 1
 
     paused = backend.pause(session_id="session-1")
 
@@ -1678,8 +1679,8 @@ def test_pause_wins_before_an_automatic_run_is_admitted(
     before_admission = Event()
     release_admission = Event()
 
-    def stop_before_admission() -> bool:
-        should_continue = original_complete()
+    def stop_before_admission(current: BaseConversation) -> bool:
+        should_continue = original_complete(current)
         assert should_continue
         before_admission.set()
         assert release_admission.wait(timeout=2)
@@ -2036,6 +2037,32 @@ def test_close_of_an_active_run_does_not_emit_a_false_worker_error(
         isinstance(event, BackendErrorEvent) and event.error_code == BackendErrorCode.WORKER_STOPPED
         for event in emitted
     )
+
+
+def test_view_repair_completion_uses_the_owned_conversation_during_close(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+    conversation.state.execution_status = ConversationExecutionStatus.PAUSED
+    with backend._view_repair_lock:
+        backend._view_repair_boundary_reached = True
+        backend._view_repair_paused_internally = True
+    with backend._conversation_lock:
+        backend._conversation_closing = True
+
+    assert backend._complete_pending_action_view_repair(cast(BaseConversation, conversation))
+
+    with backend._conversation_lock:
+        backend._conversation_closing = False
+    backend.close()
 
 
 def test_closed_backend_does_not_resurrect_its_conversation(tmp_path: Path) -> None:
@@ -2720,6 +2747,7 @@ class _ControlledConversation:
         self.messages: list[tuple[str, str | None]] = []
         self.closed = False
         self.interrupted = False
+        self.pause_calls = 0
         self.state = _ControlledState(self.id)
 
     def send_message(self, message: str, sender: str | None = None) -> None:
@@ -2741,6 +2769,10 @@ class _ControlledConversation:
         self.interrupted = True
         self.state.execution_status = ConversationExecutionStatus.PAUSED
         self.release.set()
+
+    def pause(self) -> None:
+        self.pause_calls += 1
+        self.state.execution_status = ConversationExecutionStatus.PAUSED
 
     def reject_pending_actions(self, reason: str) -> None:  # noqa: ARG002
         self.state.execution_status = ConversationExecutionStatus.FINISHED

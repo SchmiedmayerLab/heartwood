@@ -233,8 +233,8 @@ def test_linux_amd64_index_is_created_and_validated(tmp_path: Path) -> None:
     index = _image_index([_platform_manifest(_AMD64_DIGEST, "amd64")])
     result = _run_action(
         tmp_path,
-        references=f"registry.test/heartwood@{_DIGEST_A}",
-        candidate_digest=_DIGEST_A,
+        references=f"registry.test/heartwood@{_AMD64_DIGEST}",
+        candidate_digest=_AMD64_DIGEST,
         validation_mode="linux-amd64-index",
         state=_state(published_raw=index, tag_digest=_DIGEST_A),
     )
@@ -243,6 +243,46 @@ def test_linux_amd64_index_is_created_and_validated(tmp_path: Path) -> None:
     assert result.output == {"digest": _DIGEST_A}
     assert result.state["created"] is True
     assert "--prefer-index=false" not in _publish_calls(result.calls)[0]
+
+
+def test_existing_linux_amd64_index_validates_the_wrapped_manifest_digest(
+    tmp_path: Path,
+) -> None:
+    index = _image_index([_platform_manifest(_AMD64_DIGEST, "amd64")])
+    result = _run_action(
+        tmp_path,
+        references=f"registry.test/heartwood@{_AMD64_DIGEST}",
+        candidate_digest=_AMD64_DIGEST,
+        validation_mode="linux-amd64-index",
+        state=_state(
+            existing_raw=index,
+            tag_digest=_DIGEST_A,
+            tag_exists=True,
+        ),
+    )
+
+    assert result.process.returncode == 0, result.process.stderr
+    assert result.output == {"digest": _DIGEST_A}
+    assert result.state.get("created") is not True
+
+
+def test_linux_amd64_index_rejects_a_different_wrapped_manifest_digest(
+    tmp_path: Path,
+) -> None:
+    index = _image_index([_platform_manifest(_DIGEST_B, "amd64")])
+    result = _run_action(
+        tmp_path,
+        references=f"registry.test/heartwood@{_AMD64_DIGEST}",
+        candidate_digest=_AMD64_DIGEST,
+        validation_mode="linux-amd64-index",
+        state=_state(published_raw=index, tag_digest=_DIGEST_A),
+    )
+
+    assert result.process.returncode == 1
+    assert "does not match validated candidate digest" in result.process.stderr
+    assert f"expected digest: {_AMD64_DIGEST}; observed digest: {_DIGEST_B}" in (
+        result.process.stderr
+    )
 
 
 def test_linux_amd64_and_arm64_index_is_created_and_validated(

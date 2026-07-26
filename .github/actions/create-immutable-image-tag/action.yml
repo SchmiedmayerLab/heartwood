@@ -157,15 +157,6 @@ runs:
           echo "${DIAGNOSTIC_NAME} returned an invalid image digest: ${tag_digest}" >&2
           exit 1
         fi
-        if [ -n "${CANDIDATE_DIGEST}" ] && [ "${tag_digest}" != "${CANDIDATE_DIGEST}" ]; then
-          if [ "${tag_existed}" = "true" ]; then
-            echo "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" >&2
-          else
-            echo "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" >&2
-          fi
-          echo "expected digest: ${CANDIDATE_DIGEST}; observed digest: ${tag_digest}" >&2
-          exit 1
-        fi
 
         case "${VALIDATION_MODE}" in
           docker-v2)
@@ -219,5 +210,29 @@ runs:
             fi
             ;;
         esac
+
+        validated_candidate_digest="${tag_digest}"
+        if [ "${VALIDATION_MODE}" = "linux-amd64-index" ]; then
+          validated_candidate_digest="$(
+            jq -r '
+              .manifests[]
+              | select(
+                  .platform.os == "linux"
+                  and .platform.architecture == "amd64"
+                )
+              | .digest
+            ' <<<"${raw}"
+          )"
+        fi
+        if [ -n "${CANDIDATE_DIGEST}" ] \
+          && [ "${validated_candidate_digest}" != "${CANDIDATE_DIGEST}" ]; then
+          if [ "${tag_existed}" = "true" ]; then
+            echo "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" >&2
+          else
+            echo "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" >&2
+          fi
+          echo "expected digest: ${CANDIDATE_DIGEST}; observed digest: ${validated_candidate_digest}" >&2
+          exit 1
+        fi
 
         echo "digest=${tag_digest}" >> "${GITHUB_OUTPUT}"

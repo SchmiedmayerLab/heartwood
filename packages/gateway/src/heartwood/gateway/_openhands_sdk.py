@@ -709,7 +709,7 @@ class OpenHandsSdkBackend:
             return
         state = _conversation_state(conversation)
         if state.execution_status == ConversationExecutionStatus.RUNNING:
-            state.execution_status = ConversationExecutionStatus.PAUSED
+            conversation.pause()
             with self._view_repair_lock:
                 self._view_repair_paused_internally = True
 
@@ -854,7 +854,7 @@ class OpenHandsSdkBackend:
             if self._run_cancelled.is_set():
                 self._clear_pending_action_view_repair()
                 return frozenset(published_source_event_ids)
-            if not self._complete_pending_action_view_repair():
+            if not self._complete_pending_action_view_repair(conversation):
                 return frozenset(published_source_event_ids)
 
     def _admit_conversation_run(
@@ -924,13 +924,12 @@ class OpenHandsSdkBackend:
             self._view_repair_boundary_reached = False
             self._view_repair_paused_internally = False
 
-    def _complete_pending_action_view_repair(self) -> bool:
+    def _complete_pending_action_view_repair(self, conversation: BaseConversation) -> bool:
         """Rebuild a cold view after all approved tool results are persisted."""
         with self._view_repair_lock:
             if not self._view_repair_boundary_reached:
                 return False
             should_continue = self._view_repair_paused_internally
-        conversation = self._get_conversation()
         state = _conversation_state(conversation)
         state.rebuild_view()
         should_continue = (

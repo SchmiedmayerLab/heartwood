@@ -549,6 +549,13 @@ def _prepare_partial_download(
             )
         try:
             observed = json.loads(resume_record_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            _discard_partial_snapshot(staging, resume_record_path)
+            return _initialize_partial_download(
+                staging=staging,
+                resume_record_path=resume_record_path,
+                expected=expected,
+            )
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise ModelSnapshotError(
                 f"model download resume record is unavailable: {resume_record_path}"
@@ -567,6 +574,19 @@ def _prepare_partial_download(
                 "model download payload could not be inspected; completed files remain "
                 f"in {staging}. Rerun the same command to retry."
             ) from None
+    return _initialize_partial_download(
+        staging=staging,
+        resume_record_path=resume_record_path,
+        expected=expected,
+    )
+
+
+def _initialize_partial_download(
+    *,
+    staging: Path,
+    resume_record_path: Path,
+    expected: dict[str, object],
+) -> int:
     resume_record_path.unlink(missing_ok=True)
     staging.mkdir(mode=0o700)
     try:

@@ -352,6 +352,32 @@ def test_snapshot_download_retries_and_resumes_a_private_partial_snapshot(
     verify_model_snapshot(destination)
 
 
+def test_snapshot_download_recovers_a_partial_directory_without_a_resume_record(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot()
+    partial = tmp_path / f".{snapshot.snapshot_id}.partial"
+    partial.mkdir()
+    (partial / "untrusted-partial.safetensors").write_bytes(b"untrusted")
+
+    def downloader(**kwargs: object) -> str:
+        local_dir = Path(str(kwargs["local_dir"]))
+        assert not (local_dir / "untrusted-partial.safetensors").exists()
+        (local_dir / "weights.safetensors").write_bytes(b"x" * snapshot.expected_size_bytes)
+        return str(local_dir)
+
+    destination = download_model_snapshot(
+        snapshot,
+        cache_dir=tmp_path,
+        downloader=downloader,
+    )
+
+    assert destination == tmp_path / snapshot.snapshot_id
+    assert not partial.exists()
+    assert not (tmp_path / f".{snapshot.snapshot_id}.partial.json").exists()
+    verify_model_snapshot(destination)
+
+
 @pytest.mark.parametrize(
     "target",
     [
