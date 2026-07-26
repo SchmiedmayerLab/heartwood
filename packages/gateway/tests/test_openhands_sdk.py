@@ -989,6 +989,43 @@ def test_usage_is_transient_during_execution_and_durable_at_the_run_boundary(
     backend.close()
 
 
+@pytest.mark.parametrize(
+    "sdk_status",
+    [
+        ConversationExecutionStatus.IDLE,
+        ConversationExecutionStatus.PAUSED,
+    ],
+)
+def test_active_worker_hides_transitional_non_running_sdk_state(
+    tmp_path: Path,
+    sdk_status: ConversationExecutionStatus,
+) -> None:
+    conversation = _ControlledConversation()
+    conversation.state.execution_status = sdk_status
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    with backend._run_lock:
+        backend._execution_active = True
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
+
+    assert lifecycle_events
+    assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
+
+    with backend._run_lock:
+        backend._execution_active = False
+    backend.close()
+
+
 def test_real_sdk_task_tracker_updates_the_shared_task_plan(tmp_path: Path) -> None:
     llm = TestLLM.from_messages(
         [
@@ -1655,6 +1692,53 @@ def test_user_pause_does_not_resume_an_internal_pending_view_repair(
         isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
         for event in paused
     )
+    backend.close()
+
+
+def test_internal_view_repair_remains_one_running_interface_operation(
+    tmp_path: Path,
+) -> None:
+    conversation: _ViewRepairPauseConversation | None = None
+
+    def factory(
+        event_callback: Callable[[OpenHandsEvent], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> _ViewRepairPauseConversation:
+        nonlocal conversation
+        conversation = _ViewRepairPauseConversation(event_callback)
+        return conversation
+
+    backend = _backend(tmp_path, cast(ConversationFactory, factory))
+    group = backend.pending_action_group(session_id="session-1")
+    assert group is not None
+    backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    assert conversation is not None
+    assert conversation.view_repair_boundary.wait(timeout=2)
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
+
+    assert lifecycle_events
+    assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
+    assert not any(event.lifecycle == BackendLifecycle.PAUSED for event in lifecycle_events)
+    assert (
+        backend._translate_event(
+            PauseEvent(id="internal-view-repair-pause"),
+            session_id="session-1",
+        )
+        == ()
+    )
+
+    conversation.release.set()
+    assert conversation.stopped.wait(timeout=2)
+    assert conversation.second_run_started.wait(timeout=2)
     backend.close()
 
 

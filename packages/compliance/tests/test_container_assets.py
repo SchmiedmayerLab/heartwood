@@ -226,6 +226,10 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
     assert 'org.opencontainers.image.revision="${HEARTWOOD_REVISION}"' in dockerfile
     assert "HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION}" in dockerfile
+    assert "FROM heartwood-runtime-base AS heartwood-image-metadata" in dockerfile
+    assert "FROM heartwood-image-metadata AS platform-runtime-image" in dockerfile
+    assert "FROM heartwood-image-metadata AS runtime-image" in dockerfile
+    assert dockerfile.index("uv sync --locked") < dockerfile.index("ARG HEARTWOOD_REVISION=unknown")
     assert 'variable "HEARTWOOD_VERSION"' in bake
     assert 'default = "0.2.0"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2

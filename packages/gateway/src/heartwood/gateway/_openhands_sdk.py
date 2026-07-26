@@ -709,9 +709,14 @@ class OpenHandsSdkBackend:
             return
         state = _conversation_state(conversation)
         if state.execution_status == ConversationExecutionStatus.RUNNING:
-            conversation.pause()
             with self._view_repair_lock:
                 self._view_repair_paused_internally = True
+            try:
+                conversation.pause()
+            except Exception:
+                with self._view_repair_lock:
+                    self._view_repair_paused_internally = False
+                raise
 
     def _handle_token(self, chunk: LLMStreamChunk) -> None:
         if not chunk.choices:
@@ -1229,6 +1234,9 @@ class OpenHandsSdkBackend:
                 ),
             )
         if isinstance(event, PauseEvent):
+            with self._view_repair_lock:
+                if self._view_repair_paused_internally:
+                    return ()
             return (
                 BackendLifecycleEvent(
                     lifecycle=BackendLifecycle.PAUSED,
@@ -1257,6 +1265,17 @@ class OpenHandsSdkBackend:
         with self._run_lock:
             run_failed = self._run_failed
             execution_active = self._execution_active
+            run_cancelled = self._run_cancelled.is_set()
+        if (
+            execution_active
+            and not run_cancelled
+            and state.execution_status
+            in {
+                ConversationExecutionStatus.IDLE,
+                ConversationExecutionStatus.PAUSED,
+            }
+        ):
+            lifecycle = BackendLifecycle.RUNNING
         interrupted_outcome = (
             state.execution_status == ConversationExecutionStatus.RUNNING and not execution_active
         )
