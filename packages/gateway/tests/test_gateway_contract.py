@@ -25,6 +25,7 @@ from heartwood.core_adapter import (
     BackendLifecycle,
     BackendLifecycleEvent,
     SessionResult,
+    SessionService,
 )
 from heartwood.gateway import (
     GpuCapacity,
@@ -35,6 +36,7 @@ from heartwood.gateway import (
     ModelArtifactCatalog,
     ModelCatalogService,
     ModelDownload,
+    ModelProfile,
     ModelRepositoryError,
     ModelSnapshot,
     ProjectContext,
@@ -678,6 +680,65 @@ def test_configuration_handoff_closes_a_worker_without_holding_the_stream_lock(
     assert projection.session_id == "session-one"
     reader.stop()
     writer.stop()
+
+
+def test_cached_service_reloads_model_profile_changed_by_another_gateway(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    closed: list[Event] = []
+
+    def service_factory(_root: Path, _session_id: str) -> SessionService:
+        marker = Event()
+        closed.append(marker)
+        return cast(SessionService, _ClosingSessionService(marker))
+
+    reader = SessionGateway(
+        project=project,
+        env={},
+        backend_id="deterministic",
+        service_factory=service_factory,
+    )
+    writer = SessionGateway(project=project, env={}, backend_id="deterministic")
+    try:
+        reader.handle(
+            SessionCommand.model_validate_json(
+                _command(
+                    CommandKind.CHAT,
+                    command_id="before-model-change",
+                    prompt="Inspect the synthetic project",
+                )
+            )
+        )
+        assert len(closed) == 1
+        assert not closed[0].is_set()
+
+        profile = ModelProfile(
+            profile_id="local-test",
+            model="openai/local-test",
+            base_url="http://127.0.0.1:8765/v1",
+            policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+            credential_kind="none",
+        )
+        writer.save_model_profile(profile)
+        writer.select_model_profile(profile.profile_id)
+
+        reader.handle(
+            SessionCommand.model_validate_json(
+                _command(
+                    CommandKind.CHAT,
+                    command_id="after-model-change",
+                    prompt="Continue with the selected model",
+                )
+            )
+        )
+
+        assert len(closed) == 2
+        assert closed[0].is_set()
+        assert not closed[1].is_set()
+    finally:
+        reader.stop()
+        writer.stop()
 
 
 def test_fast_background_finalization_preserves_stream_order_and_projection(

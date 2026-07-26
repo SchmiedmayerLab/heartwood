@@ -1208,12 +1208,15 @@ def _handle_models(
             print(_format_model_validation(gateway.validate_model_profile()))
             return 0
         if command == "import":
-            imported = gateway.import_local_model(
-                args.path,
-                source_repository=args.source,
-                source_revision=args.revision,
-                license_posture=args.license_posture,
-                context_window=args.context_window,
+            imported = _run_with_progress(
+                lambda: gateway.import_local_model(
+                    args.path,
+                    source_repository=args.source,
+                    source_revision=args.revision,
+                    license_posture=args.license_posture,
+                    context_window=args.context_window,
+                ),
+                activity=_MODEL_DOWNLOAD_ACTIVITY,
             )
             print(f"{imported['model']['label']} is ready in this project.")
             print(f"Location: {imported['path']}")

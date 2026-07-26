@@ -179,21 +179,23 @@ def test_failed_keyring_does_not_block_audit_export(tmp_path: Path) -> None:
     gateway.save_model_profile(profile)
     gateway.select_model_profile(profile.profile_id)
 
-    result = gateway.handle(
-        SessionCommand(
-            command_id="audit-without-provider",
-            session_id="session-1",
-            kind=CommandKind.AUDIT_EXPORT,
-            actor_id="synthetic-user",
-            created_at="2026-07-26T00:00:00Z",
+    try:
+        result = gateway.handle(
+            SessionCommand(
+                command_id="audit-without-provider",
+                session_id="session-1",
+                kind=CommandKind.AUDIT_EXPORT,
+                actor_id="synthetic-user",
+                created_at="2026-07-26T00:00:00Z",
+            )
         )
-    )
 
-    assert result.events[-1].kind == EventKind.AUDIT_EXPORT_RECORDED
-    assert all(
-        event.kind != EventKind.ERROR_RECORDED
-        for event in gateway.replay_events(session_id="session-1")
-    )
-    assert not (tmp_path / ".heartwood" / "sessions" / "session-1" / "openhands").exists()
-    assert gateway.audit_export("session-1")["content"]
-    gateway.stop()
+        assert result.events[-1].kind == EventKind.AUDIT_EXPORT_RECORDED
+        assert all(
+            event.kind != EventKind.ERROR_RECORDED
+            for event in gateway.replay_events(session_id="session-1")
+        )
+        assert not (tmp_path / ".heartwood" / "sessions" / "session-1" / "openhands").exists()
+        assert gateway.audit_export("session-1")["content"]
+    finally:
+        gateway.stop()

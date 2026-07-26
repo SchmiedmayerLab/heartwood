@@ -1490,9 +1490,10 @@ def test_cli_imports_a_local_model_and_forgets_provider_credentials(
     )
     assert _run(project, monkeypatch, ["models", "forget", "openai"]) == 0
 
-    output = capsys.readouterr().out
-    assert "research-model is ready in this project" in output
-    assert "Forgot the saved credential for openai" in output
+    captured = capsys.readouterr()
+    assert "research-model is ready in this project" in captured.out
+    assert "Forgot the saved credential for openai" in captured.out
+    assert "Preparing and verifying the model" in captured.err
     assert (project / ".heartwood" / "models").is_dir()
 
 
