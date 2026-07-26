@@ -43,6 +43,9 @@ jobs:
     uses: ./.github/workflows/gitleaks.yml
   validation:
     name: Repository Validation
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/validate.yml
   web-ui:
     name: Web UI

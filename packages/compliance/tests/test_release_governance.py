@@ -290,6 +290,10 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
 
 def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
     validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
+    entrypoints = (
+        Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8"),
+        Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8"),
+    )
 
     assert validation.count("SchmiedmayerLab/.github/.github/workflows/") == 3
     assert validation.count("@v0.3") == 3
@@ -298,6 +302,12 @@ def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
     )[0]
     assert "contents: read" in markdown_job
     assert "pull-requests: read" in markdown_job
+    for entrypoint in entrypoints:
+        validation_job = entrypoint.split("  validation:\n", maxsplit=1)[1].split(
+            "\n  web-ui:\n", maxsplit=1
+        )[0]
+        assert "contents: read" in validation_job
+        assert "pull-requests: read" in validation_job
 
 
 def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
