@@ -7,6 +7,7 @@
  */
 
 import type {
+  ActionConfirmationRequest,
   ActionConfirmationMode,
   ActionSettings,
   AuditExport,
@@ -21,21 +22,30 @@ import type {
   ModelConnectRequest,
   ModelArtifacts,
   ModelDownload,
-  ModelProfile,
+  ModelDownloadRequest,
+  ModelProfileDraft,
   ModelRepositoryPlan,
   ModelRepositoryRequest,
+  ModelSelectionRequest,
   ModelSource,
+  ModelSourceRequest,
   ModelSettings,
   ModelValidation,
   ProjectReadiness,
+  SessionCreateRequest,
   StartupPlan,
   SessionCommand,
   SessionEvent,
   SessionList,
+  SessionRenameRequest,
   SessionSummary,
+  SkillInspectRequest,
+  SkillInstallRequest,
   SkillSettings,
   SkillSummary,
+  SubscriptionDeviceLoginRequest,
   SubscriptionDeviceLogin,
+  SubscriptionDevicePollRequest,
 } from "./types";
 
 const noopCleanup = (): void => undefined;
@@ -80,7 +90,7 @@ export interface HeartwoodClient {
   configureModelSource(sourceId: ModelSource): Promise<ModelSettings>;
   discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog>;
   connectModel(request: ModelConnectRequest): Promise<ModelSettings>;
-  saveModelProfile(profile: ModelProfile): Promise<ModelSettings>;
+  saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings>;
   selectModelProfile(profileId: string): Promise<ModelSettings>;
   removeModelProfile(profileId: string): Promise<ModelSettings>;
   validateModelProfile(profileId?: string): Promise<ModelValidation>;
@@ -147,9 +157,10 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   async createSession(title?: string): Promise<SessionSummary> {
+    const request: SessionCreateRequest = title === undefined ? {} : { title };
     return parseJsonResponse<SessionSummary>(
       await fetch(this.url("/sessions"), {
-        body: JSON.stringify(title === undefined ? {} : { title }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
@@ -166,9 +177,10 @@ export class GatewayClient implements HeartwoodClient {
     sessionId: string,
     title: string,
   ): Promise<SessionSummary> {
+    const request: SessionRenameRequest = { title };
     return parseJsonResponse<SessionSummary>(
       await fetch(this.url(`/sessions/${encodeURIComponent(sessionId)}`), {
-        body: JSON.stringify({ title }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "PATCH",
       }),
@@ -215,9 +227,10 @@ export class GatewayClient implements HeartwoodClient {
   async selectActionConfirmationMode(
     mode: ActionConfirmationMode,
   ): Promise<ActionSettings> {
+    const request: ActionConfirmationRequest = { mode };
     return parseJsonResponse<ActionSettings>(
       await fetch(this.url("/settings/actions/confirmation"), {
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       }),
@@ -242,12 +255,13 @@ export class GatewayClient implements HeartwoodClient {
   async startSubscriptionDeviceLogin(
     connectionId: string,
   ): Promise<SubscriptionDeviceLogin> {
+    const request: SubscriptionDeviceLoginRequest = {
+      connection_id: connectionId,
+      terms_accepted: true,
+    };
     return parseJsonResponse<SubscriptionDeviceLogin>(
       await fetch(this.url("/settings/models/subscription/device"), {
-        body: JSON.stringify({
-          connection_id: connectionId,
-          terms_accepted: true,
-        }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
@@ -258,12 +272,13 @@ export class GatewayClient implements HeartwoodClient {
     connectionId: string,
     loginId: string,
   ): Promise<SubscriptionDeviceLogin> {
+    const request: SubscriptionDevicePollRequest = {
+      connection_id: connectionId,
+      login_id: loginId,
+    };
     return parseJsonResponse<SubscriptionDeviceLogin>(
       await fetch(this.url("/settings/models/subscription/device/poll"), {
-        body: JSON.stringify({
-          connection_id: connectionId,
-          login_id: loginId,
-        }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
@@ -271,9 +286,10 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   async configureModelSource(sourceId: ModelSource): Promise<ModelSettings> {
+    const request: ModelSourceRequest = { source_id: sourceId };
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models/source"), {
-        body: JSON.stringify({ source_id: sourceId }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       }),
@@ -300,7 +316,7 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async saveModelProfile(profile: ModelProfile): Promise<ModelSettings> {
+  async saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models/profiles"), {
         body: JSON.stringify(profile),
@@ -311,9 +327,10 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   async selectModelProfile(profileId: string): Promise<ModelSettings> {
+    const request: ModelSelectionRequest = { profile_id: profileId };
     return parseJsonResponse<ModelSettings>(
       await fetch(this.url("/settings/models/active"), {
-        body: JSON.stringify({ profile_id: profileId }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "PUT",
       }),
@@ -358,9 +375,10 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   async downloadLocalModel(modelId: string): Promise<ModelDownload> {
+    const request: ModelDownloadRequest = { model_id: modelId };
     return parseJsonResponse<ModelDownload>(
       await fetch(this.url("/settings/models/downloads"), {
-        body: JSON.stringify({ model_id: modelId }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
@@ -398,9 +416,10 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   async inspectSkill(source: string): Promise<SkillSummary> {
+    const request: SkillInspectRequest = { source };
     return parseJsonResponse<SkillSummary>(
       await fetch(this.url("/settings/skills/inspect"), {
-        body: JSON.stringify({ source }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
@@ -408,9 +427,10 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   async installSkill(source: string): Promise<SkillSettings> {
+    const request: SkillInstallRequest = { approved: true, source };
     return parseJsonResponse<SkillSettings>(
       await fetch(this.url("/settings/skills/install"), {
-        body: JSON.stringify({ approved: true, source }),
+        body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),

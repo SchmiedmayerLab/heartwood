@@ -127,7 +127,28 @@ from heartwood.gateway._subscriptions import (
     SubscriptionProvider,
 )
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import (
+    ActionSettingsResponse,
+    AuditExportResponse,
+    CredentialSettingsResponse,
+    LocalModelImportResponse,
+    ModelArtifactsResponse,
+    ModelCatalogResponse,
+    ModelDownloadResponse,
+    ModelRepositoryPlanResponse,
+    ModelSettingsResponse,
+    ModelValidationResponse,
+    PlatformCapabilitiesResponse,
+    PolicyProfile,
+    ProjectReadinessResponse,
+    SessionListResponse,
+    SessionSummaryResponse,
+    SkillSettingsResponse,
+    SkillSummaryResponse,
+    StartupPlanResponse,
+    SubscriptionDeviceLoginResponse,
+    api_response,
+)
 from heartwood.session import SessionCommand, SessionEvent
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
@@ -385,7 +406,7 @@ class SessionGateway:
         """Start the interface lifecycle without requiring an agent dependency import."""
 
     @_serialized_state
-    def initialize_project(self, *, interface: InterfaceKind = "web") -> dict[str, object]:
+    def initialize_project(self, *, interface: InterfaceKind = "web") -> StartupPlanResponse:
         """Confirm the current directory as the project and create private state."""
         self.project.initialize()
         return self.startup_plan(interface=interface)
@@ -413,29 +434,38 @@ class SessionGateway:
             self._streams.publish(session_id=command.session_id, events=result.events)
         return result
 
-    def sessions(self) -> dict[str, object]:
+    def sessions(self) -> SessionListResponse:
         """Return persisted sessions ordered by recent activity."""
-        return {"sessions": [summary.safe_dict() for summary in self.session_catalog.list()]}
+        return api_response(
+            SessionListResponse,
+            {"sessions": [summary.safe_dict() for summary in self.session_catalog.list()]},
+        )
 
-    def create_session(self, title: str | None = None) -> dict[str, object]:
+    def create_session(self, title: str | None = None) -> SessionSummaryResponse:
         """Create and return one empty session."""
         self.project.initialize()
-        return self.session_catalog.create(title).safe_dict()
+        return api_response(SessionSummaryResponse, self.session_catalog.create(title).safe_dict())
 
-    def default_session(self) -> dict[str, object]:
+    def default_session(self) -> SessionSummaryResponse:
         """Return the shared first session, creating it when needed."""
         self.project.initialize()
-        return self.session_catalog.default().safe_dict()
+        return api_response(SessionSummaryResponse, self.session_catalog.default().safe_dict())
 
-    def session(self, session_id: str) -> dict[str, object]:
+    def session(self, session_id: str) -> SessionSummaryResponse:
         """Return one persisted session summary."""
-        return self.session_catalog.get(session_id).safe_dict()
+        return api_response(
+            SessionSummaryResponse,
+            self.session_catalog.get(session_id).safe_dict(),
+        )
 
-    def rename_session(self, session_id: str, title: str) -> dict[str, object]:
+    def rename_session(self, session_id: str, title: str) -> SessionSummaryResponse:
         """Rename one persisted session."""
-        return self.session_catalog.rename(session_id, title).safe_dict()
+        return api_response(
+            SessionSummaryResponse,
+            self.session_catalog.rename(session_id, title).safe_dict(),
+        )
 
-    def audit_export(self, session_id: str) -> dict[str, object]:
+    def audit_export(self, session_id: str) -> AuditExportResponse:
         """Return a generated scrubbed audit export for browser delivery."""
         self.session_catalog.get(session_id)
         store = FileSessionStore(self.sessions_root, session_id)
@@ -444,10 +474,13 @@ class SessionGateway:
         except OSError as error:
             msg = f"audit export is not available for session: {session_id}"
             raise SessionCatalogError(msg) from error
-        return {
-            "filename": f"{session_id}-audit.jsonl",
-            "content": content,
-        }
+        return api_response(
+            AuditExportResponse,
+            {
+                "filename": f"{session_id}-audit.jsonl",
+                "content": content,
+            },
+        )
 
     @_serialized_state
     def replay_events(
@@ -478,7 +511,7 @@ class SessionGateway:
             ),
         )
 
-    def model_settings(self) -> dict[str, object]:
+    def model_settings(self) -> ModelSettingsResponse:
         """Return API-safe settings, connections, and advanced presets."""
         settings = self.settings_store.load()
         config = self.config_store.load()
@@ -502,37 +535,46 @@ class SessionGateway:
             for profile in profiles:
                 if isinstance(profile, dict) and profile.get("auth_type") == "subscription":
                     profile["credential_status"] = subscription_status
-        return {
-            **safe_settings,
-            "model_source": config.model_source,
-            "source_options": [
-                option.safe_dict(selected=option.source_id == config.model_source)
-                for option in model_source_options(self.env)
-            ],
-            "connections": [
-                self._safe_connection(connection, credential_env, subscription_status)
-                for connection in sorted(
-                    self._model_connections.values(),
-                    key=lambda connection: connection.presentation_order,
-                )
-            ],
-            "presets": [preset.safe_dict() for preset in MODEL_PRESETS],
-            "credential_store": self.credential_store.availability().safe_dict(),
-            "credential_bindings": [
-                self.credential_store.status(binding).safe_dict() for binding in credential_bindings
-            ],
-        }
+        return api_response(
+            ModelSettingsResponse,
+            {
+                **safe_settings,
+                "model_source": config.model_source,
+                "source_options": [
+                    option.safe_dict(selected=option.source_id == config.model_source)
+                    for option in model_source_options(self.env)
+                ],
+                "connections": [
+                    self._safe_connection(connection, credential_env, subscription_status)
+                    for connection in sorted(
+                        self._model_connections.values(),
+                        key=lambda connection: connection.presentation_order,
+                    )
+                ],
+                "presets": [preset.safe_dict() for preset in MODEL_PRESETS],
+                "credential_store": self.credential_store.availability().safe_dict(),
+                "credential_bindings": [
+                    self.credential_store.status(binding).safe_dict()
+                    for binding in credential_bindings
+                ],
+            },
+        )
 
-    def credential_settings(self) -> dict[str, object]:
+    def credential_settings(self) -> CredentialSettingsResponse:
         """Return non-secret credential storage and binding state."""
         bindings = sorted(self._credential_binding_ids())
-        return {
-            "store": self.credential_store.availability().safe_dict(),
-            "bindings": [self.credential_store.status(binding).safe_dict() for binding in bindings],
-        }
+        return api_response(
+            CredentialSettingsResponse,
+            {
+                "store": self.credential_store.availability().safe_dict(),
+                "bindings": [
+                    self.credential_store.status(binding).safe_dict() for binding in bindings
+                ],
+            },
+        )
 
     @_serialized_state
-    def forget_credential(self, connection_id: str) -> dict[str, object]:
+    def forget_credential(self, connection_id: str) -> CredentialSettingsResponse:
         """Forget the process and persisted token for one model connection."""
         connection = self._model_connections.get(connection_id)
         if connection is None:
@@ -557,7 +599,7 @@ class SessionGateway:
         force_login: bool = False,
         open_browser: bool = True,
         auth_method: Literal["browser", "device_code"] = "browser",
-    ) -> dict[str, object]:
+    ) -> ModelSettingsResponse:
         """Run the OpenHands interactive subscription login flow."""
         connection = self._subscription_connection(connection_id)
         if auth_method not in {"browser", "device_code"}:
@@ -574,11 +616,17 @@ class SessionGateway:
         return self.model_settings()
 
     @_serialized_state
-    def start_subscription_device_login(self, connection_id: str) -> dict[str, object]:
+    def start_subscription_device_login(
+        self,
+        connection_id: str,
+    ) -> SubscriptionDeviceLoginResponse:
         """Start an OpenHands device-code flow for browser and remote clients."""
         self._subscription_connection(connection_id)
         try:
-            return self.subscription_provider.start_device_login().safe_dict()
+            return api_response(
+                SubscriptionDeviceLoginResponse,
+                self.subscription_provider.start_device_login().safe_dict(),
+            )
         except SubscriptionError as error:
             raise ModelCatalogError(str(error)) from error
 
@@ -587,11 +635,14 @@ class SessionGateway:
         self,
         connection_id: str,
         login_id: str,
-    ) -> dict[str, object]:
+    ) -> SubscriptionDeviceLoginResponse:
         """Poll one OpenHands device-code flow."""
         self._subscription_connection(connection_id)
         try:
-            return self.subscription_provider.poll_device_login(login_id).safe_dict()
+            return api_response(
+                SubscriptionDeviceLoginResponse,
+                self.subscription_provider.poll_device_login(login_id).safe_dict(),
+            )
         except SubscriptionError as error:
             raise ModelCatalogError(str(error)) from error
 
@@ -602,13 +653,16 @@ class SessionGateway:
             self._credential_environment(strict=False),
         )
 
-    def project_readiness(self) -> dict[str, object]:
+    def project_readiness(self) -> ProjectReadinessResponse:
         """Return content-free project diagnostics for presentation adapters."""
-        return self.deployment_readiness().safe_dict()
+        return api_response(ProjectReadinessResponse, self.deployment_readiness().safe_dict())
 
-    def platform_capabilities(self) -> dict[str, object]:
+    def platform_capabilities(self) -> PlatformCapabilitiesResponse:
         """Return capabilities owned by the detected platform adapter."""
-        return select_platform_adapter(self.env).capabilities().safe_dict()
+        return api_response(
+            PlatformCapabilitiesResponse,
+            select_platform_adapter(self.env).capabilities().safe_dict(),
+        )
 
     def startup(
         self,
@@ -629,12 +683,15 @@ class SessionGateway:
         *,
         interface: InterfaceKind,
         port: int = 8767,
-    ) -> dict[str, object]:
+    ) -> StartupPlanResponse:
         """Return the shared startup plan for presentation adapters."""
-        return self.startup(interface=interface, port=port).safe_dict()
+        return api_response(
+            StartupPlanResponse,
+            self.startup(interface=interface, port=port).safe_dict(),
+        )
 
     @_serialized_state
-    def configure_model_source(self, model_source: str) -> dict[str, object]:
+    def configure_model_source(self, model_source: str) -> ModelSettingsResponse:
         """Prepare one shared model source and its deployment policy."""
         option = next(
             (
@@ -663,7 +720,7 @@ class SessionGateway:
         base_url: str | None = None,
         refresh: bool = False,
         remember: bool = False,
-    ) -> dict[str, object]:
+    ) -> ModelCatalogResponse:
         """Authorize and discover every model exposed by one connection."""
         connection = self._resolve_model_connection(
             connection_id,
@@ -694,7 +751,7 @@ class SessionGateway:
             safe_connection = payload.get("connection")
             if isinstance(safe_connection, dict):
                 safe_connection["credential_status"] = self._subscription_credential_status()
-        return payload
+        return api_response(ModelCatalogResponse, payload)
 
     def connect_model(
         self,
@@ -705,7 +762,7 @@ class SessionGateway:
         base_url: str | None = None,
         manual: bool = False,
         remember: bool = False,
-    ) -> dict[str, object]:
+    ) -> ModelSettingsResponse:
         """Select a discovered model and materialize its OpenHands profile."""
         connection = self._resolve_model_connection(
             connection_id,
@@ -768,7 +825,7 @@ class SessionGateway:
             self._reset_services()
             return self.model_settings()
 
-    def action_settings(self) -> dict[str, object]:
+    def action_settings(self) -> ActionSettingsResponse:
         """Return the selected and deployment-allowed confirmation modes."""
         try:
             config = self.config_store.load()
@@ -781,26 +838,29 @@ class SessionGateway:
         )
         policy_profile = config.policy
         allowed = set(policy_profile.allowed_action_confirmation_modes)
-        return {
-            **settings.safe_dict(),
-            "scope_description": ACTION_MODE_SCOPE_DESCRIPTION,
-            "presentation": action_presentation(),
-            "modes": [
-                {
-                    **option.safe_dict(),
-                    "allowed": option.mode in allowed,
-                    "unavailable_reason": (
-                        None
-                        if option.mode in allowed
-                        else "Unavailable under the active platform policy."
-                    ),
-                }
-                for option in ACTION_MODE_OPTIONS
-            ],
-        }
+        return api_response(
+            ActionSettingsResponse,
+            {
+                **settings.safe_dict(),
+                "scope_description": ACTION_MODE_SCOPE_DESCRIPTION,
+                "presentation": action_presentation(),
+                "modes": [
+                    {
+                        **option.safe_dict(),
+                        "allowed": option.mode in allowed,
+                        "unavailable_reason": (
+                            None
+                            if option.mode in allowed
+                            else "Unavailable under the active platform policy."
+                        ),
+                    }
+                    for option in ACTION_MODE_OPTIONS
+                ],
+            },
+        )
 
     @_serialized_state
-    def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
+    def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
         """Select a deployment-allowed OpenHands confirmation mode."""
         if isinstance(self.action_settings_store, ProjectActionSettingsStore):
             try:
@@ -821,7 +881,7 @@ class SessionGateway:
         return self.action_settings()
 
     @_serialized_state
-    def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
+    def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or replace a non-secret profile and reset active services."""
         profile = align_model_profile_request_endpoint(profile)
         if profile.profile_id in _RESERVED_MODEL_PROFILE_IDS:
@@ -834,7 +894,7 @@ class SessionGateway:
         return self.model_settings()
 
     @_serialized_state
-    def select_model_profile(self, profile_id: str) -> dict[str, object]:
+    def select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Select a profile and reset active services."""
         settings = self.settings_store.load().selecting(profile_id)
         self._save_model_selection(self._model_source_for_profile(settings.profile()), settings)
@@ -842,7 +902,7 @@ class SessionGateway:
         return self.model_settings()
 
     @_serialized_state
-    def remove_model_profile(self, profile_id: str) -> dict[str, object]:
+    def remove_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Remove a profile and reset active services."""
         if profile_id in _RESERVED_MODEL_PROFILE_IDS:
             raise ModelSettingsError(f"model profile is managed by Heartwood: {profile_id}")
@@ -852,7 +912,10 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
-    def validate_model_profile(self, profile_id: str | None = None) -> dict[str, object]:
+    def validate_model_profile(
+        self,
+        profile_id: str | None = None,
+    ) -> ModelValidationResponse:
         """Validate credential availability and platform route authorization."""
         profile = self.settings_store.load().profile(profile_id)
         action_settings = self.action_settings_store.load()
@@ -870,18 +933,21 @@ class SessionGateway:
             decision_id=f"model-profile-{profile.profile_id}",
             purpose=purpose,
         )
-        return {
-            "profile": profile.safe_dict(),
-            "credential_status": (
-                self._subscription_credential_status()
-                if profile.auth_type == "subscription"
-                else profile.credential_status(self._credential_environment())
-            ),
-            "action_confirmation_mode": action_settings.confirmation_mode,
-            "policy_decision": decision.model_dump(mode="json"),
-        }
+        return api_response(
+            ModelValidationResponse,
+            {
+                "profile": profile.safe_dict(),
+                "credential_status": (
+                    self._subscription_credential_status()
+                    if profile.auth_type == "subscription"
+                    else profile.credential_status(self._credential_environment())
+                ),
+                "action_confirmation_mode": action_settings.confirmation_mode,
+                "policy_decision": decision.model_dump(mode="json"),
+            },
+        )
 
-    def model_artifacts(self) -> dict[str, object]:
+    def model_artifacts(self) -> ModelArtifactsResponse:
         """Return normalized local choices, source metadata, and download status."""
         snapshot_catalog = self.snapshot_catalog.safe_dict()
         statuses = {status.model_id: status for status in self.local_model_manager.statuses()}
@@ -960,27 +1026,30 @@ class SessionGateway:
             )
             for choice in local_choices
         ]
-        return {
-            **self.artifact_catalog.safe_dict(),
-            "snapshot_schema_version": snapshot_catalog["schema_version"],
-            "snapshots": snapshot_catalog["snapshots"],
-            "models": choices,
-            "downloads": [status.safe_dict() for status in statuses.values()],
-            "gpu_environment": {
-                "platform_id": gpu_environment.platform_id,
-                "capacities": [
-                    {
-                        "label": capacity.label,
-                        "gpu_model": capacity.gpu_model,
-                        "gpu_count": capacity.gpu_count,
-                        "gpu_memory_bytes": capacity.gpu_memory_bytes,
-                        "allocation_required": capacity.allocation_required,
-                        "partition": capacity.partition,
-                    }
-                    for capacity in gpu_environment.capacities
-                ],
+        return api_response(
+            ModelArtifactsResponse,
+            {
+                **self.artifact_catalog.safe_dict(),
+                "snapshot_schema_version": snapshot_catalog["schema_version"],
+                "snapshots": snapshot_catalog["snapshots"],
+                "models": choices,
+                "downloads": [status.safe_dict() for status in statuses.values()],
+                "gpu_environment": {
+                    "platform_id": gpu_environment.platform_id,
+                    "capacities": [
+                        {
+                            "label": capacity.label,
+                            "gpu_model": capacity.gpu_model,
+                            "gpu_count": capacity.gpu_count,
+                            "gpu_memory_bytes": capacity.gpu_memory_bytes,
+                            "allocation_required": capacity.allocation_required,
+                            "partition": capacity.partition,
+                        }
+                        for capacity in gpu_environment.capacities
+                    ],
+                },
             },
-        }
+        )
 
     def gpu_environment(self, *, refresh: bool = False) -> GpuEnvironment:
         """Return the shared GPU and scheduler inventory for this deployment."""
@@ -1040,7 +1109,7 @@ class SessionGateway:
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelRepositoryPlanResponse:
         """Build one automatic download plan without downloading model weights."""
         plan = self.model_repository.plan(
             repository,
@@ -1052,30 +1121,39 @@ class SessionGateway:
         self._repository_plans[(plan.model.source_repository, plan.model.source_revision)] = (
             plan.model
         )
-        return {
-            "model": self._local_model_choice_dict(plan.model),
-            "selection_reason": plan.selection_reason,
-        }
+        return api_response(
+            ModelRepositoryPlanResponse,
+            {
+                "model": self._local_model_choice_dict(plan.model),
+                "selection_reason": plan.selection_reason,
+            },
+        )
 
-    def download_local_model(self, model_id: str) -> dict[str, object]:
+    def download_local_model(self, model_id: str) -> ModelDownloadResponse:
         """Start a known local-model download into project storage."""
         self.project.initialize()
         choice = self._require_downloadable_local_model(model_id)
-        return self.local_model_manager.start_model(choice.download_model()).safe_dict()
+        return api_response(
+            ModelDownloadResponse,
+            self.local_model_manager.start_model(choice.download_model()).safe_dict(),
+        )
 
     def download_custom_local_model(
         self,
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelDownloadResponse:
         """Resolve and start one user-selected Hugging Face model download."""
         self.project.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
         )
-        return self.local_model_manager.start_model(choice.download_model()).safe_dict()
+        return api_response(
+            ModelDownloadResponse,
+            self.local_model_manager.start_model(choice.download_model()).safe_dict(),
+        )
 
     def download_local_model_now(
         self,
@@ -1140,7 +1218,7 @@ class SessionGateway:
         source_revision: str,
         license_posture: str,
         context_window: int,
-    ) -> dict[str, object]:
+    ) -> LocalModelImportResponse:
         """Import and select a reviewed local GGUF file or vLLM snapshot."""
         self.project.initialize()
         imported = import_local_model(
@@ -1164,18 +1242,39 @@ class SessionGateway:
             self.config_store.restore(previous_config)
             shutil.rmtree(imported.storage_root, ignore_errors=True)
             raise
-        return imported.safe_dict()
+        selected = self.config_store.load().local_model
+        selected_for_project = selected is not None and selected.artifact_id == choice.model_id
+        return api_response(
+            LocalModelImportResponse,
+            {
+                "model": self._local_model_choice_dict(
+                    choice,
+                    active=(
+                        selected_for_project
+                        and selected is not None
+                        and managed_local_runtime_active(selected, self.env)
+                    ),
+                    selected=selected_for_project,
+                    recommendation="Selected for this project",
+                ),
+                "path": str(imported.path),
+                "status": "ready",
+            },
+        )
 
-    def skill_settings(self) -> dict[str, object]:
+    def skill_settings(self) -> SkillSettingsResponse:
         """Return bundled and explicitly installed Skills."""
-        return {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]}
+        return api_response(
+            SkillSettingsResponse,
+            {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]},
+        )
 
-    def inspect_skill(self, source: Path) -> dict[str, object]:
+    def inspect_skill(self, source: Path) -> SkillSummaryResponse:
         """Verify a mounted Skill source without installing it."""
-        return self.skill_manager.inspect(source).safe_dict()
+        return api_response(SkillSummaryResponse, self.skill_manager.inspect(source).safe_dict())
 
     @_serialized_state
-    def install_skill(self, source: Path, *, approved: bool) -> dict[str, object]:
+    def install_skill(self, source: Path, *, approved: bool) -> SkillSettingsResponse:
         """Install one extension after an explicit trust decision."""
         self.project.initialize()
         self.skill_manager.install(source, approved=approved)
@@ -1183,7 +1282,7 @@ class SessionGateway:
         return self.skill_settings()
 
     @_serialized_state
-    def remove_skill(self, name: str) -> dict[str, object]:
+    def remove_skill(self, name: str) -> SkillSettingsResponse:
         """Remove one installed extension and reset active conversations."""
         self.skill_manager.remove(name)
         self._reset_services()

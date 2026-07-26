@@ -70,7 +70,7 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
     assert scope_description.startswith("Shared by every Heartwood interface")
     assert modes[0] == {
         "allowed": True,
-        "automatic_risks": (),
+        "automatic_risks": [],
         "command_value": "ask-every-time",
         "description": (
             "Heartwood pauses before every proposed action set so you can inspect it "
@@ -79,7 +79,7 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
         "label": "Review Every Action",
         "mode": "always-confirm",
         "recommended": True,
-        "reviewed_risks": ("low", "medium", "high", "unknown"),
+        "reviewed_risks": ["low", "medium", "high", "unknown"],
         "unavailable_reason": None,
     }
     assert initial["presentation"] == {

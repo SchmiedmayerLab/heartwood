@@ -66,7 +66,7 @@ class SnapshotDownloader(Protocol):
     def __call__(
         self,
         *,
-        repo_id: str,
+        repo_id: str,  # noqa: F841, RUF100
         revision: str,
         local_dir: Path,
         cache_dir: Path,

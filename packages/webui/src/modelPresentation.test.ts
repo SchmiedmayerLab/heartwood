@@ -24,6 +24,8 @@ const profile = (profileId: string, model: string): ModelProfile => ({
   api_version: null,
   aws_region_name: null,
   aws_profile_name: null,
+  max_input_tokens: null,
+  max_output_tokens: null,
   description: null,
 });
 

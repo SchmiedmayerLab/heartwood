@@ -11,9 +11,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 from heartwood.gateway import DEFAULT_SESSION_ID, ModelProfile, ProjectContext, SessionGateway
+from heartwood.schemas import (
+    ActionSettingsResponse,
+    CredentialSettingsResponse,
+    LocalModelImportResponse,
+    ModelArtifactsResponse,
+    ModelCatalogResponse,
+    ModelDownloadResponse,
+    ModelRepositoryPlanResponse,
+    ModelSettingsResponse,
+    ModelValidationResponse,
+    PlatformCapabilitiesResponse,
+    ProjectReadinessResponse,
+    StartupPlanResponse,
+)
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -21,6 +35,7 @@ from heartwood.session import (
     SessionCommand,
     SessionEvent,
     new_command_id,
+    pending_tool_actions,
 )
 
 
@@ -133,27 +148,27 @@ class NotebookSession:
         """Run one chat turn and return the notebook view model."""
         return self._handle(CommandKind.CHAT, {"prompt": prompt})
 
-    def model_settings(self) -> dict[str, object]:
+    def model_settings(self) -> ModelSettingsResponse:
         """Return non-secret model profiles and presets."""
         return self.gateway.model_settings()
 
-    def initialize_project(self) -> dict[str, object]:
+    def initialize_project(self) -> StartupPlanResponse:
         """Confirm the current directory and create private project state."""
         return self.gateway.initialize_project(interface="notebook")
 
-    def project_readiness(self) -> dict[str, object]:
+    def project_readiness(self) -> ProjectReadinessResponse:
         """Return the shared project setup and compute readiness report."""
         return self.gateway.project_readiness()
 
-    def startup_plan(self) -> dict[str, object]:
+    def startup_plan(self) -> StartupPlanResponse:
         """Return the shared notebook startup and recovery projection."""
         return self.gateway.startup_plan(interface="notebook")
 
-    def platform_capabilities(self) -> dict[str, object]:
+    def platform_capabilities(self) -> PlatformCapabilitiesResponse:
         """Return capabilities for the detected execution environment."""
         return self.gateway.platform_capabilities()
 
-    def configure_model_source(self, source_id: str) -> dict[str, object]:
+    def configure_model_source(self, source_id: str) -> ModelSettingsResponse:
         """Prepare the same project model source used by terminal and browser clients."""
         return self.gateway.configure_model_source(source_id)
 
@@ -165,7 +180,7 @@ class NotebookSession:
         base_url: str | None = None,
         refresh: bool = False,
         remember: bool = False,
-    ) -> dict[str, object]:
+    ) -> ModelCatalogResponse:
         """Discover models through the shared authorized connection catalog."""
         return self.gateway.discover_models(
             connection_id,
@@ -184,7 +199,7 @@ class NotebookSession:
         base_url: str | None = None,
         manual: bool = False,
         remember: bool = False,
-    ) -> dict[str, object]:
+    ) -> ModelSettingsResponse:
         """Select a discovered model through the shared connection workflow."""
         return self.gateway.connect_model(
             connection_id,
@@ -195,27 +210,30 @@ class NotebookSession:
             remember=remember,
         )
 
-    def credential_settings(self) -> dict[str, object]:
+    def credential_settings(self) -> CredentialSettingsResponse:
         """Return non-secret credential-store and binding status."""
         return self.gateway.credential_settings()
 
-    def forget_credential(self, connection_id: str) -> dict[str, object]:
+    def forget_credential(self, connection_id: str) -> CredentialSettingsResponse:
         """Forget a process or saved credential for one connection."""
         return self.gateway.forget_credential(connection_id)
 
-    def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
+    def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or update one non-secret model profile."""
         return self.gateway.save_model_profile(profile)
 
-    def select_model_profile(self, profile_id: str) -> dict[str, object]:
+    def select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Select the model profile used by subsequent turns."""
         return self.gateway.select_model_profile(profile_id)
 
-    def validate_model_profile(self, profile_id: str | None = None) -> dict[str, object]:
+    def validate_model_profile(
+        self,
+        profile_id: str | None = None,
+    ) -> ModelValidationResponse:
         """Validate credential availability and route authorization."""
         return self.gateway.validate_model_profile(profile_id)
 
-    def model_artifacts(self) -> dict[str, object]:
+    def model_artifacts(self) -> ModelArtifactsResponse:
         """Return default and user-selected Heartwood-managed model choices."""
         return self.gateway.model_artifacts()
 
@@ -224,11 +242,11 @@ class NotebookSession:
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelRepositoryPlanResponse:
         """Inspect supported candidates from one Hugging Face model repository."""
         return self.gateway.inspect_model_repository(repository, revision=revision)
 
-    def download_local_model(self, model_id: str) -> dict[str, object]:
+    def download_local_model(self, model_id: str) -> ModelDownloadResponse:
         """Start a recommended Heartwood-managed model download."""
         return self.gateway.download_local_model(model_id)
 
@@ -237,7 +255,7 @@ class NotebookSession:
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelDownloadResponse:
         """Start one inspected user-selected Heartwood-managed model download."""
         return self.gateway.download_custom_local_model(
             repository,
@@ -252,7 +270,7 @@ class NotebookSession:
         source_revision: str,
         license_posture: str,
         context_window: int = 32_768,
-    ) -> dict[str, object]:
+    ) -> LocalModelImportResponse:
         """Import and select a reviewed Heartwood-managed model through the shared gateway."""
         return self.gateway.import_local_model(
             source,
@@ -262,18 +280,17 @@ class NotebookSession:
             context_window=context_window,
         )
 
-    def action_settings(self) -> dict[str, object]:
+    def action_settings(self) -> ActionSettingsResponse:
         """Return the shared action-confirmation settings."""
         return self.gateway.action_settings()
 
-    def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
+    def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
         """Select a deployment-allowed action-confirmation mode."""
         return self.gateway.select_action_confirmation_mode(mode)
 
     def browser_url(self, *, port: int = 8767) -> str | None:
         """Return the supported browser URL, or ``None`` on terminal-only platforms."""
-        access_url = self.gateway.startup_plan(interface="web", port=port).get("access_url")
-        return access_url if isinstance(access_url, str) else None
+        return self.gateway.startup_plan(interface="web", port=port)["access_url"]
 
     def close(self) -> None:
         """Release active conversations and process-scoped credentials."""
@@ -361,7 +378,16 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
     chat: list[ChatMessage] = []
     skills: list[SkillProposal] = []
     approvals: list[ApprovalControl] = []
-    pending_actions: dict[str, ApprovalAction] = {}
+    pending_actions = {
+        action.tool_call_id: ApprovalAction(
+            target_id=action.tool_call_id,
+            tool_name=action.tool_name,
+            risk=action.risk,
+            summary=action.summary,
+            arguments=action.arguments,
+        )
+        for action in pending_tool_actions(events)
+    }
     policies: list[PolicyStatus] = []
     exports: list[ExportAction] = []
     paused = False
@@ -374,20 +400,6 @@ def build_view_model(events: tuple[SessionEvent, ...]) -> NotebookViewModel:
         elif kind == EventKind.AGENT_MESSAGE_EMITTED.value:
             chat.append(
                 ChatMessage(role="assistant", content=str(event.payload.get("content", "")))
-            )
-        elif kind == EventKind.CONFIRMATION_REQUESTED.value:
-            request = _mapping_payload(event.payload["request"], "request")
-            target_id = str(request["tool_call_id"])
-            pending_actions[target_id] = ApprovalAction(
-                target_id=target_id,
-                tool_name=str(request.get("tool_name", "unknown-tool")),
-                risk=str(request.get("risk", "unknown")),
-                summary=str(request.get("summary", request.get("tool_name", "action"))),
-                arguments=(
-                    cast(dict[str, JsonValue], request["arguments"])
-                    if isinstance(request.get("arguments"), dict)
-                    else {}
-                ),
             )
         elif kind == EventKind.APPROVAL_RECORDED.value:
             approval = _mapping_payload(event.payload["approval"], "approval")

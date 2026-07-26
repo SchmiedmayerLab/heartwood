@@ -71,6 +71,7 @@ import type {
   ModelConnectRequest,
   ModelConnection,
   ModelProfile,
+  ModelProfileDraft,
   ModelRepositoryPlan,
   ModelRepositoryRequest,
   ModelSource,
@@ -92,7 +93,7 @@ interface UtilitySheetProps {
   artifacts: ModelArtifacts | null;
   events: SessionEvent[];
   panel: UtilityPanel;
-  profileDraft: ModelProfile;
+  profileDraft: ModelProfileDraft;
   projectReadiness: ProjectReadiness | null;
   startupPlan: StartupPlan | null;
   skillApproved: boolean;
@@ -120,7 +121,7 @@ interface UtilitySheetProps {
   onImportLocalModel: (request: LocalModelImportRequest) => Promise<void>;
   onInitializeProject: () => Promise<void>;
   onInstallSkill: () => void;
-  onProfileDraft: (profile: ModelProfile) => void;
+  onProfileDraft: (profile: ModelProfileDraft) => void;
   onRefreshActivity: () => void;
   onRefreshSettings: () => void;
   onRestoreFocus: () => void;
@@ -162,6 +163,14 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
     </SheetContent>
   </Sheet>
 );
+
+const profileDraftFrom = ({
+  credential_status: credentialStatus,
+  ...profile
+}: ModelProfile): ModelProfileDraft => {
+  void credentialStatus;
+  return profile;
+};
 
 const ActivityContent = ({
   actions,
@@ -628,7 +637,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
                     <div className="profile-row" key={profile.profile_id}>
                       <button
                         type="button"
-                        onClick={() => onProfileDraft(profile)}
+                        onClick={() =>
+                          onProfileDraft(profileDraftFrom(profile))
+                        }
                       >
                         <strong>{profile.profile_id}</strong>
                         <span>{profile.model}</span>
@@ -1883,10 +1894,10 @@ const ProfileEditor = ({
   onDraft,
   onSave,
 }: {
-  draft: ModelProfile;
+  draft: ModelProfileDraft;
   settings: ModelSettings | null;
   onApplyPreset: (presetId: string) => void;
-  onDraft: (profile: ModelProfile) => void;
+  onDraft: (profile: ModelProfileDraft) => void;
   onSave: () => void;
 }) => (
   <div className="profile-editor">

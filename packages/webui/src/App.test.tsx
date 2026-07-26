@@ -34,6 +34,7 @@ import type {
   ModelConnection,
   ModelDownload,
   ModelProfile,
+  ModelProfileDraft,
   ModelRepositoryPlan,
   ModelRepositoryRequest,
   ModelSource,
@@ -187,6 +188,7 @@ const localModelChoice = (
   license_id: "test-fixture",
   license_posture: "Test fixture",
   catalog_source: "catalog",
+  model_type: null,
   context_window: 32_768,
   maximum_context_window: 32_768,
   precision: "GGUF Q4_K_M",
@@ -227,7 +229,7 @@ class FakeClient implements HeartwoodClient {
   artifactCalls = 0;
   artifactFailures = 0;
   activeManagedModel = false;
-  savedProfile: ModelProfile | null = null;
+  savedProfile: ModelProfileDraft | null = null;
   catalogRequest: ModelCatalogRequest | null = null;
   catalogError: Error | null = null;
   validationError: Error | null = null;
@@ -604,6 +606,7 @@ class FakeClient implements HeartwoodClient {
           source_revision: "0123456789abcdef",
           artifact_format: "GGUF",
           artifact_size_bytes: 256 * 1024 * 1024,
+          minimum_free_bytes: 256 * 1024 * 1024,
           artifact_sha256: "a".repeat(64),
           license_posture: "Test fixture",
           model_alias: "Stories 260K",
@@ -739,11 +742,11 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({ skills: [bundledSkill()] });
   }
 
-  saveModelProfile(profile: ModelProfile): Promise<ModelSettings> {
+  saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings> {
     this.savedProfile = profile;
     this.currentSettings = {
       ...this.currentSettings,
-      profiles: [profile],
+      profiles: [profileResponseFromDraft(profile)],
     };
     return Promise.resolve(this.currentSettings);
   }
@@ -777,8 +780,12 @@ class FakeClient implements HeartwoodClient {
       credential_status: "configured",
       action_confirmation_mode: this.currentActions.confirmation_mode,
       policy_decision: {
+        schema_version: "heartwood.model-call-decision.v1",
+        decision_id: "decision-test",
+        policy_profile_id: "policy-test",
         decision: "allow",
         endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+        capability_tier: "supervised",
         reason: "allowlisted",
       },
     });
@@ -1401,6 +1408,7 @@ describe("App", () => {
           binding_id: "OPENAI_API_KEY",
           configured: true,
           source: "keyring",
+          error: null,
         },
       ],
     };
@@ -2105,7 +2113,30 @@ const localProfile = (): ModelProfile => ({
   api_version: null,
   aws_region_name: null,
   aws_profile_name: null,
+  max_input_tokens: null,
+  max_output_tokens: null,
   description: "Model runtime managed by Heartwood",
+});
+
+const profileResponseFromDraft = (
+  profile: ModelProfileDraft,
+): ModelProfile => ({
+  profile_id: profile.profile_id,
+  model: profile.model,
+  policy_endpoint: profile.policy_endpoint,
+  capability_tier: profile.capability_tier ?? "supervised",
+  base_url: profile.base_url ?? null,
+  credential_kind: profile.credential_kind ?? "environment",
+  auth_type: profile.auth_type ?? "api_key",
+  subscription_vendor: profile.subscription_vendor ?? null,
+  api_key_env: profile.api_key_env ?? null,
+  api_key_file: profile.api_key_file ?? null,
+  api_version: profile.api_version ?? null,
+  aws_region_name: profile.aws_region_name ?? null,
+  aws_profile_name: profile.aws_profile_name ?? null,
+  max_input_tokens: profile.max_input_tokens ?? null,
+  max_output_tokens: profile.max_output_tokens ?? null,
+  description: profile.description ?? null,
 });
 
 const customProfile = (): ModelProfile => ({

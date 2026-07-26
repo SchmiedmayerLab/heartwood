@@ -40,6 +40,8 @@ jobs:
         run: uv run ruff format --check .
       - name: Lint
         run: uv run ruff check --output-format=github .
+      - name: Check high-confidence dead code
+        run: uv run vulture
       - name: Type-check
         run: uv run mypy packages
       - name: Check synthetic artifacts

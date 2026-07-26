@@ -36,6 +36,7 @@ from heartwood.gateway import (
     action_risk_label,
     action_tool_label,
 )
+from heartwood.schemas import ActionModeOptionResponse, ActionSettingsResponse
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
 
@@ -279,34 +280,35 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert _risk_presentation("low") == ("Low Risk", "green")
     assert _risk_presentation("other") == ("Not Classified", "bold yellow")
 
-    selected = _mode_option_prompt(
-        {
-            "allowed": True,
-            "label": "Review Every Action",
-            "mode": "always-confirm",
-            "recommended": True,
-        },
-        selected="always-confirm",
-    )
-    unavailable = _mode_option_prompt(
-        {
-            "allowed": False,
-            "label": "Low-Risk Automation",
-            "mode": "confirm-risky",
-        },
-        selected="always-confirm",
-    )
+    selected_mode: ActionModeOptionResponse = {
+        "allowed": True,
+        "automatic_risks": [],
+        "command_value": "ask-every-time",
+        "description": "Review every proposed action set.",
+        "label": "Review Every Action",
+        "mode": "always-confirm",
+        "recommended": True,
+        "reviewed_risks": ["low", "medium", "high", "unknown"],
+        "unavailable_reason": None,
+    }
+    unavailable_mode: ActionModeOptionResponse = {
+        "allowed": False,
+        "automatic_risks": ["low"],
+        "command_value": "auto-approve-low-risk",
+        "description": "Continue automatically only for low-risk action sets.",
+        "label": "Low-Risk Automation",
+        "mode": "confirm-risky",
+        "recommended": False,
+        "reviewed_risks": ["medium", "high", "unknown"],
+        "unavailable_reason": "Unavailable under the active platform policy.",
+    }
+    selected = _mode_option_prompt(selected_mode, selected="always-confirm")
+    unavailable = _mode_option_prompt(unavailable_mode, selected="always-confirm")
     assert selected.plain == "● Review Every Action · Recommended"
     assert unavailable.plain == "  Low-Risk Automation · Unavailable"
-    assert _unavailable_mode_summary(
-        (
-            {
-                "allowed": False,
-                "label": "Low-Risk Automation",
-                "unavailable_reason": "Unavailable under the active platform policy.",
-            },
-        )
-    ) == ("Low-Risk Automation unavailable: Unavailable under the active platform policy.")
+    assert _unavailable_mode_summary((unavailable_mode,)) == (
+        "Low-Risk Automation unavailable: Unavailable under the active platform policy."
+    )
 
 
 def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
@@ -360,7 +362,7 @@ def test_textual_terminal_reports_action_settings_load_failure() -> None:
         def pending_actions(self) -> tuple[PendingAction, ...]:
             return ()
 
-        def action_settings(self) -> dict[str, object]:
+        def action_settings(self) -> ActionSettingsResponse:
             raise ActionSettingsError("project action settings are invalid")
 
     app = HeartwoodTerminalApp(

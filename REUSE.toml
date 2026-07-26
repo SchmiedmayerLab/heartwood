@@ -13,6 +13,7 @@ version = 1
 [[annotations]]
 path = [
     "LICENSE",
+    ".jscpd.json",
     ".python-version",
     "uv.lock",
     "images/gpu/vllm-requirements.txt",
