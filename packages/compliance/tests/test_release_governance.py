@@ -288,6 +288,18 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert "cancel-in-progress: true" in dependency_review
 
 
+def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
+    validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
+
+    assert validation.count("SchmiedmayerLab/.github/.github/workflows/") == 3
+    assert validation.count("@v0.3") == 3
+    markdown_job = validation.split("  markdown-links:\n", maxsplit=1)[1].split(
+        "\n  yamllint:\n", maxsplit=1
+    )[0]
+    assert "contents: read" in markdown_job
+    assert "pull-requests: read" in markdown_job
+
+
 def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     pull_request = Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8")
     smoke = Path(".github/workflows/container-smoke.yml").read_text(encoding="utf-8")
