@@ -62,7 +62,7 @@ Store, retain, share, and delete audit artifacts under the same reviewed records
 - deny network egress except reviewed model and package endpoints;
 - mount controlled inputs read-only when feasible;
 - keep provider secrets in a keyring, mounted secret, or managed identity;
-- use **Ask Every Time** until a deployment-specific risk policy is reviewed;
+- use **Review Every Action** until a deployment-specific risk policy is reviewed;
 - pin release artifacts, images, model revisions, and Skill versions;
 - collect content-minimized operational logs outside project outputs;
 - validate backup, retention, deletion, and incident-response procedures; and

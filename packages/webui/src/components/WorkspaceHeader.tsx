@@ -12,10 +12,10 @@ import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
 import { LoaderCircle, Menu, Pencil, ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import type { ActionSettings, SessionSummary } from "../types";
+import type { SessionSummary } from "../types";
 
 interface WorkspaceHeaderProps {
-  actionSettings: ActionSettings | null;
+  actionModeLabel: string;
   modelDetail: string | null;
   modelLabel: string;
   modelStatus: "checking" | "denied" | "ready" | "setup";
@@ -23,12 +23,13 @@ interface WorkspaceHeaderProps {
   projectLabel: string;
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
+  onOpenActionReview: () => void;
   onOpenMenu: () => void;
   onRename: (title: string) => void;
 }
 
 export const WorkspaceHeader = ({
-  actionSettings,
+  actionModeLabel,
   modelDetail,
   modelLabel,
   modelStatus,
@@ -36,6 +37,7 @@ export const WorkspaceHeader = ({
   projectLabel,
   requestStatus,
   session,
+  onOpenActionReview,
   onOpenMenu,
   onRename,
 }: WorkspaceHeaderProps) => {
@@ -117,9 +119,10 @@ export const WorkspaceHeader = ({
           detail={modelDetail ?? undefined}
         />
         <ContextFact
-          label="Approvals"
-          value={approvalLabel(actionSettings)}
+          label="Action review"
+          value={actionModeLabel}
           icon={<ShieldCheck size={14} />}
+          onActivate={onOpenActionReview}
         />
       </dl>
     </header>
@@ -130,21 +133,40 @@ const ContextFact = ({
   detail,
   icon,
   label,
+  onActivate,
   value,
 }: {
   detail?: string;
   icon?: React.ReactNode;
   label: string;
+  onActivate?: () => void;
   value: string;
-}) => (
-  <div className="context-fact">
-    <dt>{label}</dt>
-    <dd title={detail}>
+}) => {
+  const content = (
+    <>
       {icon}
       <span title={value}>{value}</span>
-    </dd>
-  </div>
-);
+    </>
+  );
+  return (
+    <div className="context-fact">
+      <dt>{label}</dt>
+      <dd title={detail}>
+        {onActivate ?
+          <Button
+            aria-label={`Open ${label.toLowerCase()} settings`}
+            className="context-fact-button"
+            size="sm"
+            variant="ghost"
+            onClick={onActivate}
+          >
+            {content}
+          </Button>
+        : content}
+      </dd>
+    </div>
+  );
+};
 
 const StatusBadge = ({
   modelStatus,
@@ -186,13 +208,5 @@ const statusLabel = (status: string): string =>
     error: "Needs attention",
     idle: "Ready",
     paused: "Paused",
-    waiting: "Approval needed",
+    waiting: "Action review needed",
   })[status] ?? status;
-
-const approvalLabel = (settings: ActionSettings | null): string => {
-  if (settings === null) return "Loading";
-  return (
-    settings.modes.find((mode) => mode.mode === settings.confirmation_mode)
-      ?.label ?? settings.confirmation_mode
-  );
-};

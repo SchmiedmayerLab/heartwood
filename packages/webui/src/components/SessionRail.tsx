@@ -18,7 +18,8 @@ import {
 } from "lucide-react";
 import type { SessionSummary } from "../types";
 
-export type UtilityPanel = "activity" | "settings" | "skills" | null;
+export type UtilityPanel =
+  "action-review" | "activity" | "settings" | "skills" | null;
 
 interface SessionRailProps {
   activePanel: UtilityPanel;
@@ -112,8 +113,14 @@ export const SessionRailContent = ({
         Activity &amp; audit
       </Button>
       <Button
-        aria-pressed={activePanel === "settings"}
-        variant={activePanel === "settings" ? "secondary" : "ghost"}
+        aria-pressed={
+          activePanel === "settings" || activePanel === "action-review"
+        }
+        variant={
+          activePanel === "settings" || activePanel === "action-review" ?
+            "secondary"
+          : "ghost"
+        }
         onClick={() => onOpenPanel("settings")}
       >
         <Settings size={17} />
@@ -164,6 +171,6 @@ const sessionStatusLabel = (status: SessionSummary["status"]): string => {
   if (status === "error") return "Needs attention";
   if (status === "recovery-required") return "Recovery required";
   if (status === "paused") return "Paused";
-  if (status === "waiting") return "Approval needed";
+  if (status === "waiting") return "Action review needed";
   return "Ready";
 };

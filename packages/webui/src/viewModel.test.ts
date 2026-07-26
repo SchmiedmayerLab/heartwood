@@ -8,11 +8,28 @@
 
 import { describe, expect, it } from "vitest";
 import { event, syntheticEvents } from "./test/fixtures";
+import type { ActionPresentation } from "./types";
 import { buildViewModel } from "./viewModel";
+
+const presentation: ActionPresentation = {
+  risk_labels: {
+    high: "High Risk",
+    low: "Low Risk",
+    medium: "Medium Risk",
+    unknown: "Not Classified",
+  },
+  tool_labels: {
+    file_editor: "File Change",
+    terminal: "Terminal Command",
+  },
+  other_tool_label_template: "{tool_name} Action",
+  unknown_risk_label: "Not Classified",
+  unknown_tool_label: "Tool Action",
+};
 
 describe("buildViewModel", () => {
   it("projects the conversation and actual pending action", () => {
-    const viewModel = buildViewModel(syntheticEvents());
+    const viewModel = buildViewModel(syntheticEvents(), presentation);
 
     expect(viewModel.sessionId).toBe("session-test");
     expect(viewModel.conversation).toEqual(
@@ -55,24 +72,27 @@ describe("buildViewModel", () => {
   });
 
   it("projects lifecycle, exports, errors, and confirmation results", () => {
-    const viewModel = buildViewModel([
-      event(0, "confirmation.resolved", {
-        decision: "approved",
-        tool_call_id: "toolcall-1",
-      }),
-      event(1, "tool.execution.recorded", {
-        exit_code: 0,
-        summary: "Wrote summary",
-        tool_name: "terminal",
-      }),
-      event(2, "audit.export.recorded", {
-        event_count: 3,
-        path: "/audit.jsonl",
-      }),
-      event(3, "session.paused", {}),
-      event(4, "session.resumed", {}),
-      event(5, "error.recorded", { reason: "synthetic error" }),
-    ]);
+    const viewModel = buildViewModel(
+      [
+        event(0, "confirmation.resolved", {
+          decision: "approved",
+          tool_call_id: "toolcall-1",
+        }),
+        event(1, "tool.execution.recorded", {
+          exit_code: 0,
+          summary: "Wrote summary",
+          tool_name: "terminal",
+        }),
+        event(2, "audit.export.recorded", {
+          event_count: 3,
+          path: "/audit.jsonl",
+        }),
+        event(3, "session.paused", {}),
+        event(4, "session.resumed", {}),
+        event(5, "error.recorded", { reason: "synthetic error" }),
+      ],
+      presentation,
+    );
 
     expect(viewModel.approvalControls).toEqual([
       expect.objectContaining({ decision: "approved", targetId: "toolcall-1" }),
@@ -90,6 +110,27 @@ describe("buildViewModel", () => {
       detail: "synthetic error",
       label: "System",
     });
+  });
+
+  it("uses gateway-owned action terminology", () => {
+    const viewModel = buildViewModel(
+      [
+        event(0, "tool_call.proposed", {
+          tool_name: "terminal",
+        }),
+      ],
+      {
+        risk_labels: { unknown: "Needs Review" },
+        tool_labels: { terminal: "Research Command" },
+        other_tool_label_template: "{tool_name} Operation",
+        unknown_risk_label: "Needs Review",
+        unknown_tool_label: "Research Operation",
+      },
+    );
+
+    expect(viewModel.conversation[0]?.content).toBe(
+      "Proposed research command",
+    );
   });
 
   it("surfaces one researcher decision for each grouped action set", () => {
@@ -129,12 +170,12 @@ describe("buildViewModel", () => {
       {
         content: "Action set approved",
         detail: "The decision applied to every action in the set.",
-        label: "Approval",
+        label: "Action Review",
       },
       {
         content: "Action set rejected",
         detail: "The decision applied to every action in the set.",
-        label: "Approval",
+        label: "Action Review",
       },
     ]);
     expect(viewModel.activity[3]?.detail).toBe("approved");
@@ -272,20 +313,23 @@ describe("buildViewModel", () => {
   });
 
   it("projects missing optional values into stable researcher-facing defaults", () => {
-    const viewModel = buildViewModel([
-      event(0, "tool_call.proposed", { tool_name: "terminal" }),
-      event(1, "tool.execution.recorded", {}),
-      event(2, "confirmation.requested", {
-        request: { tool_call_id: "toolcall-default" },
-      }),
-      event(3, "confirmation.resolved", {
-        tool_call_id: "toolcall-default",
-      }),
-      event(4, "model_call.decision.recorded", { decision: {} }),
-      event(5, "session.paused", {}),
-      event(6, "audit.export.recorded", { event_count: "unknown" }),
-      event(7, "error.recorded", {}),
-    ]);
+    const viewModel = buildViewModel(
+      [
+        event(0, "tool_call.proposed", { tool_name: "terminal" }),
+        event(1, "tool.execution.recorded", {}),
+        event(2, "confirmation.requested", {
+          request: { tool_call_id: "toolcall-default" },
+        }),
+        event(3, "confirmation.resolved", {
+          tool_call_id: "toolcall-default",
+        }),
+        event(4, "model_call.decision.recorded", { decision: {} }),
+        event(5, "session.paused", {}),
+        event(6, "audit.export.recorded", { event_count: "unknown" }),
+        event(7, "error.recorded", {}),
+      ],
+      presentation,
+    );
 
     expect(viewModel.conversation).toEqual(
       expect.arrayContaining([
@@ -308,7 +352,7 @@ describe("buildViewModel", () => {
         arguments: {},
         decision: "approved",
         label: "approved tool-call",
-        risk: null,
+        risk: "unknown",
         summary: null,
         targetId: "toolcall-default",
         targetType: "tool-call",

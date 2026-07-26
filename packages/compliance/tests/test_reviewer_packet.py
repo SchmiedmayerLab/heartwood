@@ -55,7 +55,7 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     limitations_text = (packet.output_dir / "current-limitations.md").read_text(encoding="utf-8")
     assert "Synthetic Reviewer Packet" in packet_text
     assert "Data-Flow Diagram" in packet_text
-    assert "Auto-Approve Low Risk" in packet_text
+    assert "`confirm-risky`" in packet_text
     assert "platform controls remain authoritative for network egress" in packet_text
     assert "In-boundary model endpoint" not in packet_text
     assert "Allowed action-confirmation modes: `always-confirm, confirm-risky`" in packet_text
@@ -66,10 +66,10 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     assert "provider agreement" in limitations_text
     assert "application-layer route policy" in limitations_text
     assert "unattended operation" in limitations_text
-    assert "Ask Every Time is the action-confirmation default" in limitations_text
-    assert "published documentation site" in limitations_text.lower()
+    assert "`always-confirm` is the default" in limitations_text
+    assert "release-scoped" in limitations_text
     assert "Jupyter-style proxy smoke" in limitations_text
-    assert "live controlled-platform validation remains future work" in limitations_text
+    assert "live validation evidence is release- and platform-specific" in limitations_text
     assert "Platform-specific policy, identity, network" in limitations_text
 
 

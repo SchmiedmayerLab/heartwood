@@ -14,8 +14,14 @@ from heartwood.core_adapter import (
     SessionRecoveryError,
     SessionStorageCapabilityError,
 )
+from heartwood.gateway._action_presentation import (
+    action_mode_label,
+    action_risk_label,
+    action_tool_label,
+)
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
+    ACTION_MODE_SCOPE_DESCRIPTION,
     ActionModeOption,
     ActionSettings,
     ActionSettingsError,
@@ -147,6 +153,7 @@ from heartwood.gateway._subscriptions import (
 
 __all__ = [
     "ACTION_MODE_OPTIONS",
+    "ACTION_MODE_SCOPE_DESCRIPTION",
     "BUILT_IN_MODEL_CONNECTIONS",
     "DEFAULT_SESSION_ID",
     "MODEL_PRESETS",
@@ -226,7 +233,10 @@ __all__ = [
     "SubscriptionError",
     "SubscriptionProvider",
     "ToolCallParser",
+    "action_mode_label",
+    "action_risk_label",
     "action_settings_from_mapping",
+    "action_tool_label",
     "automatic_model_tier",
     "catalog_model_choices",
     "custom_model_connection",

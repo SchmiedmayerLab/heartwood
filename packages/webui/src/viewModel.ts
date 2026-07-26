@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { actionToolLabel } from "./actionPresentation";
 import type {
+  ActionPresentation,
+  ActionRisk,
   ActivityItem,
   ApprovalControl,
   EventKind,
@@ -29,7 +32,10 @@ export const emptyViewModel = (sessionId = ""): SessionViewModel => ({
   paused: false,
 });
 
-export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
+export const buildViewModel = (
+  events: SessionEvent[],
+  presentation: ActionPresentation | null = null,
+): SessionViewModel => {
   const viewModel = emptyViewModel(events.at(-1)?.session_id ?? "");
   for (const [index, event] of events.entries()) {
     viewModel.activity.push(activityItem(event));
@@ -57,7 +63,7 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
                 "Action set approved"
               : "Action set rejected",
             detail: "The decision applied to every action in the set.",
-            label: "Approval",
+            label: "Action Review",
             role: "trace",
           });
         }
@@ -81,7 +87,10 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
       case "tool_call.proposed": {
         const action = actionPresentation(event.payload);
         addConversationMessage(viewModel, event, {
-          content: `Proposed ${toolLabel(event.payload.tool_name)}`,
+          content: `Proposed ${actionToolLabel(
+            stringValue(event.payload.tool_name),
+            presentation,
+          ).toLowerCase()}`,
           detail: action.summary,
           label: "Trace",
           role: "trace",
@@ -91,7 +100,10 @@ export const buildViewModel = (events: SessionEvent[]): SessionViewModel => {
       }
       case "tool.execution.recorded":
         addConversationMessage(viewModel, event, {
-          content: `Ran ${toolLabel(event.payload.tool_name)}`,
+          content: `Ran ${actionToolLabel(
+            stringValue(event.payload.tool_name),
+            presentation,
+          ).toLowerCase()}`,
           detail:
             stringValue(event.payload.summary) ||
             `Exit ${stringValue(event.payload.exit_code) || "unknown"}`,
@@ -175,7 +187,7 @@ const confirmationApproval = (
     targetId: stringValue(request.tool_call_id),
     label: `Review ${toolName || "tool action"}`,
     toolName,
-    risk: stringValue(request.risk) || null,
+    risk: actionRisk(request.risk),
     summary: stringValue(request.summary) || null,
     arguments: recordValue(request.arguments),
     decision: null,
@@ -288,6 +300,13 @@ export const stringValue = (value: JsonValue | undefined): string => {
   return "";
 };
 
+const actionRisk = (value: JsonValue | undefined): ActionRisk => {
+  const risk = stringValue(value);
+  return risk === "low" || risk === "medium" || risk === "high" ?
+      risk
+    : "unknown";
+};
+
 const actionPresentation = (
   payload: Record<string, JsonValue>,
 ): { arguments: string | null; summary: string | null } => {
@@ -301,14 +320,4 @@ const actionPresentation = (
     arguments: argumentsText || null,
     summary: summary || null,
   };
-};
-
-const toolLabel = (value: JsonValue | undefined): string => {
-  const toolName = stringValue(value);
-  return (
-    {
-      file_editor: "file change",
-      terminal: "terminal command",
-    }[toolName] ?? (toolName ? `${toolName} action` : "tool action")
-  );
 };

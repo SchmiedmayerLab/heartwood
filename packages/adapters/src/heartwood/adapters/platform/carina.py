@@ -75,7 +75,7 @@ class CarinaPlatformAdapter:
             allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
             credential_allowlist=(),
             notes=(
-                "Synthetic-only Carina policy with loopback inference; Ask Every Time is the "
-                "default and researchers may explicitly select low-risk auto-approval."
+                "Synthetic-only Carina policy with loopback inference; always-confirm is the "
+                "default and confirm-risky requires an explicit researcher selection."
             ),
         )

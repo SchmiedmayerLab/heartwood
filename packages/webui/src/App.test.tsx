@@ -127,12 +127,47 @@ const settings = (): ModelSettings => ({
 const actions = (): ActionSettings => ({
   schema_version: "heartwood.action-settings.v1",
   confirmation_mode: "always-confirm",
+  scope_description:
+    "Shared by every Heartwood interface in this project and applied to future action sets.",
+  presentation: {
+    risk_labels: {
+      high: "High Risk",
+      low: "Low Risk",
+      medium: "Medium Risk",
+      unknown: "Not Classified",
+    },
+    tool_labels: {
+      file_editor: "File Change",
+      terminal: "Terminal Command",
+    },
+    other_tool_label_template: "{tool_name} Action",
+    unknown_risk_label: "Not Classified",
+    unknown_tool_label: "Tool Action",
+  },
   modes: [
-    { mode: "always-confirm", label: "Ask Every Time", allowed: true },
+    {
+      mode: "always-confirm",
+      command_value: "ask-every-time",
+      label: "Review Every Action",
+      description:
+        "Heartwood pauses before every proposed action set so you can inspect it before anything runs.",
+      automatic_risks: [],
+      reviewed_risks: ["low", "medium", "high", "unknown"],
+      recommended: true,
+      allowed: true,
+      unavailable_reason: null,
+    },
     {
       mode: "confirm-risky",
-      label: "Auto-Approve Low Risk",
+      command_value: "auto-approve-low-risk",
+      label: "Low-Risk Automation",
+      description:
+        "An action set continues automatically only when every action is low risk. Any medium-, high-, or unclassified-risk action pauses the complete set for review.",
+      automatic_risks: ["low"],
+      reviewed_risks: ["medium", "high", "unknown"],
+      recommended: false,
       allowed: true,
+      unavailable_reason: null,
     },
   ],
 });
@@ -1034,8 +1069,10 @@ describe("App", () => {
     const client = new PendingClient();
     render(<App client={client} initialSessionId="session-test" />);
 
-    const allow = await screen.findByLabelText("Allow all 1 action once");
-    const argumentsRegion = screen.getByLabelText("Arguments for terminal");
+    const allow = await screen.findByLabelText("Allow 1 action once");
+    const argumentsRegion = screen.getByLabelText(
+      "Arguments for Terminal Command",
+    );
     expect(argumentsRegion).toHaveAttribute("tabindex", "0");
     expect(argumentsRegion).toHaveTextContent(
       "python run.py --output /project/cohort-summary.json",
@@ -1083,11 +1120,11 @@ describe("App", () => {
     expect(screen.getByLabelText("Active model profile")).toHaveTextContent(
       "Research AI Service · provider-coder",
     );
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Approvals" }), {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Action Review" }), {
       button: 0,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Auto-Approve Low Risk" }),
+      screen.getByRole("radio", { name: /Low-Risk Automation/u }),
     );
     await waitFor(() =>
       expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
@@ -1288,6 +1325,32 @@ describe("App", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("opens the shared action review setting from the session header", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    const actionReview = await screen.findByLabelText(
+      "Open action review settings",
+    );
+    await waitFor(() =>
+      expect(actionReview).toHaveTextContent("Review Every Action"),
+    );
+    fireEvent.click(actionReview);
+
+    expect(
+      await screen.findByRole("tab", { name: "Action Review" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.getByText(
+        "Shared by every Heartwood interface in this project and applied to future action sets.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("radio", { name: /Review Every Action/u }),
+    ).toBeChecked();
   });
 
   it("uses a transient cloud token to discover and select a model", async () => {
@@ -1624,18 +1687,29 @@ describe("App", () => {
       modes: client.currentActions.modes.map((option) => ({
         ...option,
         allowed: option.mode === "always-confirm",
+        unavailable_reason:
+          option.mode === "always-confirm" ?
+            null
+          : "Unavailable under the active platform policy.",
       })),
     };
     render(<App client={client} initialSessionId="session-test" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Approvals" }), {
-      button: 0,
-    });
+    fireEvent.mouseDown(
+      await screen.findByRole("tab", { name: "Action Review" }),
+      { button: 0 },
+    );
 
     expect(
-      await screen.findByRole("button", { name: "Auto-Approve Low Risk" }),
-    ).toBeDisabled();
+      await screen.findByText("Low-Risk Automation", { exact: true }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("radio", { name: /Low-Risk Automation/u }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Unavailable under the active platform policy."),
+    ).toBeVisible();
   });
 
   it("keeps setup incomplete when the selected credential is unavailable", async () => {
@@ -1723,7 +1797,7 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(await screen.findByLabelText("Reject all 1 action"));
+    fireEvent.click(await screen.findByLabelText("Reject 1 action"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("deny"));
     fireEvent.click(screen.getByLabelText("Pause agent"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("pause"));
@@ -1780,11 +1854,11 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    const allow = await screen.findByLabelText("Allow all 1 action once");
-    const reject = screen.getByLabelText("Reject all 1 action");
+    const allow = await screen.findByLabelText("Allow 1 action once");
+    const reject = screen.getByLabelText("Reject 1 action");
     expect(
       screen.getByText(
-        "OpenHands proposed these actions together. One decision applies to every action below.",
+        "These actions were proposed together. Allowing runs every action once; rejecting runs none of them.",
       ),
     ).toBeVisible();
 
@@ -1796,6 +1870,44 @@ describe("App", () => {
         "approve",
       ]),
     );
+  });
+
+  it("presents a multi-action proposal as one explicit decision", async () => {
+    const client = new BatchPendingClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const heading = await screen.findByRole("heading", {
+      name: "One Decision for This Action Set",
+    });
+    expect(heading).toBeVisible();
+    expect(heading).toHaveFocus();
+    expect(
+      within(
+        screen.getByRole("region", {
+          name: "One Decision for This Action Set",
+        }),
+      ).getByRole("list"),
+    ).toBeVisible();
+    expect(screen.getAllByText("2 actions", { exact: true })).toHaveLength(2);
+    expect(screen.getByText("Not Classified")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Allow 2 actions once" }),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByLabelText("Open action review settings"));
+    expect(
+      await screen.findByText(
+        "Resolve the pending action set before changing this setting.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("radio", { name: /Review Every Action/u }),
+    ).toBeDisabled();
   });
 
   it("inspects and explicitly approves a mounted Skill extension", async () => {
@@ -1828,6 +1940,30 @@ class PendingClient extends FakeClient {
   override replayEvents(): Promise<SessionEventResponse> {
     this.replayCalls += 1;
     return Promise.resolve({ events: syntheticEvents() });
+  }
+}
+
+class BatchPendingClient extends PendingClient {
+  override replayEvents(): Promise<SessionEventResponse> {
+    this.replayCalls += 1;
+    return Promise.resolve({
+      events: [
+        ...syntheticEvents(),
+        event(6, "confirmation.requested", {
+          request: {
+            request_id: "session-test-toolcall-1-confirm",
+            risk: "unknown",
+            summary: "Write the aggregate cohort summary",
+            arguments: {
+              command: "create",
+              path: "/project/cohort-summary.md",
+            },
+            tool_call_id: "session-test-toolcall-1",
+            tool_name: "file_editor",
+          },
+        }),
+      ],
+    });
   }
 }
 

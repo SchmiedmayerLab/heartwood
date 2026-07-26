@@ -28,7 +28,7 @@ Heartwood treats the folder from which you start it as the project, so begin in 
 
 ### Review Actions Before They Run
 
-Heartwood presents related proposed actions together before execution under the default **Ask Every Time** setting.
+Heartwood presents related proposed actions together before execution under the default **Review Every Action** setting.
 You can allow or reject the complete set after inspecting every proposed command and file operation.
 
 ### Reuse Research Skills

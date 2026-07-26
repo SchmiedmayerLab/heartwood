@@ -60,7 +60,7 @@ Run a synthetic tool task before using a newly enabled model or gateway configur
 2. Choose **OpenAI API** or **Anthropic**.
 3. Enter the provider API key when prompted.
 4. Choose a model returned by the provider API.
-5. Review the route and action-confirmation setting.
+5. Review the route and action-review setting.
 
 Heartwood validates that the credential binding, route, model profile, and platform policy agree before enabling requests.
 An OpenAI API key is separate from **Sign in with ChatGPT**.

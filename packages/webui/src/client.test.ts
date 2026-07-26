@@ -596,6 +596,15 @@ describe("GatewayClient", () => {
     const actions = {
       schema_version: "heartwood.action-settings.v1",
       confirmation_mode: "always-confirm",
+      scope_description:
+        "Shared by every Heartwood interface in this project and applied to future action sets.",
+      presentation: {
+        risk_labels: {},
+        tool_labels: {},
+        other_tool_label_template: "{tool_name} Action",
+        unknown_risk_label: "Not Classified",
+        unknown_tool_label: "Tool Action",
+      },
       modes: [],
     };
     const fetch = vi

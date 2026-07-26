@@ -233,6 +233,53 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
     assert closed.is_set()
 
 
+def test_project_setting_change_waits_for_another_gateway_turn(tmp_path: Path) -> None:
+    entered = Event()
+    release = Event()
+    closed = Event()
+    selection_started = Event()
+    service = _BlockingSessionService(entered=entered, release=release, closed=closed)
+    project = ProjectContext(tmp_path)
+    reader = SessionGateway(
+        project=project,
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    writer = SessionGateway(project=project, env={}, backend_id="deterministic")
+    command = SessionCommand(
+        command_id="command-1",
+        session_id="session-1",
+        kind=CommandKind.PAUSE,
+        actor_id="synthetic-user",
+        created_at="2026-01-01T00:00:00Z",
+        payload={},
+    )
+
+    def select_mode() -> None:
+        selection_started.set()
+        writer.select_action_confirmation_mode("confirm-risky")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        command_future = executor.submit(reader.handle, command)
+        selection_future = None
+        try:
+            assert entered.wait(timeout=1)
+            selection_future = executor.submit(select_mode)
+            assert selection_started.wait(timeout=1)
+            assert not selection_future.done()
+        finally:
+            release.set()
+        assert command_future.result(timeout=2).events == ()
+        assert selection_future is not None
+        selection_future.result(timeout=2)
+
+    assert writer.action_settings()["confirmation_mode"] == "confirm-risky"
+    reader.stop()
+    writer.stop()
+    assert closed.is_set()
+
+
 def test_gateway_releases_every_session_when_one_backend_close_fails(tmp_path: Path) -> None:
     first_closed = Event()
     second_closed = Event()
@@ -1665,6 +1712,7 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     gateway._backend(
         model_settings=gateway.settings_store.load(),
         action_settings=gateway.action_settings_store.load(),
+        selected_model=gateway.config_store.load().local_model,
         session_id="hermes-wiring",
     )
     assert constructed_backend["native_tool_calling"] is True

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Sequence
-from typing import ClassVar
+from collections.abc import Callable, Iterable, Sequence
+from typing import ClassVar, cast
 
 from rich.text import Text
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Vertical
+from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
@@ -28,7 +29,149 @@ from heartwood.cli._interactive import (
     format_action_arguments,
     interaction_activity,
 )
+from heartwood.gateway import action_mode_label, action_risk_label, action_tool_label
 from heartwood.session import SessionEvent
+
+
+class ActionModeScreen(ModalScreen[str | None]):
+    """Keyboard-first action-mode chooser backed by gateway metadata."""
+
+    CSS = """
+    ActionModeScreen {
+        align: center middle;
+        background: $background 70%;
+    }
+    #action-mode-dialog {
+        width: 76;
+        max-width: 92%;
+        height: auto;
+        max-height: 90%;
+        padding: 1 2;
+        border: round $primary;
+        background: $surface;
+    }
+    #action-mode-title {
+        height: auto;
+        text-style: bold;
+    }
+    #action-mode-scope, #action-mode-detail, #action-mode-help {
+        height: auto;
+        color: $text-muted;
+    }
+    #action-mode-options {
+        height: auto;
+        max-height: 8;
+        margin: 1 0;
+    }
+    #action-mode-detail {
+        min-height: 3;
+        padding: 1;
+        background: $panel;
+    }
+    #action-mode-unavailable {
+        height: auto;
+        color: $warning;
+    }
+    #action-mode-help {
+        margin-top: 1;
+    }
+    """
+    BINDINGS: ClassVar = [("escape", "cancel", "Close")]
+
+    def __init__(
+        self,
+        settings: dict[str, object],
+        *,
+        locked_reason: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.settings = settings
+        self.locked_reason = locked_reason
+        modes = settings.get("modes", [])
+        self.modes = (
+            tuple(cast(dict[str, object], item) for item in modes if isinstance(item, dict))
+            if isinstance(modes, list)
+            else ()
+        )
+
+    def compose(self) -> ComposeResult:
+        selected = self.settings.get("confirmation_mode")
+        with Vertical(id="action-mode-dialog"):
+            yield Static("Action Review", id="action-mode-title")
+            yield Static(
+                str(self.settings.get("scope_description", "")),
+                id="action-mode-scope",
+            )
+            yield OptionList(
+                *(
+                    Option(
+                        _mode_option_prompt(item, selected=selected),
+                        id=str(item.get("command_value", item.get("mode", ""))),
+                        disabled=(
+                            not bool(item.get("allowed"))
+                            or (self.locked_reason is not None and item.get("mode") != selected)
+                        ),
+                    )
+                    for item in self.modes
+                ),
+                id="action-mode-options",
+                markup=False,
+                compact=False,
+            )
+            yield Static(id="action-mode-detail")
+            yield Static(
+                _unavailable_mode_summary(self.modes),
+                id="action-mode-unavailable",
+            )
+            yield Static(
+                self.locked_reason
+                or "Use the arrow keys to compare modes, then press Enter to select one.",
+                id="action-mode-help",
+            )
+
+    def on_mount(self) -> None:
+        """Focus the active mode and show its complete behavior."""
+        selected = self.settings.get("confirmation_mode")
+        options = self.query_one("#action-mode-options", OptionList)
+        for index, item in enumerate(self.modes):
+            if item.get("mode") == selected:
+                options.highlighted = index
+                break
+        options.focus()
+        self._update_detail(options.highlighted)
+
+    def on_option_list_option_highlighted(
+        self,
+        event: OptionList.OptionHighlighted,
+    ) -> None:
+        """Explain the currently highlighted mode."""
+        if event.option_list.id == "action-mode-options":
+            self._update_detail(event.option_index)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Return the selected public command value."""
+        if event.option_list.id != "action-mode-options":
+            return
+        selected = self.settings.get("confirmation_mode")
+        item = self.modes[event.option_index]
+        if item.get("mode") == selected:
+            self.dismiss(None)
+            return
+        if self.locked_reason is None and item.get("allowed"):
+            self.dismiss(str(item.get("command_value", "")))
+
+    def action_cancel(self) -> None:
+        """Close without changing the project setting."""
+        self.dismiss(None)
+
+    def _update_detail(self, index: int | None) -> None:
+        if index is None or not 0 <= index < len(self.modes):
+            return
+        item = self.modes[index]
+        detail = str(item.get("description", ""))
+        if not item.get("allowed") and item.get("unavailable_reason"):
+            detail = f"{detail}\n{item['unavailable_reason']}"
+        self.query_one("#action-mode-detail", Static).update(detail)
 
 
 class HeartwoodTerminalApp(App[None]):
@@ -43,7 +186,8 @@ class HeartwoodTerminalApp(App[None]):
     #conversation { height: 1fr; padding: 1 2; }
     #approval { display: none; height: auto; margin: 0 1 1 1; border: round $warning; }
     #approval-title { height: auto; padding: 0 1; color: $warning; text-style: bold; }
-    #approval-actions { height: auto; max-height: 8; padding: 0 1; }
+    #approval-help { height: auto; padding: 0 1; color: $text-muted; }
+    #approval-actions { height: auto; max-height: 12; padding: 0 1; }
     #approval-options { height: 4; }
     #composer { dock: bottom; margin: 0 1 1 1; }
     """
@@ -51,6 +195,7 @@ class HeartwoodTerminalApp(App[None]):
     BINDINGS: ClassVar = [
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+l", "focus_composer", "Prompt"),
+        ("ctrl+p", "command_palette", "Commands"),
         ("escape", "pause", "Pause"),
     ]
 
@@ -70,18 +215,25 @@ class HeartwoodTerminalApp(App[None]):
         self._guidance_shown = False
         self._animations_enabled = "NO_COLOR" not in os.environ
         self._activity_timer: Timer | None = None
+        self._mode_label = self._selected_mode_label()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Static(f"Session {self.session.session_id} · ready", id="status")
+        yield Static(self._idle_status("ready"), id="status")
         with Vertical():
             yield RichLog(id="conversation", wrap=True, markup=False)
             with Vertical(id="approval"):
                 yield Static(id="approval-title")
-                yield RichLog(id="approval-actions", wrap=True, markup=False)
+                yield Static(id="approval-help")
+                yield RichLog(
+                    id="approval-actions",
+                    wrap=True,
+                    markup=False,
+                    auto_scroll=False,
+                )
                 yield OptionList(
-                    Option("Allow all once", id="allow"),
-                    Option("Reject all", id="reject"),
+                    Option("Reject", id="reject"),
+                    Option("Allow Once", id="allow"),
                     id="approval-options",
                     markup=False,
                     compact=True,
@@ -100,6 +252,10 @@ class HeartwoodTerminalApp(App[None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Submit input without blocking terminal rendering."""
         if self._busy or not event.value.strip():
+            return
+        if event.value.strip() == "/permissions":
+            event.input.value = ""
+            self.action_show_permissions()
             return
         event.input.value = ""
         self._set_busy(True, activity=interaction_activity(event.value))
@@ -122,10 +278,14 @@ class HeartwoodTerminalApp(App[None]):
         if result.replace_transcript:
             self.query_one("#conversation", RichLog).clear()
         self._render_events(result.events)
+        self._mode_label = self._selected_mode_label()
         self._set_busy(False, failed=result.failed)
         self._sync_approval()
 
-    def _render_events(self, events: Sequence[SessionEvent]) -> None:
+    def _render_events(
+        self,
+        events: Sequence[SessionEvent],
+    ) -> None:
         log = self.query_one("#conversation", RichLog)
         for line in self.format_events(events):
             if not line:
@@ -163,7 +323,7 @@ class HeartwoodTerminalApp(App[None]):
             state = "error" if failed else "ready"
             if failed:
                 status.add_class("error")
-            status.update(f"Session {self.session.session_id} · {state}")
+            status.update(self._idle_status(state))
         if not busy:
             composer.focus()
 
@@ -198,24 +358,39 @@ class HeartwoodTerminalApp(App[None]):
         panel.display = True
         label = "action" if len(actions) == 1 else "actions"
         self.query_one("#approval-title", Static).update(
-            f"One decision applies to all {len(actions)} {label}"
+            f"Review Agent Actions · {len(actions)} {label.title()}"
+        )
+        self.query_one("#approval-help", Static).update(
+            "These actions were proposed together. One decision applies to the complete set."
         )
         action_log = self.query_one("#approval-actions", RichLog)
         action_log.clear()
         for index, action in enumerate(actions, 1):
-            details = [
-                f"{index}. {action.summary}",
-                f"   {action.tool_name} · {action.risk.title()} risk",
-            ]
+            risk_label, risk_style = _risk_presentation(action.risk)
+            heading = Text()
+            heading.append(f"{index}. {action.summary}\n", style="bold")
+            heading.append(f"   {action_tool_label(action.tool_name)} · ", style="dim")
+            heading.append(risk_label, style=risk_style)
+            details: list[Text | str] = [heading]
             if action.arguments:
-                details.extend(("   Arguments:", *format_action_arguments(action.arguments)))
-            action_log.write("\n".join(details))
+                details.extend(
+                    (
+                        "   Exact arguments:",
+                        *(f"     {line}" for line in format_action_arguments(action.arguments)),
+                    )
+                )
+            for detail in details:
+                action_log.write(detail)
+        action_log.scroll_home(animate=False)
         composer.disabled = True
         composer.placeholder = "Resolve the action set to continue"
         status.remove_class("working", "error")
         status.add_class("waiting")
         status.update(f"Review required · {len(actions)} {label} · one decision")
         options = self.query_one("#approval-options", OptionList)
+        count_label = f"{len(actions)} {label.title()}"
+        options.replace_option_prompt("reject", f"Reject {count_label}")
+        options.replace_option_prompt("allow", f"Allow {count_label} Once")
         options.disabled = self._busy
         options.highlighted = 0
         options.focus()
@@ -230,6 +405,9 @@ class HeartwoodTerminalApp(App[None]):
 
     def action_focus_composer(self) -> None:
         """Focus the prompt input."""
+        if self.session.pending_actions():
+            self.query_one("#approval-options", OptionList).focus()
+            return
         self.query_one("#composer", Input).focus()
 
     def action_pause(self) -> None:
@@ -237,8 +415,118 @@ class HeartwoodTerminalApp(App[None]):
         if self._busy:
             self.notify("The active OpenHands turn cannot yet be interrupted.", severity="warning")
             return
+        if self.session.pending_actions():
+            self.notify(
+                "Review the pending action set before pausing.",
+                severity="warning",
+            )
+            self.query_one("#approval-options", OptionList).focus()
+            return
         self._set_busy(True, activity=interaction_activity("/pause"))
         self._submit("/pause")
+
+    def action_show_permissions(self) -> None:
+        """Open the shared action-mode chooser."""
+        locked_reason = (
+            "Wait for the active request to finish before changing this setting."
+            if self._busy
+            else (
+                "Resolve the pending action set before changing this setting."
+                if self.session.pending_actions()
+                else None
+            )
+        )
+        self.push_screen(
+            ActionModeScreen(
+                self.session.action_settings(),
+                locked_reason=locked_reason,
+            ),
+            self._action_mode_selected,
+        )
+
+    def action_show_status(self) -> None:
+        """Show model, policy, and action-review status."""
+        self._run_directive("/status")
+
+    def action_replay(self) -> None:
+        """Reload the persisted conversation."""
+        self._run_directive("/replay")
+
+    def action_export_audit(self) -> None:
+        """Create the session audit export."""
+        self._run_directive("/audit-export")
+
+    def get_system_commands(self, screen: Screen[object]) -> Iterable[SystemCommand]:
+        """Add Heartwood workflows to Textual's built-in command palette."""
+        yield from super().get_system_commands(screen)
+        yield SystemCommand(
+            "Action Review",
+            "Choose how Heartwood confirms proposed actions",
+            self.action_show_permissions,
+        )
+        yield SystemCommand(
+            "Session Status",
+            "Show the active model, policy, and action-review mode",
+            self.action_show_status,
+        )
+        yield SystemCommand(
+            "Replay Conversation",
+            "Reload the durable session history",
+            self.action_replay,
+        )
+        yield SystemCommand(
+            "Export Audit",
+            "Create a content-minimized audit export",
+            self.action_export_audit,
+        )
+
+    def _action_mode_selected(self, command_value: str | None) -> None:
+        if command_value is None:
+            return
+        self._set_busy(True, activity=interaction_activity("/permissions"))
+        self._select_action_mode(command_value)
+
+    @work(thread=True, exclusive=True)
+    def _select_action_mode(self, command_value: str) -> None:
+        try:
+            settings = self.session.select_action_mode(command_value)
+        except Exception as error:
+            self.call_from_thread(self._finish_action_mode_selection, None, error)
+        else:
+            self.call_from_thread(self._finish_action_mode_selection, settings, None)
+
+    def _finish_action_mode_selection(
+        self,
+        settings: dict[str, object] | None,
+        error: Exception | None,
+    ) -> None:
+        if error is not None:
+            self._set_busy(False, failed=True)
+            self.notify(str(error), title="Action Review", severity="error")
+            return
+        assert settings is not None
+        self._mode_label = action_mode_label(settings.get("confirmation_mode"))
+        self._set_busy(False)
+        self.notify(
+            f"Using {self._mode_label} for future action sets.",
+            title="Action Review",
+        )
+
+    def _run_directive(self, directive: str) -> None:
+        if self._busy:
+            self.notify("Wait for the active request to finish.", severity="warning")
+            return
+        self._set_busy(True, activity=interaction_activity(directive))
+        self._submit(directive)
+
+    def _selected_mode_label(self) -> str:
+        try:
+            return action_mode_label(self.session.action_settings().get("confirmation_mode"))
+        except Exception:
+            return "Action Review Unavailable"
+
+    def _idle_status(self, state: str) -> str:
+        return f"Session {self.session.session_id} · {state.title()} · {self._mode_label}"
 
 
 def run_terminal(
@@ -266,4 +554,37 @@ def _line_style(line: str) -> str | None:
     return None
 
 
-__all__ = ["HeartwoodTerminalApp", "run_terminal"]
+def _mode_option_prompt(item: dict[str, object], *, selected: object) -> Text:
+    prompt = Text()
+    prompt.append("● " if item.get("mode") == selected else "  ", style="green")
+    prompt.append(str(item.get("label", item.get("mode", ""))), style="bold")
+    if item.get("recommended"):
+        prompt.append(" · Recommended", style="green")
+    if not item.get("allowed"):
+        prompt.append(" · Unavailable", style="dim")
+    return prompt
+
+
+def _unavailable_mode_summary(modes: Sequence[dict[str, object]]) -> str:
+    lines = [
+        (
+            f"{item.get('label', item.get('mode', 'Mode'))} unavailable: "
+            f"{item.get('unavailable_reason', 'Blocked by the active platform policy.')}"
+        )
+        for item in modes
+        if not item.get("allowed")
+    ]
+    return "\n".join(lines)
+
+
+def _risk_presentation(risk: str) -> tuple[str, str]:
+    style = {
+        "high": "bold red",
+        "low": "green",
+        "medium": "yellow",
+        "unknown": "bold yellow",
+    }.get(risk.lower(), "bold yellow")
+    return action_risk_label(risk), style
+
+
+__all__ = ["ActionModeScreen", "HeartwoodTerminalApp", "run_terminal"]

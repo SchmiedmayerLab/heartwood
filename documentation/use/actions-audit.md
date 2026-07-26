@@ -9,29 +9,36 @@ SPDX-License-Identifier: MIT
 Heartwood separates a model suggestion from an executed action.
 OpenHands proposes tools, Heartwood applies the selected confirmation policy, and the session records the decision and result.
 
-## Action Confirmation Modes
+## Choose When Heartwood Pauses
 
 | Mode | Behavior |
 |---|---|
-| **Ask Every Time** | Present every OpenHands action set for one allow-or-reject decision |
-| **Auto-Approve Low Risk** | Automatically allow actions classified as low risk and request confirmation for riskier sets |
+| **Review Every Action** | Pause before every OpenHands action set so you can inspect it before anything runs |
+| **Low-Risk Automation** | Continue only action sets made entirely of low-risk actions; pause the complete set when any action is medium risk, high risk, or unclassified |
 
 The detected platform policy determines which modes are available.
-**Ask Every Time** is the default and the recommended mode while learning the system or working with sensitive projects.
+**Review Every Action** is the default and the recommended mode while learning the system or working with sensitive projects.
+The selected mode applies to future action sets in the project and is shared by the terminal, browser, and notebook bridge.
 
-Change the setting interactively in the browser or with:
+In the full-screen terminal, enter `/permissions` or press `Ctrl-P` and choose **Action Review**.
+In the browser, select the current **Action review** value in the session header or open the **Action Review** settings tab.
+
+For scripts and the plain terminal, use:
 
 ```bash
 heartwood actions set ask-every-time
 heartwood actions set auto-approve-low-risk
 ```
 
+![Heartwood action-review settings showing the project-wide modes](../assets/screenshots/browser-action-settings.png)
+
 ## Grouped Decisions
 
-The current OpenHands confirmation callback may propose more than one tool call in one callback.
+OpenHands may propose several related tool calls as one action set.
 Heartwood displays those calls as one action set and resolves them together instead of presenting misleading per-item controls.
 
-A set is allowed only after the user or policy resolves the pending callback.
+A set is allowed only after the user or policy resolves the pending review.
+Allowing the set runs every member once.
 Rejecting the set prevents all of its members from executing.
 
 ## Session History
