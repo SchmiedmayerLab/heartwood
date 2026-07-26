@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from importlib.metadata import PackageNotFoundError
 from io import BytesIO
 from pathlib import Path
 
@@ -91,6 +92,102 @@ def test_readiness_reports_agent_dependency_failure_without_raising(
     check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
 
     assert readiness.state == "recovery-required"
+    assert check.status == "fail"
+    assert check.safe_dict()["code"] == "HW-AGENT-001"
+
+
+def test_carina_login_readiness_defers_full_agent_import_until_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packages: list[str] = []
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.prepare_openhands_sdk",
+        lambda _env: pytest.fail("Carina login readiness loaded the full agent runtime"),
+    )
+
+    def record_package(package: str) -> str:
+        packages.append(package)
+        return "synthetic-version"
+
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.version",
+        record_package,
+    )
+
+    readiness = inspect_deployment(
+        ProjectContext(tmp_path),
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert check.status == "pass"
+    assert "allocation" in check.summary
+    assert packages == ["openhands-sdk", "openhands-tools"]
+
+
+def test_carina_login_readiness_reports_missing_agent_packages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(_package: str) -> str:
+        raise PackageNotFoundError
+
+    monkeypatch.setattr("heartwood.gateway._readiness.version", missing)
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.prepare_openhands_sdk",
+        lambda _env: pytest.fail("Carina login readiness loaded the full agent runtime"),
+    )
+
+    readiness = inspect_deployment(
+        ProjectContext(tmp_path),
+        env={"HEARTWOOD_PLATFORM": "carina"},
+    )
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert check.status == "fail"
+    assert check.safe_dict()["code"] == "HW-AGENT-001"
+
+
+def test_carina_allocation_readiness_validates_full_agent_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, str]] = []
+    env = {
+        "HEARTWOOD_PLATFORM": "carina",
+        "SLURM_JOB_ID": "synthetic-allocation",
+    }
+    monkeypatch.setattr(
+        "heartwood.gateway._readiness.prepare_openhands_sdk",
+        lambda active_env: observed.append(dict(active_env)),
+    )
+
+    readiness = inspect_deployment(ProjectContext(tmp_path), env=env)
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
+    assert check.status == "pass"
+    assert observed == [env]
+
+
+def test_carina_allocation_readiness_reports_agent_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(_env: object) -> None:
+        raise RuntimeError("synthetic allocation import failure")
+
+    monkeypatch.setattr("heartwood.gateway._readiness.prepare_openhands_sdk", fail)
+
+    readiness = inspect_deployment(
+        ProjectContext(tmp_path),
+        env={
+            "HEARTWOOD_PLATFORM": "carina",
+            "SLURM_JOB_ID": "synthetic-allocation",
+        },
+    )
+    check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
+
     assert check.status == "fail"
     assert check.safe_dict()["code"] == "HW-AGENT-001"
 

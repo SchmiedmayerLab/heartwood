@@ -60,6 +60,15 @@ uv run zensical build --clean --strict
 Run focused tests while iterating, then run the complete affected suites before review.
 Container and capable-model checks have higher resource requirements and run through their documented workflows.
 
+## Qualify a Terra Image Before Merge
+
+Ordinary pull-request validation builds the GPU targets without exporting an image.
+When a change requires live Terra qualification, push the reviewed commit and manually run **Terra GPU Qualification Candidate** for that branch.
+
+The workflow publishes one commit-bound `candidate-sha-…-terra-gpu-nvidia` tag, verifies its Docker media type and embedded revision, and runs the shared Terra image smoke tests.
+Use the tag reported in the workflow summary when recreating the Terra environment.
+The candidate does not move release or `edge` tags.
+
 ## Change a Shared Contract
 
 When changing project state, startup, models, actions, sessions, Skills, or audit behavior:

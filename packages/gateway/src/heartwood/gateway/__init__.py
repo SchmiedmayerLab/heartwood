@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from heartwood.core_adapter import (
     CommandConflictError,
     SessionOwnershipError,
@@ -107,7 +109,6 @@ from heartwood.gateway._model_snapshots import (
     load_model_snapshot_catalog,
     verify_model_snapshot,
 )
-from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, OpenHandsSdkError
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
     LocalModelSelection,
@@ -159,6 +160,9 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     SubscriptionProvider,
 )
+
+if TYPE_CHECKING:
+    from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, OpenHandsSdkError
 
 __all__ = [
     "ACTION_MODE_OPTIONS",
@@ -287,3 +291,17 @@ __all__ = [
     "verify_model_artifact",
     "verify_model_snapshot",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Load the OpenHands runtime API only when a caller requests it."""
+    if name == "OpenHandsSdkBackend":
+        from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+
+        return OpenHandsSdkBackend
+    if name == "OpenHandsSdkError":
+        from heartwood.gateway._openhands_sdk import OpenHandsSdkError
+
+        return OpenHandsSdkError
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)

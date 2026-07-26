@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, assert_never
 
@@ -25,7 +26,6 @@ from heartwood.gateway._model_catalog import (
     model_connections_from_mapping,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
-from heartwood.gateway._openhands_sdk import prepare_openhands_sdk
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
     LocalModelSelection,
@@ -174,6 +174,28 @@ class DeploymentReadiness:
         }
 
 
+def prepare_openhands_sdk(env: Mapping[str, str]) -> None:
+    """Validate the full OpenHands import only when runtime resources are available."""
+    from heartwood.gateway._openhands_sdk import prepare_openhands_sdk as prepare
+
+    prepare(env)
+
+
+def _agent_runtime_available(env: Mapping[str, str], *, platform_id: str) -> bool:
+    if platform_id == "carina" and not env.get("SLURM_JOB_ID"):
+        try:
+            version("openhands-sdk")
+            version("openhands-tools")
+        except PackageNotFoundError:
+            return False
+        return True
+    try:
+        prepare_openhands_sdk(env)
+    except Exception:
+        return False
+    return True
+
+
 def inspect_deployment(
     project: ProjectContext,
     env: Mapping[str, str] | None = None,
@@ -184,9 +206,7 @@ def inspect_deployment(
     detection = adapter.detect(active_env)
     checks: list[ReadinessCheck] = []
 
-    try:
-        prepare_openhands_sdk(active_env)
-    except Exception:
+    if not _agent_runtime_available(active_env, platform_id=adapter.adapter_id):
         checks.append(
             ReadinessCheck(
                 "agent-runtime",
@@ -195,11 +215,16 @@ def inspect_deployment(
             )
         )
     else:
+        summary = (
+            "OpenHands agent packages are installed; runtime validation follows in the allocation"
+            if adapter.adapter_id == "carina" and not active_env.get("SLURM_JOB_ID")
+            else "OpenHands agent dependencies are available"
+        )
         checks.append(
             ReadinessCheck(
                 "agent-runtime",
                 "pass",
-                "OpenHands agent dependencies are available",
+                summary,
             )
         )
 

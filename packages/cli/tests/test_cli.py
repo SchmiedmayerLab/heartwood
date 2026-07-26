@@ -11,6 +11,8 @@ import hashlib
 import io
 import json
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -30,6 +32,7 @@ from heartwood.cli import (
     _format_model_settings,
     _format_model_validation,
     _format_skill_settings,
+    _handle_replay,
     _mapping_payload,
     _submit_and_wait,
     _submit_with_progress,
@@ -60,6 +63,65 @@ from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
 )
 from heartwood.session import EventKind, SessionEvent
+
+
+def test_cli_import_keeps_openhands_runtime_lazy() -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import sys; import heartwood.cli; assert 'openhands.sdk' not in sys.modules",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("platform", "slurm_job_id", "expected_call", "expects_note"),
+    [
+        ("generic", None, "reconciled", False),
+        ("carina", None, "committed", True),
+        ("carina", "synthetic-allocation", "reconciled", False),
+    ],
+)
+def test_replay_defers_runtime_reconciliation_only_on_carina_login_nodes(
+    platform: str,
+    slurm_job_id: str | None,
+    expected_call: str,
+    expects_note: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str] = []
+    projection = project_session((), session_id="synthetic-session")
+
+    class ReplayGateway:
+        def session_projection(self, *, session_id: str) -> SessionProjection:
+            assert session_id == "synthetic-session"
+            calls.append("reconciled")
+            return projection
+
+        def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
+            assert session_id == "synthetic-session"
+            calls.append("committed")
+            return projection
+
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", platform)
+    if slurm_job_id is None:
+        monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    else:
+        monkeypatch.setenv("SLURM_JOB_ID", slurm_job_id)
+
+    gateway = cast(RealSessionGateway, ReplayGateway())
+    assert _handle_replay(gateway, session_id="synthetic-session") == 0
+
+    captured = capsys.readouterr()
+    assert calls == [expected_call]
+    assert ("runtime recovery reconciliation" in captured.err) is expects_note
 
 
 def _run(

@@ -1,0 +1,62 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: GPU Container Pull Request
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-container-pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Validate GPU image contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Validate GPU runtime contract
+        uses: ./.github/actions/validate-gpu-contract
+  build:
+    name: Build GPU candidate ${{ matrix.target }}
+    needs: contract
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: runtime-gpu-nvidia
+            runner: ubuntu-24.04
+          - target: terra-runtime-gpu-nvidia
+            runner: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build and validate candidate without image export
+        uses: docker/bake-action@v7
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          GIT_SHA: ${{ github.sha }}
+        with:
+          files: docker-bake.hcl
+          provenance: false
+          sbom: false
+          source: .
+          targets: ${{ matrix.target }}
+          set: |
+            ${{ matrix.target }}.target=gpu-ci-validate
+            ${{ matrix.target }}.output=type=cacheonly

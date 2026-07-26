@@ -55,9 +55,13 @@ runs:
         bash -n images/gpu/heartwood-vllm
         bash -n images/gpu/install_runtime.sh
         bash -n images/gpu/coding_agent_e2e.sh
+        bash -n images/gpu/validate_image_candidate.sh
+        bash -n images/scripts/verify_image_revision.sh
         bash -n images/generic/scripts/coding_agent_e2e.sh
         test -x images/gpu/start_vllm.sh
         test -x images/gpu/heartwood-vllm
         test -x images/gpu/install_runtime.sh
         test -x images/gpu/coding_agent_e2e.sh
+        test -x images/gpu/validate_image_candidate.sh
+        test -x images/scripts/verify_image_revision.sh
         test -x images/generic/scripts/coding_agent_e2e.sh

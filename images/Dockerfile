@@ -41,12 +41,14 @@ ARG HEARTWOOD_JUPYTER_PREFIX=/usr/local
 ARG HEARTWOOD_INSTALL_JUPYTER_KERNEL=false
 ARG HEARTWOOD_UV_PYTHON_PREFERENCE=system
 ARG HEARTWOOD_VERSION=development
+ARG HEARTWOOD_REVISION=unknown
 
 LABEL org.opencontainers.image.title="Heartwood Runtime" \
     org.opencontainers.image.description="Heartwood CLI, web UI, notebook bridge, policy and audit controls, verified skills, OpenHands, and optional Heartwood-managed inference." \
     org.opencontainers.image.source="https://github.com/SchmiedmayerLab/heartwood" \
     org.opencontainers.image.licenses="MIT" \
     org.opencontainers.image.version="${HEARTWOOD_VERSION}" \
+    org.opencontainers.image.revision="${HEARTWOOD_REVISION}" \
     org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}" \
     org.heartwood.platform="${HEARTWOOD_PLATFORM}" \
     org.heartwood.platform.base="${HEARTWOOD_BASE_IMAGE}" \
@@ -54,6 +56,7 @@ LABEL org.opencontainers.image.title="Heartwood Runtime" \
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION} \
     HEARTWOOD_GPU_RUNTIME=${HEARTWOOD_GPU_RUNTIME} \
     HEARTWOOD_IMAGE_FLAVOR=${HEARTWOOD_IMAGE_FLAVOR} \
     HEARTWOOD_PLATFORM=${HEARTWOOD_PLATFORM} \

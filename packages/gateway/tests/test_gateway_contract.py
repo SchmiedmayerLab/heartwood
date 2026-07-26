@@ -101,6 +101,35 @@ def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
     assert prepared == []
 
 
+def test_persisted_projection_does_not_construct_an_agent_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = _gateway(tmp_path)
+    writer.handle(
+        SessionCommand.model_validate_json(
+            _command(CommandKind.CHAT, prompt="Persist one synthetic task")
+        )
+    )
+    writer.stop()
+    reader = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="auto",
+    )
+    monkeypatch.setattr(
+        reader,
+        "_service",
+        lambda _session_id: pytest.fail("persisted replay constructed a backend"),
+    )
+
+    projection = reader.persisted_session_projection(session_id="session-1")
+
+    assert [message.content for message in projection.conversation if message.role == "user"] == [
+        "Persist one synthetic task"
+    ]
+
+
 def test_deterministic_gateway_does_not_load_openhands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1930,7 +1959,10 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
         constructed_backend.update(kwargs)
         return cast(AgentBackend, object())
 
-    monkeypatch.setattr("heartwood.gateway._gateway.OpenHandsSdkBackend", openhands_backend)
+    monkeypatch.setattr(
+        "heartwood.gateway._openhands_sdk.OpenHandsSdkBackend",
+        openhands_backend,
+    )
     gateway.backend_id = "auto"
     gateway._backend(
         model_settings=gateway.settings_store.load(),

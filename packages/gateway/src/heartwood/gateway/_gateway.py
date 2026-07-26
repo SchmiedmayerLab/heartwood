@@ -96,7 +96,6 @@ from heartwood.gateway._model_snapshots import (
     download_model_snapshot,
     load_model_snapshot_catalog,
 )
-from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._project_config import (
     LocalModelSelection,
@@ -533,6 +532,19 @@ class SessionGateway:
     def session_projection(self, *, session_id: str) -> SessionProjection:
         """Return the sole interface projection for one session."""
         return self._session_snapshot_locked(session_id=session_id).projection
+
+    @_serialized_state
+    def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
+        """Project committed Heartwood events without reconciling OpenHands state."""
+        with self._stream_lock:
+            self.project.initialize()
+            events = FileSessionStore(self.sessions_root, session_id).replay_events()
+            return project_session(
+                events,
+                session_id=session_id,
+                stream_epoch=self._stream_epoch,
+                stream_revision=self._stream_revisions.get(session_id, 0),
+            )
 
     @_serialized_state
     def session_snapshot(
@@ -1335,6 +1347,8 @@ class SessionGateway:
         except ModelSettingsError:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
         selected_model = self.config_store.load().local_model if profile.is_local else None
+        from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+
         return OpenHandsSdkBackend(
             profile=profile,
             workspace=self.project.root,

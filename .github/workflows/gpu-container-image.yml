@@ -70,6 +70,7 @@ jobs:
         env:
           BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
           DOCKER_BUILD_RECORD_UPLOAD: false
+          GIT_SHA: ${{ github.sha }}
         with:
           files: docker-bake.hcl
           source: .
@@ -88,54 +89,14 @@ jobs:
           digest="$(python3 images/scripts/read_buildx_digest.py /tmp/gpu-metadata.json "${TARGET}")"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
           echo "reference=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
-      - name: Verify candidate contents
+      - name: Verify candidate contents and interfaces
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}
-        run: |
-          docker pull --platform linux/amd64 "${CANDIDATE}"
-          docker run --rm --platform linux/amd64 \
-            --entrypoint /opt/heartwood/images/gpu/verify_runtime.sh "${CANDIDATE}"
-          profiles="$(
-            docker run --rm --platform linux/amd64 \
-              --entrypoint heartwood-python "${CANDIDATE}" \
-              /opt/heartwood/images/gpu/qualification_config.py --list
-          )"
-          jq --exit-status '
-            length > 0
-            and all(.[].configuration_id; type == "string" and length > 0)
-          ' <<<"${profiles}" >/dev/null
-      - name: Verify shared agent and platform interfaces
-        env:
-          CANDIDATE: ${{ steps.candidate.outputs.reference }}
+          EXPECTED_REVISION: ${{ github.sha }}
           TARGET: ${{ matrix.target }}
         run: |
-          if [ "${TARGET}" = "terra-runtime-gpu-nvidia" ]; then
-            docker run --rm --platform linux/amd64 --network none \
-              --entrypoint bash \
-              "${CANDIDATE}" \
-              /opt/heartwood/images/platform/scripts/terra_jupyter_contract_smoke.sh
-            docker run --rm --platform linux/amd64 --network none \
-              --entrypoint bash \
-              "${CANDIDATE}" \
-              -c 'mkdir -p /home/jupyter/synthetic-analysis &&
-              cd /home/jupyter/synthetic-analysis &&
-              exec /opt/heartwood/images/platform/scripts/terra_image_smoke.sh'
-            docker run --rm --platform linux/amd64 --network none \
-              --entrypoint bash \
-              --env HEARTWOOD_SMOKE_PROJECT=/home/jupyter/synthetic-agent-analysis \
-              --env HEARTWOOD_TERRA_DEMO_PROJECT_ROOT=/home/jupyter/synthetic-notebook-analysis \
-              "${CANDIDATE}" \
-              /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
-          else
-            docker run --rm --init --platform linux/amd64 \
-              --network none --read-only \
-              --cap-drop ALL --security-opt no-new-privileges=true --pids-limit 256 \
-              --tmpfs /tmp:rw,nosuid,nodev,size=1g \
-              --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700 \
-              --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
-              "${CANDIDATE}" \
-              bash /opt/heartwood/images/generic/scripts/offline_stack_smoke.sh
-          fi
+          bash images/gpu/validate_image_candidate.sh \
+            "${CANDIDATE}" "${TARGET}" "${EXPECTED_REVISION}"
       - name: Create and verify immutable commit tag
         env:
           CANDIDATE: ${{ steps.candidate.outputs.reference }}

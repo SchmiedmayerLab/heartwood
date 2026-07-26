@@ -218,12 +218,30 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
 def test_runtime_image_sets_the_release_version_label() -> None:
     dockerfile = _read("images/Dockerfile")
     bake = _read("docker-bake.hcl")
+    workflow = _read(".github/workflows/container-image.yml")
+    revision_verifier = _read("images/scripts/verify_image_revision.sh")
 
     assert "ARG HEARTWOOD_VERSION=development" in dockerfile
+    assert "ARG HEARTWOOD_REVISION=unknown" in dockerfile
     assert 'org.opencontainers.image.version="${HEARTWOOD_VERSION}"' in dockerfile
+    assert 'org.opencontainers.image.revision="${HEARTWOOD_REVISION}"' in dockerfile
+    assert "HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION}" in dockerfile
     assert 'variable "HEARTWOOD_VERSION"' in bake
     assert 'default = "0.2.0"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
+    assert bake.count('HEARTWOOD_REVISION = "${GIT_SHA}"') == 2
+    generic_build = workflow.split("      - name: Build and stage image by digest\n", maxsplit=1)[
+        1
+    ].split("      - name: Record staged image digest\n", maxsplit=1)[0]
+    terra_build = workflow.split(
+        "      - name: Build and stage Terra image by digest\n", maxsplit=1
+    )[1].split("      - name: Record staged Terra image digest\n", maxsplit=1)[0]
+    assert "GIT_SHA: ${{ github.sha }}" in generic_build
+    assert "GIT_SHA: ${{ github.sha }}" in terra_build
+    assert workflow.count("bash images/scripts/verify_image_revision.sh") == 2
+    assert "HEARTWOOD_IMAGE_REVISION" in revision_verifier
+    assert "org.opencontainers.image.revision" in revision_verifier
+    assert os.access(_repo_root() / "images/scripts/verify_image_revision.sh", os.X_OK)
 
 
 def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
@@ -778,10 +796,13 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "heartwood-source-tamper-test" in real_smoke
 
 
-def test_gpu_publication_builds_only_explicit_main_variants() -> None:
+def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
-    pull_request_workflow = _read(".github/workflows/gpu-container-pr.yml")
+    manual_workflow = _read(".github/workflows/gpu-container-pr.yml")
+    pull_request_workflow = _read(".github/workflows/gpu-container-pr-validation.yml")
+    pull_request_validation = _read(".github/workflows/pull-request-validation.yml")
     qualification = _read(".github/workflows/gpu-qualification.yml")
+    candidate_validation = _read("images/gpu/validate_image_candidate.sh")
     runner_cleanup = _read("deploy/reclaim-github-runner-space.sh")
     dependency_review = _read(".github/workflows/dependency-review.yml")
     main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
@@ -790,12 +811,22 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "terra-runtime-gpu-nvidia" in workflow
     assert "Build GPU candidate ${{ matrix.target }}" in pull_request_workflow
     assert ".target=gpu-ci-validate" in pull_request_workflow
+    assert "candidate-sha-${GITHUB_SHA}-terra-gpu-nvidia" in manual_workflow
     contract_action = _read(".github/actions/validate-gpu-contract/action.yml")
     assert workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
     assert pull_request_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
+    assert manual_workflow.count("uses: ./.github/actions/validate-gpu-contract") == 1
     assert "bash -n images/gpu/install_runtime.sh" in contract_action
     assert "test -x images/gpu/install_runtime.sh" in contract_action
+    assert "bash -n images/gpu/validate_image_candidate.sh" in contract_action
+    assert "test -x images/gpu/validate_image_candidate.sh" in contract_action
+    assert "bash -n images/scripts/verify_image_revision.sh" in contract_action
+    assert "test -x images/scripts/verify_image_revision.sh" in contract_action
     assert ".output=type=cacheonly" in pull_request_workflow
+    assert "push-by-digest=true" not in pull_request_workflow
+    assert "packages: write" not in pull_request_workflow
+    assert "workflow_call:" in pull_request_workflow
+    assert "workflow_dispatch:" not in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
     assert "runner: ubuntu-24.04" in pull_request_workflow
@@ -804,6 +835,15 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "cache-from=type=gha" not in pull_request_workflow
     assert "cache-to=type=gha" not in pull_request_workflow
     assert "uses: docker/bake-action@v7" in workflow
+    assert "workflow_dispatch:" in manual_workflow
+    assert "workflow_call:" not in manual_workflow
+    assert "packages: write" in manual_workflow
+    workflow_header = manual_workflow.split("jobs:", maxsplit=1)[0]
+    assert "packages: write" not in workflow_header
+    publish_job = manual_workflow.split("  publish:\n", maxsplit=1)[1]
+    assert "packages: write" in publish_job
+    assert "push-by-digest=true" in manual_workflow
+    assert "targets: runtime-gpu-nvidia" not in manual_workflow
     assert "mode=max" not in pull_request_workflow
     assert "mode=max" not in main_build
     assert "cache-from=type=gha" not in main_build
@@ -821,7 +861,11 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "runs-on: [self-hosted, linux, x64, gpu]" in qualification
     assert "inputs.qualification_configuration" not in pull_request_workflow
     assert "inputs.qualification_configuration" not in main_build
-    assert "if:" not in pull_request_workflow
+    gpu_caller = pull_request_validation.split("  gpu-containers:\n", maxsplit=1)[1].split(
+        "\n  native-assets:\n", maxsplit=1
+    )[0]
+    assert "gpu-container-pr-validation.yml" in gpu_caller
+    assert "packages: write" not in gpu_caller
     assert "push-by-digest=true" in workflow
     assert 'BUILDX_NO_DEFAULT_ATTESTATIONS: "1"' in workflow
     assert "deploy/reclaim-github-runner-space.sh" not in main_build
@@ -832,12 +876,22 @@ def test_gpu_publication_builds_only_explicit_main_variants() -> None:
     assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
     assert "observed media type:" in workflow
     assert "Linux platforms:" in workflow
-    assert 'docker pull --platform linux/amd64 "${CANDIDATE}"' in main_build
-    assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in main_build
-    assert "Verify shared agent and platform interfaces" in main_build
-    assert "terra_jupyter_contract_smoke.sh" in main_build
-    assert "terra_image_smoke.sh" in main_build
-    assert "offline_stack_smoke.sh" in main_build
+    assert "validate_image_candidate.sh" in main_build
+    assert "validate_image_candidate.sh" in manual_workflow
+    assert manual_workflow.index("Validate staged Terra candidate") < manual_workflow.index(
+        "Create immutable Terra candidate tag"
+    )
+    assert "immutable Terra candidate tag does not match" in manual_workflow
+    assert 'docker pull --platform linux/amd64 "${candidate}"' in candidate_validation
+    assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in (candidate_validation)
+    assert "terra_jupyter_contract_smoke.sh" in candidate_validation
+    assert "terra_image_smoke.sh" in candidate_validation
+    assert "offline_stack_smoke.sh" in candidate_validation
+    assert os.access(_repo_root() / "images/gpu/validate_image_candidate.sh", os.X_OK)
+    assert "--prefer-index=false" in manual_workflow
+    assert "application/vnd.docker.distribution.manifest.v2+json" in manual_workflow
+    assert "edge-gpu-nvidia" not in manual_workflow
+    assert "edge-terra-gpu-nvidia" not in manual_workflow
     assert "immutable GPU commit tag does not match" in workflow
     assert "sha-${GIT_SHA}-${COMMIT_SUFFIX}" in main_build
     assert "edge-gpu-nvidia" not in main_build

@@ -25,7 +25,7 @@ jobs:
     uses: ./.github/workflows/container-smoke.yml
   gpu-containers:
     name: GPU Container Candidates
-    uses: ./.github/workflows/gpu-container-pr.yml
+    uses: ./.github/workflows/gpu-container-pr-validation.yml
   native-assets:
     name: Native Release Assets
     uses: ./.github/workflows/native-release.yml
