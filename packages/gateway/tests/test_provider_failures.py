@@ -597,7 +597,11 @@ def _wait_for_terminal_events(
             for event in events
             if event.kind == EventKind.AGENT_LIFECYCLE_UPDATED
         ]
-        if statuses and statuses[-1] == expected_status:
+        if (
+            statuses
+            and statuses[-1] == expected_status
+            and (expected_status != "error" or _error_events(events))
+        ):
             return events
         time.sleep(0.01)
     kinds = [str(event.kind) for event in events]
