@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
+from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
 
 
@@ -570,9 +571,18 @@ class DeterministicAgentBackend:
             return None
         try:
             raw: object = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
+        except (json.JSONDecodeError, OSError) as error:
             raise ValueError("deterministic backend state is invalid") from error
         if not isinstance(raw, dict):
+            raise ValueError("deterministic backend state is invalid")
+        tool_call_id = raw.get("tool_call_id")
+        tool_name = raw.get("tool_name")
+        if (
+            not isinstance(tool_call_id, str)
+            or not tool_call_id
+            or not isinstance(tool_name, str)
+            or not tool_name
+        ):
             raise ValueError("deterministic backend state is invalid")
         risk_value = raw.get("risk")
         risk: Literal["low", "medium", "high", "unknown"]
@@ -582,8 +592,8 @@ class DeterministicAgentBackend:
             risk = "unknown"
         arguments = raw.get("arguments")
         return ProposedToolCall(
-            tool_call_id=str(raw.get("tool_call_id", "")),
-            tool_name=str(raw.get("tool_name", "unknown-tool")),
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
             risk=risk,
             summary=str(raw.get("summary", "pending action")),
             arguments=(
@@ -598,24 +608,16 @@ class DeterministicAgentBackend:
         if self._pending is None:
             path.unlink(missing_ok=True)
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(f"{path.suffix}.tmp")
-        temporary.write_text(
-            json.dumps(
-                {
-                    "tool_call_id": self._pending.tool_call_id,
-                    "tool_name": self._pending.tool_name,
-                    "risk": self._pending.risk,
-                    "summary": self._pending.summary,
-                    "arguments": self._pending.arguments,
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
+        _write_private_json_atomic(
+            path,
+            {
+                "tool_call_id": self._pending.tool_call_id,
+                "tool_name": self._pending.tool_name,
+                "risk": self._pending.risk,
+                "summary": self._pending.summary,
+                "arguments": self._pending.arguments,
+            },
         )
-        temporary.chmod(0o600)
-        temporary.replace(path)
 
 
 class LocalWorkspaceAgentBackend(DeterministicAgentBackend):

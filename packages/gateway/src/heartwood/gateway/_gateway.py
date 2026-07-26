@@ -457,6 +457,8 @@ class SessionGateway:
         self._streaming_text: dict[str, str] = {}
         self._stream_revisions: dict[str, int] = {}
         self._streaming_active: set[str] = set()
+        self._published_stream_sequences: dict[str, int] = {}
+        self._pending_stream_events: dict[str, dict[int, SessionEvent]] = {}
 
     def start(self) -> None:
         """Start the interface lifecycle without requiring an agent dependency import."""
@@ -478,40 +480,58 @@ class SessionGateway:
     @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
-        with self.config_store.locked(), self._stream_lock:
+        with self.config_store.locked():
             self.project.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
                 self.session_catalog.default()
             else:
                 self.session_catalog.ensure(command.session_id)
             service = self._service(command.session_id)
-            snapshot = self._session_snapshot_locked(
+            all_events = self._reconciled_session_events(
                 session_id=command.session_id,
+                service=service,
             )
-            projection = snapshot.projection
-            command_kind = str(command.kind)
-            unavailable_reason = (
-                None
-                if command_kind not in _PROJECTED_COMMANDS
-                or command_kind in projection.available_commands
-                else (
-                    f"{command_kind} is unavailable while the agent is "
-                    f"{projection.lifecycle.status}"
-                )
-            )
-            if unavailable_reason is None and command_kind in _STREAMING_COMMANDS:
-                self._streaming_active.add(command.session_id)
-            result = (
-                service.handle(command)
-                if unavailable_reason is None
-                else service.handle(command, unavailable_reason=unavailable_reason)
-            )
-            if not result.replayed:
-                self._update_streaming_state(
+            with self._stream_lock:
+                projection = self._snapshot_from_events_locked(
                     session_id=command.session_id,
-                    events=result.events,
+                    all_events=all_events,
+                ).projection
+                command_kind = str(command.kind)
+                unavailable_reason = (
+                    None
+                    if command_kind not in _PROJECTED_COMMANDS
+                    or command_kind in projection.available_commands
+                    else (
+                        f"{command_kind} is unavailable while the agent is "
+                        f"{projection.lifecycle.status}"
+                    )
                 )
-                self._streams.publish(
+                streaming_started = (
+                    unavailable_reason is None and command_kind in _STREAMING_COMMANDS
+                )
+                streaming_was_active = command.session_id in self._streaming_active
+                if streaming_started:
+                    self._streaming_active.add(command.session_id)
+            try:
+                result = (
+                    service.handle(command)
+                    if unavailable_reason is None
+                    else service.handle(command, unavailable_reason=unavailable_reason)
+                )
+            except Exception:
+                if streaming_started and not streaming_was_active:
+                    with self._stream_lock:
+                        self._streaming_active.discard(command.session_id)
+                        if self._streaming_text.pop(command.session_id, None) is not None:
+                            self._advance_stream_revision(command.session_id)
+                            self._streams.notify(session_id=command.session_id)
+                raise
+            if result.replayed:
+                if streaming_started and not streaming_was_active:
+                    with self._stream_lock:
+                        self._streaming_active.discard(command.session_id)
+            else:
+                self._publish_committed_events(
                     session_id=command.session_id,
                     events=result.events,
                 )
@@ -617,13 +637,16 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> GatewayEventStream:
         """Connect an event stream with replay."""
+        all_events = self._reconciled_session_events(session_id=session_id)
         with self._stream_lock:
+            snapshot = self._snapshot_from_events_locked(
+                session_id=session_id,
+                all_events=all_events,
+                after_sequence=after_sequence,
+            )
             return self._streams.connect(
                 session_id=session_id,
-                replay_events=self.replay_events(
-                    session_id=session_id,
-                    after_sequence=after_sequence,
-                ),
+                replay_events=snapshot.events,
             )
 
     @_serialized_state
@@ -634,9 +657,11 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
         """Connect a stream and capture its first coherent snapshot atomically."""
+        all_events = self._reconciled_session_events(session_id=session_id)
         with self._stream_lock:
-            snapshot = self._session_snapshot_locked(
+            snapshot = self._snapshot_from_events_locked(
                 session_id=session_id,
+                all_events=all_events,
                 after_sequence=after_sequence,
             )
             stream = self._streams.connect(
@@ -1566,9 +1591,7 @@ class SessionGateway:
         """Publish events committed by the supervised OpenHands worker."""
         if not events:
             return
-        with self._stream_lock:
-            self._update_streaming_state(session_id=session_id, events=events)
-            self._streams.publish(session_id=session_id, events=events)
+        self._publish_committed_events(session_id=session_id, events=events)
 
     def _publish_token_delta(self, *, session_id: str, delta: str) -> None:
         """Update transient visible model text without writing the event log."""
@@ -1587,11 +1610,39 @@ class SessionGateway:
         session_id: str,
         after_sequence: int | None = None,
     ) -> GatewaySessionSnapshot:
+        all_events = self._reconciled_session_events(session_id=session_id)
         with self._stream_lock:
-            self.project.initialize()
-            service = self._service(session_id)
-            service.reconcile()
-            all_events = service.replay_events()
+            return self._snapshot_from_events_locked(
+                session_id=session_id,
+                all_events=all_events,
+                after_sequence=after_sequence,
+            )
+
+    def _reconciled_session_events(
+        self,
+        *,
+        session_id: str,
+        service: SessionService | None = None,
+    ) -> tuple[SessionEvent, ...]:
+        """Resolve the service and reconcile durable state without holding the stream lock."""
+        self.project.initialize()
+        active_service = self._service(session_id) if service is None else service
+        active_service.reconcile()
+        return active_service.replay_events()
+
+    def _snapshot_from_events_locked(
+        self,
+        *,
+        session_id: str,
+        all_events: tuple[SessionEvent, ...],
+        after_sequence: int | None = None,
+    ) -> GatewaySessionSnapshot:
+        """Publish and project one durable event snapshot while holding the stream lock."""
+        with self._stream_lock:
+            self._publish_committed_events(
+                session_id=session_id,
+                events=all_events,
+            )
             events = (
                 all_events
                 if after_sequence is None
@@ -1614,12 +1665,46 @@ class SessionGateway:
         session_id: str,
         events: tuple[SessionEvent, ...],
     ) -> None:
-        if any(_starts_streaming_text(event) for event in events):
-            self._streaming_active.add(session_id)
-        if any(_clears_streaming_text(event) for event in events):
-            self._streaming_active.discard(session_id)
-            if self._streaming_text.pop(session_id, None) is not None:
-                self._advance_stream_revision(session_id)
+        for event in events:
+            if _starts_streaming_text(event):
+                self._streaming_active.add(session_id)
+            if _clears_streaming_text(event):
+                self._streaming_active.discard(session_id)
+                if self._streaming_text.pop(session_id, None) is not None:
+                    self._advance_stream_revision(session_id)
+
+    def _publish_committed_events(
+        self,
+        *,
+        session_id: str,
+        events: tuple[SessionEvent, ...],
+    ) -> tuple[SessionEvent, ...]:
+        """Publish each durable sequence once and apply transient boundaries in order."""
+        if not events:
+            return ()
+        with self._stream_lock:
+            watermark = self._published_stream_sequences.get(session_id, -1)
+            pending = self._pending_stream_events.setdefault(session_id, {})
+            for event in events:
+                if event.sequence > watermark:
+                    pending[event.sequence] = event
+            next_sequence = watermark + 1
+            unpublished_events: list[SessionEvent] = []
+            while next_sequence in pending:
+                event = pending.pop(next_sequence)
+                unpublished_events.append(event)
+                next_sequence += 1
+            unpublished = tuple(unpublished_events)
+            if not unpublished:
+                if not pending:
+                    self._pending_stream_events.pop(session_id, None)
+                return ()
+            self._update_streaming_state(session_id=session_id, events=unpublished)
+            self._published_stream_sequences[session_id] = unpublished[-1].sequence
+            if not pending:
+                self._pending_stream_events.pop(session_id, None)
+            self._streams.publish(session_id=session_id, events=unpublished)
+            return unpublished
 
     def _advance_stream_revision(self, session_id: str) -> None:
         self._stream_revisions[session_id] = self._stream_revisions.get(session_id, 0) + 1
@@ -1800,6 +1885,7 @@ class SessionGateway:
         )
         return bindings
 
+    @_serialized_state
     def _active_service_session_ids(self) -> tuple[str, ...]:
         active: list[str] = []
         for session_id, service in self._services.items():

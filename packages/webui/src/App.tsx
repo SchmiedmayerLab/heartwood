@@ -64,6 +64,11 @@ interface InitialState {
   sessions: SessionSummary[];
 }
 
+interface ProjectionSelection {
+  projection: SessionProjection | null;
+  retiredEpoch: string | null;
+}
+
 const emptyProfile = (): ModelProfileDraft => ({
   profile_id: "custom-profile",
   model: "openai/",
@@ -86,7 +91,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const initialization = useRef<Promise<InitialState> | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const [projection, setProjection] = useState<SessionProjection | null>(null);
+  const projectionRef = useRef<SessionProjection | null>(null);
   const [prompt, setPrompt] = useState("");
   const [requestStatus, setRequestStatus] = useState<"idle" | "busy" | "error">(
     "idle",
@@ -130,6 +137,42 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const retiredStreamEpochs = useRef(new Map<string, Set<string>>());
   const setupOpened = useRef(false);
   const modelPollingError = useRef<string | null>(null);
+
+  const acceptProjection = useCallback(
+    (next: SessionProjection, selectedSessionId: string) => {
+      if (sessionIdRef.current !== selectedSessionId) return;
+      const current = projectionRef.current;
+      const retiredEpochs =
+        retiredStreamEpochs.current.get(selectedSessionId) ?? new Set<string>();
+      const selection = selectProjection(
+        current,
+        next,
+        selectedSessionId,
+        retiredEpochs,
+      );
+      if (selection.retiredEpoch !== null) {
+        const updatedEpochs = new Set(retiredEpochs);
+        updatedEpochs.add(selection.retiredEpoch);
+        const updatedBySession = new Map(retiredStreamEpochs.current);
+        updatedBySession.set(selectedSessionId, updatedEpochs);
+        retiredStreamEpochs.current = updatedBySession;
+      }
+      if (selection.projection === current) return;
+      projectionRef.current = selection.projection;
+      setProjection(selection.projection);
+    },
+    [],
+  );
+
+  const updateSessionId = useCallback((nextSessionId: string | null) => {
+    sessionIdRef.current = nextSessionId;
+    setSessionId(nextSessionId);
+  }, []);
+
+  const clearProjection = useCallback(() => {
+    projectionRef.current = null;
+    setProjection(null);
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     const response = await resolvedClient.listSessions();
@@ -196,7 +239,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       .then((state) => {
         if (!active || selectionGeneration.current !== generation) return;
         setSessions(state.sessions);
-        setSessionId(state.selectedSessionId);
+        updateSessionId(state.selectedSessionId);
       })
       .catch((caught: unknown) => {
         if (!active || selectionGeneration.current !== generation) return;
@@ -206,7 +249,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     return () => {
       active = false;
     };
-  }, [initialSessionId, resolvedClient]);
+  }, [initialSessionId, resolvedClient, updateSessionId]);
 
   useEffect(() => {
     if (sessionId === null) return;
@@ -216,29 +259,17 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     void resolvedClient
       .replayEvents(sessionId)
       .then(({ projection: replayed }) => {
-        if (!active) return;
-        setProjection((current) =>
-          selectProjection(
-            current,
-            replayed,
-            sessionId,
-            retiredStreamEpochs.current,
-          ),
-        );
-        setRequestStatus("idle");
+        if (!active || sessionIdRef.current !== sessionId) return;
+        acceptProjection(replayed, sessionId);
+        if (!commandInFlight.current) {
+          setRequestStatus("idle");
+        }
         closeStream = resolvedClient.streamSession(
           sessionId,
           replayed.revision,
           (streamed) => {
-            if (!active) return;
-            setProjection((current) =>
-              selectProjection(
-                current,
-                streamed,
-                sessionId,
-                retiredStreamEpochs.current,
-              ),
-            );
+            if (!active || sessionIdRef.current !== sessionId) return;
+            acceptProjection(streamed, sessionId);
             refreshTimer ??= window.setTimeout(() => {
               refreshTimer = null;
               void refreshSessions().catch((caught: unknown) =>
@@ -247,14 +278,14 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             }, 250);
           },
           (streamError) => {
-            if (!active) return;
+            if (!active || sessionIdRef.current !== sessionId) return;
             setError(`Live session updates stopped: ${streamError.message}`);
             setRequestStatus("error");
           },
         );
       })
       .catch((caught: unknown) => {
-        if (active) {
+        if (active && sessionIdRef.current === sessionId) {
           setError(errorMessage(caught));
           setRequestStatus("error");
         }
@@ -264,7 +295,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       closeStream();
     };
-  }, [refreshSessions, resolvedClient, sessionId]);
+  }, [acceptProjection, refreshSessions, resolvedClient, sessionId]);
 
   useEffect(() => {
     let active = true;
@@ -512,22 +543,24 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     existingCommand?: SessionCommand,
   ) => {
     if (sessionId === null || commandInFlight.current) return false;
+    const selectedSessionId = sessionId;
+    const selectedGeneration = selectionGeneration.current;
     commandInFlight.current = true;
-    const command = existingCommand ?? createCommand(sessionId, kind, payload);
+    const command =
+      existingCommand ?? createCommand(selectedSessionId, kind, payload);
     setRequestActivity(requestActivityForCommand(kind));
     setRequestStatus("busy");
     setError(null);
     try {
       const response = await resolvedClient.postCommand(command);
-      setProjection((current) =>
-        selectProjection(
-          current,
-          response.projection,
-          sessionId,
-          retiredStreamEpochs.current,
-        ),
-      );
+      const selectionIsCurrent = () =>
+        sessionIdRef.current === selectedSessionId &&
+        selectionGeneration.current === selectedGeneration;
+      if (selectionIsCurrent()) {
+        acceptProjection(response.projection, selectedSessionId);
+      }
       await refreshSessions();
+      if (!selectionIsCurrent()) return false;
       const outcome = response.projection.lastCommandOutcome;
       if (
         outcome?.commandId === command.command_id &&
@@ -541,6 +574,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       setRequestStatus("idle");
       return true;
     } catch (caught) {
+      if (
+        sessionIdRef.current !== selectedSessionId ||
+        selectionGeneration.current !== selectedGeneration
+      ) {
+        return false;
+      }
       setRetryCommand(command);
       setError(errorMessage(caught));
       setRequestStatus("error");
@@ -548,6 +587,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     } finally {
       commandInFlight.current = false;
       setRequestActivity(null);
+      if (
+        sessionIdRef.current !== selectedSessionId ||
+        selectionGeneration.current !== selectedGeneration
+      ) {
+        setRequestStatus("idle");
+      }
     }
   };
 
@@ -583,9 +628,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       const created = await resolvedClient.createSession();
       setSessions((current) => mergeSessionSummaries(current, [created]));
       if (selectionGeneration.current !== generation) return;
-      setProjection(null);
+      clearProjection();
       setPrompt("");
-      setSessionId(created.session_id);
+      setRetryCommand(null);
+      updateSessionId(created.session_id);
       setMobileSessionsOpen(false);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -604,9 +650,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   const selectSession = (nextSessionId: string) => {
     selectionGeneration.current += 1;
-    setProjection(null);
+    clearProjection();
     setPrompt("");
-    setSessionId(nextSessionId);
+    setError(null);
+    setRetryCommand(null);
+    updateSessionId(nextSessionId);
     setMobileSessionsOpen(false);
     setPanel(null);
   };
@@ -901,7 +949,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             if (sessions.length === 0) {
               const created = await resolvedClient.ensureDefaultSession();
               setSessions([created]);
-              setSessionId(created.session_id);
+              updateSessionId(created.session_id);
             }
           }}
           onInspectSkill={() =>
@@ -925,23 +973,29 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               .catch((caught: unknown) => setError(errorMessage(caught)))
           }
           onProfileDraft={setProfileDraft}
-          onRefreshActivity={() =>
-            sessionId === null ? undefined : (
-              void resolvedClient
-                .replayEvents(sessionId)
-                .then(({ projection: replayed }) =>
-                  setProjection((current) =>
-                    selectProjection(
-                      current,
-                      replayed,
-                      sessionId,
-                      retiredStreamEpochs.current,
-                    ),
-                  ),
+          onRefreshActivity={() => {
+            const selectedSessionId = sessionId;
+            const selectedGeneration = selectionGeneration.current;
+            if (selectedSessionId === null) return;
+            void resolvedClient
+              .replayEvents(selectedSessionId)
+              .then(({ projection: replayed }) => {
+                if (
+                  sessionIdRef.current !== selectedSessionId ||
+                  selectionGeneration.current !== selectedGeneration
                 )
-                .catch((caught: unknown) => setError(errorMessage(caught)))
-            )
-          }
+                  return;
+                acceptProjection(replayed, selectedSessionId);
+              })
+              .catch((caught: unknown) => {
+                if (
+                  sessionIdRef.current === selectedSessionId &&
+                  selectionGeneration.current === selectedGeneration
+                ) {
+                  setError(errorMessage(caught));
+                }
+              });
+          }}
           onRefreshSettings={refreshSettings}
           onRestoreFocus={() => utilityTriggerRef.current?.focus()}
           onRemoveProfile={(profileId) =>
@@ -1028,26 +1082,28 @@ const selectProjection = (
   current: SessionProjection | null,
   next: SessionProjection,
   sessionId: string,
-  retiredEpochsBySession: Map<string, Set<string>>,
-): SessionProjection | null => {
-  if (next.sessionId !== sessionId) return current;
-  if (current?.sessionId !== sessionId) return next;
+  retiredEpochs: ReadonlySet<string>,
+): ProjectionSelection => {
+  if (next.sessionId !== sessionId) {
+    return { projection: current, retiredEpoch: null };
+  }
+  if (current?.sessionId !== sessionId) {
+    return { projection: next, retiredEpoch: null };
+  }
   if (next.streamEpoch !== current.streamEpoch) {
-    const retiredEpochs =
-      retiredEpochsBySession.get(sessionId) ?? new Set<string>();
-    if (retiredEpochs.has(next.streamEpoch)) return current;
-    retiredEpochs.add(current.streamEpoch);
-    retiredEpochsBySession.set(sessionId, retiredEpochs);
-    return next;
+    if (retiredEpochs.has(next.streamEpoch)) {
+      return { projection: current, retiredEpoch: null };
+    }
+    return { projection: next, retiredEpoch: current.streamEpoch };
   }
   if (
     next.revision > current.revision ||
     (next.revision === current.revision &&
       next.streamRevision > current.streamRevision)
   ) {
-    return next;
+    return { projection: next, retiredEpoch: null };
   }
-  return current;
+  return { projection: current, retiredEpoch: null };
 };
 
 const modelValidationKey = (

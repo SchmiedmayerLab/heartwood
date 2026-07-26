@@ -320,14 +320,11 @@ class RestGateway:
             result = self.gateway.handle(command)
         except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
             return _error(409, error)
-        snapshot = self.gateway.session_snapshot(
-            session_id=session_id,
-            after_sequence=(result.events[0].sequence - 1 if result.events else None),
-        )
+        snapshot = self.gateway.session_snapshot(session_id=session_id)
         return RestResponse(
             status_code=200,
             body={
-                "events": [event.model_dump(mode="json") for event in snapshot.events],
+                "events": [event.model_dump(mode="json") for event in result.events],
                 "projection": _json_object(snapshot.projection.safe_dict()),
             },
         )

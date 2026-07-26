@@ -581,7 +581,15 @@ const parseJsonResponse = async <Value>(response: Response): Promise<Value> => {
 };
 
 const parseProjectionPayload = (payload: string): SessionProjectionResponse => {
-  const parsed = sessionProjectionResponseSchema.safeParse(JSON.parse(payload));
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(payload) as unknown;
+  } catch {
+    throw new Error(
+      "Heartwood could not read the session update. Refresh the page to reconnect.",
+    );
+  }
+  const parsed = sessionProjectionResponseSchema.safeParse(decoded);
   if (!parsed.success) {
     throw new Error("Gateway response included an invalid session projection");
   }

@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from textual.containers import Vertical
 from textual.pilot import Pilot
 from textual.widgets import Input, OptionList, RichLog, Static
@@ -34,12 +36,14 @@ from heartwood.gateway import (
     ProjectContext,
     ProjectionApprovalAction,
     ProjectionApprovalGroup,
+    ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionSubagent,
     ProjectionUsage,
     RestGateway,
     RestRequest,
     SessionGateway,
+    SessionLifecycle,
     SessionProjection,
     action_mode_label,
     action_risk_label,
@@ -62,6 +66,84 @@ async def _wait_for_tui(
         if loop.time() >= deadline:
             raise AssertionError(f"Timed out waiting for {description}.")
         await pilot.pause(0.05)
+
+
+def _test_action_settings() -> ActionSettingsResponse:
+    return {
+        "schema_version": "heartwood.action-settings.v1",
+        "confirmation_mode": "always-confirm",
+        "scope_description": "Applies to this test project.",
+        "presentation": {
+            "risk_labels": {
+                "low": "Low Risk",
+                "medium": "Medium Risk",
+                "high": "High Risk",
+            },
+            "tool_labels": {
+                "file_editor": "File Change",
+                "terminal": "Terminal Command",
+            },
+            "other_tool_label_template": "{tool_name} Action",
+            "unknown_risk_label": "Not Classified",
+            "unknown_tool_label": "Tool Action",
+        },
+        "change_allowed": True,
+        "change_blocked_reason": None,
+        "modes": [
+            {
+                "allowed": True,
+                "automatic_risks": [],
+                "command_value": "ask-every-time",
+                "description": "Review every proposed action set.",
+                "label": "Review Every Action",
+                "mode": "always-confirm",
+                "recommended": True,
+                "reviewed_risks": ["low", "medium", "high", "unknown"],
+                "unavailable_reason": None,
+            }
+        ],
+    }
+
+
+def test_interactive_session_stable_wait_has_a_deterministic_deadline() -> None:
+    class RunningSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "running"
+            self.replay_count = 0
+
+        def replay(self) -> SessionProjection:
+            self.replay_count += 1
+            return SessionProjection(
+                session_id=self.session_id,
+                event_count=1,
+                revision=0,
+                lifecycle=ProjectionLifecycleState(status=SessionLifecycle.RUNNING),
+            )
+
+    session = RunningSession()
+    now = 0.0
+    sleeps: list[float] = []
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(duration: float) -> None:
+        nonlocal now
+        sleeps.append(duration)
+        now += duration
+
+    with (
+        patch("heartwood.cli._interactive.time.monotonic", side_effect=monotonic),
+        patch("heartwood.cli._interactive.time.sleep", side_effect=sleep),
+        pytest.raises(
+            TimeoutError,
+            match=r"session running remained active for 0\.5 seconds",
+        ),
+    ):
+        session.wait_until_stable(poll_interval=0.2, timeout=0.5)
+
+    assert sleeps == pytest.approx([0.2, 0.2, 0.1])
+    assert session.replay_count == 4
 
 
 def test_interactive_session_uses_gateway_commands_and_persisted_replay(
@@ -152,6 +234,11 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
         app = HeartwoodTerminalApp(session)
         async with app.run_test(size=(64, 22)) as pilot:
             composer = app.query_one("#composer", Input)
+            await _wait_for_tui(
+                pilot,
+                lambda: composer.has_focus,
+                description="the composer to receive initial focus",
+            )
             composer.value = "inspect the synthetic workspace"
             await pilot.press("enter")
             approval = app.query_one("#approval", Vertical)
@@ -193,6 +280,243 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
             await pilot.pause()
             assert app.query_one("#composer", Input).disabled is False
             assert str(conversation.lines).count("You: inspect the synthetic workspace") == 1
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gateway.stop()
+
+
+def test_textual_terminal_appends_persisted_messages_and_replaces_transient_state() -> None:
+    class ProjectionSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "incremental"
+            self.projection = SessionProjection(
+                session_id=self.session_id,
+                event_count=1,
+                revision=0,
+                stream_epoch="process-a",
+                stream_revision=1,
+                lifecycle=ProjectionLifecycleState(status=SessionLifecycle.RUNNING),
+                conversation=(
+                    ProjectionMessage(
+                        id="user-1",
+                        sequence=0,
+                        role="user",
+                        label="You",
+                        content="Inspect the synthetic project",
+                    ),
+                ),
+                streaming_text="Inspecting",
+                usage=ProjectionUsage(
+                    usage_id="total",
+                    model_name="synthetic-model",
+                    call_count=1,
+                    prompt_tokens=10,
+                    completion_tokens=2,
+                ),
+            )
+
+        def replay(self) -> SessionProjection:
+            return self.projection
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
+    async def exercise() -> None:
+        session = ProjectionSession()
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(72, 24)) as pilot:
+            conversation = app.query_one("#conversation", RichLog)
+            streaming = app.query_one("#streaming", Static)
+            details = app.query_one("#projection-details", RichLog)
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    "You: Inspect the synthetic project" in str(conversation.lines)
+                    and "Agent: Inspecting" in str(streaming.render())
+                ),
+                description="the initial projection",
+            )
+            first_rendered_line = conversation.lines[0]
+
+            session.projection = session.projection.model_copy(
+                update={
+                    "event_count": 2,
+                    "revision": 1,
+                    "stream_revision": 2,
+                    "lifecycle": ProjectionLifecycleState(status=SessionLifecycle.FINISHED),
+                    "conversation": (
+                        *session.projection.conversation,
+                        ProjectionMessage(
+                            id="agent-1",
+                            sequence=1,
+                            role="agent",
+                            label="Agent",
+                            content="Inspection complete",
+                        ),
+                    ),
+                    "streaming_text": "",
+                    "usage": ProjectionUsage(
+                        usage_id="total",
+                        model_name="synthetic-model",
+                        call_count=2,
+                        prompt_tokens=20,
+                        completion_tokens=5,
+                    ),
+                }
+            )
+            app._apply_projection(session.projection)
+            await _wait_for_tui(
+                pilot,
+                lambda: "2 calls · 25 tokens" in str(details.lines),
+                description="the updated projection details",
+            )
+
+            assert conversation.lines[0] is first_rendered_line
+            assert str(conversation.lines).count("You: Inspect the synthetic project") == 1
+            assert str(conversation.lines).count("Agent: Inspection complete") == 1
+            assert not streaming.display
+            assert "2 calls · 25 tokens" in str(details.lines)
+
+    asyncio.run(exercise())
+
+
+def test_textual_terminal_resets_on_stream_handoff_and_rejects_retired_epoch() -> None:
+    class HandoffSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "handoff"
+            self.projection = SessionProjection(
+                session_id=self.session_id,
+                event_count=1,
+                revision=0,
+                stream_epoch="first-process",
+                stream_revision=4,
+                conversation=(
+                    ProjectionMessage(
+                        id="old-message",
+                        sequence=0,
+                        role="agent",
+                        label="Agent",
+                        content="Old process response",
+                    ),
+                ),
+                streaming_text="Stale partial response",
+            )
+
+        def replay(self) -> SessionProjection:
+            return self.projection
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
+    async def exercise() -> None:
+        session = HandoffSession()
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(72, 22)) as pilot:
+            conversation = app.query_one("#conversation", RichLog)
+            streaming = app.query_one("#streaming", Static)
+            await _wait_for_tui(
+                pilot,
+                lambda: "Old process response" in str(conversation.lines),
+                description="the first stream epoch",
+            )
+            first_epoch = session.projection
+            restarted = first_epoch.model_copy(
+                update={
+                    "stream_epoch": "restarted-process",
+                    "stream_revision": 0,
+                    "conversation": (
+                        ProjectionMessage(
+                            id="fresh-message",
+                            sequence=0,
+                            role="agent",
+                            label="Agent",
+                            content="Fresh process response",
+                        ),
+                    ),
+                    "streaming_text": "Fresh partial response",
+                }
+            )
+            session.projection = restarted
+            app._apply_projection(restarted)
+
+            assert "Old process response" not in str(conversation.lines)
+            assert "Fresh process response" in str(conversation.lines)
+            assert "Fresh partial response" in str(streaming.render())
+
+            delayed = first_epoch.model_copy(
+                update={
+                    "stream_revision": 5,
+                    "streaming_text": "Delayed stale response",
+                }
+            )
+            app._apply_projection(delayed)
+
+            assert app._projection == restarted
+            assert "Fresh process response" in str(conversation.lines)
+            assert "Delayed stale response" not in str(streaming.render())
+
+    asyncio.run(exercise())
+
+
+def test_textual_gateway_reads_run_outside_the_event_loop(tmp_path: Path) -> None:
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    gateway.start()
+
+    class RecordingSession(InteractiveSession):
+        def __init__(self) -> None:
+            super().__init__(gateway, session_id="threaded-reads")
+            self.replay_threads: list[int] = []
+            self.action_settings_threads: list[int] = []
+
+        def replay(self) -> SessionProjection:
+            self.replay_threads.append(threading.get_ident())
+            return super().replay()
+
+        def pending_approval(self) -> ProjectionApprovalGroup | None:
+            raise AssertionError("key handlers must use the cached session projection")
+
+        def action_settings(self) -> ActionSettingsResponse:
+            self.action_settings_threads.append(threading.get_ident())
+            return super().action_settings()
+
+    async def exercise() -> None:
+        event_loop_thread = threading.get_ident()
+        session = RecordingSession()
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(72, 22)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: bool(
+                    session.replay_threads
+                    and session.action_settings_threads
+                    and app._projection is not None
+                ),
+                description="the initial gateway reads",
+            )
+
+            app.action_focus_composer()
+            app.action_pause()
+            await _wait_for_tui(
+                pilot,
+                lambda: not app._busy,
+                description="the pause command",
+            )
+
+            app.action_show_permissions()
+            await _wait_for_tui(
+                pilot,
+                lambda: isinstance(app.screen, ActionModeScreen),
+                description="the action review mode screen",
+            )
+
+            assert event_loop_thread not in session.replay_threads
+            assert event_loop_thread not in session.action_settings_threads
 
     try:
         asyncio.run(exercise())
@@ -283,6 +607,11 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     )
     assert "tool-1" not in rendered
 
+    filtered = "\n".join(format_projection_lines(projection, after_sequence=1))
+    assert "Proposed terminal command" not in filtered
+    assert "Model activity: 2 calls · 150 tokens · synthetic-model" in filtered
+    assert "Review 2 actions as one OpenHands action set:" in filtered
+
 
 def test_interaction_activity_matches_the_submitted_operation() -> None:
     assert interaction_activity("inspect the project").label == "Working on your task"
@@ -360,6 +689,11 @@ def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
         app = HeartwoodTerminalApp(session)
         async with app.run_test(size=(72, 24)) as pilot:
             composer = app.query_one("#composer", Input)
+            await _wait_for_tui(
+                pilot,
+                lambda: composer.has_focus,
+                description="the composer to receive initial focus",
+            )
             composer.value = "/permissions"
             await pilot.press("enter")
             await _wait_for_tui(
@@ -405,16 +739,24 @@ def test_textual_terminal_reports_action_settings_load_failure() -> None:
         def action_settings(self) -> ActionSettingsResponse:
             raise ActionSettingsError("project action settings are invalid")
 
-    app = HeartwoodTerminalApp(InvalidSettingsSession())
+    async def exercise() -> None:
+        app = HeartwoodTerminalApp(InvalidSettingsSession())
+        async with app.run_test(size=(72, 20)) as pilot:
+            with patch.object(app, "notify") as notify:
+                app.action_show_permissions()
+                await _wait_for_tui(
+                    pilot,
+                    lambda: notify.called,
+                    description="the action settings error",
+                )
 
-    with patch.object(app, "notify") as notify:
-        app.action_show_permissions()
+            notify.assert_called_once_with(
+                "project action settings are invalid",
+                title="Action Review",
+                severity="error",
+            )
 
-    notify.assert_called_once_with(
-        "project action settings are invalid",
-        title="Action Review",
-        severity="error",
-    )
+    asyncio.run(exercise())
 
 
 def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() -> None:
@@ -449,6 +791,9 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
         def replay(self) -> SessionProjection:
             return self.projection
 
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
         def submit(self, line: str) -> InteractionResult:
             self.submitted.append(line)
             self.resolved = True
@@ -461,6 +806,14 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
         session = BatchSession()
         app = HeartwoodTerminalApp(session)
         async with app.run_test(size=(64, 22)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    app.query_one("#approval", Vertical).display
+                    and app.query_one("#approval-options", OptionList).has_focus
+                ),
+                description="the grouped action review",
+            )
             title = str(app.query_one("#approval-title", Static).render())
             assert "Review Agent Actions · 2 Actions" in title
             assert app.query_one("#approval-options", OptionList).has_focus
@@ -510,9 +863,20 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
         def replay(self) -> SessionProjection:
             return self.projection
 
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
     async def exercise() -> None:
         app = HeartwoodTerminalApp(LongBatchSession())
-        async with app.run_test(size=(64, 18)):
+        async with app.run_test(size=(64, 18)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    app.query_one("#approval", Vertical).display
+                    and "1. Review step 1" in str(app.query_one("#approval-actions", RichLog).lines)
+                ),
+                description="the long action review",
+            )
             action_log = app.query_one("#approval-actions", RichLog)
 
             assert action_log.auto_scroll is False
@@ -534,6 +898,9 @@ def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progre
                 event_count=0,
                 revision=-1,
             )
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
 
     async def exercise() -> None:
         app = HeartwoodTerminalApp(IdleSession())

@@ -41,12 +41,16 @@ jobs:
           - target: runtime-gpu-nvidia
             runner: ubuntu-24.04
             commit_suffix: gpu-nvidia
+            diagnostic_name: generic GPU commit tag
             flatten: "false"
+            validation_mode: linux-amd64-index
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true
           - target: terra-runtime-gpu-nvidia
             runner: blacksmith-16vcpu-ubuntu-2404
             commit_suffix: terra-gpu-nvidia
+            diagnostic_name: Terra GPU commit tag
             flatten: "true"
+            validation_mode: docker-v2
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=false
     steps:
       - name: Checkout repository
@@ -98,60 +102,14 @@ jobs:
           bash images/gpu/validate_image_candidate.sh \
             "${CANDIDATE}" "${TARGET}" "${EXPECTED_REVISION}"
       - name: Create and verify immutable commit tag
-        env:
-          CANDIDATE: ${{ steps.candidate.outputs.reference }}
-          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
-          COMMIT_SUFFIX: ${{ matrix.commit_suffix }}
-          FLATTEN: ${{ matrix.flatten }}
-          GIT_SHA: ${{ github.sha }}
-          IMAGE_NAME: ${{ steps.image.outputs.name }}
-        run: |
-          commit_ref="${IMAGE_NAME}:sha-${GIT_SHA}-${COMMIT_SUFFIX}"
-          if inspect="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then
-            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect}")"
-          else
-            create_args=()
-            if [ "${FLATTEN}" = "true" ]; then
-              create_args+=(--prefer-index=false)
-            fi
-            docker buildx imagetools create "${create_args[@]}" \
-              --tag "${commit_ref}" "${CANDIDATE}"
-            inspect="$(docker buildx imagetools inspect "${commit_ref}")"
-            commit_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect}")"
-          fi
-          if [ "${commit_digest}" != "${CANDIDATE_DIGEST}" ]; then
-            echo "immutable GPU commit tag does not match the validated candidate" >&2
-            exit 1
-          fi
-          raw="$(docker buildx imagetools inspect --raw "${commit_ref}")"
-          if [ "${FLATTEN}" = "true" ]; then
-            if ! jq --exit-status '
-              .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
-              and .config.mediaType == "application/vnd.docker.container.image.v1+json"
-            ' <<<"${raw}" >/dev/null; then
-              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
-              config_media_type="$(jq -r '.config.mediaType // "<missing>"' <<<"${raw}")"
-              echo "immutable Terra GPU tag has incompatible media types: ${commit_ref}" >&2
-              echo "observed media type: ${media_type}; config media type: ${config_media_type}" >&2
-              exit 1
-            fi
-          else
-            if ! jq --exit-status '
-              [.manifests[] | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
-              == ["linux/amd64"]
-            ' <<<"${raw}" >/dev/null; then
-              media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
-              platforms="$(
-                jq -r '
-                  [.manifests[]? | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"]
-                  | join(", ")
-                ' <<<"${raw}"
-              )"
-              echo "immutable generic GPU tag has an incompatible index: ${commit_ref}" >&2
-              echo "observed media type: ${media_type}; Linux platforms: ${platforms:-<none>}" >&2
-              exit 1
-            fi
-          fi
+        uses: ./.github/actions/create-immutable-image-tag
+        with:
+          candidate-tag: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}-${{ matrix.commit_suffix }}
+          candidate-references: ${{ steps.candidate.outputs.reference }}
+          candidate-digest: ${{ steps.candidate.outputs.digest }}
+          diagnostic-name: ${{ matrix.diagnostic_name }}
+          flatten: ${{ matrix.flatten }}
+          validation-mode: ${{ matrix.validation_mode }}
 
   promote:
     name: Promote GPU Channel Tags

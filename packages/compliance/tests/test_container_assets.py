@@ -209,7 +209,7 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
         if Requirement(requirement).name.startswith("openhands-")
     )
 
-    assert pins == {"openhands-sdk": "1.36.1", "openhands-tools": "1.36.1"}
+    assert pins == {"openhands-sdk": "1.37.1", "openhands-tools": "1.37.1"}
     assert "optional-dependencies" not in gateway["project"]
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
     assert "openhands-agent-server" not in _read("uv.lock")
@@ -799,6 +799,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
 def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
     manual_workflow = _read(".github/workflows/gpu-container-pr.yml")
+    immutable_tag_action = _read(".github/actions/create-immutable-image-tag/action.yml")
     pull_request_workflow = _read(".github/workflows/gpu-container-pr-validation.yml")
     pull_request_validation = _read(".github/workflows/pull-request-validation.yml")
     qualification = _read(".github/workflows/gpu-qualification.yml")
@@ -872,28 +873,41 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     assert main_build.index("Build candidate by digest") < main_build.index(
         "Verify candidate contents"
     )
-    assert "--prefer-index=false" in workflow
-    assert "application/vnd.docker.distribution.manifest.v2+json" in workflow
-    assert "observed media type:" in workflow
-    assert "Linux platforms:" in workflow
+    assert workflow.count("uses: ./.github/actions/create-immutable-image-tag") == 1
+    assert manual_workflow.count("uses: ./.github/actions/create-immutable-image-tag") == 1
+    assert "--prefer-index=false" in immutable_tag_action
+    assert "application/vnd.docker.distribution.manifest.v2+json" in immutable_tag_action
+    assert "observed media type:" in immutable_tag_action
+    assert "config media type:" in immutable_tag_action
+    assert "Linux platforms:" in immutable_tag_action
     assert "validate_image_candidate.sh" in main_build
     assert "validate_image_candidate.sh" in manual_workflow
     assert manual_workflow.index("Validate staged Terra candidate") < manual_workflow.index(
         "Create immutable Terra candidate tag"
     )
-    assert "immutable Terra candidate tag does not match" in manual_workflow
+    assert "diagnostic-name: Terra qualification candidate tag" in manual_workflow
     assert 'docker pull --platform linux/amd64 "${candidate}"' in candidate_validation
     assert "--entrypoint /opt/heartwood/images/gpu/verify_runtime.sh" in (candidate_validation)
     assert "terra_jupyter_contract_smoke.sh" in candidate_validation
     assert "terra_image_smoke.sh" in candidate_validation
     assert "offline_stack_smoke.sh" in candidate_validation
     assert os.access(_repo_root() / "images/gpu/validate_image_candidate.sh", os.X_OK)
-    assert "--prefer-index=false" in manual_workflow
-    assert "application/vnd.docker.distribution.manifest.v2+json" in manual_workflow
+    assert "validation-mode: docker-v2" in manual_workflow
     assert "edge-gpu-nvidia" not in manual_workflow
     assert "edge-terra-gpu-nvidia" not in manual_workflow
-    assert "immutable GPU commit tag does not match" in workflow
-    assert "sha-${GIT_SHA}-${COMMIT_SUFFIX}" in main_build
+    assert "diagnostic_name: generic GPU commit tag" in workflow
+    assert "diagnostic_name: Terra GPU commit tag" in workflow
+    assert "diagnostic-name: ${{ matrix.diagnostic_name }}" in workflow
+    assert (
+        "candidate-tag: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}-"
+        "${{ matrix.commit_suffix }}"
+    ) in main_build
+    assert "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" in (
+        immutable_tag_action
+    )
+    assert "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" in (
+        immutable_tag_action
+    )
     assert "edge-gpu-nvidia" not in main_build
     assert "edge-terra-gpu-nvidia" not in main_build
     assert "refusing to move GPU channel tags from a stale main workflow" in workflow
@@ -1219,6 +1233,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
+    immutable_tag_action = _read(".github/actions/create-immutable-image-tag/action.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
     capable_workflow = _read(".github/workflows/capable-model.yml")
     compose = _read("images/generic/compose.yaml")
@@ -1244,9 +1259,9 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}-terra"' in publish
     assert publish.count("uid=10001,gid=10001,mode=0700") == 4
     assert "verify_registry_manifest.py" in publish
-    assert "--prefer-index=false" in publish
+    assert "--prefer-index=false" in immutable_tag_action
     assert '--reference "${CANDIDATE_DIGEST}"' in publish
-    assert publish.count("^sha256:[0-9a-f]{64}$") == 2
+    assert immutable_tag_action.count("^sha256:[0-9a-f]{64}$") == 2
     assert "if: github.ref == 'refs/heads/main'" not in publish
     assert "runner: ubuntu-24.04" in publish
     assert "runner: ubuntu-24.04-arm" in publish
@@ -1254,17 +1269,27 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "cache-to=type=gha" in publish
     assert publish.count("uses: docker/bake-action@v7") == 2
     assert "mode=max" not in publish
-    assert "immutable generic commit tag already exists with a different manifest" in publish
-    assert "newly created generic commit tag does not match validated candidate manifest" in publish
-    assert "immutable Terra commit tag already exists with a different digest" in publish
-    assert "newly created Terra commit tag does not match staged candidate digest" in publish
+    assert publish.count("uses: ./.github/actions/create-immutable-image-tag") == 2
+    assert "diagnostic-name: generic commit tag" in publish
+    assert "diagnostic-name: Terra commit tag" in publish
+    assert "immutable ${DIAGNOSTIC_NAME} already exists with a different manifest" in (
+        immutable_tag_action
+    )
+    assert "newly created ${DIAGNOSTIC_NAME} does not match validated candidate manifest" in (
+        immutable_tag_action
+    )
+    assert "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" in (
+        immutable_tag_action
+    )
+    assert "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" in (
+        immutable_tag_action
+    )
     assert "promoted generic channel digest does not match the immutable commit tag" in publish
     assert "promoted Terra channel digest does not match the immutable commit tag" in publish
     assert (
-        'if inspect_output="$(docker buildx imagetools inspect "${commit_ref}" 2>/dev/null)"; then'
-        in publish
+        'if raw="$(docker buildx imagetools inspect --raw "${CANDIDATE_TAG}" 2>/dev/null)"; then'
+        in immutable_tag_action
     )
-    assert 'if commit_digest="$(docker buildx imagetools inspect' not in publish
     assert "refusing to move the generic channel tag from a stale main workflow" in publish
     assert "refusing to move the Terra channel tag from a stale main workflow" in publish
     assert publish.index("Build and stage image by digest") < publish.index(

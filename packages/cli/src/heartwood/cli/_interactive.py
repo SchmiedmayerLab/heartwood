@@ -118,6 +118,7 @@ _COMMAND_ACTIVITIES = {
         guidance="Heartwood is waiting for the active project services to close safely.",
     ),
 }
+_STABLE_WAIT_TIMEOUT_SECONDS = 3600.0
 
 
 class InteractiveSession:
@@ -135,13 +136,28 @@ class InteractiveSession:
         """Return the complete unresolved OpenHands action group."""
         return self.replay().pending_approval
 
-    def wait_until_stable(self, *, poll_interval: float = 0.1) -> SessionProjection:
+    def wait_until_stable(
+        self,
+        *,
+        poll_interval: float = 0.1,
+        timeout: float = _STABLE_WAIT_TIMEOUT_SECONDS,
+    ) -> SessionProjection:
         """Wait for a background run to reach an interactive boundary."""
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than zero")
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
+        deadline = time.monotonic() + timeout
         while True:
             projection = self.replay()
             if projection.lifecycle.status != "running":
                 return projection
-            time.sleep(poll_interval)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"session {self.session_id} remained active for {timeout:g} seconds"
+                )
+            time.sleep(min(poll_interval, remaining))
 
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared project action-confirmation settings."""
@@ -234,11 +250,7 @@ class InteractiveSession:
         approval = self.pending_approval()
         if approval is None:
             return None
-        if requested_id is None:
-            return approval.group_id
-        if requested_id == approval.group_id:
-            return requested_id
-        return requested_id
+        return approval.group_id if requested_id is None else requested_id
 
     def _handle(
         self,
@@ -285,7 +297,46 @@ def format_projection_lines(
     include_pending_review: bool = True,
     after_sequence: int | None = None,
 ) -> tuple[str, ...]:
-    """Render the shared projection without reconstructing session state."""
+    """Render the shared projection without reconstructing session state.
+
+    ``after_sequence`` filters only persisted conversation messages. Transient
+    streaming text and current runtime state are always rendered in full.
+    """
+    lines = list(
+        format_conversation_lines(
+            projection,
+            after_sequence=after_sequence,
+        )
+    )
+    if projection.streaming_text:
+        lines.append(f"[...] Agent: {projection.streaming_text}")
+    lines.extend(format_runtime_lines(projection))
+    approval = projection.pending_approval
+    if approval is not None and include_pending_review:
+        label = "action" if len(approval.actions) == 1 else "actions"
+        lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
+        for index, action in enumerate(approval.actions, 1):
+            tool_label = action_tool_label(action.tool_name)
+            risk_label = action_risk_label(action.risk or "unknown")
+            lines.append(f"  {index}. {action.summary or tool_label} [{tool_label} · {risk_label}]")
+            if argument_lines := format_action_arguments(action.arguments):
+                lines.append("     Arguments:")
+                lines.extend(f"       {line}" for line in argument_lines)
+        lines.extend(
+            (
+                "Allow the complete set once: /allow",
+                "Reject the complete set: /reject",
+            )
+        )
+    return tuple(lines)
+
+
+def format_conversation_lines(
+    projection: SessionProjection,
+    *,
+    after_sequence: int | None = None,
+) -> tuple[str, ...]:
+    """Render persisted conversation messages after an optional sequence cursor."""
     lines: list[str] = []
     for message in projection.conversation:
         if after_sequence is not None and message.sequence <= after_sequence:
@@ -296,8 +347,12 @@ def format_projection_lines(
             lines.append(f"  {message.detail}")
         if message.technical_detail:
             lines.extend(f"    {line}" for line in message.technical_detail.splitlines())
-    if projection.streaming_text:
-        lines.append(f"[...] Agent: {projection.streaming_text}")
+    return tuple(lines)
+
+
+def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
+    """Render current task, usage, and specialist state from the projection."""
+    lines: list[str] = []
     if projection.task_plan:
         lines.append("Task plan:")
         lines.extend(
@@ -322,23 +377,6 @@ def format_projection_lines(
             f"  {item.agent_name}: {item.status} · invocation {item.invocation_id}"
             f"{f' · task {item.task_id}' if item.task_id is not None else ''}"
             for item in projection.subagents
-        )
-    approval = projection.pending_approval
-    if approval is not None and include_pending_review:
-        label = "action" if len(approval.actions) == 1 else "actions"
-        lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
-        for index, action in enumerate(approval.actions, 1):
-            tool_label = action_tool_label(action.tool_name)
-            risk_label = action_risk_label(action.risk or "unknown")
-            lines.append(f"  {index}. {action.summary or tool_label} [{tool_label} · {risk_label}]")
-            if argument_lines := format_action_arguments(action.arguments):
-                lines.append("     Arguments:")
-                lines.extend(f"       {line}" for line in argument_lines)
-        lines.extend(
-            (
-                "Allow the complete set once: /allow",
-                "Reject the complete set: /reject",
-            )
         )
     return tuple(lines)
 

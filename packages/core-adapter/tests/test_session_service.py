@@ -756,10 +756,23 @@ def test_approval_intent_recovers_when_interrupted_before_backend_transition(
 
     with pytest.raises(OSError, match="before backend transition"):
         service.handle(approval)
+    recovered = service.reconcile()
+    denied = service.handle(
+        _command(
+            CommandKind.DENY,
+            target_type="action-set",
+            target_id=_action_group_id(tool_call.tool_call_id),
+        ).model_copy(update={"session_id": "session-main"})
+    )
     replayed = service.handle(approval)
 
     assert replayed.replayed
     assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+    assert any(event.kind == EventKind.CONFIRMATION_RESOLVED.value for event in recovered)
+    assert denied.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert denied.events[-1].payload["reason"] == (
+        f"no matching pending action group: {_action_group_id(tool_call.tool_call_id)}"
+    )
 
 
 def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
@@ -1600,6 +1613,38 @@ def test_service_uses_backend_owned_pending_group_after_restart(tmp_path: Path) 
     )
 
 
+def test_corrupt_deterministic_pending_state_blocks_restart_without_changing_history(
+    tmp_path: Path,
+) -> None:
+    service = SessionService.local_default(
+        tmp_path,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    result = service.handle(
+        _command(CommandKind.CHAT, prompt="propose one action").model_copy(
+            update={"session_id": "session-main"}
+        )
+    )
+    service.close()
+    event_log = service.store.events_path
+    audit_log = service.audit_log.path
+    state_path = service.store.session_dir / ".deterministic-backend.json"
+    events_before = event_log.read_bytes()
+    audit_before = audit_log.read_bytes()
+    state_path.write_text("{interrupted", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="deterministic backend state is invalid"):
+        SessionService.local_default(
+            tmp_path,
+            clock=lambda: "2026-01-01T00:00:00Z",
+        )
+
+    assert any(event.kind == EventKind.CONFIRMATION_REQUESTED.value for event in result.events)
+    assert event_log.read_bytes() == events_before
+    assert audit_log.read_bytes() == audit_before
+    assert state_path.read_text(encoding="utf-8") == "{interrupted"
+
+
 def test_resume_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:
     backend = _RecordingBackend(endpoint="https://public.example.invalid/v1/chat/completions")
     service = SessionService.local_default(
@@ -1673,6 +1718,120 @@ def test_backend_error_is_translated_without_exception(tmp_path: Path) -> None:
     assert result.events[-1].payload["reason"] == "The agent runtime reported an error"
     audit_text = service.store.audit_path.read_text(encoding="utf-8")
     assert '"reason":"[scrubbed]"' in audit_text
+
+
+def test_reconciliation_reuses_source_event_index_across_appends_and_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_backend_event = BackendAgentMessageEvent(
+        message="first",
+        source_event_id="source-first",
+    )
+    second_backend_event = BackendAgentMessageEvent(
+        message="second",
+        source_event_id="source-second",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        reconciled=(first_backend_event,),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    original_read_events = service.store.read_events
+    read_count = 0
+
+    def count_read_events() -> tuple[SessionEvent, ...]:
+        nonlocal read_count
+        read_count += 1
+        return original_read_events()
+
+    monkeypatch.setattr(service.store, "read_events", count_read_events)
+
+    assert len(service.reconcile()) == 1
+    reads_after_hydration = read_count
+    assert reads_after_hydration > 0
+    backend._reconciled = (first_backend_event, second_backend_event)
+    assert len(service.reconcile()) == 1
+    assert service.reconcile() == ()
+    assert read_count == reads_after_hydration
+    service.close()
+
+    restarted_backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        reconciled=(first_backend_event, second_backend_event),
+    )
+    restarted = SessionService.local_default(
+        tmp_path,
+        backend=restarted_backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    restarted_original_read_events = restarted.store.read_events
+    restarted_read_count = 0
+
+    def count_restarted_read_events() -> tuple[SessionEvent, ...]:
+        nonlocal restarted_read_count
+        restarted_read_count += 1
+        return restarted_original_read_events()
+
+    monkeypatch.setattr(restarted.store, "read_events", count_restarted_read_events)
+
+    assert restarted.reconcile() == ()
+    reads_after_restart_hydration = restarted_read_count
+    assert reads_after_restart_hydration > 0
+    assert restarted.reconcile() == ()
+    assert restarted_read_count == reads_after_restart_hydration
+    restarted.close()
+
+
+def test_reconciliation_rebuilds_source_event_index_after_commit_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_backend_event = BackendAgentMessageEvent(
+        message="first",
+        source_event_id="source-first",
+    )
+    recovered_backend_event = BackendAgentMessageEvent(
+        message="recovered",
+        source_event_id="source-recovered",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        reconciled=(first_backend_event,),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    assert len(service.reconcile()) == 1
+    backend._reconciled = (first_backend_event, recovered_backend_event)
+    original_append = session_state._append_private_json_line
+    append_count = 0
+
+    def interrupt_event_append(path: Path, content: str) -> None:
+        nonlocal append_count
+        append_count += 1
+        if append_count == 2:
+            raise OSError("simulated event append interruption")
+        original_append(path, content)
+
+    monkeypatch.setattr(
+        session_state,
+        "_append_private_json_line",
+        interrupt_event_append,
+    )
+    with pytest.raises(OSError, match="simulated event append interruption"):
+        service.reconcile()
+    monkeypatch.setattr(session_state, "_append_private_json_line", original_append)
+
+    assert service.reconcile() == ()
+    source_event_ids = [event.payload.get("source_event_id") for event in service.replay_events()]
+    assert source_event_ids == ["source-first", "source-recovered"]
 
 
 def test_task_titles_stay_out_of_audit_while_usage_remains_verifiable(

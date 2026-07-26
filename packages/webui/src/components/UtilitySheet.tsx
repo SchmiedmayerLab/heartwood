@@ -698,7 +698,10 @@ const ActionReviewSettings = ({
   const effectiveLockedReason =
     lockedReason ??
     (actions.change_allowed ? null : actions.change_blocked_reason);
-  const disabled = effectiveLockedReason !== null || pendingMode !== null;
+  const disabled =
+    !actions.change_allowed ||
+    effectiveLockedReason !== null ||
+    pendingMode !== null;
   const select = async (mode: ActionConfirmationMode) => {
     if (mode === actions.confirmation_mode || disabled) return;
     setPendingMode(mode);

@@ -121,7 +121,7 @@ class _OpenHandsAuth(Protocol):
         self,
         provider_value: object,
         *,
-        persist: bool,  # noqa: F841, RUF100
+        persist: bool,
     ) -> Coroutine[Any, Any, object | None]:
         """Poll device login."""
 

@@ -33,11 +33,8 @@ class GatewayEventStream:
         self._changed = initial_changed
         self._on_close = on_close
         self._lock = Lock()
-        self._ready = asyncio.Event()
-        try:
-            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
-        except RuntimeError:
-            self._loop = None
+        self._ready: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def closed(self) -> bool:
@@ -70,12 +67,21 @@ class GatewayEventStream:
 
     async def receive_next(self) -> tuple[SessionEvent, ...]:
         """Wait for and drain the next available event batch."""
+        loop = asyncio.get_running_loop()
         while True:
             with self._lock:
+                if self._loop is None:
+                    self._loop = loop
+                    self._ready = asyncio.Event()
+                elif self._loop is not loop:
+                    raise RuntimeError("gateway event stream cannot move between event loops")
                 if self._pending or self._changed or self._closed:
                     return self._receive_locked()
-                self._ready.clear()
-            await self._ready.wait()
+                ready = self._ready
+                if ready is None:  # pragma: no cover - initialized with the loop above
+                    raise RuntimeError("gateway event stream signal is unavailable")
+                ready.clear()
+            await ready.wait()
 
     def close(self) -> None:
         """Close the stream."""
@@ -92,15 +98,17 @@ class GatewayEventStream:
         events = tuple(self._pending)
         self._pending.clear()
         self._changed = False
-        self._ready.clear()
         return events
 
     def _signal(self) -> None:
-        loop = self._loop
-        if loop is not None and loop.is_running():
-            loop.call_soon_threadsafe(self._ready.set)
-        else:
-            self._ready.set()
+        with self._lock:
+            loop = self._loop
+            ready = self._ready
+        if loop is not None and ready is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(ready.set)
+            except RuntimeError:
+                return
 
 
 class EventStreamHub:

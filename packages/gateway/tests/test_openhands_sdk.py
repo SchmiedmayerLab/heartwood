@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import Literal, cast
 
@@ -40,7 +40,9 @@ from openhands.sdk.event import (
 from openhands.sdk.event import (
     Event as OpenHandsEvent,
 )
-from openhands.sdk.llm import Message, MessageToolCall, Metrics, TextContent
+from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, Metrics, TextContent
+from openhands.sdk.llm.llm import LLMCallContext
+from openhands.sdk.llm.streaming import TokenCallbackType
 from openhands.sdk.security import (
     AlwaysConfirm,
     ConfirmRisky,
@@ -59,8 +61,9 @@ from openhands.sdk.subagent import (
     register_agent_if_absent,
 )
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.tool import ToolDefinition
 from openhands.sdk.tool.builtins.finish import FinishAction, FinishObservation, FinishTool
-from openhands.sdk.tool.schema import Observation
+from openhands.sdk.tool.schema import Action, Observation
 from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
@@ -83,16 +86,25 @@ from heartwood.core_adapter import (
     BackendTaskStatus,
     BackendToolCallEvent,
     BackendToolExecutionEvent,
+    BackendUsageEvent,
     PendingActionGroup,
+    SessionOwnershipError,
     SessionService,
 )
-from heartwood.gateway import ModelProfile, OpenHandsSdkBackend
+from heartwood.gateway import (
+    ModelProfile,
+    OpenHandsSdkBackend,
+    ProjectContext,
+    SessionGateway,
+    SessionProjection,
+)
 from heartwood.gateway._openhands_sdk import (
     ConversationFactory,
     OpenHandsSdkError,
     _agent_context,
     _agent_settings,
     _analyzed_risk,
+    _backend_lifecycle,
     _configure_upstream_defaults,
     _context_condenser_settings,
     _conversation_runtime_options,
@@ -101,6 +113,7 @@ from heartwood.gateway._openhands_sdk import (
     _llm_resilience_options,
     _observation_exit_code,
     _security_configuration,
+    _task_status,
     _terminal_tool_params,
     _tool_arguments,
     _tool_call,
@@ -108,7 +121,7 @@ from heartwood.gateway._openhands_sdk import (
     _usage,
     _usage_source_event_id,
 )
-from heartwood.session import CommandKind, EventKind, SessionCommand
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
 @pytest.fixture(autouse=True)
@@ -806,6 +819,30 @@ def test_openhands_adapter_uses_typed_public_state_only() -> None:
     assert "self._captured" not in source
 
 
+def test_openhands_status_mappings_are_exhaustive_and_fail_closed() -> None:
+    assert {status: _backend_lifecycle(status) for status in ConversationExecutionStatus} == {
+        ConversationExecutionStatus.IDLE: BackendLifecycle.IDLE,
+        ConversationExecutionStatus.RUNNING: BackendLifecycle.RUNNING,
+        ConversationExecutionStatus.PAUSED: BackendLifecycle.PAUSED,
+        ConversationExecutionStatus.WAITING_FOR_CONFIRMATION: (
+            BackendLifecycle.WAITING_FOR_CONFIRMATION
+        ),
+        ConversationExecutionStatus.FINISHED: BackendLifecycle.FINISHED,
+        ConversationExecutionStatus.ERROR: BackendLifecycle.ERROR,
+        ConversationExecutionStatus.STUCK: BackendLifecycle.ERROR,
+        ConversationExecutionStatus.DELETING: BackendLifecycle.ERROR,
+    }
+    assert _backend_lifecycle(cast(ConversationExecutionStatus, object())) == (
+        BackendLifecycle.ERROR
+    )
+    assert {status: _task_status(status) for status in ("todo", "in_progress", "done")} == {
+        "todo": BackendTaskStatus.TODO,
+        "in_progress": BackendTaskStatus.IN_PROGRESS,
+        "done": BackendTaskStatus.DONE,
+    }
+    assert _task_status("unknown-upstream-status") == BackendTaskStatus.TODO
+
+
 def test_public_conversation_state_projects_a_content_safe_error(
     tmp_path: Path,
 ) -> None:
@@ -891,6 +928,65 @@ def test_usage_is_reported_as_total_agent_and_condenser_metrics() -> None:
         completion_tokens=usages["agent"].completion_tokens + 1,
     )
     assert _usage_source_event_id("anchor", changed) != first_source
+
+
+def test_usage_is_transient_during_execution_and_durable_at_the_run_boundary(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    metrics = Metrics(model_name="agent-model")
+    metrics.add_token_usage(100, 20, 0, 0, 32_768, "response-1")
+    conversation.state.stats = ConversationStats(usage_to_metrics={"agent": metrics})
+    conversation.state.execution_status = ConversationExecutionStatus.RUNNING
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    with backend._run_lock:
+        backend._execution_active = True
+
+    first_active = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    metrics.add_token_usage(40, 10, 0, 0, 32_768, "response-2")
+    second_active = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert not any(isinstance(event, BackendUsageEvent) for event in first_active)
+    assert not any(isinstance(event, BackendUsageEvent) for event in second_active)
+
+    with backend._run_lock:
+        backend._execution_active = False
+    conversation.state.execution_status = ConversationExecutionStatus.FINISHED
+    final = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    final_usage = {
+        event.usage.usage_id: event.usage for event in final if isinstance(event, BackendUsageEvent)
+    }
+
+    assert set(final_usage) == {"total", "agent"}
+    assert final_usage["total"].call_count == 2
+    assert final_usage["total"].prompt_tokens == 140
+    assert final_usage["total"].completion_tokens == 30
+    final_source_event_ids = frozenset(
+        event.source_event_id for event in final if event.source_event_id is not None
+    )
+    assert (
+        backend.reconcile(
+            session_id="session-1",
+            known_source_event_ids=final_source_event_ids,
+        )
+        == ()
+    )
+    backend.close()
 
 
 def test_real_sdk_task_tracker_updates_the_shared_task_plan(tmp_path: Path) -> None:
@@ -995,6 +1091,56 @@ def test_restart_reconciliation_does_not_repeat_the_model_call(tmp_path: Path) -
     restored.close()
 
 
+def test_corrupted_openhands_event_store_fails_closed_without_model_work(
+    tmp_path: Path,
+) -> None:
+    conversation_id = uuid.uuid4()
+    persistence_dir = tmp_path / "openhands"
+    first_llm = TestLLM.from_messages([_assistant_message("Persisted result.")])
+    first = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            first_llm,
+            tools=[],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    first.submit_turn(session_id="session-1", prompt="Persist one result")
+    _wait_for_lifecycle(first, BackendLifecycle.FINISHED)
+    first.close()
+
+    event_file = sorted(persistence_dir.rglob("event-*.json"))[0]
+    event_file.write_text("{", encoding="utf-8")
+    restored_llm = TestLLM.from_messages([])
+    restored = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            restored_llm,
+            tools=[],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+
+    reconciled = restored.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    submitted = restored.submit_turn(session_id="session-1", prompt="Do not continue")
+
+    assert event_file.read_text(encoding="utf-8") == "{"
+    assert restored_llm.call_count == 0
+    assert any(
+        isinstance(event, BackendErrorEvent) and event.error_code == BackendErrorCode.WORKER_STOPPED
+        for event in (*reconciled, *submitted)
+    )
+    assert str(event_file) not in repr((*reconciled, *submitted))
+    restored.close()
+
+
 def test_pending_action_restart_recovers_without_duplicate_model_or_tool_work(
     tmp_path: Path,
 ) -> None:
@@ -1020,7 +1166,9 @@ def test_pending_action_restart_recovers_without_duplicate_model_or_tool_work(
     assert not (tmp_path / "workspace" / "restored.txt").exists()
     first.close()
 
-    restored_llm = TestLLM.from_messages([_assistant_message("The file was created once.")])
+    restored_llm = _StrictToolHistoryTestLLM.from_messages(
+        [_assistant_message("The file was created once.")]
+    )
     restored = _backend(
         tmp_path,
         _conversation_factory(
@@ -1046,6 +1194,196 @@ def test_pending_action_restart_recovers_without_duplicate_model_or_tool_work(
     assert restored_llm.call_count == 1
     assert restored.pending_action_group(session_id="session-1") is None
     restored.close()
+
+
+def test_grouped_pending_actions_restart_with_matched_tool_history(
+    tmp_path: Path,
+) -> None:
+    conversation_id = uuid.uuid4()
+    persistence_dir = tmp_path / "openhands"
+    first_llm = TestLLM.from_messages(
+        [
+            _tool_message(
+                ("call-restart-first", "printf first > first.txt"),
+                ("call-restart-second", "printf second > second.txt"),
+            )
+        ]
+    )
+    first = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            first_llm,
+            tools=[Tool(name=TerminalTool.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    first.submit_turn(session_id="session-1", prompt="Create two synthetic files")
+    original_group = _wait_for_pending_group(first)
+    first.close()
+
+    restored_llm = _StrictToolHistoryTestLLM.from_messages(
+        [_assistant_message("Both files were created once.")]
+    )
+    restored = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            restored_llm,
+            tools=[Tool(name=TerminalTool.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    restored_group = restored.pending_action_group(session_id="session-1")
+
+    assert restored_group == original_group
+    restored.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=original_group.group_id,
+        approved=True,
+    )
+    _wait_for_lifecycle(restored, BackendLifecycle.FINISHED)
+
+    assert (tmp_path / "workspace" / "first.txt").read_text(encoding="utf-8") == "first"
+    assert (tmp_path / "workspace" / "second.txt").read_text(encoding="utf-8") == "second"
+    assert restored_llm.call_count == 1
+    restored.close()
+
+
+def test_rejected_pending_action_restart_rebuilds_history_before_next_turn(
+    tmp_path: Path,
+) -> None:
+    conversation_id = uuid.uuid4()
+    persistence_dir = tmp_path / "openhands"
+    first_llm = TestLLM.from_messages(
+        [_tool_message(("call-restart-reject", "printf denied > denied.txt"))]
+    )
+    first = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            first_llm,
+            tools=[Tool(name=TerminalTool.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    first.submit_turn(session_id="session-1", prompt="Create a file")
+    original_group = _wait_for_pending_group(first)
+    first.close()
+
+    restored_llm = _StrictToolHistoryTestLLM.from_messages(
+        [_assistant_message("The rejected action was not executed.")]
+    )
+    restored = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            restored_llm,
+            tools=[Tool(name=TerminalTool.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    rejected = restored.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=original_group.group_id,
+        approved=False,
+    )
+
+    assert any(
+        isinstance(event, BackendConfirmationResolutionEvent) and not event.approved
+        for event in rejected
+    )
+    restored.submit_turn(session_id="session-1", prompt="Continue without creating the file")
+    _wait_for_lifecycle(restored, BackendLifecycle.FINISHED)
+
+    assert not (tmp_path / "workspace" / "denied.txt").exists()
+    assert restored_llm.call_count == 1
+    restored.close()
+
+
+def test_gateway_interface_handoff_preserves_real_sdk_session_exactly_once(
+    tmp_path: Path,
+) -> None:
+    conversation_id = uuid.uuid4()
+    first_llm = TestLLM.from_messages(
+        [_tool_message(("call-gateway-handoff", "printf handoff > handoff.txt"))]
+    )
+    browser_gateway = _openhands_gateway(
+        tmp_path,
+        first_llm,
+        conversation_id=conversation_id,
+    )
+    chat = SessionCommand(
+        command_id="browser-chat",
+        session_id="session-1",
+        kind=CommandKind.CHAT,
+        actor_id="test-user",
+        created_at="2026-07-25T00:00:00Z",
+        payload={"prompt": "Create one synthetic handoff file"},
+    )
+    browser_gateway.handle(chat)
+    browser_projection = _wait_for_gateway_pending_approval(browser_gateway)
+    pending = browser_projection.pending_approval
+    assert pending is not None
+
+    restored_llm = _StrictToolHistoryTestLLM.from_messages(
+        [_assistant_message("The handoff file was created once.")]
+    )
+    cli_gateway = _openhands_gateway(
+        tmp_path,
+        restored_llm,
+        conversation_id=conversation_id,
+    )
+    approve = SessionCommand(
+        command_id="cli-approve",
+        session_id="session-1",
+        kind=CommandKind.APPROVE,
+        actor_id="test-user",
+        created_at="2026-07-25T00:00:01Z",
+        payload={"target_type": "action-set", "target_id": pending.group_id},
+    )
+
+    with pytest.raises(SessionOwnershipError, match="active in another Heartwood process"):
+        cli_gateway.handle(approve)
+
+    browser_gateway.stop()
+    first_approval = cli_gateway.handle(approve)
+    _wait_for_gateway_lifecycle(cli_gateway, "finished")
+    retried_approval = cli_gateway.handle(approve)
+
+    assert retried_approval.events == first_approval.events
+    assert first_approval.replayed is False
+    assert retried_approval.replayed is True
+    assert first_llm.call_count == 1
+    assert restored_llm.call_count == 1
+    assert (tmp_path / "handoff.txt").read_text(encoding="utf-8") == "handoff"
+
+    audit_command = SessionCommand(
+        command_id="cli-audit",
+        session_id="session-1",
+        kind=CommandKind.AUDIT_EXPORT,
+        actor_id="test-user",
+        created_at="2026-07-25T00:00:02Z",
+    )
+    cli_gateway.handle(audit_command)
+    replayed = cli_gateway.replay_events(session_id="session-1")
+    repeated_replay = cli_gateway.replay_events(session_id="session-1")
+    audit = cli_gateway.audit_export("session-1")
+    repeated_audit = cli_gateway.audit_export("session-1")
+    cli_projection = cli_gateway.session_projection(session_id="session-1")
+    browser_persisted_projection = browser_gateway.persisted_session_projection(
+        session_id="session-1"
+    )
+
+    assert replayed == repeated_replay
+    assert [event.sequence for event in replayed] == list(range(len(replayed)))
+    assert audit["content"] == repeated_audit["content"]
+    assert _durable_projection(cli_projection) == _durable_projection(browser_persisted_projection)
+    cli_gateway.stop()
 
 
 def test_completed_tool_turn_restarts_without_repeating_model_or_tool_work(
@@ -1180,12 +1518,23 @@ def test_active_run_can_be_steered_paused_and_resumed(tmp_path: Path) -> None:
         ),
     )
 
-    started_at = time.monotonic()
-    backend.submit_turn(session_id="session-1", prompt="Start")
-    assert time.monotonic() - started_at < 0.25
+    submitted = Event()
+
+    def submit() -> None:
+        backend.submit_turn(session_id="session-1", prompt="Start")
+        submitted.set()
+
+    submitter = Thread(target=submit, daemon=True)
+    submitter.start()
+    assert submitted.wait(timeout=2)
+    submitter.join(timeout=2)
+    assert not submitter.is_alive()
     assert conversation.started.wait(timeout=2)
     run_thread = backend._run_thread
-    backend._start_run(session_id="session-1")
+    backend._start_run(
+        session_id="session-1",
+        conversation=cast(BaseConversation, conversation),
+    )
     assert backend._run_thread is run_thread
 
     active_state = _BranchState(conversation.id)
@@ -1229,9 +1578,7 @@ def test_resume_waits_for_an_interrupt_still_transitioning_to_paused(
     backend.submit_turn(session_id="session-1", prompt="Start")
     assert conversation.started.wait(timeout=2)
 
-    started_at = time.monotonic()
     paused = backend.pause(session_id="session-1")
-    assert time.monotonic() - started_at >= 0.04
     assert conversation.stopped.is_set()
     assert any(
         isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
@@ -1274,6 +1621,170 @@ def test_pause_reports_failure_without_acknowledging_an_unstopped_worker(
     backend.close()
 
 
+def test_user_pause_does_not_resume_an_internal_pending_view_repair(
+    tmp_path: Path,
+) -> None:
+    conversation: _ViewRepairPauseConversation | None = None
+
+    def factory(
+        event_callback: Callable[[OpenHandsEvent], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> _ViewRepairPauseConversation:
+        nonlocal conversation
+        conversation = _ViewRepairPauseConversation(event_callback)
+        return conversation
+
+    backend = _backend(tmp_path, cast(ConversationFactory, factory))
+    group = backend.pending_action_group(session_id="session-1")
+    assert group is not None
+    backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    assert conversation is not None
+    assert conversation.view_repair_boundary.wait(timeout=2)
+
+    paused = backend.pause(session_id="session-1")
+
+    assert conversation.stopped.wait(timeout=2)
+    assert conversation.run_count == 1
+    assert not conversation.second_run_started.is_set()
+    assert any(
+        isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+        for event in paused
+    )
+    backend.close()
+
+
+def test_pause_wins_before_an_automatic_run_is_admitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation: _AutomaticRepairConversation | None = None
+
+    def factory(
+        event_callback: Callable[[OpenHandsEvent], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> _AutomaticRepairConversation:
+        nonlocal conversation
+        conversation = _AutomaticRepairConversation(event_callback)
+        return conversation
+
+    backend = _backend(tmp_path, cast(ConversationFactory, factory))
+    group = backend.pending_action_group(session_id="session-1")
+    assert group is not None
+    original_complete = backend._complete_pending_action_view_repair
+    before_admission = Event()
+    release_admission = Event()
+
+    def stop_before_admission() -> bool:
+        should_continue = original_complete()
+        assert should_continue
+        before_admission.set()
+        assert release_admission.wait(timeout=2)
+        return should_continue
+
+    monkeypatch.setattr(
+        backend,
+        "_complete_pending_action_view_repair",
+        stop_before_admission,
+    )
+    backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    assert before_admission.wait(timeout=2)
+    paused: list[tuple[BackendEvent, ...]] = []
+    pause_thread = Thread(
+        target=lambda: paused.append(backend.pause(session_id="session-1")),
+        daemon=True,
+    )
+    pause_thread.start()
+    assert conversation is not None
+    assert conversation.interrupt_called.wait(timeout=2)
+    release_admission.set()
+    pause_thread.join(timeout=2)
+
+    assert not pause_thread.is_alive()
+    assert conversation.run_count == 1
+    assert not conversation.second_run_started.is_set()
+    assert any(
+        isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+        for event in paused[0]
+    )
+    backend.close()
+
+
+@pytest.mark.parametrize("operation", ["pause", "close"])
+def test_pause_or_close_cancels_an_admitted_run_before_openhands_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    conversation: _AutomaticRepairConversation | None = None
+
+    def factory(
+        event_callback: Callable[[OpenHandsEvent], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> _AutomaticRepairConversation:
+        nonlocal conversation
+        conversation = _AutomaticRepairConversation(event_callback)
+        return conversation
+
+    backend = _backend(tmp_path, cast(ConversationFactory, factory))
+    group = backend.pending_action_group(session_id="session-1")
+    assert group is not None
+    original_admit = backend._admit_conversation_run
+    admitted = Event()
+    release_admission = Event()
+
+    def block_after_admission(
+        current: BaseConversation,
+    ) -> asyncio.Task[object] | None:
+        run = original_admit(current)
+        assert conversation is not None
+        if conversation.run_count == 1:
+            admitted.set()
+            assert release_admission.wait(timeout=2)
+        return run
+
+    monkeypatch.setattr(backend, "_admit_conversation_run", block_after_admission)
+    backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    assert admitted.wait(timeout=2)
+    result: list[tuple[BackendEvent, ...]] = []
+
+    def stop_backend() -> None:
+        if operation == "pause":
+            result.append(backend.pause(session_id="session-1"))
+        else:
+            backend.close()
+
+    stop_thread = Thread(target=stop_backend, daemon=True)
+    stop_thread.start()
+    assert conversation is not None
+    assert conversation.interrupt_called.wait(timeout=2)
+    release_admission.set()
+    stop_thread.join(timeout=2)
+
+    assert not stop_thread.is_alive()
+    assert conversation.run_count == 1
+    assert not conversation.second_run_started.is_set()
+    if operation == "pause":
+        assert any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+            for event in result[0]
+        )
+        backend.close()
+    else:
+        assert conversation.closed
+
+
 def test_confirmation_continuation_waits_for_the_previous_run_boundary(
     tmp_path: Path,
 ) -> None:
@@ -1305,6 +1816,7 @@ def test_confirmation_continuation_waits_for_the_previous_run_boundary(
 def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path) -> None:
     conversation = _ProgressConversation()
     emitted: list[BackendEvent] = []
+    progress_published = Event()
     backend = _backend(
         tmp_path,
         cast(
@@ -1312,23 +1824,53 @@ def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path)
             lambda _event_callback, _token_callback: conversation,
         ),
     )
-    backend.bind_runtime(
-        event_sink=lambda events: emitted.extend(events),
-        token_sink=lambda _delta: None,
-    )
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        emitted.extend(events)
+        if any(event.kind == BackendEventKind.AGENT_MESSAGE for event in events):
+            progress_published.set()
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
     backend.submit_turn(session_id="session-1", prompt="Start")
     assert conversation.started.wait(timeout=2)
-
-    deadline = time.monotonic() + 2
-    while not any(event.kind == BackendEventKind.AGENT_MESSAGE for event in emitted):
-        if time.monotonic() >= deadline:
-            pytest.fail("persisted OpenHands progress was not published")
-        time.sleep(0.02)
+    assert progress_published.wait(timeout=2)
 
     assert not conversation.finished.is_set()
     conversation.release.set()
     assert conversation.finished.wait(timeout=2)
     backend.close()
+
+
+def test_synchronous_progress_sink_does_not_block_the_openhands_event_loop(
+    tmp_path: Path,
+) -> None:
+    conversation = _ProgressConversation()
+    sink_started = Event()
+    release_sink = Event()
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        if any(event.kind == BackendEventKind.AGENT_MESSAGE for event in events):
+            sink_started.set()
+            if not release_sink.wait(timeout=2):
+                raise TimeoutError("test progress sink was not released")
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        backend.submit_turn(session_id="session-1", prompt="Start")
+        assert conversation.started.wait(timeout=2)
+        assert sink_started.wait(timeout=2)
+        conversation.release.set()
+        assert conversation.finished.wait(timeout=2)
+    finally:
+        release_sink.set()
+        backend.close()
 
 
 def test_stale_running_model_turn_fails_closed_without_repeating_provider_work(
@@ -1466,6 +2008,102 @@ def test_close_does_not_release_a_worker_that_failed_to_stop(
     conversation.release.set()
     assert conversation.finished.wait(timeout=2)
     backend.close()
+
+
+def test_close_of_an_active_run_does_not_emit_a_false_worker_error(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    emitted: list[BackendEvent] = []
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    backend.bind_runtime(
+        event_sink=lambda events: emitted.extend(events),
+        token_sink=lambda _delta: None,
+    )
+    backend.submit_turn(session_id="session-1", prompt="Stop cleanly")
+    assert conversation.started.wait(timeout=2)
+
+    backend.close()
+
+    assert conversation.closed
+    assert not any(
+        isinstance(event, BackendErrorEvent) and event.error_code == BackendErrorCode.WORKER_STOPPED
+        for event in emitted
+    )
+
+
+def test_closed_backend_does_not_resurrect_its_conversation(tmp_path: Path) -> None:
+    conversation = _ControlledConversation()
+    factory_calls = 0
+
+    def factory(
+        _event_callback: Callable[[OpenHandsEvent], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> BaseConversation:
+        nonlocal factory_calls
+        factory_calls += 1
+        return cast(BaseConversation, conversation)
+
+    backend = _backend(tmp_path, factory)
+    backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+    backend.close()
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert factory_calls == 1
+    assert conversation.closed
+    assert len(events) == 1
+    assert isinstance(events[0], BackendErrorEvent)
+    assert events[0].error_code == BackendErrorCode.WORKER_STOPPED
+
+
+def test_backend_rejects_conversation_access_while_close_is_in_progress(
+    tmp_path: Path,
+) -> None:
+    conversation = _BlockingShutdownConversation()
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    backend.submit_turn(session_id="session-1", prompt="Wait")
+    assert conversation.started.wait(timeout=2)
+    close_errors: list[Exception] = []
+
+    def close_backend() -> None:
+        try:
+            backend.close()
+        except Exception as error:  # pragma: no cover - asserted below
+            close_errors.append(error)
+
+    close_thread = Thread(target=close_backend)
+    close_thread.start()
+    assert conversation.shutdown_started.wait(timeout=2)
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], BackendErrorEvent)
+    assert events[0].error_code == BackendErrorCode.WORKER_STOPPED
+    conversation.allow_shutdown.set()
+    close_thread.join(timeout=2)
+    assert not close_thread.is_alive()
+    assert not close_errors
+    assert conversation.closed
 
 
 def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
@@ -1806,6 +2444,7 @@ def _conversation_factory(
     tools: list[Tool],
     conversation_id: uuid.UUID | None = None,
     persistence_dir: Path | None = None,
+    workspace: Path | None = None,
 ) -> ConversationFactory:
     def factory(
         callback: Callable[[OpenHandsEvent], None],
@@ -1819,7 +2458,7 @@ def _conversation_factory(
         )
         conversation = Conversation(
             agent=settings.create_agent(),
-            workspace=tmp_path / "workspace",
+            workspace=workspace or tmp_path / "workspace",
             persistence_dir=persistence_dir or tmp_path / "openhands",
             conversation_id=conversation_id or uuid.uuid4(),
             callbacks=[callback],
@@ -1838,6 +2477,77 @@ def _finished_conversation_factory(
     llm: TestLLM,
 ) -> ConversationFactory:
     return _conversation_factory(tmp_path, llm, tools=[])
+
+
+def _openhands_gateway(
+    project_root: Path,
+    llm: TestLLM,
+    *,
+    conversation_id: uuid.UUID,
+) -> SessionGateway:
+    def service_factory(sessions_root: Path, session_id: str) -> SessionService:
+        backend = OpenHandsSdkBackend(
+            profile=_local_profile(),
+            workspace=project_root,
+            skills_dir=project_root / "skills",
+            persistence_dir=sessions_root / session_id / "openhands",
+            conversation_key=f"{project_root}#{session_id}",
+            env={},
+            conversation_factory=_conversation_factory(
+                project_root,
+                llm,
+                tools=[Tool(name=TerminalTool.name)],
+                conversation_id=conversation_id,
+                persistence_dir=sessions_root / session_id / "openhands",
+                workspace=project_root,
+            ),
+        )
+        return SessionService.local_default(
+            sessions_root,
+            session_id=session_id,
+            backend=backend,
+            env={},
+            clock=lambda: "2026-07-25T00:00:00Z",
+        )
+
+    return SessionGateway(
+        project=ProjectContext(project_root),
+        service_factory=service_factory,
+        env={},
+        backend_id="openhands-sdk",
+    )
+
+
+def _wait_for_gateway_pending_approval(
+    gateway: SessionGateway,
+) -> SessionProjection:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        projection = gateway.session_projection(session_id="session-1")
+        if projection.pending_approval is not None:
+            return projection
+        time.sleep(0.02)
+    pytest.fail("gateway did not expose the OpenHands confirmation group")
+
+
+def _wait_for_gateway_lifecycle(
+    gateway: SessionGateway,
+    lifecycle: str,
+) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        projection = gateway.session_projection(session_id="session-1")
+        if projection.lifecycle.status == lifecycle:
+            return
+        time.sleep(0.02)
+    pytest.fail(f"gateway did not reach {lifecycle}")
+
+
+def _durable_projection(projection: SessionProjection) -> dict[str, JsonValue]:
+    payload = projection.model_dump(mode="json", by_alias=True)
+    payload.pop("streamEpoch")
+    payload.pop("streamRevision")
+    return cast(dict[str, JsonValue], payload)
 
 
 def _wait_for_lifecycle(
@@ -1887,6 +2597,34 @@ def _tool_message(*calls: tuple[str, str]) -> Message:
             for tool_call_id, command in calls
         ],
     )
+
+
+class _StrictToolHistoryTestLLM(TestLLM):
+    """Reject tool results that do not retain their preceding tool call."""
+
+    def completion(
+        self,
+        messages: list[Message],
+        tools: Sequence[ToolDefinition[Action, Observation]] | None = None,
+        add_security_risk_prediction: bool = False,
+        on_token: TokenCallbackType | None = None,
+        call_context: LLMCallContext | None = None,
+        **kwargs: object,
+    ) -> LLMResponse:
+        seen_tool_calls: set[str] = set()
+        for message in messages:
+            if message.tool_calls:
+                seen_tool_calls.update(call.id for call in message.tool_calls)
+            if message.role == "tool":
+                assert message.tool_call_id in seen_tool_calls
+        return super().completion(
+            messages=messages,
+            tools=tools,
+            add_security_risk_prediction=add_security_risk_prediction,
+            on_token=on_token,
+            call_context=call_context,
+            **kwargs,
+        )
 
 
 def _terminal_action_event(
@@ -2030,7 +2768,8 @@ class _ControlledState:
     def __init__(self, conversation_id: uuid.UUID) -> None:
         self.id = conversation_id
         self.execution_status = ConversationExecutionStatus.IDLE
-        self.stats = SimpleNamespace(
+        self.view = SimpleNamespace(events=())
+        self.stats: ConversationStats | SimpleNamespace = SimpleNamespace(
             usage_to_metrics={},
             get_combined_metrics=lambda: SimpleNamespace(
                 get_snapshot=lambda: SimpleNamespace(accumulated_token_usage=None)
@@ -2039,6 +2778,9 @@ class _ControlledState:
 
     def active_branch(self) -> Sequence[OpenHandsEvent]:
         return ()
+
+    def rebuild_view(self) -> None:
+        self.view.events = tuple(self.active_branch())
 
 
 class _BranchState(_ControlledState):
@@ -2055,6 +2797,7 @@ class _PendingState(_ControlledState):
         super().__init__(conversation_id)
         self.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
         self.action = action
+        self.rebuild_view()
 
     def active_branch(self) -> Sequence[OpenHandsEvent]:
         return (self.action,)
@@ -2124,12 +2867,111 @@ class _StubbornConversation(_ControlledConversation):
         self.state.execution_status = ConversationExecutionStatus.RUNNING
         self.started.set()
         while not self.release.is_set():
-            await asyncio.sleep(0.01)
+            try:
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                continue
         self.state.execution_status = ConversationExecutionStatus.FINISHED
         self.finished.set()
 
     def interrupt(self) -> None:
         return None
+
+
+class _ViewRepairPauseConversation(_ControlledConversation):
+    def __init__(self, event_callback: Callable[[OpenHandsEvent], None]) -> None:
+        super().__init__()
+        self.event_callback = event_callback
+        self.action = _terminal_action_event("repair-action", "repair-call", "true")
+        state = _BranchState(self.id)
+        state.events = (self.action,)
+        state.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+        self.state = state
+        self.view_repair_boundary = Event()
+        self.second_run_started = Event()
+        self.run_count = 0
+
+    async def arun(self) -> None:
+        self.run_count += 1
+        if self.run_count > 1:
+            self.second_run_started.set()
+            return
+        self.state.execution_status = ConversationExecutionStatus.RUNNING
+        observation = ObservationEvent(
+            id="repair-observation",
+            tool_name="terminal",
+            tool_call_id=self.action.tool_call_id,
+            action_id=self.action.id,
+            observation=TerminalObservation(command="true", exit_code=0),
+        )
+        assert isinstance(self.state, _BranchState)
+        self.state.events = (self.action, observation)
+        self.event_callback(observation)
+        self.view_repair_boundary.set()
+        while not self.release.is_set():
+            await asyncio.sleep(0.01)
+        self.stopped.set()
+
+    def interrupt(self) -> None:
+        self.interrupted = True
+        self.state.execution_status = ConversationExecutionStatus.PAUSED
+        self.release.set()
+
+
+class _AutomaticRepairConversation(_ControlledConversation):
+    def __init__(self, event_callback: Callable[[OpenHandsEvent], None]) -> None:
+        super().__init__()
+        self.event_callback = event_callback
+        self.action = _terminal_action_event("automatic-action", "automatic-call", "true")
+        state = _BranchState(self.id)
+        state.events = (self.action,)
+        state.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+        self.state = state
+        self.interrupt_called = Event()
+        self.second_run_started = Event()
+        self.run_count = 0
+
+    async def arun(self) -> None:
+        self.run_count += 1
+        if self.run_count > 1:
+            self.second_run_started.set()
+            return
+        self.state.execution_status = ConversationExecutionStatus.RUNNING
+        observation = ObservationEvent(
+            id="automatic-observation",
+            tool_name="terminal",
+            tool_call_id=self.action.tool_call_id,
+            action_id=self.action.id,
+            observation=TerminalObservation(command="true", exit_code=0),
+        )
+        assert isinstance(self.state, _BranchState)
+        self.state.events = (self.action, observation)
+        self.event_callback(observation)
+
+    def interrupt(self) -> None:
+        self.state.execution_status = ConversationExecutionStatus.PAUSED
+        self.interrupt_called.set()
+
+
+class _BlockingShutdownConversation(_ControlledConversation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.shutdown_started = Event()
+        self.allow_shutdown = Event()
+
+    async def arun(self) -> None:
+        self.state.execution_status = ConversationExecutionStatus.RUNNING
+        self.started.set()
+        try:
+            while not self.release.is_set():
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            pass
+        self.shutdown_started.set()
+        while not self.allow_shutdown.is_set():
+            await asyncio.sleep(0.01)
+        self.state.execution_status = ConversationExecutionStatus.PAUSED
+        self.stopped.set()
 
 
 class _MetadataObservation(Observation):

@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from heartwood.gateway import SessionLifecycle, project_session
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
@@ -125,6 +127,7 @@ def test_projection_represents_one_atomic_decision_for_a_grouped_action_set() ->
     projection = project_session(events, session_id="session-1")
 
     assert projection.pending_approval is None
+    assert projection.lifecycle.status == SessionLifecycle.IDLE
     approval_messages = [item for item in projection.conversation if item.label == "Approval"]
     assert len(approval_messages) == 1
     assert approval_messages[0].content == "Action set approved (2 actions)"
@@ -147,9 +150,135 @@ def test_projection_displays_stable_error_code_without_technical_details() -> No
     )
 
     assert projection.lifecycle.status == SessionLifecycle.ERROR
-    assert projection.available_commands == ()
+    assert projection.lifecycle.can_steer is True
+    assert projection.available_commands == ("chat",)
     assert projection.activity[0].detail == "HW-AGENT-003"
     assert projection.conversation[0].detail == ("HW-AGENT-003: The agent conversation stopped")
+
+
+@pytest.mark.parametrize("error_code", ["HW-AGENT-006", "HW-AGENT-007"])
+def test_unknown_execution_outcome_disables_further_session_commands(
+    error_code: str,
+) -> None:
+    projection = project_session(
+        (
+            _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "error"}),
+            _event(
+                1,
+                EventKind.ERROR_RECORDED,
+                {
+                    "backend_id": "openhands-sdk",
+                    "code": error_code,
+                    "reason": "The previous execution outcome is unknown",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert projection.lifecycle.can_steer is False
+    assert projection.available_commands == ()
+
+
+def test_later_stable_lifecycle_recovers_from_an_outcome_error() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.ERROR_RECORDED,
+                {
+                    "backend_id": "openhands-sdk",
+                    "code": "HW-AGENT-007",
+                    "reason": "The previous execution outcome is unknown",
+                },
+            ),
+            _event(1, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "finished"}),
+        ),
+        session_id="session-1",
+    )
+
+    assert projection.lifecycle.status == SessionLifecycle.FINISHED
+    assert projection.lifecycle.can_steer is True
+    assert projection.available_commands == ("chat",)
+
+
+def test_later_command_error_does_not_reopen_a_fail_closed_session() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.ERROR_RECORDED,
+                {
+                    "backend_id": "openhands-sdk",
+                    "code": "HW-AGENT-006",
+                    "reason": "The previous action outcome is unknown",
+                },
+            ),
+            _event(
+                1,
+                EventKind.ERROR_RECORDED,
+                {"command": "chat", "reason": "chat is unavailable while the agent is error"},
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert projection.lifecycle.can_steer is False
+    assert projection.available_commands == ()
+
+
+def test_stale_confirmation_resolution_preserves_current_lifecycle() -> None:
+    projection = project_session(
+        (
+            _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+            _event(
+                1,
+                EventKind.CONFIRMATION_RESOLVED,
+                {
+                    "group_id": "stale-group",
+                    "tool_call_id": "stale-call",
+                    "decision": "denied",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    assert projection.lifecycle.status == SessionLifecycle.RUNNING
+    assert projection.available_commands == ("chat", "pause")
+
+
+def test_duplicate_confirmation_resolution_does_not_override_new_lifecycle() -> None:
+    projection = project_session(
+        (
+            _confirmation_event(0, "group-1", "call-1", "terminal"),
+            _event(
+                1,
+                EventKind.CONFIRMATION_RESOLVED,
+                {
+                    "group_id": "group-1",
+                    "tool_call_id": "call-1",
+                    "decision": "approved",
+                },
+            ),
+            _event(2, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+            _event(
+                3,
+                EventKind.CONFIRMATION_RESOLVED,
+                {
+                    "group_id": "group-1",
+                    "tool_call_id": "call-1",
+                    "decision": "approved",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    assert projection.lifecycle.status == SessionLifecycle.RUNNING
+    assert projection.available_commands == ("chat", "pause")
 
 
 def test_projection_owns_nonfatal_command_outcomes() -> None:

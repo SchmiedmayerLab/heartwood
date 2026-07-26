@@ -95,6 +95,7 @@ class SessionService:
         self._command_lock = RLock()
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
+        self._known_source_event_ids: set[str] | None = None
         self.backend.bind_runtime(
             event_sink=self._accept_backend_events,
             token_sink=self._token_sink,
@@ -175,7 +176,7 @@ class SessionService:
             raise ValueError(msg)
         with self._command_lock:
             self.store.acquire_writer()
-            self.store.recover_pending_commit()
+            self._recover_pending_commit_locked()
             reconciled = (
                 *self._reconcile_locked(),
                 *self._recover_approval_commands_locked(),
@@ -316,8 +317,11 @@ class SessionService:
         """Commit OpenHands state not yet represented in the durable session."""
         with self._command_lock:
             self.store.acquire_writer()
-            self.store.recover_pending_commit()
-            events = self._reconcile_locked()
+            self._recover_pending_commit_locked()
+            events = (
+                *self._reconcile_locked(),
+                *self._recover_approval_commands_locked(),
+            )
         if events:
             self._event_sink(events)
         return events
@@ -488,7 +492,7 @@ class SessionService:
 
     def _translate_backend_events(self, stream: tuple[BackendEvent, ...]) -> list[SessionEvent]:
         translated: list[SessionEvent] = []
-        known_source_event_ids = _source_event_ids(self.store.read_events())
+        known_source_event_ids = self._known_source_event_ids_locked()
         for event in stream:
             if (
                 event.source_event_id is not None
@@ -630,8 +634,6 @@ class SessionService:
                 )
             else:
                 assert_never(event)
-            if event.source_event_id is not None:
-                known_source_event_ids = known_source_event_ids | {event.source_event_id}
         return translated
 
     def _record_confirmation_request(
@@ -670,21 +672,30 @@ class SessionService:
             return
         with self._command_lock:
             self.store.acquire_writer()
-            self.store.recover_pending_commit()
+            self._recover_pending_commit_locked()
             events = tuple(self._translate_backend_events(stream))
         if events:
             self._event_sink(events)
 
     def _reconcile_locked(self) -> tuple[SessionEvent, ...]:
-        persisted = self.replay_events()
+        known_source_event_ids = self._known_source_event_ids_locked()
         return tuple(
             self._translate_backend_events(
                 self.backend.reconcile(
                     session_id=self.store.session_id,
-                    known_source_event_ids=_source_event_ids(persisted),
+                    known_source_event_ids=frozenset(known_source_event_ids),
                 )
             )
         )
+
+    def _known_source_event_ids_locked(self) -> set[str]:
+        if self._known_source_event_ids is None:
+            self._known_source_event_ids = set(_source_event_ids(self.replay_events()))
+        return self._known_source_event_ids
+
+    def _recover_pending_commit_locked(self) -> None:
+        if self.store.recover_pending_commit() and self._known_source_event_ids is not None:
+            self._known_source_event_ids = set(_source_event_ids(self.replay_events()))
 
     def _recover_approval_commands_locked(self) -> tuple[SessionEvent, ...]:
         """Finish an interrupted approval only when persisted state makes it unambiguous."""
@@ -776,6 +787,13 @@ class SessionService:
         ):
             raise AuditIntegrityError("audit log changed during session event append")
         self.store.commit_event(event, audit_event)
+        source_event_id = payload.get("source_event_id")
+        if (
+            self._known_source_event_ids is not None
+            and isinstance(source_event_id, str)
+            and source_event_id
+        ):
+            self._known_source_event_ids.add(source_event_id)
         return event
 
 

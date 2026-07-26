@@ -1556,6 +1556,10 @@ summary:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .streaming-cursor {
+    animation: none;
+  }
+
   *,
   *::before,
   *::after {

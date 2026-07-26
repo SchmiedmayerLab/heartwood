@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError
 from io import BytesIO
@@ -82,18 +83,24 @@ def test_managed_runtime_activity_uses_exact_launch_state_or_loopback_catalog(
 def test_readiness_reports_agent_dependency_failure_without_raising(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    secret = "synthetic-secret-value"
+
     def fail(_env: object) -> object:
-        raise RuntimeError("synthetic import failure")
+        raise RuntimeError(f"synthetic import failure: {secret}")
 
     monkeypatch.setattr("heartwood.gateway._readiness.prepare_openhands_sdk", fail)
 
-    readiness = inspect_deployment(ProjectContext(tmp_path), env={})
+    with caplog.at_level(logging.WARNING, logger="heartwood.gateway._readiness"):
+        readiness = inspect_deployment(ProjectContext(tmp_path), env={})
     check = next(item for item in readiness.checks if item.check_id == "agent-runtime")
 
     assert readiness.state == "recovery-required"
     assert check.status == "fail"
     assert check.safe_dict()["code"] == "HW-AGENT-001"
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_carina_login_readiness_defers_full_agent_import_until_allocation(

@@ -262,6 +262,19 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("reports malformed projection JSON with recovery guidance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{not-json", { status: 200 })),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Heartwood could not read the session update. Refresh the page to reconnect.",
+    );
+  });
+
   it("uses optional request defaults and an empty event response", async () => {
     const session = {
       session_id: "session-test",
@@ -1031,6 +1044,30 @@ describe("GatewayClient", () => {
     expect(FakeWebSocket.instances[0]?.close).toHaveBeenCalledWith(
       1002,
       "invalid Heartwood projection",
+    );
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("reports malformed streamed JSON with recovery guidance", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const onError = vi.fn();
+    const client = new GatewayClient();
+
+    const cleanup = client.streamSession(
+      "session-test",
+      undefined,
+      vi.fn(),
+      onError,
+    );
+    FakeWebSocket.instances[0]?.emitRaw("{not-json");
+    cleanup();
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Heartwood could not read the session update. Refresh the page to reconnect.",
+      }),
     );
     expect(FakeEventSource.instances).toHaveLength(1);
   });

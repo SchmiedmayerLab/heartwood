@@ -394,6 +394,7 @@ write_command_wrapper() {
     printf '#!/usr/bin/env bash\n'
     if [[ "${platform}" == "carina" ]]; then
       printf 'export HEARTWOOD_PLATFORM=carina\n'
+      printf 'export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"\n'
     fi
     printf 'runtime=%q\n' "${support_runtime}"
     cat <<'EOF'

@@ -58,6 +58,7 @@ from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
     GpuDevice,
     ModelSettings,
+    ModelSnapshotError,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -497,6 +498,46 @@ def test_recommended_model_cannot_download_or_allocate_before_setup(
     assert not runner_called
     assert plan.model_root is not None
     assert not plan.model_root.exists()
+
+
+def test_launch_reports_a_safe_resumable_model_transfer_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = _options(tmp_path, selected=False, yes_download=True)
+    plan = LaunchPlan(
+        platform_id="carina",
+        allocation_required=True,
+        allocation_command=("srun", "--pty", "heartwood"),
+        model_root=options.project.models_dir / "recommended-model",
+        state_root=options.project.state_root,
+        project_root=options.project.root,
+        runtime="vllm",
+        model_id="heartwood-managed-model",
+        artifact_id="recommended-model",
+        context_window=32_768,
+        download_required=True,
+        model_selected=True,
+    )
+    private_failure = "https://signed.example.invalid/private-transfer-token"
+
+    def fail_download(*_args: object, **_kwargs: object) -> Path:
+        try:
+            raise RuntimeError(private_failure)
+        except RuntimeError as error:
+            raise ModelSnapshotError(
+                "Hugging Face model transfer did not complete after 3 attempts. "
+                "Rerun the same command to resume."
+            ) from error
+
+    monkeypatch.setattr("heartwood.cli._launch.build_launch_plan", lambda *_args: plan)
+    monkeypatch.setattr(SessionGateway, "download_local_model_now", fail_download)
+
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "carina"}) == 74
+    output = capsys.readouterr().out
+    assert "Rerun the same command to resume." in output
+    assert private_failure not in output
 
 
 def test_real_launch_plan_cannot_download_a_recommendation_before_setup(

@@ -408,6 +408,9 @@ done
 test "$("${carina_installation}/bin/heartwood")" = "heartwood synthetic command"
 grep --fixed-strings --line-regexp --quiet 'export HEARTWOOD_PLATFORM=carina' \
   "${carina_generation}/bin/heartwood"
+grep --fixed-strings --line-regexp --quiet \
+  'export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"' \
+  "${carina_generation}/bin/heartwood"
 grep --fixed-strings --quiet \
   "runtime=${carina_runtime}/bootstrap" \
   "${carina_generation}/bin/heartwood"

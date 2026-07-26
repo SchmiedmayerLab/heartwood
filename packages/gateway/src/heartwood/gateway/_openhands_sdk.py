@@ -16,8 +16,10 @@ import os
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
-from threading import Lock, Thread, current_thread
+from threading import Event as ThreadEvent
+from threading import Lock, RLock, Thread, current_thread
 from typing import Any, TypedDict, cast
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -35,6 +37,7 @@ from openhands.sdk.event import (
     AgentErrorEvent,
     Event,
     MessageEvent,
+    ObservationBaseEvent,
     ObservationEvent,
     PauseEvent,
     UserRejectObservation,
@@ -192,6 +195,9 @@ class OpenHandsSdkBackend:
         self._security_analyzer: SecurityAnalyzerBase | None = None
         self._conversation_factory = conversation_factory or self._default_conversation_factory
         self._conversation: BaseConversation | None = None
+        self._conversation_lock = RLock()
+        self._conversation_closing = False
+        self._closed = False
         self._event_sink: BackendEventSink = lambda _events: None
         self._token_sink: TokenDeltaSink = lambda _delta: None
         self._run_thread: Thread | None = None
@@ -199,6 +205,14 @@ class OpenHandsSdkBackend:
         self._run_lock = Lock()
         self._execution_active = False
         self._run_failed = False
+        self._run_cancelled = ThreadEvent()
+        self._agent_loop: asyncio.AbstractEventLoop | None = None
+        self._agent_task: asyncio.Task[Any] | None = None
+        self._agent_started = False
+        self._view_repair_lock = Lock()
+        self._view_repair_tool_call_ids: set[str] = set()
+        self._view_repair_boundary_reached = False
+        self._view_repair_paused_internally = False
 
     @property
     def backend_id(self) -> str:
@@ -287,6 +301,20 @@ class OpenHandsSdkBackend:
             return (
                 () if backend_error.source_event_id in known_source_event_ids else (backend_error,)
             )
+        return self._reconcile_conversation(
+            conversation,
+            session_id=session_id,
+            known_source_event_ids=known_source_event_ids,
+        )
+
+    def _reconcile_conversation(
+        self,
+        conversation: BaseConversation,
+        *,
+        session_id: str,
+        known_source_event_ids: frozenset[str],
+    ) -> tuple[BackendEvent, ...]:
+        """Translate one already-owned conversation without reopening it."""
         branch = tuple(_conversation_state(conversation).active_branch())
         actions_by_id, action_groups = self._action_resolution_context(branch)
         translated: list[BackendEvent] = []
@@ -303,7 +331,7 @@ class OpenHandsSdkBackend:
                 translated.append(backend_event)
                 if backend_event.source_event_id is not None:
                     seen_source_event_ids.add(backend_event.source_event_id)
-        for state_event in self._state_events():
+        for state_event in self._state_events(conversation):
             if state_event.source_event_id in seen_source_event_ids:
                 continue
             translated.append(state_event)
@@ -356,7 +384,7 @@ class OpenHandsSdkBackend:
             return (_backend_error(error),)
         if self._run_active():
             return ()
-        if not self._start_run(session_id=session_id):
+        if not self._start_run(session_id=session_id, conversation=conversation):
             return (
                 BackendErrorEvent(
                     error_code=BackendErrorCode.INVALID_STATE,
@@ -391,6 +419,7 @@ class OpenHandsSdkBackend:
         if not approved:
             try:
                 conversation.reject_pending_actions("User rejected the pending action set")
+                _conversation_state(conversation).rebuild_view()
             except Exception as error:
                 return (_backend_error(error),)
             return (
@@ -410,7 +439,9 @@ class OpenHandsSdkBackend:
             session_id=session_id,
             status=BackendSubagentStatus.RUNNING,
         )
-        if not self._start_run(session_id=session_id):
+        self._prepare_pending_action_view_repair(conversation)
+        if not self._start_run(session_id=session_id, conversation=conversation):
+            self._clear_pending_action_view_repair()
             return (
                 BackendErrorEvent(
                     error_code=BackendErrorCode.INVALID_STATE,
@@ -431,7 +462,8 @@ class OpenHandsSdkBackend:
     def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
         """Interrupt active OpenHands I/O and acknowledge a stable boundary."""
         conversation = self._conversation
-        if conversation is None or not self._run_active():
+        can_interrupt = self._request_run_cancellation()
+        if conversation is None or not can_interrupt:
             return (
                 BackendErrorEvent(
                     error_code=BackendErrorCode.INVALID_STATE,
@@ -476,7 +508,7 @@ class OpenHandsSdkBackend:
                     error_code=BackendErrorCode.INVALID_STATE,
                 ),
             )
-        if not self._start_run(session_id=session_id):
+        if not self._start_run(session_id=session_id, conversation=conversation):
             return (
                 BackendErrorEvent(
                     error_code=BackendErrorCode.INVALID_STATE,
@@ -491,25 +523,52 @@ class OpenHandsSdkBackend:
 
     def close(self) -> None:
         """Release OpenHands conversation resources."""
-        if self._conversation is not None:
-            if self._run_active():
-                self._conversation.interrupt()
+        with self._conversation_lock:
+            if self._closed:
+                return
+            if self._conversation_closing:
+                raise OpenHandsSdkError("OpenHands conversation close is already in progress")
+            self._conversation_closing = True
+            conversation = self._conversation
+        if conversation is None:
+            with self._conversation_lock:
+                self._closed = True
+                self._conversation_closing = False
+            return
+        try:
+            if self._request_run_cancellation():
+                conversation.interrupt()
             if not self._wait_for_workers_exit(_AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS):
                 raise OpenHandsSdkError(
                     "OpenHands worker did not stop; session ownership remains active"
                 )
-            self._conversation.close()
-            self._conversation = None
+            with self._conversation_lock:
+                self._closed = True
+            conversation.close()
+        except Exception:
+            with self._conversation_lock:
+                self._closed = False
+                self._conversation_closing = False
+            raise
+        with self._conversation_lock:
+            if self._conversation is conversation:
+                self._conversation = None
+            self._conversation_closing = False
 
     def _get_conversation(self) -> BaseConversation:
-        conversation = self._conversation
-        if conversation is None:
-            conversation = self._conversation_factory(
-                self._handle_sdk_event,
-                self._handle_token,
-            )
-            self._conversation = conversation
-        return conversation
+        with self._conversation_lock:
+            if self._closed:
+                raise OpenHandsSdkError("OpenHands conversation is closed")
+            if self._conversation_closing:
+                raise OpenHandsSdkError("OpenHands conversation is closing")
+            conversation = self._conversation
+            if conversation is None:
+                conversation = self._conversation_factory(
+                    self._handle_sdk_event,
+                    self._handle_token,
+                )
+                self._conversation = conversation
+            return conversation
 
     def _default_conversation_factory(  # pragma: no cover - container integration
         self,
@@ -626,14 +685,33 @@ class OpenHandsSdkBackend:
                     )
                 _REGISTERED_HEARTWOOD_SPECIALISTS[definition.name] = definition
 
-    def _handle_sdk_event(self, event: Event) -> None:  # noqa: ARG002
+    def _handle_sdk_event(self, event: Event) -> None:
         """Leave durable translation to the persisted OpenHands state.
 
         OpenHands invokes this callback before its own persistence callback.
         Durable Heartwood translation therefore occurs only from conversation
         state after the run reaches a stable boundary.
         """
-        return None
+        if not isinstance(event, ObservationBaseEvent):
+            return
+        should_pause = False
+        with self._view_repair_lock:
+            if event.tool_call_id not in self._view_repair_tool_call_ids:
+                return
+            self._view_repair_tool_call_ids.remove(event.tool_call_id)
+            if not self._view_repair_tool_call_ids:
+                self._view_repair_boundary_reached = True
+                should_pause = True
+        if not should_pause:
+            return
+        conversation = self._conversation
+        if conversation is None:
+            return
+        state = _conversation_state(conversation)
+        if state.execution_status == ConversationExecutionStatus.RUNNING:
+            state.execution_status = ConversationExecutionStatus.PAUSED
+            with self._view_repair_lock:
+                self._view_repair_paused_internally = True
 
     def _handle_token(self, chunk: LLMStreamChunk) -> None:
         if not chunk.choices:
@@ -650,15 +728,24 @@ class OpenHandsSdkBackend:
         with self._run_lock:
             return self._execution_active
 
-    def _start_run(self, *, session_id: str) -> bool:
+    def _start_run(
+        self,
+        *,
+        session_id: str,
+        conversation: BaseConversation,
+    ) -> bool:
         with self._run_lock:
             if self._run_active():
                 return False
             self._run_failed = False
+            self._run_cancelled.clear()
             self._execution_active = True
             thread = Thread(
                 target=self._run,
-                kwargs={"session_id": session_id},
+                kwargs={
+                    "session_id": session_id,
+                    "conversation": conversation,
+                },
                 name=f"heartwood-openhands-{session_id}",
                 daemon=True,
             )
@@ -667,11 +754,21 @@ class OpenHandsSdkBackend:
             thread.start()
             return True
 
-    def _run(self, *, session_id: str) -> None:
+    def _run(
+        self,
+        *,
+        session_id: str,
+        conversation: BaseConversation,
+    ) -> None:
         failure: tuple[BackendEvent, ...] = ()
         published_source_event_ids: frozenset[str] = frozenset()
         try:
-            published_source_event_ids = asyncio.run(self._run_until_stable(session_id=session_id))
+            published_source_event_ids = asyncio.run(
+                self._run_until_stable(
+                    session_id=session_id,
+                    conversation=conversation,
+                )
+            )
         except Exception as error:
             with self._run_lock:
                 self._run_failed = True
@@ -688,7 +785,8 @@ class OpenHandsSdkBackend:
             try:
                 final_events = (
                     *failure,
-                    *self.reconcile(
+                    *self._reconcile_conversation(
+                        conversation,
                         session_id=session_id,
                         known_source_event_ids=published_source_event_ids,
                     ),
@@ -710,29 +808,144 @@ class OpenHandsSdkBackend:
                 with self._run_lock:
                     self._worker_threads.discard(worker)
 
-    async def _run_until_stable(self, *, session_id: str) -> frozenset[str]:
+    async def _run_until_stable(
+        self,
+        *,
+        session_id: str,
+        conversation: BaseConversation,
+    ) -> frozenset[str]:
         """Run OpenHands while publishing newly persisted non-token progress."""
-        run = asyncio.create_task(self._get_conversation().arun())
         published_source_event_ids: set[str] = set()
-        while not run.done():
-            done, _pending = await asyncio.wait(
-                {run},
-                timeout=_AGENT_PROGRESS_POLL_SECONDS,
-            )
-            if run not in done:
-                events = self.reconcile(
-                    session_id=session_id,
-                    known_source_event_ids=frozenset(published_source_event_ids),
-                )
-                if events:
-                    self._event_sink(events)
-                    published_source_event_ids.update(
-                        event.source_event_id
-                        for event in events
-                        if event.source_event_id is not None
+        while True:
+            run = self._admit_conversation_run(conversation)
+            if run is None:
+                self._clear_pending_action_view_repair()
+                return frozenset(published_source_event_ids)
+            try:
+                while not run.done():
+                    done, _pending = await asyncio.wait(
+                        {run},
+                        timeout=_AGENT_PROGRESS_POLL_SECONDS,
                     )
-        run.result()
-        return frozenset(published_source_event_ids)
+                    if run not in done:
+                        events = self._reconcile_conversation(
+                            conversation,
+                            session_id=session_id,
+                            known_source_event_ids=frozenset(published_source_event_ids),
+                        )
+                        if events:
+                            await asyncio.to_thread(self._event_sink, events)
+                            published_source_event_ids.update(
+                                event.source_event_id
+                                for event in events
+                                if event.source_event_id is not None
+                            )
+                run.result()
+            except asyncio.CancelledError:
+                if not self._run_cancelled.is_set():
+                    raise
+                self._clear_pending_action_view_repair()
+                return frozenset(published_source_event_ids)
+            except Exception:
+                self._clear_pending_action_view_repair()
+                raise
+            finally:
+                self._clear_agent_task(run)
+            if self._run_cancelled.is_set():
+                self._clear_pending_action_view_repair()
+                return frozenset(published_source_event_ids)
+            if not self._complete_pending_action_view_repair():
+                return frozenset(published_source_event_ids)
+
+    def _admit_conversation_run(
+        self,
+        conversation: BaseConversation,
+    ) -> asyncio.Task[Any] | None:
+        loop = asyncio.get_running_loop()
+        with self._run_lock:
+            if self._run_cancelled.is_set():
+                return None
+            run = loop.create_task(self._run_admitted_conversation(conversation))
+            self._agent_loop = loop
+            self._agent_task = run
+            self._agent_started = False
+            return run
+
+    async def _run_admitted_conversation(self, conversation: BaseConversation) -> None:
+        # Yield once so a pause or close that raced with task admission is observed
+        # before OpenHands can start another model or tool step.
+        await asyncio.sleep(0)
+        with self._run_lock:
+            if self._run_cancelled.is_set():
+                return
+            self._agent_started = True
+        await conversation.arun()
+
+    def _request_run_cancellation(self) -> bool:
+        with self._run_lock:
+            run_thread = self._run_thread
+            can_interrupt = (
+                self._execution_active and run_thread is not None and run_thread.is_alive()
+            )
+            if not can_interrupt:
+                return False
+            self._run_cancelled.set()
+            loop = self._agent_loop
+            task = self._agent_task
+            should_cancel_task = not self._agent_started
+        if should_cancel_task and loop is not None and task is not None and not task.done():
+            with suppress(RuntimeError):
+                loop.call_soon_threadsafe(task.cancel)
+        return True
+
+    def _clear_agent_task(self, run: asyncio.Task[Any]) -> None:
+        with self._run_lock:
+            if self._agent_task is run:
+                self._agent_task = None
+                self._agent_loop = None
+                self._agent_started = False
+
+    def _prepare_pending_action_view_repair(self, conversation: BaseConversation) -> None:
+        """Detect the OpenHands cold-view omission for unmatched actions."""
+        state = _conversation_state(conversation)
+        unmatched_actions = ConversationState.get_unmatched_actions(state.active_branch())
+        view_action_ids = {
+            event.id for event in state.view.events if isinstance(event, ActionEvent)
+        }
+        missing_actions = [
+            action for action in unmatched_actions if action.id not in view_action_ids
+        ]
+        with self._view_repair_lock:
+            self._view_repair_tool_call_ids = (
+                {str(action.tool_call_id) for action in unmatched_actions}
+                if missing_actions
+                else set()
+            )
+            self._view_repair_boundary_reached = False
+            self._view_repair_paused_internally = False
+
+    def _complete_pending_action_view_repair(self) -> bool:
+        """Rebuild a cold view after all approved tool results are persisted."""
+        with self._view_repair_lock:
+            if not self._view_repair_boundary_reached:
+                return False
+            should_continue = self._view_repair_paused_internally
+        conversation = self._get_conversation()
+        state = _conversation_state(conversation)
+        state.rebuild_view()
+        should_continue = (
+            should_continue
+            and not self._run_cancelled.is_set()
+            and state.execution_status == ConversationExecutionStatus.PAUSED
+        )
+        self._clear_pending_action_view_repair()
+        return should_continue
+
+    def _clear_pending_action_view_repair(self) -> None:
+        with self._view_repair_lock:
+            self._view_repair_tool_call_ids.clear()
+            self._view_repair_boundary_reached = False
+            self._view_repair_paused_internally = False
 
     def _wait_for_run_boundary(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
@@ -1030,8 +1243,12 @@ class OpenHandsSdkBackend:
             return True
         return _analyzed_risk(self._security_analyzer, action) != SecurityRisk.LOW.value.lower()
 
-    def _state_events(self) -> tuple[BackendEvent, ...]:
-        conversation = self._get_conversation()
+    def _state_events(
+        self,
+        conversation: BaseConversation | None = None,
+    ) -> tuple[BackendEvent, ...]:
+        if conversation is None:
+            conversation = self._get_conversation()
         state = _conversation_state(conversation)
         branch = state.active_branch()
         anchor = branch[-1].id if branch else str(conversation.id)
@@ -1097,13 +1314,14 @@ class OpenHandsSdkBackend:
                 )
                 for action in unmatched_actions
             )
-        for usage in _usage(state):
-            events.append(
-                BackendUsageEvent(
-                    usage=usage,
-                    source_event_id=_usage_source_event_id(anchor, usage),
+        if not execution_active:
+            for usage in _usage(state):
+                events.append(
+                    BackendUsageEvent(
+                        usage=usage,
+                        source_event_id=_usage_source_event_id(anchor, usage),
+                    )
                 )
-            )
         return tuple(events)
 
 
@@ -1228,7 +1446,7 @@ def _backend_lifecycle(status: ConversationExecutionStatus) -> BackendLifecycle:
         ConversationExecutionStatus.ERROR: BackendLifecycle.ERROR,
         ConversationExecutionStatus.STUCK: BackendLifecycle.ERROR,
         ConversationExecutionStatus.DELETING: BackendLifecycle.ERROR,
-    }[status]
+    }.get(status, BackendLifecycle.ERROR)
 
 
 def _task_status(status: str) -> BackendTaskStatus:
@@ -1236,7 +1454,7 @@ def _task_status(status: str) -> BackendTaskStatus:
         "todo": BackendTaskStatus.TODO,
         "in_progress": BackendTaskStatus.IN_PROGRESS,
         "done": BackendTaskStatus.DONE,
-    }[status]
+    }.get(status, BackendTaskStatus.TODO)
 
 
 def _usage(state: ConversationState) -> tuple[BackendUsage, ...]:

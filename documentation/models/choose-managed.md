@@ -77,6 +77,8 @@ Heartwood evaluates GPU count and memory separately when planning runtime startu
 
 Large public snapshots can encounter Hugging Face's anonymous download limits.
 When an approved Hugging Face token is available, expose `HF_TOKEN` only to the download process and do not store it in the project or `.heartwood/` configuration.
+If a transfer stops, rerun the same Heartwood command from the project directory.
+Heartwood retains completed files in a private partial snapshot, verifies that it belongs to the same immutable model revision, and publishes it into `.heartwood/models/` only after full verification.
 
 In the browser, expand **Advanced options** to request a particular tag, branch, or commit.
 In the terminal, pass `--revision REVISION` to `models inspect` or `models download`.

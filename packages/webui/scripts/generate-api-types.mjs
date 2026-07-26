@@ -9,7 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { compile } from "json-schema-to-typescript";
 import { format, resolveConfig } from "prettier";
@@ -60,8 +60,14 @@ for (const contract of contracts) {
     encoding: "utf8",
   });
   if (exported.error !== undefined || exported.status !== 0) {
+    const processReason =
+      exported.status === null ?
+        `terminated by ${exported.signal ?? "an unknown signal"}`
+      : `exited with status ${exported.status}`;
     const reason =
-      exported.error?.message ?? exported.stderr.trim() ?? "unknown error";
+      exported.error?.message.trim() ||
+      exported.stderr?.trim() ||
+      processReason;
     throw new Error(`Unable to export ${contract.sourceLabel}: ${reason}`);
   }
 
@@ -103,7 +109,9 @@ for (const contract of contracts) {
 
   if (checkOnly) {
     const current = await readFile(contract.output, "utf8").catch(() => "");
-    if (current !== output) staleOutputs.push(contract.output);
+    if (current !== output) {
+      staleOutputs.push(relative(repositoryRoot, contract.output));
+    }
   } else {
     await writeFile(contract.output, output, "utf8");
   }
@@ -111,7 +119,8 @@ for (const contract of contracts) {
 
 if (staleOutputs.length > 0) {
   throw new Error(
-    "Generated browser API types are stale. Run `npm run contracts:generate`.",
+    `Generated browser API types are stale: ${staleOutputs.join(", ")}. ` +
+      "Run `npm run contracts:generate`.",
   );
 }
 

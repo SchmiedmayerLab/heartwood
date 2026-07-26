@@ -91,29 +91,19 @@ jobs:
           bash images/gpu/validate_image_candidate.sh \
             "${CANDIDATE}" terra-runtime-gpu-nvidia "${EXPECTED_REVISION}"
       - name: Create immutable Terra candidate tag
+        uses: ./.github/actions/create-immutable-image-tag
+        with:
+          candidate-tag: ${{ steps.candidate.outputs.tag }}
+          candidate-references: ${{ steps.staged.outputs.reference }}
+          candidate-digest: ${{ steps.staged.outputs.digest }}
+          diagnostic-name: Terra qualification candidate tag
+          flatten: "true"
+          validation-mode: docker-v2
+      - name: Summarize Terra qualification candidate
         env:
-          CANDIDATE_DIGEST: ${{ steps.staged.outputs.digest }}
-          CANDIDATE_REFERENCE: ${{ steps.staged.outputs.reference }}
           CANDIDATE_TAG: ${{ steps.candidate.outputs.tag }}
           EXPECTED_REVISION: ${{ github.sha }}
         run: |
-          if inspect="$(docker buildx imagetools inspect "${CANDIDATE_TAG}" 2>/dev/null)"; then
-            tag_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect}")"
-          else
-            docker buildx imagetools create --prefer-index=false \
-              --tag "${CANDIDATE_TAG}" "${CANDIDATE_REFERENCE}"
-            inspect="$(docker buildx imagetools inspect "${CANDIDATE_TAG}")"
-            tag_digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect}")"
-          fi
-          if [ "${tag_digest}" != "${CANDIDATE_DIGEST}" ]; then
-            echo "immutable Terra candidate tag does not match the validated digest" >&2
-            exit 1
-          fi
-          raw="$(docker buildx imagetools inspect --raw "${CANDIDATE_TAG}")"
-          jq --exit-status '
-            .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
-            and .config.mediaType == "application/vnd.docker.container.image.v1+json"
-          ' <<<"${raw}" >/dev/null
           {
             echo "### Terra qualification candidate"
             echo

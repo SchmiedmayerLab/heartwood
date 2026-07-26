@@ -14,6 +14,7 @@ from typing import ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from heartwood.core_adapter import BackendErrorCode
 from heartwood.gateway._action_presentation import action_tool_label
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
@@ -187,6 +188,7 @@ def project_session(
     reported_resolutions: set[str] = set()
     context = ProjectionModelContext()
     lifecycle_status = SessionLifecycle.IDLE
+    lifecycle_error_recoverable = True
     command_outcome: ProjectionCommandOutcome | None = None
     tasks: tuple[ProjectionTask, ...] = ()
     usage: ProjectionUsage | None = None
@@ -285,6 +287,7 @@ def project_session(
             )
             current = approval_groups.get(group_id)
             if current is not None:
+                was_pending = current.decision is None
                 approval_groups[group_id] = current.model_copy(
                     update={"decision": approval_decision}
                 )
@@ -304,7 +307,8 @@ def project_session(
                         ),
                         detail="The decision applied to every action in the set.",
                     )
-            lifecycle_status = SessionLifecycle.IDLE
+                if was_pending:
+                    lifecycle_status = SessionLifecycle.IDLE
         elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
             model_decision = _mapping(event.payload.get("decision"))
             context = ProjectionModelContext(
@@ -314,6 +318,8 @@ def project_session(
             )
         elif kind == EventKind.AGENT_LIFECYCLE_UPDATED.value:
             lifecycle_status = _lifecycle(_string(event.payload.get("status")))
+            if lifecycle_status != SessionLifecycle.ERROR:
+                lifecycle_error_recoverable = True
         elif kind == EventKind.TASK_PLAN_UPDATED.value:
             tasks = tuple(_task(item) for item in _sequence(event.payload.get("tasks")))
         elif kind == EventKind.MODEL_USAGE_UPDATED.value:
@@ -355,18 +361,24 @@ def project_session(
                 )
             if event.payload.get("affects_lifecycle") is not False:
                 lifecycle_status = SessionLifecycle.ERROR
+                lifecycle_error_recoverable = (
+                    lifecycle_error_recoverable and error_code not in _FATAL_ERROR_CODES
+                )
 
     lifecycle = ProjectionLifecycleState(
         status=lifecycle_status,
         can_pause=lifecycle_status == SessionLifecycle.RUNNING,
         can_resume=lifecycle_status == SessionLifecycle.PAUSED,
-        can_steer=lifecycle_status
-        in {
-            SessionLifecycle.IDLE,
-            SessionLifecycle.RUNNING,
-            SessionLifecycle.PAUSED,
-            SessionLifecycle.FINISHED,
-        },
+        can_steer=(
+            lifecycle_status
+            in {
+                SessionLifecycle.IDLE,
+                SessionLifecycle.RUNNING,
+                SessionLifecycle.PAUSED,
+                SessionLifecycle.FINISHED,
+            }
+            or (lifecycle_status == SessionLifecycle.ERROR and lifecycle_error_recoverable)
+        ),
     )
     pending_approval = next(
         (group for group in reversed(tuple(approval_groups.values())) if group.decision is None),
@@ -392,6 +404,7 @@ def project_session(
         available_commands=_available_commands(
             lifecycle=lifecycle_status,
             has_pending_approval=pending_approval is not None,
+            error_recoverable=lifecycle_error_recoverable,
         ),
     )
 
@@ -550,6 +563,7 @@ def _available_commands(
     *,
     lifecycle: SessionLifecycle,
     has_pending_approval: bool,
+    error_recoverable: bool,
 ) -> tuple[Literal["chat", "pause", "resume", "approve", "deny"], ...]:
     if has_pending_approval:
         return ("approve", "deny")
@@ -558,7 +572,7 @@ def _available_commands(
     if lifecycle == SessionLifecycle.PAUSED:
         return ("chat", "resume")
     if lifecycle == SessionLifecycle.ERROR:
-        return ()
+        return ("chat",) if error_recoverable else ()
     return ("chat",)
 
 
@@ -625,6 +639,13 @@ _ACTIVITY_LABELS = {
     EventKind.TOOL_CALL_PROPOSED.value: "Tool proposed",
     EventKind.USER_MESSAGE_RECORDED.value: "Researcher message",
 }
+
+_FATAL_ERROR_CODES = frozenset(
+    {
+        BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+        BackendErrorCode.AGENT_OUTCOME_UNKNOWN.value,
+    }
+)
 
 
 __all__ = [

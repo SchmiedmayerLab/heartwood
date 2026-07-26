@@ -170,6 +170,25 @@ class _BlockingSessionService:
 
 
 @dataclass
+class _FailingSessionService:
+    publish_token: Callable[[str], None]
+    events: tuple[SessionEvent, ...] = ()
+
+    def handle(self, _command: SessionCommand) -> SessionResult:
+        self.publish_token("partial response")
+        raise RuntimeError("synthetic service failure")
+
+    def replay_events(self) -> tuple[SessionEvent, ...]:
+        return self.events
+
+    def reconcile(self) -> tuple[SessionEvent, ...]:
+        return ()
+
+    def close(self) -> None:
+        return None
+
+
+@dataclass
 class _ClosingSessionService:
     closed: Event
     fail: bool = False
@@ -390,6 +409,82 @@ def test_project_setting_change_waits_for_another_gateway_turn(tmp_path: Path) -
     assert closed.is_set()
 
 
+def test_failed_service_handle_clears_transient_streaming_state(tmp_path: Path) -> None:
+    gateway: SessionGateway
+    service = _FailingSessionService(
+        publish_token=lambda delta: gateway._publish_token_delta(
+            session_id="session-1",
+            delta=delta,
+        )
+    )
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    command = SessionCommand(
+        command_id="failing-command",
+        session_id="session-1",
+        kind=CommandKind.CHAT,
+        actor_id="synthetic-user",
+        created_at="2026-01-01T00:00:00Z",
+        payload={"prompt": "Fail after emitting a partial response"},
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic service failure"):
+        gateway.handle(command)
+
+    projection = gateway.session_projection(session_id="session-1")
+    assert projection.streaming_text == ""
+    assert "session-1" not in gateway._streaming_active
+    gateway.stop()
+
+
+def test_failed_steering_command_preserves_an_existing_token_stream(tmp_path: Path) -> None:
+    gateway: SessionGateway
+    running = SessionEvent(
+        event_id="active-run",
+        session_id="session-1",
+        sequence=0,
+        kind=EventKind.AGENT_LIFECYCLE_UPDATED,
+        occurred_at="2026-01-01T00:00:00Z",
+        payload={"status": "running"},
+    )
+    service = _FailingSessionService(
+        publish_token=lambda delta: gateway._publish_token_delta(
+            session_id="session-1",
+            delta=delta,
+        ),
+        events=(running,),
+    )
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    gateway._streaming_active.add("session-1")
+    gateway._publish_token_delta(session_id="session-1", delta="existing response ")
+
+    with pytest.raises(RuntimeError, match="synthetic service failure"):
+        gateway.handle(
+            SessionCommand(
+                command_id="failing-steer",
+                session_id="session-1",
+                kind=CommandKind.CHAT,
+                actor_id="synthetic-user",
+                created_at="2026-01-01T00:00:00Z",
+                payload={"prompt": "Steer the active synthetic turn"},
+            )
+        )
+
+    projection = gateway.session_projection(session_id="session-1")
+    assert projection.streaming_text == "existing response partial response"
+    assert "session-1" in gateway._streaming_active
+    gateway.stop()
+
+
 def test_gateway_releases_every_session_when_one_backend_close_fails(tmp_path: Path) -> None:
     first_closed = Event()
     second_closed = Event()
@@ -476,6 +571,49 @@ def test_gateway_shutdown_does_not_block_final_background_publication(
 
     assert closed.is_set()
     assert gateway._services == {}
+
+
+def test_configuration_handoff_closes_a_worker_without_holding_the_stream_lock(
+    tmp_path: Path,
+) -> None:
+    published = SessionEvent(
+        event_id="configuration-handoff-event",
+        session_id="session-one",
+        sequence=0,
+        kind=EventKind.AGENT_LIFECYCLE_UPDATED,
+        occurred_at="2026-01-01T00:00:00Z",
+        payload={"status": "finished"},
+    )
+    close_finished = Event()
+    reader: SessionGateway
+    service = _PublishingCloseSessionService(
+        publish=lambda: reader._publish_background_events(
+            session_id="session-one",
+            events=(published,),
+        ),
+        closed=close_finished,
+    )
+    project = ProjectContext(tmp_path)
+    reader = SessionGateway(
+        project=project,
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda _root, _session_id: cast(Any, service),
+    )
+    writer = SessionGateway(project=project, env={}, backend_id="deterministic")
+    reader.session_projection(session_id="session-one")
+    writer.select_action_confirmation_mode("confirm-risky")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        projection = executor.submit(
+            reader.session_projection,
+            session_id="session-one",
+        ).result(timeout=2)
+
+    assert close_finished.is_set()
+    assert projection.session_id == "session-one"
+    reader.stop()
+    writer.stop()
 
 
 def test_fast_background_finalization_preserves_stream_order_and_projection(
@@ -638,13 +776,83 @@ def test_rest_command_retry_is_not_published_twice(tmp_path: Path) -> None:
 
     first = rest.handle(RestRequest(method="POST", path="/sessions/session-1/commands", body=body))
     first_stream_events = stream.receive()
+    second = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.RESUME, command_id="session-1-resume"),
+        )
+    )
     retried = rest.handle(
         RestRequest(method="POST", path="/sessions/session-1/commands", body=body)
     )
 
-    assert retried == first
+    assert _events(retried) == _events(first)
+    assert {cast(str, event["event_id"]) for event in _events(retried)}.isdisjoint(
+        cast(str, event["event_id"]) for event in _events(second)
+    )
+    assert retried.body["projection"] == second.body["projection"]
     assert len(first_stream_events) == 2
+    assert len(stream.receive()) == 2
     assert stream.receive() == ()
+
+
+def test_streaming_command_retry_does_not_reactivate_a_stable_session(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(tmp_path)
+    command = SessionCommand.model_validate_json(
+        _command(
+            CommandKind.CHAT,
+            command_id="same-chat-command",
+            prompt="Create one synthetic action",
+        )
+    )
+    first = gateway.handle(command)
+
+    assert "session-1" not in gateway._streaming_active
+    retried = gateway.handle(command)
+
+    assert retried.replayed is True
+    assert retried.events == first.events
+    assert "session-1" not in gateway._streaming_active
+    gateway.stop()
+
+
+def test_rest_empty_command_result_does_not_replay_session_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+    first = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.CHAT, prompt="Create session history"),
+        )
+    )
+    first_projection = first.body["projection"]
+    assert isinstance(first_projection, dict)
+    assert _events(first)
+
+    monkeypatch.setattr(
+        gateway,
+        "handle",
+        lambda _command: SessionResult(events=()),
+    )
+    empty = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.PAUSE, command_id="empty-result"),
+        )
+    )
+
+    assert _events(empty) == []
+    empty_projection = empty.body["projection"]
+    assert isinstance(empty_projection, dict)
+    assert empty_projection["revision"] == first_projection["revision"]
 
 
 def test_interface_handoff_requires_owner_shutdown_and_preserves_sequence(
@@ -670,6 +878,8 @@ def test_interface_handoff_requires_owner_shutdown_and_preserves_sequence(
     pending = projection["pendingApproval"]
     assert isinstance(pending, dict)
     group_id = str(pending["groupId"])
+    pre_handoff_revision = projection["revision"]
+    assert isinstance(pre_handoff_revision, int)
     handoff_command = _command(
         CommandKind.DENY,
         command_id="cli-deny",
@@ -697,10 +907,11 @@ def test_interface_handoff_requires_owner_shutdown_and_preserves_sequence(
     assert blocked.status_code == 409
     assert "active in another Heartwood process" in str(blocked.body["error"])
     assert handed_off.status_code == 200
-    assert _events(handed_off)[-1]["kind"] == EventKind.CONFIRMATION_RESOLVED.value
+    handoff_events = _events(handed_off)
+    assert handoff_events[-1]["kind"] == EventKind.CONFIRMATION_RESOLVED.value
     handed_off_projection = handed_off.body["projection"]
     assert isinstance(handed_off_projection, dict)
-    assert handed_off_projection["revision"] == 8
+    assert handed_off_projection["revision"] == pre_handoff_revision + len(handoff_events)
 
 
 def test_two_gateways_can_mutate_distinct_sessions(tmp_path: Path) -> None:

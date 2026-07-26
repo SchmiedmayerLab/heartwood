@@ -254,6 +254,8 @@ class FakeClient implements HeartwoodClient {
   currentSessions: SessionSummary[] = [sessionSummary("session-test")];
   projections = new Map<string, SessionProjection>();
   streamListener: ((projection: SessionProjection) => void) | null = null;
+  retiredStreamListener: ((projection: SessionProjection) => void) | null =
+    null;
   commandFailure: { code: string; message: string } | null = null;
   subscriptionPolls = 0;
 
@@ -414,13 +416,20 @@ class FakeClient implements HeartwoodClient {
   ): () => void {
     this.streamListener = onProjection;
     return () => {
-      if (this.streamListener === onProjection) this.streamListener = null;
+      if (this.streamListener === onProjection) {
+        this.retiredStreamListener = onProjection;
+        this.streamListener = null;
+      }
     };
   }
 
   emitStream(projection: SessionProjection): void {
     this.projections.set(projection.sessionId, projection);
     this.streamListener?.(projection);
+  }
+
+  emitRetiredStream(projection: SessionProjection): void {
+    this.retiredStreamListener?.(projection);
   }
 
   projectionFor(sessionId: string): SessionProjection {
@@ -870,22 +879,55 @@ class FakeClient implements HeartwoodClient {
 class DeferredCommandClient extends FakeClient {
   private complete: ((response: SessionProjectionResponse) => void) | null =
     null;
+  private pendingSessionId: string | null = null;
 
   override postCommand(
     command: SessionCommand,
   ): Promise<SessionProjectionResponse> {
     this.commands.push(command);
+    this.pendingSessionId = command.session_id;
     return new Promise((resolve) => {
       this.complete = resolve;
     });
   }
 
-  completeCommand(): void {
+  completeCommand(projection?: SessionProjection): void {
+    const sessionId = this.pendingSessionId ?? "session-test";
     this.complete?.({
       events: [],
-      projection: this.projectionFor("session-test"),
+      projection: projection ?? this.projectionFor(sessionId),
     });
     this.complete = null;
+    this.pendingSessionId = null;
+  }
+}
+
+class DeferredActivityClient extends FakeClient {
+  private deferReplay = false;
+  private completeReplay:
+    ((response: SessionProjectionResponse) => void) | null = null;
+
+  deferNextReplay(): void {
+    this.deferReplay = true;
+  }
+
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    this.replayCalls += 1;
+    if (!this.deferReplay) {
+      return Promise.resolve({
+        events: [],
+        projection: this.projectionFor(sessionId),
+      });
+    }
+    this.deferReplay = false;
+    return new Promise((resolve) => {
+      this.completeReplay = resolve;
+    });
+  }
+
+  completeDeferredReplay(projection: SessionProjection): void {
+    this.completeReplay?.({ events: [], projection });
+    this.completeReplay = null;
   }
 }
 
@@ -973,6 +1015,149 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Synthetic analysis" }),
     ).toBeInTheDocument();
+  });
+
+  it("ignores a delayed command response after selecting another session", async () => {
+    const client = new DeferredCommandClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    client.currentSessions = [
+      sessionSummary("session-test", "First analysis"),
+      sessionSummary("session-second", "Second analysis"),
+    ];
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "First analysis" });
+    fireEvent.change(screen.getByLabelText("Task"), {
+      target: { value: "Run the first analysis" },
+    });
+    fireEvent.click(screen.getByLabelText("Send task"));
+    await waitFor(() => expect(client.commands).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /Second analysis/u }));
+    await screen.findByRole("heading", { name: "Second analysis" });
+    expect(screen.getByLabelText("Task")).toBeDisabled();
+    const delayedProjection = {
+      ...client.projectionFor("session-test"),
+      eventCount: 1,
+      revision: 0,
+      conversation: [
+        {
+          id: "delayed-first-session",
+          sequence: 0,
+          role: "agent" as const,
+          label: "Agent",
+          content: "Delayed result from the first session",
+          detail: null,
+          technicalDetail: null,
+        },
+      ],
+    };
+    await act(async () => {
+      client.completeCommand(delayedProjection);
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Second analysis" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Delayed result from the first session"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Task")).toBeEnabled();
+  });
+
+  it("ignores a retired stream after selecting another session", async () => {
+    const client = new FakeClient();
+    client.currentSessions = [
+      sessionSummary("session-test", "First analysis"),
+      sessionSummary("session-second", "Second analysis"),
+    ];
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "First analysis" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Second analysis/u }));
+    await screen.findByRole("heading", { name: "Second analysis" });
+    act(() => {
+      client.emitRetiredStream({
+        ...client.projectionFor("session-test"),
+        eventCount: 1,
+        revision: 0,
+        conversation: [
+          {
+            id: "retired-first-session",
+            sequence: 0,
+            role: "agent",
+            label: "Agent",
+            content: "Retired first-session stream",
+            detail: null,
+            technicalDetail: null,
+          },
+        ],
+      });
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Second analysis" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Retired first-session stream")).toBeNull();
+  });
+
+  it("rejects a delayed activity refresh after an A-B-A session handoff", async () => {
+    const client = new DeferredActivityClient();
+    client.currentSessions = [
+      sessionSummary("session-test", "First analysis"),
+      sessionSummary("session-second", "Second analysis"),
+    ];
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "First analysis" });
+    const current = syntheticProjection({
+      sessionId: "session-test",
+      streamEpoch: "current-process",
+      streamRevision: 1,
+      streamingText: "Current response",
+      lifecycle: {
+        status: "running",
+        canPause: true,
+        canResume: false,
+        canSteer: true,
+      },
+      availableCommands: ["chat", "pause"],
+    });
+    act(() => client.emitStream(current));
+
+    client.deferNextReplay();
+    fireEvent.click(screen.getByRole("button", { name: "Activity & audit" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: /Second analysis/u }));
+    await screen.findByRole("heading", { name: "Second analysis" });
+    fireEvent.click(screen.getByRole("button", { name: /First analysis/u }));
+    await screen.findByRole("heading", { name: "First analysis" });
+
+    await act(async () => {
+      client.completeDeferredReplay({
+        ...current,
+        streamEpoch: "delayed-process",
+        streamRevision: 7,
+        streamingText: "Delayed stale refresh",
+      });
+      await Promise.resolve();
+    });
+    act(() => {
+      client.emitStream({
+        ...current,
+        streamRevision: 2,
+        streamingText: "Latest current response",
+      });
+    });
+
+    expect(screen.queryByText("Delayed stale refresh")).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Agent response in progress"),
+    ).toHaveTextContent("Latest current response");
   });
 
   it("keeps a new session selected when initialization resolves later", async () => {
@@ -1220,7 +1405,7 @@ describe("App", () => {
         ...running,
         streamEpoch: "restarted-process",
         streamRevision: 0,
-        streamingText: "",
+        streamingText: "Fresh response after restart",
       });
       client.emitStream({
         ...running,
@@ -1235,6 +1420,9 @@ describe("App", () => {
     expect(
       screen.queryByText("Delayed stale response", { exact: true }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Agent response in progress"),
+    ).toHaveTextContent("Fresh response after restart");
   });
 
   it("renders gateway-owned lifecycle, streaming, task, usage, and specialist state", async () => {
@@ -1438,6 +1626,25 @@ describe("App", () => {
     ).toBeVisible();
     const mode = screen.getByRole("radio", { name: /Low-Risk Automation/u });
     expect(mode).toBeDisabled();
+  });
+
+  it("honors the action-mode change gate without requiring a reason", async () => {
+    const client = new FakeClient();
+    client.currentActions = {
+      ...actions(),
+      change_allowed: false,
+      change_blocked_reason: null,
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Action Review" }), {
+      button: 0,
+    });
+
+    expect(
+      screen.getByRole("radio", { name: /Low-Risk Automation/u }),
+    ).toBeDisabled();
   });
 
   it("configures and validates model profiles in the settings panel", async () => {

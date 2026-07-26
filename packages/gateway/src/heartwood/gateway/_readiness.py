@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -56,6 +57,7 @@ ModelSource = Literal[
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
 _MANAGED_MODEL_CATALOG_URL = "http://127.0.0.1:8765/v1/models"
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,8 +184,12 @@ def prepare_openhands_sdk(env: Mapping[str, str]) -> None:
     prepare(env)
 
 
+def _is_carina_login_node(env: Mapping[str, str], *, platform_id: str) -> bool:
+    return platform_id == "carina" and not env.get("SLURM_JOB_ID")
+
+
 def _agent_runtime_available(env: Mapping[str, str], *, platform_id: str) -> bool:
-    if platform_id == "carina" and not env.get("SLURM_JOB_ID"):
+    if _is_carina_login_node(env, platform_id=platform_id):
         try:
             version("openhands-sdk")
             version("openhands-tools")
@@ -192,7 +198,11 @@ def _agent_runtime_available(env: Mapping[str, str], *, platform_id: str) -> boo
         return True
     try:
         prepare_openhands_sdk(env)
-    except Exception:
+    except Exception as error:
+        _LOGGER.warning(
+            "OpenHands runtime readiness probe failed (%s)",
+            type(error).__name__,
+        )
         return False
     return True
 
@@ -206,6 +216,10 @@ def inspect_deployment(
     adapter = select_platform_adapter(active_env)
     detection = adapter.detect(active_env)
     checks: list[ReadinessCheck] = []
+    carina_login_node = _is_carina_login_node(
+        active_env,
+        platform_id=adapter.adapter_id,
+    )
 
     if not _agent_runtime_available(active_env, platform_id=adapter.adapter_id):
         checks.append(
@@ -218,7 +232,7 @@ def inspect_deployment(
     else:
         summary = (
             "OpenHands agent packages are installed; runtime validation follows in the allocation"
-            if adapter.adapter_id == "carina" and not active_env.get("SLURM_JOB_ID")
+            if carina_login_node
             else "OpenHands agent dependencies are available"
         )
         checks.append(

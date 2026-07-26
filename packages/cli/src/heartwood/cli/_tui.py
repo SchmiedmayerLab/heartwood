@@ -27,7 +27,8 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     format_action_arguments,
-    format_projection_lines,
+    format_conversation_lines,
+    format_runtime_lines,
     interaction_activity,
 )
 from heartwood.gateway import (
@@ -187,6 +188,20 @@ class HeartwoodTerminalApp(App[None]):
     #status.waiting { color: $warning; text-style: bold; }
     #status.error { color: $error; }
     #conversation { height: 1fr; padding: 1 2; }
+    #streaming {
+        display: none;
+        height: auto;
+        max-height: 6;
+        padding: 0 2 1 2;
+        color: $success;
+    }
+    #projection-details {
+        display: none;
+        height: auto;
+        max-height: 8;
+        padding: 0 2 1 2;
+        color: $text-muted;
+    }
     #approval { display: none; height: auto; margin: 0 1 1 1; border: round $warning; }
     #approval-title { height: auto; padding: 0 1; color: $warning; text-style: bold; }
     #approval-help { height: auto; padding: 0 1; color: $text-muted; }
@@ -218,13 +233,18 @@ class HeartwoodTerminalApp(App[None]):
         self._projection_timer: Timer | None = None
         self._projection: SessionProjection | None = None
         self._projection_signature: tuple[object, ...] | None = None
-        self._mode_label = self._selected_mode_label()
+        self._projection_read_in_flight = False
+        self._rendered_sequence: int | None = None
+        self._retired_stream_epochs: set[str] = set()
+        self._mode_label = "Action Review"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield Static(self._idle_status("ready"), id="status")
         with Vertical():
             yield RichLog(id="conversation", wrap=True, markup=False)
+            yield Static(id="streaming", markup=False)
+            yield RichLog(id="projection-details", wrap=True, markup=False)
             with Vertical(id="approval"):
                 yield Static(id="approval-title")
                 yield Static(id="approval-help")
@@ -250,7 +270,9 @@ class HeartwoodTerminalApp(App[None]):
             0.5, self._refresh_working_status, pause=True, name="activity"
         )
         self._projection_timer = self.set_interval(0.25, self._sync_projection, name="projection")
+        self.query_one("#composer", Input).focus()
         self._sync_projection()
+        self._load_action_settings(show_screen=False)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Submit input without blocking terminal rendering."""
@@ -280,36 +302,114 @@ class HeartwoodTerminalApp(App[None]):
             self.query_one("#conversation", RichLog).write(result.message)
         if result.replace_transcript:
             self.query_one("#conversation", RichLog).clear()
-        if result.projection is not None:
-            self._render_projection(result.projection)
-        self._mode_label = self._selected_mode_label()
         self._set_busy(False, failed=result.failed)
+        if result.projection is not None:
+            self._apply_projection(
+                result.projection,
+                force=result.replace_transcript,
+            )
         self._sync_projection()
+        self._load_action_settings(show_screen=False)
 
-    def _render_projection(self, projection: SessionProjection) -> None:
+    def _render_projection(
+        self,
+        projection: SessionProjection,
+        *,
+        reset_transcript: bool,
+    ) -> None:
         log = self.query_one("#conversation", RichLog)
-        log.clear()
-        for line in format_projection_lines(
+        if reset_transcript:
+            log.clear()
+            self._rendered_sequence = None
+        for line in format_conversation_lines(
             projection,
-            include_pending_review=False,
+            after_sequence=self._rendered_sequence,
         ):
             if not line:
                 continue
             style = _line_style(line) if self._animations_enabled else None
             log.write(Text(line, style=style) if style else line)
+        if projection.conversation:
+            self._rendered_sequence = max(message.sequence for message in projection.conversation)
+        self._sync_streaming_text(projection)
+        self._sync_projection_details(projection)
         self._projection = projection
 
+    def _sync_streaming_text(self, projection: SessionProjection) -> None:
+        streaming = self.query_one("#streaming", Static)
+        text = projection.streaming_text
+        streaming.display = bool(text)
+        if not text:
+            streaming.update("")
+            return
+        line = f"Agent: {text}"
+        streaming.update(Text(line, style="green") if self._animations_enabled else line)
+
+    def _sync_projection_details(self, projection: SessionProjection) -> None:
+        details = self.query_one("#projection-details", RichLog)
+        lines = format_runtime_lines(projection)
+        details.clear()
+        details.display = bool(lines)
+        for line in lines:
+            details.write(line)
+
+    def _transcript_requires_reset(self, projection: SessionProjection) -> bool:
+        cursor = self._rendered_sequence
+        return cursor is not None and not any(
+            message.sequence == cursor for message in projection.conversation
+        )
+
     def _sync_projection(self) -> None:
-        projection = self.session.replay()
+        if self._projection_read_in_flight:
+            return
+        self._projection_read_in_flight = True
+        self._read_projection()
+
+    @work(thread=True, group="projection-read")
+    def _read_projection(self) -> None:
+        try:
+            projection = self.session.replay()
+        except Exception:
+            self.call_from_thread(self._finish_projection_read, None)
+            return
+        self.call_from_thread(self._finish_projection_read, projection)
+
+    def _finish_projection_read(self, projection: SessionProjection | None) -> None:
+        self._projection_read_in_flight = False
+        if projection is not None:
+            self._apply_projection(projection)
+
+    def _apply_projection(
+        self,
+        projection: SessionProjection,
+        *,
+        force: bool = False,
+    ) -> None:
+        current = self._projection
+        epoch_changed = False
+        if current is not None and projection.stream_epoch != current.stream_epoch:
+            epoch_changed = True
+            if projection.stream_epoch in self._retired_stream_epochs:
+                return
+            self._retired_stream_epochs.add(current.stream_epoch)
+        if (
+            current is not None
+            and not epoch_changed
+            and (projection.revision, projection.stream_revision)
+            < (current.revision, current.stream_revision)
+        ):
+            return
         approval = projection.pending_approval
         signature = (
             projection.revision,
+            projection.stream_revision,
+            projection.stream_epoch,
             projection.streaming_text,
             projection.lifecycle.status,
             None if approval is None else approval.group_id,
             0 if approval is None else len(approval.actions),
         )
-        if signature != self._projection_signature:
+        if force or signature != self._projection_signature:
             was_running = (
                 self._projection is not None and self._projection.lifecycle.status == "running"
             )
@@ -318,9 +418,19 @@ class HeartwoodTerminalApp(App[None]):
                 self._frame = 0
                 self._guidance_shown = False
             self._projection_signature = signature
-            self._render_projection(projection)
+            self._render_projection(
+                projection,
+                reset_transcript=(
+                    force
+                    or current is None
+                    or epoch_changed
+                    or self._transcript_requires_reset(projection)
+                ),
+            )
             self._sync_approval(projection)
             self._sync_runtime_status(projection)
+        else:
+            self._projection = projection
 
     def _set_busy(
         self,
@@ -469,7 +579,7 @@ class HeartwoodTerminalApp(App[None]):
 
     def action_focus_composer(self) -> None:
         """Focus the prompt input."""
-        if self.session.pending_approval() is not None:
+        if self._projection is not None and self._projection.pending_approval is not None:
             self.query_one("#approval-options", OptionList).focus()
             return
         self.query_one("#composer", Input).focus()
@@ -479,7 +589,7 @@ class HeartwoodTerminalApp(App[None]):
         if self._busy:
             self.notify("The active OpenHands turn cannot yet be interrupted.", severity="warning")
             return
-        if self.session.pending_approval() is not None:
+        if self._projection is not None and self._projection.pending_approval is not None:
             self.notify(
                 "Review the pending action set before pausing.",
                 severity="warning",
@@ -491,25 +601,84 @@ class HeartwoodTerminalApp(App[None]):
 
     def action_show_permissions(self) -> None:
         """Open the shared action-mode chooser."""
-        projection = self.session.replay()
         locked_reason = (
             "Wait for the active request to finish before changing this setting."
             if self._busy
-            else (
-                "Resolve the pending action set before changing this setting."
-                if projection.pending_approval is not None
-                else (
-                    "Wait for the active task to reach a review point before changing this setting."
-                    if projection.lifecycle.status == "running"
-                    else None
-                )
-            )
+            else None
         )
+        self._load_action_settings(show_screen=True, locked_reason=locked_reason)
+
+    @work(thread=True, group="action-settings-read", exclusive=True)
+    def _load_action_settings(
+        self,
+        *,
+        show_screen: bool,
+        locked_reason: str | None = None,
+    ) -> None:
+        projection: SessionProjection | None = None
         try:
+            projection = self.session.replay() if show_screen else None
             settings = self.session.action_settings()
         except ActionSettingsError as error:
-            self.notify(str(error), title="Action Review", severity="error")
+            self.call_from_thread(
+                self._finish_action_settings_load,
+                None,
+                error,
+                projection=projection,
+                show_screen=show_screen,
+                locked_reason=locked_reason,
+            )
+        except Exception:
+            self.call_from_thread(
+                self._finish_action_settings_load,
+                None,
+                ActionSettingsError("Action review settings are unavailable"),
+                projection=projection,
+                show_screen=show_screen,
+                locked_reason=locked_reason,
+            )
+        else:
+            self.call_from_thread(
+                self._finish_action_settings_load,
+                settings,
+                None,
+                projection=projection,
+                show_screen=show_screen,
+                locked_reason=locked_reason,
+            )
+
+    def _finish_action_settings_load(
+        self,
+        settings: ActionSettingsResponse | None,
+        error: ActionSettingsError | None,
+        *,
+        projection: SessionProjection | None,
+        show_screen: bool,
+        locked_reason: str | None,
+    ) -> None:
+        if projection is not None:
+            self._apply_projection(projection)
+        if error is not None:
+            self._mode_label = "Action Review Unavailable"
+            if show_screen:
+                self.notify(str(error), title="Action Review", severity="error")
             return
+        assert settings is not None
+        self._mode_label = action_mode_label(settings["confirmation_mode"])
+        if not self._busy:
+            if self._projection is None:
+                self.query_one("#status", Static).update(self._idle_status("ready"))
+            else:
+                self._sync_runtime_status(self._projection)
+        if not show_screen:
+            return
+        if locked_reason is None and projection is not None:
+            if projection.pending_approval is not None:
+                locked_reason = "Resolve the pending action set before changing this setting."
+            elif projection.lifecycle.status == "running":
+                locked_reason = (
+                    "Wait for the active task to reach a review point before changing this setting."
+                )
         locked_reason = locked_reason or settings["change_blocked_reason"]
         self.push_screen(
             ActionModeScreen(
@@ -593,12 +762,6 @@ class HeartwoodTerminalApp(App[None]):
             return
         self._set_busy(True, activity=interaction_activity(directive))
         self._submit(directive)
-
-    def _selected_mode_label(self) -> str:
-        try:
-            return action_mode_label(self.session.action_settings()["confirmation_mode"])
-        except Exception:
-            return "Action Review Unavailable"
 
     def _idle_status(self, state: str) -> str:
         return f"Session {self.session.session_id} · {state.title()} · {self._mode_label}"

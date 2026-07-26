@@ -1517,11 +1517,13 @@ def _submit_simple(gateway: SessionGateway, *, session_id: str, kind: CommandKin
     if result.message:
         print(result.message)
     if result.projection is not None:
+        # Show this command's events, or suppress prior history when it emitted none.
+        after_sequence = (
+            result.events[0].sequence - 1 if result.events else result.projection.revision
+        )
         lines = format_projection_lines(
             result.projection,
-            after_sequence=(
-                result.events[0].sequence - 1 if result.events else result.projection.revision
-            ),
+            after_sequence=after_sequence,
         )
         print(
             "\n".join(lines)
