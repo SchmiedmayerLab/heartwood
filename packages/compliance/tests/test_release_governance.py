@@ -310,6 +310,29 @@ def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
         assert "pull-requests: read" in validation_job
 
 
+def test_python_coverage_upload_uses_oidc_and_fails_closed() -> None:
+    python = Path(".github/workflows/python.yml").read_text(encoding="utf-8")
+    entrypoints = (
+        Path(".github/workflows/main-validation.yml").read_text(encoding="utf-8"),
+        Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8"),
+    )
+
+    assert "  id-token: write" in python.split("jobs:", maxsplit=1)[0]
+    codecov = python.split("      - name: Upload coverage to Codecov\n", maxsplit=1)[1]
+    assert "          fail_ci_if_error: true" in codecov
+    assert "          use_oidc: true" in codecov
+    assert "token:" not in codecov
+    expected_job = """  python:
+    name: Python
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/python.yml
+"""
+    for entrypoint in entrypoints:
+        assert expected_job in entrypoint
+
+
 def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     pull_request = Path(".github/workflows/pull-request-validation.yml").read_text(encoding="utf-8")
     smoke = Path(".github/workflows/container-smoke.yml").read_text(encoding="utf-8")
