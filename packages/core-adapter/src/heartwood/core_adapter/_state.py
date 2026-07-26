@@ -99,6 +99,7 @@ class FileSessionStore:
             timeout=0,
             mode=0o600,
             fallback_to_soft=False,
+            thread_local=False,
         )
         try:
             lock.acquire()

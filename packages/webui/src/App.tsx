@@ -16,6 +16,7 @@ import {
 import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { selectedActionMode } from "./actionPresentation";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import {
@@ -39,6 +40,7 @@ import type {
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelProfile,
+  ModelProfileDraft,
   ModelSource,
   ModelSettings,
   ModelValidation,
@@ -62,7 +64,7 @@ interface InitialState {
   sessions: SessionSummary[];
 }
 
-const emptyProfile = (): ModelProfile => ({
+const emptyProfile = (): ModelProfileDraft => ({
   profile_id: "custom-profile",
   model: "openai/",
   policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
@@ -107,7 +109,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [projectReadiness, setProjectReadiness] =
     useState<ProjectReadiness | null>(null);
   const [startupPlan, setStartupPlan] = useState<StartupPlan | null>(null);
-  const [profileDraft, setProfileDraft] = useState<ModelProfile>(emptyProfile);
+  const [profileDraft, setProfileDraft] =
+    useState<ModelProfileDraft>(emptyProfile);
   const [validation, setValidation] = useState<ModelValidation | null>(null);
   const [validationFailureKey, setValidationFailureKey] = useState<
     string | null
@@ -452,6 +455,20 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     : activeProfile === null ? "Not configured"
     : modelProfileLabel(activeProfile, modelSettings);
   const conversation = projection?.conversation ?? [];
+  const activeActionMode = selectedActionMode(actionSettings);
+  const actionModeLockedReason =
+    requestStatus === "busy" ?
+      "Wait for the active request to finish before changing this setting."
+    : (
+      projection?.pendingApproval !== null &&
+      projection?.pendingApproval !== undefined
+    ) ?
+      "Resolve the pending action set before changing this setting."
+    : projection?.lifecycle.status === "running" ?
+      "Wait for the active task to reach a review point before changing this setting."
+    : actionSettings?.change_allowed === false ?
+      actionSettings.change_blocked_reason
+    : null;
 
   useEffect(() => {
     scrollConversationEnd(conversationEndRef.current);
@@ -729,7 +746,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         <SessionRail {...railProps} />
         <section className="workbench">
           <WorkspaceHeader
-            actionSettings={actionSettings}
+            actionModeLabel={activeActionMode?.label ?? "Loading"}
             modelDetail={activeProfile?.model ?? null}
             modelLabel={activeModelLabel}
             modelStatus={modelStatus.kind}
@@ -740,6 +757,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
+            onOpenActionReview={() => openPanel("action-review")}
             onOpenMenu={() => setMobileSessionsOpen(true)}
             onRename={(title) => void renameSession(title)}
           />
@@ -777,6 +795,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           : null}
 
           <ConversationWorkspace
+            actionModeLabel={activeActionMode?.label ?? null}
+            actionPresentation={actionSettings?.presentation ?? null}
             conversationEndRef={conversationEndRef}
             modelConfigured={modelReady}
             modelMessage={modelStatus.message}
@@ -813,6 +833,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         </Sheet>
 
         <UtilitySheet
+          actionModeLockedReason={actionModeLockedReason}
           actions={actionSettings}
           artifacts={modelArtifacts}
           panel={panel}
@@ -939,7 +960,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               .catch((caught: unknown) => setError(errorMessage(caught)))
           }
           onSaveProfile={() => void saveProfile()}
-          onSelectActionMode={(mode) => void selectActionMode(mode)}
+          onSelectActionMode={selectActionMode}
           onSelectProfile={(profileId) => void selectProfile(profileId)}
           onSetSkillApproved={setSkillApproved}
           onSetSkillSource={setSkillSource}

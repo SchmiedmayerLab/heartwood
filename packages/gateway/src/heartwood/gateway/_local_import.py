@@ -52,14 +52,6 @@ class LocalModelImport:
         """Return the project directory committed for this imported model."""
         return self.path if self.path.is_dir() else self.path.parent
 
-    def safe_dict(self) -> dict[str, object]:
-        """Return import metadata without the original filesystem path."""
-        return {
-            "model": self.model.safe_dict(),
-            "path": str(self.path),
-            "status": "ready",
-        }
-
 
 def import_local_model(
     source: Path,

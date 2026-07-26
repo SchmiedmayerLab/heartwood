@@ -19,7 +19,7 @@ from heartwood.gateway import (
     action_settings_from_mapping,
 )
 from heartwood.schemas import PolicyProfile
-from heartwood.session import CommandKind, SessionCommand
+from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
 @pytest.mark.parametrize(
@@ -65,6 +65,38 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
         "always-confirm",
         "confirm-risky",
     ]
+    scope_description = initial["scope_description"]
+    assert isinstance(scope_description, str)
+    assert scope_description.startswith("Shared by every Heartwood interface")
+    assert modes[0] == {
+        "allowed": True,
+        "automatic_risks": [],
+        "command_value": "ask-every-time",
+        "description": (
+            "Heartwood pauses before every proposed action set so you can inspect it "
+            "before anything runs."
+        ),
+        "label": "Review Every Action",
+        "mode": "always-confirm",
+        "recommended": True,
+        "reviewed_risks": ["low", "medium", "high", "unknown"],
+        "unavailable_reason": None,
+    }
+    assert initial["presentation"] == {
+        "other_tool_label_template": "{tool_name} Action",
+        "risk_labels": {
+            "high": "High Risk",
+            "low": "Low Risk",
+            "medium": "Medium Risk",
+            "unknown": "Not Classified",
+        },
+        "tool_labels": {
+            "file_editor": "File Change",
+            "terminal": "Terminal Command",
+        },
+        "unknown_risk_label": "Not Classified",
+        "unknown_tool_label": "Tool Action",
+    }
     assert selected["confirmation_mode"] == "confirm-risky"
     assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
 
@@ -115,5 +147,47 @@ def test_gateway_rejects_confirmation_mode_blocked_by_deployment_policy(
     )
     gateway = SessionGateway(project=project, env={})
 
+    modes = gateway.action_settings()["modes"]
+    assert isinstance(modes, list)
+    restricted = next(item for item in modes if item["mode"] == "confirm-risky")
+    assert restricted["allowed"] is False
+    assert restricted["unavailable_reason"] == ("Unavailable under the active platform policy.")
+
     with pytest.raises(ActionSettingsError, match="not allowed by platform policy"):
         gateway.select_action_confirmation_mode("confirm-risky")
+
+
+def test_cached_service_reloads_action_mode_changed_by_another_gateway(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    reader = SessionGateway(project=project, env={}, backend_id="deterministic")
+    writer = SessionGateway(project=project, env={}, backend_id="deterministic")
+    try:
+        writer.select_action_confirmation_mode("confirm-risky")
+
+        first = reader.handle(_chat_command("first"))
+        first_kinds = {str(event.kind) for event in first.events}
+        assert EventKind.TOOL_EXECUTION_RECORDED.value in first_kinds
+        assert EventKind.CONFIRMATION_REQUESTED.value not in first_kinds
+
+        writer.select_action_confirmation_mode("always-confirm")
+
+        second = reader.handle(_chat_command("second"))
+        second_kinds = {str(event.kind) for event in second.events}
+        assert EventKind.CONFIRMATION_REQUESTED.value in second_kinds
+        assert EventKind.TOOL_EXECUTION_RECORDED.value not in second_kinds
+    finally:
+        reader.stop()
+        writer.stop()
+
+
+def _chat_command(command_id: str) -> SessionCommand:
+    return SessionCommand(
+        command_id=command_id,
+        session_id="shared-session",
+        kind=CommandKind.CHAT,
+        actor_id="synthetic-user",
+        created_at="2026-07-25T00:00:00Z",
+        payload={"prompt": "inspect the synthetic project"},
+    )

@@ -33,8 +33,10 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
 )
+from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
+    ACTION_MODE_SCOPE_DESCRIPTION,
     ActionSettings,
     ActionSettingsError,
 )
@@ -133,7 +135,28 @@ from heartwood.gateway._subscriptions import (
     SubscriptionProvider,
 )
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import (
+    ActionSettingsResponse,
+    AuditExportResponse,
+    CredentialSettingsResponse,
+    LocalModelImportResponse,
+    ModelArtifactsResponse,
+    ModelCatalogResponse,
+    ModelDownloadResponse,
+    ModelRepositoryPlanResponse,
+    ModelSettingsResponse,
+    ModelValidationResponse,
+    PlatformCapabilitiesResponse,
+    PolicyProfile,
+    ProjectReadinessResponse,
+    SessionListResponse,
+    SessionSummaryResponse,
+    SkillSettingsResponse,
+    SkillSummaryResponse,
+    StartupPlanResponse,
+    SubscriptionDeviceLoginResponse,
+    api_response,
+)
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
@@ -198,6 +221,16 @@ class _ActionSettingsStore(Protocol):
 
     def save(self, settings: ActionSettings) -> None:
         """Persist action settings."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ServiceConfiguration:
+    """Configuration snapshot that owns one cached agent service."""
+
+    model_settings: ModelSettings
+    action_settings: ActionSettings
+    policy_profile: PolicyProfile
+    local_model: LocalModelSelection | None
 
 
 class _UnconfiguredAgentBackend:
@@ -419,6 +452,7 @@ class SessionGateway:
         self._service_factory = service_factory
         self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
+        self._service_configurations: dict[str, _ServiceConfiguration] = {}
         self._streams = EventStreamHub()
         self._streaming_text: dict[str, str] = {}
         self._stream_revisions: dict[str, int] = {}
@@ -428,7 +462,7 @@ class SessionGateway:
         """Start the interface lifecycle without requiring an agent dependency import."""
 
     @_serialized_state
-    def initialize_project(self, *, interface: InterfaceKind = "web") -> dict[str, object]:
+    def initialize_project(self, *, interface: InterfaceKind = "web") -> StartupPlanResponse:
         """Confirm the current directory as the project and create private state."""
         self.project.initialize()
         return self.startup_plan(interface=interface)
@@ -444,16 +478,17 @@ class SessionGateway:
     @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
-        with self._stream_lock:
+        with self.config_store.locked(), self._stream_lock:
             self.project.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
                 self.session_catalog.default()
             else:
                 self.session_catalog.ensure(command.session_id)
             service = self._service(command.session_id)
-            projection = self._session_snapshot_locked(
+            snapshot = self._session_snapshot_locked(
                 session_id=command.session_id,
-            ).projection
+            )
+            projection = snapshot.projection
             command_kind = str(command.kind)
             unavailable_reason = (
                 None
@@ -476,32 +511,44 @@ class SessionGateway:
                     session_id=command.session_id,
                     events=result.events,
                 )
-                self._streams.publish(session_id=command.session_id, events=result.events)
+                self._streams.publish(
+                    session_id=command.session_id,
+                    events=result.events,
+                )
             return result
 
-    def sessions(self) -> dict[str, object]:
+    def sessions(self) -> SessionListResponse:
         """Return persisted sessions ordered by recent activity."""
-        return {"sessions": [summary.safe_dict() for summary in self.session_catalog.list()]}
+        return api_response(
+            SessionListResponse,
+            {"sessions": [summary.safe_dict() for summary in self.session_catalog.list()]},
+        )
 
-    def create_session(self, title: str | None = None) -> dict[str, object]:
+    def create_session(self, title: str | None = None) -> SessionSummaryResponse:
         """Create and return one empty session."""
         self.project.initialize()
-        return self.session_catalog.create(title).safe_dict()
+        return api_response(SessionSummaryResponse, self.session_catalog.create(title).safe_dict())
 
-    def default_session(self) -> dict[str, object]:
+    def default_session(self) -> SessionSummaryResponse:
         """Return the shared first session, creating it when needed."""
         self.project.initialize()
-        return self.session_catalog.default().safe_dict()
+        return api_response(SessionSummaryResponse, self.session_catalog.default().safe_dict())
 
-    def session(self, session_id: str) -> dict[str, object]:
+    def session(self, session_id: str) -> SessionSummaryResponse:
         """Return one persisted session summary."""
-        return self.session_catalog.get(session_id).safe_dict()
+        return api_response(
+            SessionSummaryResponse,
+            self.session_catalog.get(session_id).safe_dict(),
+        )
 
-    def rename_session(self, session_id: str, title: str) -> dict[str, object]:
+    def rename_session(self, session_id: str, title: str) -> SessionSummaryResponse:
         """Rename one persisted session."""
-        return self.session_catalog.rename(session_id, title).safe_dict()
+        return api_response(
+            SessionSummaryResponse,
+            self.session_catalog.rename(session_id, title).safe_dict(),
+        )
 
-    def audit_export(self, session_id: str) -> dict[str, object]:
+    def audit_export(self, session_id: str) -> AuditExportResponse:
         """Return a generated scrubbed audit export for browser delivery."""
         self.session_catalog.get(session_id)
         store = FileSessionStore(self.sessions_root, session_id)
@@ -510,10 +557,13 @@ class SessionGateway:
         except OSError as error:
             msg = f"audit export is not available for session: {session_id}"
             raise SessionCatalogError(msg) from error
-        return {
-            "filename": f"{session_id}-audit.jsonl",
-            "content": content,
-        }
+        return api_response(
+            AuditExportResponse,
+            {
+                "filename": f"{session_id}-audit.jsonl",
+                "content": content,
+            },
+        )
 
     @_serialized_state
     def replay_events(
@@ -595,7 +645,7 @@ class SessionGateway:
             )
             return stream, snapshot
 
-    def model_settings(self) -> dict[str, object]:
+    def model_settings(self) -> ModelSettingsResponse:
         """Return API-safe settings, connections, and advanced presets."""
         settings = self.settings_store.load()
         config = self.config_store.load()
@@ -619,37 +669,46 @@ class SessionGateway:
             for profile in profiles:
                 if isinstance(profile, dict) and profile.get("auth_type") == "subscription":
                     profile["credential_status"] = subscription_status
-        return {
-            **safe_settings,
-            "model_source": config.model_source,
-            "source_options": [
-                option.safe_dict(selected=option.source_id == config.model_source)
-                for option in model_source_options(self.env)
-            ],
-            "connections": [
-                self._safe_connection(connection, credential_env, subscription_status)
-                for connection in sorted(
-                    self._model_connections.values(),
-                    key=lambda connection: connection.presentation_order,
-                )
-            ],
-            "presets": [preset.safe_dict() for preset in MODEL_PRESETS],
-            "credential_store": self.credential_store.availability().safe_dict(),
-            "credential_bindings": [
-                self.credential_store.status(binding).safe_dict() for binding in credential_bindings
-            ],
-        }
+        return api_response(
+            ModelSettingsResponse,
+            {
+                **safe_settings,
+                "model_source": config.model_source,
+                "source_options": [
+                    option.safe_dict(selected=option.source_id == config.model_source)
+                    for option in model_source_options(self.env)
+                ],
+                "connections": [
+                    self._safe_connection(connection, credential_env, subscription_status)
+                    for connection in sorted(
+                        self._model_connections.values(),
+                        key=lambda connection: connection.presentation_order,
+                    )
+                ],
+                "presets": [preset.safe_dict() for preset in MODEL_PRESETS],
+                "credential_store": self.credential_store.availability().safe_dict(),
+                "credential_bindings": [
+                    self.credential_store.status(binding).safe_dict()
+                    for binding in credential_bindings
+                ],
+            },
+        )
 
-    def credential_settings(self) -> dict[str, object]:
+    def credential_settings(self) -> CredentialSettingsResponse:
         """Return non-secret credential storage and binding state."""
         bindings = sorted(self._credential_binding_ids())
-        return {
-            "store": self.credential_store.availability().safe_dict(),
-            "bindings": [self.credential_store.status(binding).safe_dict() for binding in bindings],
-        }
+        return api_response(
+            CredentialSettingsResponse,
+            {
+                "store": self.credential_store.availability().safe_dict(),
+                "bindings": [
+                    self.credential_store.status(binding).safe_dict() for binding in bindings
+                ],
+            },
+        )
 
     @_serialized_state
-    def forget_credential(self, connection_id: str) -> dict[str, object]:
+    def forget_credential(self, connection_id: str) -> CredentialSettingsResponse:
         """Forget the process and persisted token for one model connection."""
         connection = self._model_connections.get(connection_id)
         if connection is None:
@@ -674,7 +733,7 @@ class SessionGateway:
         force_login: bool = False,
         open_browser: bool = True,
         auth_method: Literal["browser", "device_code"] = "browser",
-    ) -> dict[str, object]:
+    ) -> ModelSettingsResponse:
         """Run the OpenHands interactive subscription login flow."""
         connection = self._subscription_connection(connection_id)
         if auth_method not in {"browser", "device_code"}:
@@ -691,11 +750,17 @@ class SessionGateway:
         return self.model_settings()
 
     @_serialized_state
-    def start_subscription_device_login(self, connection_id: str) -> dict[str, object]:
+    def start_subscription_device_login(
+        self,
+        connection_id: str,
+    ) -> SubscriptionDeviceLoginResponse:
         """Start an OpenHands device-code flow for browser and remote clients."""
         self._subscription_connection(connection_id)
         try:
-            return self.subscription_provider.start_device_login().safe_dict()
+            return api_response(
+                SubscriptionDeviceLoginResponse,
+                self.subscription_provider.start_device_login().safe_dict(),
+            )
         except SubscriptionError as error:
             raise ModelCatalogError(str(error)) from error
 
@@ -704,11 +769,14 @@ class SessionGateway:
         self,
         connection_id: str,
         login_id: str,
-    ) -> dict[str, object]:
+    ) -> SubscriptionDeviceLoginResponse:
         """Poll one OpenHands device-code flow."""
         self._subscription_connection(connection_id)
         try:
-            return self.subscription_provider.poll_device_login(login_id).safe_dict()
+            return api_response(
+                SubscriptionDeviceLoginResponse,
+                self.subscription_provider.poll_device_login(login_id).safe_dict(),
+            )
         except SubscriptionError as error:
             raise ModelCatalogError(str(error)) from error
 
@@ -719,13 +787,16 @@ class SessionGateway:
             self._credential_environment(strict=False),
         )
 
-    def project_readiness(self) -> dict[str, object]:
+    def project_readiness(self) -> ProjectReadinessResponse:
         """Return content-free project diagnostics for presentation adapters."""
-        return self.deployment_readiness().safe_dict()
+        return api_response(ProjectReadinessResponse, self.deployment_readiness().safe_dict())
 
-    def platform_capabilities(self) -> dict[str, object]:
+    def platform_capabilities(self) -> PlatformCapabilitiesResponse:
         """Return capabilities owned by the detected platform adapter."""
-        return select_platform_adapter(self.env).capabilities().safe_dict()
+        return api_response(
+            PlatformCapabilitiesResponse,
+            select_platform_adapter(self.env).capabilities().safe_dict(),
+        )
 
     def startup(
         self,
@@ -746,12 +817,15 @@ class SessionGateway:
         *,
         interface: InterfaceKind,
         port: int = 8767,
-    ) -> dict[str, object]:
+    ) -> StartupPlanResponse:
         """Return the shared startup plan for presentation adapters."""
-        return self.startup(interface=interface, port=port).safe_dict()
+        return api_response(
+            StartupPlanResponse,
+            self.startup(interface=interface, port=port).safe_dict(),
+        )
 
     @_serialized_state
-    def configure_model_source(self, model_source: str) -> dict[str, object]:
+    def configure_model_source(self, model_source: str) -> ModelSettingsResponse:
         """Prepare one shared model source and its deployment policy."""
         option = next(
             (
@@ -780,7 +854,7 @@ class SessionGateway:
         base_url: str | None = None,
         refresh: bool = False,
         remember: bool = False,
-    ) -> dict[str, object]:
+    ) -> ModelCatalogResponse:
         """Authorize and discover every model exposed by one connection."""
         connection = self._resolve_model_connection(
             connection_id,
@@ -811,7 +885,7 @@ class SessionGateway:
             safe_connection = payload.get("connection")
             if isinstance(safe_connection, dict):
                 safe_connection["credential_status"] = self._subscription_credential_status()
-        return payload
+        return api_response(ModelCatalogResponse, payload)
 
     def connect_model(
         self,
@@ -822,7 +896,7 @@ class SessionGateway:
         base_url: str | None = None,
         manual: bool = False,
         remember: bool = False,
-    ) -> dict[str, object]:
+    ) -> ModelSettingsResponse:
         """Select a discovered model and materialize its OpenHands profile."""
         connection = self._resolve_model_connection(
             connection_id,
@@ -885,45 +959,75 @@ class SessionGateway:
             self._reset_services()
             return self.model_settings()
 
-    def action_settings(self) -> dict[str, object]:
+    def action_settings(self) -> ActionSettingsResponse:
         """Return the selected and deployment-allowed confirmation modes."""
-        settings = self.action_settings_store.load()
-        policy_profile = self._policy_profile()
+        try:
+            config = self.config_store.load()
+        except ProjectConfigError as error:
+            raise ActionSettingsError(str(error)) from error
+        settings = (
+            config.action_settings
+            if isinstance(self.action_settings_store, ProjectActionSettingsStore)
+            else self.action_settings_store.load()
+        )
+        policy_profile = config.policy
         allowed = set(policy_profile.allowed_action_confirmation_modes)
         blocking_sessions = self._active_service_session_ids()
-        return {
-            **settings.safe_dict(),
-            "change_allowed": not blocking_sessions,
-            "change_blocked_reason": (
-                None
-                if not blocking_sessions
-                else "Finish or resolve active session work before changing approvals."
-            ),
-            "modes": [
-                {**option.safe_dict(), "allowed": option.mode in allowed}
-                for option in ACTION_MODE_OPTIONS
-            ],
-        }
+        return api_response(
+            ActionSettingsResponse,
+            {
+                **settings.safe_dict(),
+                "scope_description": ACTION_MODE_SCOPE_DESCRIPTION,
+                "presentation": action_presentation(),
+                "change_allowed": not blocking_sessions,
+                "change_blocked_reason": (
+                    None
+                    if not blocking_sessions
+                    else "Finish or resolve active session work before changing approvals."
+                ),
+                "modes": [
+                    {
+                        **option.safe_dict(),
+                        "allowed": option.mode in allowed,
+                        "unavailable_reason": (
+                            None
+                            if option.mode in allowed
+                            else "Unavailable under the active platform policy."
+                        ),
+                    }
+                    for option in ACTION_MODE_OPTIONS
+                ],
+            },
+        )
 
     @_serialized_state
-    def select_action_confirmation_mode(self, mode: str) -> dict[str, object]:
+    def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
         """Select a deployment-allowed OpenHands confirmation mode."""
-        policy_profile = self._policy_profile()
-        if mode not in policy_profile.allowed_action_confirmation_modes:
-            msg = f"action confirmation mode is not allowed by platform policy: {mode}"
-            raise ActionSettingsError(msg)
         blocking_sessions = self._active_service_session_ids()
         if blocking_sessions:
             raise ActionSettingsError(
                 "action confirmation mode cannot change while a session is active"
             )
-        settings = self.action_settings_store.load().selecting(mode)
+        if isinstance(self.action_settings_store, ProjectActionSettingsStore):
+            try:
+                self.config_store.update(
+                    lambda config: _select_action_confirmation_mode(config, mode)
+                )
+            except ProjectConfigError as error:
+                raise ActionSettingsError(str(error)) from error
+        else:
+            with self.config_store.locked():
+                config = self.config_store.load()
+                if mode not in config.policy.allowed_action_confirmation_modes:
+                    msg = f"action confirmation mode is not allowed by platform policy: {mode}"
+                    raise ActionSettingsError(msg)
+                settings = self.action_settings_store.load().selecting(mode)
+                self.action_settings_store.save(settings)
         self._reset_services()
-        self.action_settings_store.save(settings)
         return self.action_settings()
 
     @_serialized_state
-    def save_model_profile(self, profile: ModelProfile) -> dict[str, object]:
+    def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or replace a non-secret profile and reset active services."""
         profile = align_model_profile_request_endpoint(profile)
         if profile.profile_id in _RESERVED_MODEL_PROFILE_IDS:
@@ -936,7 +1040,7 @@ class SessionGateway:
         return self.model_settings()
 
     @_serialized_state
-    def select_model_profile(self, profile_id: str) -> dict[str, object]:
+    def select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Select a profile and reset active services."""
         settings = self.settings_store.load().selecting(profile_id)
         self._save_model_selection(self._model_source_for_profile(settings.profile()), settings)
@@ -944,7 +1048,7 @@ class SessionGateway:
         return self.model_settings()
 
     @_serialized_state
-    def remove_model_profile(self, profile_id: str) -> dict[str, object]:
+    def remove_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Remove a profile and reset active services."""
         if profile_id in _RESERVED_MODEL_PROFILE_IDS:
             raise ModelSettingsError(f"model profile is managed by Heartwood: {profile_id}")
@@ -954,7 +1058,10 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
-    def validate_model_profile(self, profile_id: str | None = None) -> dict[str, object]:
+    def validate_model_profile(
+        self,
+        profile_id: str | None = None,
+    ) -> ModelValidationResponse:
         """Validate credential availability and platform route authorization."""
         profile = self.settings_store.load().profile(profile_id)
         action_settings = self.action_settings_store.load()
@@ -972,18 +1079,21 @@ class SessionGateway:
             decision_id=f"model-profile-{profile.profile_id}",
             purpose=purpose,
         )
-        return {
-            "profile": profile.safe_dict(),
-            "credential_status": (
-                self._subscription_credential_status()
-                if profile.auth_type == "subscription"
-                else profile.credential_status(self._credential_environment())
-            ),
-            "action_confirmation_mode": action_settings.confirmation_mode,
-            "policy_decision": decision.model_dump(mode="json"),
-        }
+        return api_response(
+            ModelValidationResponse,
+            {
+                "profile": profile.safe_dict(),
+                "credential_status": (
+                    self._subscription_credential_status()
+                    if profile.auth_type == "subscription"
+                    else profile.credential_status(self._credential_environment())
+                ),
+                "action_confirmation_mode": action_settings.confirmation_mode,
+                "policy_decision": decision.model_dump(mode="json"),
+            },
+        )
 
-    def model_artifacts(self) -> dict[str, object]:
+    def model_artifacts(self) -> ModelArtifactsResponse:
         """Return normalized local choices, source metadata, and download status."""
         snapshot_catalog = self.snapshot_catalog.safe_dict()
         statuses = {status.model_id: status for status in self.local_model_manager.statuses()}
@@ -1062,27 +1172,30 @@ class SessionGateway:
             )
             for choice in local_choices
         ]
-        return {
-            **self.artifact_catalog.safe_dict(),
-            "snapshot_schema_version": snapshot_catalog["schema_version"],
-            "snapshots": snapshot_catalog["snapshots"],
-            "models": choices,
-            "downloads": [status.safe_dict() for status in statuses.values()],
-            "gpu_environment": {
-                "platform_id": gpu_environment.platform_id,
-                "capacities": [
-                    {
-                        "label": capacity.label,
-                        "gpu_model": capacity.gpu_model,
-                        "gpu_count": capacity.gpu_count,
-                        "gpu_memory_bytes": capacity.gpu_memory_bytes,
-                        "allocation_required": capacity.allocation_required,
-                        "partition": capacity.partition,
-                    }
-                    for capacity in gpu_environment.capacities
-                ],
+        return api_response(
+            ModelArtifactsResponse,
+            {
+                **self.artifact_catalog.safe_dict(),
+                "snapshot_schema_version": snapshot_catalog["schema_version"],
+                "snapshots": snapshot_catalog["snapshots"],
+                "models": choices,
+                "downloads": [status.safe_dict() for status in statuses.values()],
+                "gpu_environment": {
+                    "platform_id": gpu_environment.platform_id,
+                    "capacities": [
+                        {
+                            "label": capacity.label,
+                            "gpu_model": capacity.gpu_model,
+                            "gpu_count": capacity.gpu_count,
+                            "gpu_memory_bytes": capacity.gpu_memory_bytes,
+                            "allocation_required": capacity.allocation_required,
+                            "partition": capacity.partition,
+                        }
+                        for capacity in gpu_environment.capacities
+                    ],
+                },
             },
-        }
+        )
 
     def gpu_environment(self, *, refresh: bool = False) -> GpuEnvironment:
         """Return the shared GPU and scheduler inventory for this deployment."""
@@ -1142,7 +1255,7 @@ class SessionGateway:
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelRepositoryPlanResponse:
         """Build one automatic download plan without downloading model weights."""
         plan = self.model_repository.plan(
             repository,
@@ -1154,30 +1267,39 @@ class SessionGateway:
         self._repository_plans[(plan.model.source_repository, plan.model.source_revision)] = (
             plan.model
         )
-        return {
-            "model": self._local_model_choice_dict(plan.model),
-            "selection_reason": plan.selection_reason,
-        }
+        return api_response(
+            ModelRepositoryPlanResponse,
+            {
+                "model": self._local_model_choice_dict(plan.model),
+                "selection_reason": plan.selection_reason,
+            },
+        )
 
-    def download_local_model(self, model_id: str) -> dict[str, object]:
+    def download_local_model(self, model_id: str) -> ModelDownloadResponse:
         """Start a known local-model download into project storage."""
         self.project.initialize()
         choice = self._require_downloadable_local_model(model_id)
-        return self.local_model_manager.start_model(choice.download_model()).safe_dict()
+        return api_response(
+            ModelDownloadResponse,
+            self.local_model_manager.start_model(choice.download_model()).safe_dict(),
+        )
 
     def download_custom_local_model(
         self,
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelDownloadResponse:
         """Resolve and start one user-selected Hugging Face model download."""
         self.project.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
         )
-        return self.local_model_manager.start_model(choice.download_model()).safe_dict()
+        return api_response(
+            ModelDownloadResponse,
+            self.local_model_manager.start_model(choice.download_model()).safe_dict(),
+        )
 
     def download_local_model_now(
         self,
@@ -1242,7 +1364,7 @@ class SessionGateway:
         source_revision: str,
         license_posture: str,
         context_window: int,
-    ) -> dict[str, object]:
+    ) -> LocalModelImportResponse:
         """Import and select a reviewed local GGUF file or vLLM snapshot."""
         self.project.initialize()
         imported = import_local_model(
@@ -1266,18 +1388,39 @@ class SessionGateway:
             self.config_store.restore(previous_config)
             shutil.rmtree(imported.storage_root, ignore_errors=True)
             raise
-        return imported.safe_dict()
+        selected = self.config_store.load().local_model
+        selected_for_project = selected is not None and selected.artifact_id == choice.model_id
+        return api_response(
+            LocalModelImportResponse,
+            {
+                "model": self._local_model_choice_dict(
+                    choice,
+                    active=(
+                        selected_for_project
+                        and selected is not None
+                        and managed_local_runtime_active(selected, self.env)
+                    ),
+                    selected=selected_for_project,
+                    recommendation="Selected for this project",
+                ),
+                "path": str(imported.path),
+                "status": "ready",
+            },
+        )
 
-    def skill_settings(self) -> dict[str, object]:
+    def skill_settings(self) -> SkillSettingsResponse:
         """Return bundled and explicitly installed Skills."""
-        return {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]}
+        return api_response(
+            SkillSettingsResponse,
+            {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]},
+        )
 
-    def inspect_skill(self, source: Path) -> dict[str, object]:
+    def inspect_skill(self, source: Path) -> SkillSummaryResponse:
         """Verify a mounted Skill source without installing it."""
-        return self.skill_manager.inspect(source).safe_dict()
+        return api_response(SkillSummaryResponse, self.skill_manager.inspect(source).safe_dict())
 
     @_serialized_state
-    def install_skill(self, source: Path, *, approved: bool) -> dict[str, object]:
+    def install_skill(self, source: Path, *, approved: bool) -> SkillSettingsResponse:
         """Install one extension after an explicit trust decision."""
         self.project.initialize()
         self.skill_manager.install(source, approved=approved)
@@ -1285,7 +1428,7 @@ class SessionGateway:
         return self.skill_settings()
 
     @_serialized_state
-    def remove_skill(self, name: str) -> dict[str, object]:
+    def remove_skill(self, name: str) -> SkillSettingsResponse:
         """Remove one installed extension and reset active conversations."""
         self.skill_manager.remove(name)
         self._reset_services()
@@ -1293,28 +1436,66 @@ class SessionGateway:
 
     @_serialized_state
     def _service(self, session_id: str) -> SessionService:
+        configuration = self._service_configuration()
         service = self._services.get(session_id)
+        if service is not None and self._service_configurations.get(session_id) != configuration:
+            service.close()
+            self._services.pop(session_id, None)
+            self._service_configurations.pop(session_id, None)
+            with self._stream_lock:
+                had_transient_state = (
+                    session_id in self._streaming_active or session_id in self._streaming_text
+                )
+                self._streaming_active.discard(session_id)
+                self._streaming_text.pop(session_id, None)
+                if had_transient_state:
+                    self._advance_stream_revision(session_id)
+                    self._streams.notify(session_id=session_id)
+            service = None
         if service is None:
             if self._service_factory is not None:
                 service = self._service_factory(self.sessions_root, session_id)
             else:
-                service = self._default_service(session_id)
+                service = self._default_service(session_id, configuration)
             self._services[session_id] = service
+            self._service_configurations[session_id] = configuration
         return service
 
-    def _default_service(self, session_id: str) -> SessionService:
-        model_settings = self.settings_store.load()
-        action_settings = self.action_settings_store.load()
-        backend = self._backend(
+    def _service_configuration(self) -> _ServiceConfiguration:
+        config = self.config_store.load()
+        model_settings = (
+            config.model_settings
+            if isinstance(self.settings_store, ProjectModelSettingsStore)
+            else self.settings_store.load()
+        )
+        action_settings = (
+            config.action_settings
+            if isinstance(self.action_settings_store, ProjectActionSettingsStore)
+            else self.action_settings_store.load()
+        )
+        return _ServiceConfiguration(
             model_settings=model_settings,
             action_settings=action_settings,
+            policy_profile=config.policy,
+            local_model=config.local_model,
+        )
+
+    def _default_service(
+        self,
+        session_id: str,
+        configuration: _ServiceConfiguration,
+    ) -> SessionService:
+        backend = self._backend(
+            model_settings=configuration.model_settings,
+            action_settings=configuration.action_settings,
+            selected_model=configuration.local_model,
             session_id=session_id,
         )
         return SessionService.local_default(
             self.sessions_root,
             session_id=session_id,
             backend=backend,
-            policy_profile=self._policy_profile(),
+            policy_profile=configuration.policy_profile,
             env=self.env,
             event_sink=lambda events: self._publish_background_events(
                 session_id=session_id,
@@ -1331,6 +1512,7 @@ class SessionGateway:
         *,
         model_settings: ModelSettings,
         action_settings: ActionSettings,
+        selected_model: LocalModelSelection | None,
         session_id: str,
     ) -> AgentBackend:
         backend_id = self.backend_id
@@ -1346,7 +1528,7 @@ class SessionGateway:
             profile = model_settings.profile()
         except ModelSettingsError:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
-        selected_model = self.config_store.load().local_model if profile.is_local else None
+        selected_model = selected_model if profile.is_local else None
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
         return OpenHandsSdkBackend(
@@ -1640,12 +1822,19 @@ class SessionGateway:
     def _reset_services(self) -> None:
         services = tuple(self._services.items())
         failed: dict[str, SessionService] = {}
+        configurations = dict(self._service_configurations)
+        self._services.clear()
+        self._service_configurations.clear()
+        failed_configurations: dict[str, _ServiceConfiguration] = {}
         errors: list[Exception] = []
         for session_id, service in services:
             try:
                 service.close()
             except Exception as error:
                 failed[session_id] = service
+                configuration = configurations.get(session_id)
+                if configuration is not None:
+                    failed_configurations[session_id] = configuration
                 errors.append(error)
             else:
                 with self._stream_lock:
@@ -1658,6 +1847,7 @@ class SessionGateway:
                         self._advance_stream_revision(session_id)
                         self._streams.notify(session_id=session_id)
         self._services = failed
+        self._service_configurations = failed_configurations
         if errors:
             raise ExceptionGroup("unable to close all session services", errors)
 
@@ -1976,6 +2166,16 @@ def _starts_streaming_text(event: SessionEvent) -> bool:
         str(event.kind) == EventKind.AGENT_LIFECYCLE_UPDATED.value
         and event.payload.get("status") == "running"
     )
+
+
+def _select_action_confirmation_mode(
+    config: ProjectConfig,
+    mode: str,
+) -> ProjectConfig:
+    if mode not in config.policy.allowed_action_confirmation_modes:
+        msg = f"action confirmation mode is not allowed by platform policy: {mode}"
+        raise ActionSettingsError(msg)
+    return config.with_action_settings(config.action_settings.selecting(mode))
 
 
 def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelChoice:

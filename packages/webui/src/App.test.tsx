@@ -38,6 +38,7 @@ import type {
   ModelConnection,
   ModelDownload,
   ModelProfile,
+  ModelProfileDraft,
   ModelRepositoryPlan,
   ModelRepositoryRequest,
   ModelSource,
@@ -131,14 +132,49 @@ const settings = (): ModelSettings => ({
 const actions = (): ActionSettings => ({
   schema_version: "heartwood.action-settings.v1",
   confirmation_mode: "always-confirm",
+  scope_description:
+    "Shared by every Heartwood interface in this project and applied to future action sets.",
+  presentation: {
+    risk_labels: {
+      high: "High Risk",
+      low: "Low Risk",
+      medium: "Medium Risk",
+      unknown: "Not Classified",
+    },
+    tool_labels: {
+      file_editor: "File Change",
+      terminal: "Terminal Command",
+    },
+    other_tool_label_template: "{tool_name} Action",
+    unknown_risk_label: "Not Classified",
+    unknown_tool_label: "Tool Action",
+  },
   change_allowed: true,
   change_blocked_reason: null,
   modes: [
-    { mode: "always-confirm", label: "Ask Every Time", allowed: true },
+    {
+      mode: "always-confirm",
+      command_value: "ask-every-time",
+      label: "Review Every Action",
+      description:
+        "Heartwood pauses before every proposed action set so you can inspect it before anything runs.",
+      automatic_risks: [],
+      reviewed_risks: ["low", "medium", "high", "unknown"],
+      recommended: true,
+      allowed: true,
+      unavailable_reason: null,
+    },
     {
       mode: "confirm-risky",
-      label: "Auto-Approve Low Risk",
+      command_value: "auto-approve-low-risk",
+      label: "Low-Risk Automation",
+      description:
+        "An action set continues automatically only when every action is low risk. Any medium-, high-, or unclassified-risk action pauses the complete set for review.",
+      automatic_risks: ["low"],
+      reviewed_risks: ["medium", "high", "unknown"],
+      recommended: false,
       allowed: true,
+      unavailable_reason: null,
     },
   ],
 });
@@ -158,6 +194,7 @@ const localModelChoice = (
   license_id: "test-fixture",
   license_posture: "Test fixture",
   catalog_source: "catalog",
+  model_type: null,
   context_window: 32_768,
   maximum_context_window: 32_768,
   precision: "GGUF Q4_K_M",
@@ -198,7 +235,7 @@ class FakeClient implements HeartwoodClient {
   artifactCalls = 0;
   artifactFailures = 0;
   activeManagedModel = false;
-  savedProfile: ModelProfile | null = null;
+  savedProfile: ModelProfileDraft | null = null;
   catalogRequest: ModelCatalogRequest | null = null;
   catalogError: Error | null = null;
   validationError: Error | null = null;
@@ -317,6 +354,7 @@ class FakeClient implements HeartwoodClient {
               label: "You",
               content: prompt,
               detail: null,
+              technicalDetail: null,
             },
           ]
         : current.conversation,
@@ -643,6 +681,7 @@ class FakeClient implements HeartwoodClient {
           source_revision: "0123456789abcdef",
           artifact_format: "GGUF",
           artifact_size_bytes: 256 * 1024 * 1024,
+          minimum_free_bytes: 256 * 1024 * 1024,
           artifact_sha256: "a".repeat(64),
           license_posture: "Test fixture",
           model_alias: "Stories 260K",
@@ -778,11 +817,11 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({ skills: [bundledSkill()] });
   }
 
-  saveModelProfile(profile: ModelProfile): Promise<ModelSettings> {
+  saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings> {
     this.savedProfile = profile;
     this.currentSettings = {
       ...this.currentSettings,
-      profiles: [profile],
+      profiles: [profileResponseFromDraft(profile)],
     };
     return Promise.resolve(this.currentSettings);
   }
@@ -816,8 +855,12 @@ class FakeClient implements HeartwoodClient {
       credential_status: "configured",
       action_confirmation_mode: this.currentActions.confirmation_mode,
       policy_decision: {
+        schema_version: "heartwood.model-call-decision.v1",
+        decision_id: "decision-test",
+        policy_profile_id: "policy-test",
         decision: "allow",
         endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+        capability_tier: "supervised",
         reason: "allowlisted",
       },
     });
@@ -1344,8 +1387,10 @@ describe("App", () => {
     const client = new PendingClient();
     render(<App client={client} initialSessionId="session-test" />);
 
-    const allow = await screen.findByLabelText("Allow all 1 action once");
-    const argumentsRegion = screen.getByLabelText("Arguments for terminal");
+    const allow = await screen.findByLabelText("Allow 1 action once");
+    const argumentsRegion = screen.getByLabelText(
+      "Arguments for Terminal Command",
+    );
     expect(argumentsRegion).toHaveAttribute("tabindex", "0");
     expect(argumentsRegion).toHaveTextContent(
       "python run.py --output /project/cohort-summary.json",
@@ -1367,10 +1412,8 @@ describe("App", () => {
     );
     render(<App client={client} initialSessionId="session-test" />);
 
-    expect(
-      await screen.findByLabelText("Allow all 1 action once"),
-    ).toBeDisabled();
-    expect(screen.getByLabelText("Reject all 1 action")).toBeDisabled();
+    expect(await screen.findByLabelText("Allow 1 action once")).toBeDisabled();
+    expect(screen.getByLabelText("Reject 1 action")).toBeDisabled();
   });
 
   it("disables approval-mode changes while session work is active", async () => {
@@ -1384,16 +1427,17 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     await screen.findByRole("heading", { name: "Settings" });
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Approvals" }), {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Action Review" }), {
       button: 0,
     });
 
-    const mode = screen.getByRole("button", { name: "Auto-Approve Low Risk" });
+    expect(
+      await screen.findByText(
+        "Finish or resolve active session work before changing approvals.",
+      ),
+    ).toBeVisible();
+    const mode = screen.getByRole("radio", { name: /Low-Risk Automation/u });
     expect(mode).toBeDisabled();
-    expect(mode).toHaveAttribute(
-      "title",
-      "Finish or resolve active session work before changing approvals.",
-    );
   });
 
   it("configures and validates model profiles in the settings panel", async () => {
@@ -1430,11 +1474,11 @@ describe("App", () => {
     expect(screen.getByLabelText("Active model profile")).toHaveTextContent(
       "Research AI Service · provider-coder",
     );
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Approvals" }), {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Action Review" }), {
       button: 0,
     });
     fireEvent.click(
-      screen.getByRole("button", { name: "Auto-Approve Low Risk" }),
+      screen.getByRole("radio", { name: /Low-Risk Automation/u }),
     );
     await waitFor(() =>
       expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
@@ -1542,6 +1586,7 @@ describe("App", () => {
               label: "Agent",
               content: "Session update",
               detail: null,
+              technicalDetail: null,
             },
           ],
         });
@@ -1651,6 +1696,32 @@ describe("App", () => {
     }
   });
 
+  it("opens the shared action review setting from the session header", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    const actionReview = await screen.findByLabelText(
+      "Open action review settings",
+    );
+    await waitFor(() =>
+      expect(actionReview).toHaveTextContent("Review Every Action"),
+    );
+    fireEvent.click(actionReview);
+
+    expect(
+      await screen.findByRole("tab", { name: "Action Review" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.getByText(
+        "Shared by every Heartwood interface in this project and applied to future action sets.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("radio", { name: /Review Every Action/u }),
+    ).toBeChecked();
+  });
+
   it("uses a transient cloud token to discover and select a model", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
@@ -1699,6 +1770,7 @@ describe("App", () => {
           binding_id: "OPENAI_API_KEY",
           configured: true,
           source: "keyring",
+          error: null,
         },
       ],
     };
@@ -1985,18 +2057,29 @@ describe("App", () => {
       modes: client.currentActions.modes.map((option) => ({
         ...option,
         allowed: option.mode === "always-confirm",
+        unavailable_reason:
+          option.mode === "always-confirm" ?
+            null
+          : "Unavailable under the active platform policy.",
       })),
     };
     render(<App client={client} initialSessionId="session-test" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.mouseDown(await screen.findByRole("tab", { name: "Approvals" }), {
-      button: 0,
-    });
+    fireEvent.mouseDown(
+      await screen.findByRole("tab", { name: "Action Review" }),
+      { button: 0 },
+    );
 
     expect(
-      await screen.findByRole("button", { name: "Auto-Approve Low Risk" }),
-    ).toBeDisabled();
+      await screen.findByText("Low-Risk Automation", { exact: true }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("radio", { name: /Low-Risk Automation/u }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Unavailable under the active platform policy."),
+    ).toBeVisible();
   });
 
   it("keeps setup incomplete when the selected credential is unavailable", async () => {
@@ -2084,7 +2167,7 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    fireEvent.click(await screen.findByLabelText("Reject all 1 action"));
+    fireEvent.click(await screen.findByLabelText("Reject 1 action"));
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("deny"));
     act(() => {
       const current = client.projectionFor("session-test");
@@ -2156,11 +2239,11 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
 
-    const allow = await screen.findByLabelText("Allow all 1 action once");
-    const reject = screen.getByLabelText("Reject all 1 action");
+    const allow = await screen.findByLabelText("Allow 1 action once");
+    const reject = screen.getByLabelText("Reject 1 action");
     expect(
       screen.getByText(
-        "OpenHands proposed these actions together. One decision applies to every action below.",
+        "These actions were proposed together. Allowing runs every action once; rejecting runs none of them.",
       ),
     ).toBeVisible();
 
@@ -2172,6 +2255,59 @@ describe("App", () => {
         "approve",
       ]),
     );
+  });
+
+  it("presents a multi-action proposal as one explicit decision", async () => {
+    const client = new BatchPendingClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const heading = await screen.findByRole("heading", {
+      name: "One Decision for This Action Set",
+    });
+    expect(heading).toBeVisible();
+    expect(heading).toHaveFocus();
+    expect(
+      within(
+        screen.getByRole("region", {
+          name: "One Decision for This Action Set",
+        }),
+      ).getByRole("list"),
+    ).toBeVisible();
+    expect(screen.getAllByText("2 actions", { exact: true })).toHaveLength(2);
+    expect(screen.getByText("Not Classified")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Allow 2 actions once" }),
+    ).toBeVisible();
+
+    const argumentDisclosure = screen.getAllByText("Review Exact Arguments")[0];
+    if (!argumentDisclosure)
+      throw new Error("action argument disclosure is missing");
+    argumentDisclosure.focus();
+    expect(argumentDisclosure).toHaveFocus();
+    act(() => {
+      const current = client.projectionFor("session-test");
+      client.emitStream({
+        ...current,
+        streamRevision: current.streamRevision + 1,
+        streamingText: "The action set is still awaiting review.",
+      });
+    });
+    expect(argumentDisclosure).toHaveFocus();
+
+    fireEvent.click(screen.getByLabelText("Open action review settings"));
+    expect(
+      await screen.findByText(
+        "Resolve the pending action set before changing this setting.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("radio", { name: /Review Every Action/u }),
+    ).toBeDisabled();
   });
 
   it("inspects and explicitly approves a mounted Skill extension", async () => {
@@ -2207,6 +2343,48 @@ class PendingClient extends FakeClient {
       ...syntheticProjection(),
       sessionId,
     };
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({
+      events: syntheticEvents(),
+      projection,
+    });
+  }
+}
+
+class BatchPendingClient extends PendingClient {
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    this.replayCalls += 1;
+    const projection = syntheticProjection({
+      sessionId,
+      eventCount: 7,
+      revision: 6,
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [
+          {
+            targetId: "session-test-toolcall-0",
+            toolName: "terminal",
+            risk: "low",
+            summary: "build the aggregate synthetic target-condition cohort",
+            arguments: {
+              command: "python run.py --output /project/cohort-summary.json",
+            },
+          },
+          {
+            targetId: "session-test-toolcall-1",
+            toolName: "file_editor",
+            risk: "unknown",
+            summary: "Write the aggregate cohort summary",
+            arguments: {
+              command: "create",
+              path: "/project/cohort-summary.md",
+            },
+          },
+        ],
+        decision: null,
+        decisionScope: "all",
+      },
+    });
     this.projections.set(sessionId, projection);
     return Promise.resolve({
       events: syntheticEvents(),
@@ -2297,6 +2475,7 @@ class LostResponseClient extends FakeClient {
           label: "You",
           content: prompt,
           detail: null,
+          technicalDetail: null,
         },
       ],
     };
@@ -2378,7 +2557,30 @@ const localProfile = (): ModelProfile => ({
   api_version: null,
   aws_region_name: null,
   aws_profile_name: null,
+  max_input_tokens: null,
+  max_output_tokens: null,
   description: "Model runtime managed by Heartwood",
+});
+
+const profileResponseFromDraft = (
+  profile: ModelProfileDraft,
+): ModelProfile => ({
+  profile_id: profile.profile_id,
+  model: profile.model,
+  policy_endpoint: profile.policy_endpoint,
+  capability_tier: profile.capability_tier ?? "supervised",
+  base_url: profile.base_url ?? null,
+  credential_kind: profile.credential_kind ?? "environment",
+  auth_type: profile.auth_type ?? "api_key",
+  subscription_vendor: profile.subscription_vendor ?? null,
+  api_key_env: profile.api_key_env ?? null,
+  api_key_file: profile.api_key_file ?? null,
+  api_version: profile.api_version ?? null,
+  aws_region_name: profile.aws_region_name ?? null,
+  aws_profile_name: profile.aws_profile_name ?? null,
+  max_input_tokens: profile.max_input_tokens ?? null,
+  max_output_tokens: profile.max_output_tokens ?? null,
+  description: profile.description ?? null,
 });
 
 const customProfile = (): ModelProfile => ({

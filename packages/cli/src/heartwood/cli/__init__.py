@@ -30,11 +30,13 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     command_help,
+    format_action_settings,
     format_projection_lines,
     interaction_activity,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.gateway import (
+    ACTION_MODE_OPTIONS,
     BUILT_IN_MODEL_CONNECTIONS,
     DEFAULT_SESSION_ID,
     MODEL_SOURCE_OPTIONS,
@@ -59,9 +61,20 @@ from heartwood.gateway import (
     SessionRecoveryError,
     SkillSettingsError,
     StartupPlan,
+    action_mode_label,
     custom_model_connection_requires_token,
     inspect_deployment,
     model_source_options,
+)
+from heartwood.schemas import (
+    ModelArtifactsResponse,
+    ModelCatalogResponse,
+    ModelRepositoryPlanResponse,
+    ModelSettingsResponse,
+    ModelValidationResponse,
+    SkillSettingsResponse,
+    SkillSummaryResponse,
+    StartupPlanResponse,
 )
 from heartwood.session import (
     CommandKind,
@@ -90,10 +103,7 @@ def _bundled_path(relative: Path) -> Path:
 
 _DEFAULT_WEB_ROOT = _bundled_path(Path("packages") / "webui" / "dist")
 _DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
-_ACTION_MODE_ARGUMENTS = {
-    "ask-every-time": "always-confirm",
-    "auto-approve-low-risk": "confirm-risky",
-}
+_ACTION_MODE_ARGUMENTS = {option.command_value: option.mode for option in ACTION_MODE_OPTIONS}
 _MODEL_SOURCE_ARGUMENTS = {
     "heartwood": "heartwood",
     "openai-subscription": "openai-subscription",
@@ -244,10 +254,10 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("resume", help="Resume the current session.")
     subparsers.add_parser("replay", help="Replay the persisted session event stream.")
 
-    actions = subparsers.add_parser("actions", help="Configure action confirmation.")
+    actions = subparsers.add_parser("actions", help="Configure action review.")
     action_subparsers = actions.add_subparsers(dest="actions_command", metavar="<actions-command>")
     action_set = action_subparsers.add_parser(
-        "set", help="Select an action-confirmation mode allowed by platform policy."
+        "set", help="Select an action-review mode allowed by platform policy."
     )
     action_set.add_argument("mode", choices=tuple(_ACTION_MODE_ARGUMENTS))
 
@@ -711,17 +721,14 @@ def _handle_setup(
     project: ProjectContext,
 ) -> int:
     code, gateway = _configure_setup(parser, args, project=project)
-    startup: dict[str, object] | None = None
+    startup: StartupPlanResponse | None = None
     process_only_credentials = False
     if gateway is not None:
         startup = gateway.startup_plan(interface="terminal")
         credential_settings = gateway.credential_settings()
-        bindings = credential_settings.get("bindings", [])
-        process_only_credentials = isinstance(bindings, list) and any(
-            isinstance(binding, dict)
-            and binding.get("configured") is True
-            and binding.get("source") == "process"
-            for binding in bindings
+        process_only_credentials = any(
+            binding["configured"] and binding["source"] == "process"
+            for binding in credential_settings["bindings"]
         )
         gateway.stop()
     if code == 0:
@@ -733,7 +740,7 @@ def _handle_setup(
             )
             return 2
         print("Setup complete.")
-        if startup is not None and startup.get("phase") == "compute-required":
+        if startup is not None and startup["phase"] == "compute-required":
             print("Run `heartwood` to start the selected model and conversation.")
         else:
             print("Run `heartwood` to start the conversation.")
@@ -834,9 +841,9 @@ def _configure_setup(
     )
     print(f"  Model source: {source_option.label if source_option else source}")
     print(
-        "  Action confirmation: Existing project setting"
+        "  Action review: Existing project setting"
         if resume_existing
-        else "  Action confirmation: Ask Every Time"
+        else f"  Action review: {action_mode_label('always-confirm')}"
     )
     if not confirmed and not resume_existing:
         if non_interactive:
@@ -895,12 +902,8 @@ def _configure_setup(
             else None
         )
         if token is not None and not non_interactive:
-            credential_store = gateway.credential_settings().get("store", {})
-            if (
-                isinstance(credential_store, dict)
-                and credential_store.get("persistence_available") is True
-                and source != "custom"
-            ):
+            credential_store = gateway.credential_settings()["store"]
+            if credential_store["persistence_available"] and source != "custom":
                 try:
                     remember_credential = (
                         input("Remember this API key in the system credential store? [y/N]: ")
@@ -922,13 +925,8 @@ def _configure_setup(
             ),
             activity=_MODEL_CATALOG_ACTIVITY,
         )
-        models = catalog.get("models", [])
-        if not isinstance(models, list):
-            raise ModelCatalogError("the selected model service returned an invalid catalog")
         available = [
-            item.get("model_id")
-            for item in models
-            if isinstance(item, dict) and item.get("availability") != "unsupported"
+            item["model_id"] for item in catalog["models"] if item["availability"] != "unsupported"
         ]
         if model_id is None:
             if not available:
@@ -947,12 +945,7 @@ def _configure_setup(
             else:
                 model_id = selected
         if source == "openai-subscription":
-            catalog_connection = catalog.get("connection", {})
-            credential_status = (
-                catalog_connection.get("credential_status")
-                if isinstance(catalog_connection, dict)
-                else "missing"
-            )
+            credential_status = catalog["connection"]["credential_status"]
             if credential_status != "available":
                 print("\nSign in with ChatGPT")
                 print("OpenHands will show OpenAI's terms, then provide a URL and one-time code.")
@@ -1005,30 +998,21 @@ def _configure_local_model(
         lambda: _available_managed_models(gateway),
         activity=_MODEL_CATALOG_ACTIVITY,
     )
-    raw_recommendations = local_catalog.get("models", [])
-    recommendations = (
-        [
-            item
-            for item in raw_recommendations
-            if isinstance(item, dict) and item.get("available") is True
-        ]
-        if isinstance(raw_recommendations, list)
-        else []
-    )
+    recommendations = [item for item in local_catalog["models"] if item["available"]]
     if model_id is None:
         print("\nModels Heartwood can run:")
         choices: list[tuple[str, str]] = []
         for item in recommendations:
-            recommendation_id = str(item.get("model_id"))
-            label = str(item.get("label"))
-            runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
-            if item.get("recommended") is True:
+            recommendation_id = item["model_id"]
+            label = item["label"]
+            runtime = "CPU" if item["runtime"] == "llama-cpp" else "NVIDIA GPU"
+            if item["recommended"]:
                 source = "Heartwood recommendation"
-            elif item.get("catalog_source") == "catalog":
+            elif item["catalog_source"] == "catalog":
                 source = "Under evaluation"
             else:
                 source = "Previously selected"
-            tier = _model_tier_label(item.get("tier"))
+            tier = _model_tier_label(item["tier"])
             choices.append((recommendation_id, f"{tier}: {label} ({source}, {runtime})"))
         choices.append(("other", "Other Hugging Face model"))
         choices.extend((model, f"{model} (already running)") for model in service_models)
@@ -1054,22 +1038,18 @@ def _configure_local_model(
     if not model_id.strip():
         raise ModelRepositoryError("a Heartwood-managed model must be selected")
 
-    known_local_ids = {
-        str(item.get("model_id")): item for item in recommendations if item.get("model_id")
-    }
+    known_local_ids = {item["model_id"]: item for item in recommendations}
     if model_id in known_local_ids:
         item = known_local_ids[model_id]
         print("\nSelected Heartwood-managed model")
-        print(f"  {item.get('label')}")
-        print(f"  Hugging Face: {item.get('source_repository')}")
-        print(f"  Pinned revision: {item.get('source_revision')}")
-        size = item.get("size_bytes")
-        if isinstance(size, int):
-            print(f"  Download: {size / 1024**3:.2f} GiB")
-        if resources := item.get("recommended_resource_envelope"):
+        print(f"  {item['label']}")
+        print(f"  Hugging Face: {item['source_repository']}")
+        print(f"  Pinned revision: {item['source_revision']}")
+        print(f"  Download: {item['size_bytes'] / 1024**3:.2f} GiB")
+        if resources := item["recommended_resource_envelope"]:
             print(f"  {resources}")
         _confirm_model_download(
-            label=str(item.get("label")),
+            label=item["label"],
             non_interactive=non_interactive,
             yes_download=yes_download,
         )
@@ -1086,10 +1066,8 @@ def _configure_local_model(
         print()
         print(_format_model_repository(plan))
         print()
-        raw_model = plan.get("model", {})
-        label = str(raw_model.get("label")) if isinstance(raw_model, dict) else model_id
         _confirm_model_download(
-            label=label,
+            label=plan["model"]["label"],
             non_interactive=non_interactive,
             yes_download=yes_download,
         )
@@ -1128,21 +1106,16 @@ def _confirm_model_download(
 
 def _available_managed_models(
     gateway: SessionGateway,
-) -> tuple[dict[str, object], list[str]]:
+) -> tuple[ModelArtifactsResponse, list[str]]:
     local_catalog = gateway.model_artifacts()
     try:
         service_catalog = gateway.discover_models("heartwood", refresh=True)
     except ModelCatalogError:
         return local_catalog, []
-    raw_service_models = service_catalog.get("models", [])
-    if not isinstance(raw_service_models, list):
-        return local_catalog, []
     service_models = [
-        str(item["model_id"])
-        for item in raw_service_models
-        if isinstance(item, dict)
-        and isinstance(item.get("model_id"), str)
-        and item.get("availability") != "unsupported"
+        item["model_id"]
+        for item in service_catalog["models"]
+        if item["availability"] != "unsupported"
     ]
     return local_catalog, service_models
 
@@ -1153,24 +1126,19 @@ def _prompt_for_provider_token(
     connection_id: str,
     non_interactive: bool,
 ) -> str | None:
-    raw_connections = gateway.model_settings().get("connections", [])
-    connections = raw_connections if isinstance(raw_connections, list) else []
+    connections = gateway.model_settings()["connections"]
     connection = next(
-        (
-            item
-            for item in connections
-            if isinstance(item, dict) and item.get("connection_id") == connection_id
-        ),
+        (item for item in connections if item["connection_id"] == connection_id),
         None,
     )
     if connection is None:
         raise ModelCatalogError(f"unknown model connection: {connection_id}")
-    if connection.get("credential_status") != "missing" or not connection.get("accepts_token"):
+    if connection["credential_status"] != "missing" or not connection["accepts_token"]:
         return None
     if non_interactive:
         return None
     try:
-        token = getpass.getpass(f"{connection.get('label', 'Provider')} API key: ")
+        token = getpass.getpass(f"{connection['label']} API key: ")
     except EOFError as error:
         raise ModelCatalogError("credential entry was cancelled because input closed") from error
     if not token.strip():
@@ -1253,14 +1221,8 @@ def _handle_models(
                 license_posture=args.license_posture,
                 context_window=args.context_window,
             )
-            model = imported.get("model", {})
-            label = (
-                model.get("label", "Imported model")
-                if isinstance(model, dict)
-                else "Imported model"
-            )
-            print(f"{label} is ready in this project.")
-            print(f"Location: {imported.get('path')}")
+            print(f"{imported['model']['label']} is ready in this project.")
+            print(f"Location: {imported['path']}")
             print("Run `heartwood` to use it.")
             return 0
         if command == "add":
@@ -1333,7 +1295,7 @@ def _handle_actions(
     gateway: SessionGateway,
     args: argparse.Namespace,
 ) -> int:
-    """Show or update the shared OpenHands action-confirmation mode."""
+    """Show or update the shared OpenHands action-review mode."""
     try:
         if getattr(args, "actions_command", None) == "set":
             settings = gateway.select_action_confirmation_mode(_ACTION_MODE_ARGUMENTS[args.mode])
@@ -1341,124 +1303,92 @@ def _handle_actions(
             settings = gateway.action_settings()
     except ActionSettingsError as error:
         parser.error(str(error))
-    print(_format_action_settings(settings))
+    print(format_action_settings(settings))
     return 0
 
 
-def _format_action_settings(settings: dict[str, object]) -> str:
-    lines = ["Action confirmation", ""]
-    selected = settings.get("confirmation_mode")
-    modes = settings.get("modes", [])
-    if isinstance(modes, list):
-        for item in modes:
-            if not isinstance(item, dict):
-                continue
-            marker = "*" if item.get("mode") == selected else " "
-            availability = "" if item.get("allowed") else " (not allowed by policy)"
-            lines.append(f"{marker} {item.get('label')}{availability}")
-    return "\n".join(lines)
-
-
-def _format_model_settings(settings: dict[str, object]) -> str:
+def _format_model_settings(settings: ModelSettingsResponse) -> str:
     lines = ["Heartwood models", "", "Connections:"]
-    connections = settings.get("connections", [])
-    if isinstance(connections, list):
-        for item in connections:
-            if not isinstance(item, dict):
-                continue
-            source = item.get("source")
-            status = item.get("credential_status", "unknown")
-            lines.append(
-                f"  {item.get('connection_id')}  {item.get('label')}  "
-                f"source={source}  credentials={status}"
-            )
+    for connection in settings["connections"]:
+        lines.append(
+            f"  {connection['connection_id']}  {connection['label']}  "
+            f"source={connection['source']}  credentials={connection['credential_status']}"
+        )
     lines.extend(("", "Active and saved profiles:"))
-    active = settings.get("active_profile")
-    profiles = settings.get("profiles", [])
-    if isinstance(profiles, list) and profiles:
-        for item in profiles:
-            if not isinstance(item, dict):
-                continue
-            profile_id = item.get("profile_id")
+    active = settings["active_profile"]
+    profiles = settings["profiles"]
+    if profiles:
+        for profile in profiles:
+            profile_id = profile["profile_id"]
             marker = "*" if profile_id == active else " "
             lines.append(
-                f"{marker} {profile_id}  {item.get('model')}  "
-                f"credentials={item.get('credential_status', 'unknown')}"
+                f"{marker} {profile_id}  {profile['model']}  "
+                f"credentials={profile.get('credential_status', 'unknown')}"
             )
-            lines.append(f"    policy endpoint: {item.get('policy_endpoint')}")
+            lines.append(f"    policy endpoint: {profile['policy_endpoint']}")
     else:
         lines.append("No model profiles configured.")
     return "\n".join(lines)
 
 
-def _format_model_catalog(catalog: dict[str, object]) -> str:
-    connection = catalog.get("connection", {})
-    if not isinstance(connection, dict):
-        return "Model catalog returned malformed connection metadata."
-    connection_id = connection.get("connection_id")
-    lines = [f"Models available from {connection.get('label')}", ""]
-    models = catalog.get("models", [])
-    if not isinstance(models, list) or not models:
+def _format_model_catalog(catalog: ModelCatalogResponse) -> str:
+    connection = catalog["connection"]
+    lines = [f"Models available from {connection['label']}", ""]
+    models = catalog["models"]
+    if not models:
         return "\n".join((*lines, "No models available."))
     for item in models:
-        if not isinstance(item, dict):
-            continue
-        model_id = item.get("model_id")
-        display_name = item.get("display_name")
+        model_id = item["model_id"]
+        display_name = item["display_name"]
         label = model_id if display_name in {None, model_id} else f"{display_name} ({model_id})"
-        lines.append(f"  {label}  [{item.get('availability', 'unknown')}]")
-        lines.append(f"    {item.get('reason', '')}")
-    lines.extend(("", f"Select with: heartwood models connect {connection_id} <model-id>"))
+        lines.append(f"  {label}  [{item['availability']}]")
+        lines.append(f"    {item['reason']}")
+    lines.extend(
+        (
+            "",
+            f"Select with: heartwood models connect {connection['connection_id']} <model-id>",
+        )
+    )
     return "\n".join(lines)
 
 
-def _format_model_validation(validation: dict[str, object]) -> str:
-    profile = validation.get("profile", {})
-    decision = validation.get("policy_decision", {})
-    if not isinstance(profile, dict) or not isinstance(decision, dict):
-        return "Model profile validation returned malformed data."
+def _format_model_validation(validation: ModelValidationResponse) -> str:
+    profile = validation["profile"]
+    decision = validation["policy_decision"]
     return "\n".join(
         (
-            f"Profile: {profile.get('profile_id')}",
-            f"Model: {profile.get('model')}",
-            f"Credentials: {validation.get('credential_status')}",
-            f"Action confirmation: {validation.get('action_confirmation_mode')}",
-            f"Policy: {decision.get('decision')} ({decision.get('reason')})",
+            f"Profile: {profile['profile_id']}",
+            f"Model: {profile['model']}",
+            f"Credentials: {validation['credential_status']}",
+            f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
+            f"Policy: {decision['decision']} ({decision['reason']})",
         )
     )
 
 
-def _format_model_artifacts(catalog: dict[str, object]) -> str:
+def _format_model_artifacts(catalog: ModelArtifactsResponse) -> str:
     lines = ["Models Heartwood can run", ""]
-    models = catalog.get("models", [])
-    if isinstance(models, list):
-        for tier in ("standard", "powerful", "maximum"):
-            tier_models = [
-                item for item in models if isinstance(item, dict) and item.get("tier") == tier
-            ]
-            if not tier_models:
-                continue
-            lines.append(_model_tier_label(tier))
-            for item in tier_models:
-                size = item.get("size_bytes")
-                size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
-                runtime = "CPU" if item.get("runtime") == "llama-cpp" else "NVIDIA GPU"
-                if item.get("recommended") is True:
-                    review = "Recommended"
-                elif item.get("catalog_source") == "catalog":
-                    review = "Not tested"
-                else:
-                    review = "User selected"
-                lines.append(f"  {item.get('model_id')}  {runtime}  {size_gib:.2f} GiB  {review}")
-                lines.append(f"      {item.get('label')}: {item.get('purpose')}")
-                context_window = item.get("context_window")
-                if isinstance(context_window, int):
-                    lines.append(f"      Context capacity: up to {context_window:,} tokens")
-                lines.append(f"      {item.get('availability_reason')}")
-                resources = item.get("recommended_resource_envelope")
-                if isinstance(resources, str):
-                    lines.append(f"      {resources}")
-            lines.append("")
+    for tier in ("standard", "powerful", "maximum"):
+        tier_models = [item for item in catalog["models"] if item["tier"] == tier]
+        if not tier_models:
+            continue
+        lines.append(_model_tier_label(tier))
+        for item in tier_models:
+            size_gib = item["size_bytes"] / (1024**3)
+            runtime = "CPU" if item["runtime"] == "llama-cpp" else "NVIDIA GPU"
+            if item["recommended"]:
+                review = "Recommended"
+            elif item["catalog_source"] == "catalog":
+                review = "Not tested"
+            else:
+                review = "User selected"
+            lines.append(f"  {item['model_id']}  {runtime}  {size_gib:.2f} GiB  {review}")
+            lines.append(f"      {item['label']}: {item['purpose']}")
+            lines.append(f"      Context capacity: up to {item['context_window']:,} tokens")
+            lines.append(f"      {item['availability_reason']}")
+            if resources := item["recommended_resource_envelope"]:
+                lines.append(f"      {resources}")
+        lines.append("")
     lines.extend(
         (
             "",
@@ -1478,31 +1408,24 @@ def _model_tier_label(value: object) -> str:
     return "Standard"
 
 
-def _format_model_repository(inspection: dict[str, object]) -> str:
-    model = inspection.get("model", {})
-    if not isinstance(model, dict):
-        return "Hugging Face model\n\nHeartwood returned an invalid model plan."
-    size = model.get("size_bytes")
-    size_gib = float(size) / (1024**3) if isinstance(size, int | float) else 0
-    context_window = model.get("context_window")
-    context_label = (
-        f"up to {context_window:,} tokens" if isinstance(context_window, int) else "Unknown"
-    )
-    runtime = "CPU" if model.get("runtime") == "llama-cpp" else "NVIDIA GPU"
+def _format_model_repository(inspection: ModelRepositoryPlanResponse) -> str:
+    model = inspection["model"]
+    size_gib = model["size_bytes"] / (1024**3)
+    runtime = "CPU" if model["runtime"] == "llama-cpp" else "NVIDIA GPU"
     lines = [
         "Heartwood model plan",
         "",
-        f"Model: {model.get('label')}",
-        f"Repository: {model.get('source_repository')}",
-        f"Revision: {model.get('source_revision')}",
+        f"Model: {model['label']}",
+        f"Repository: {model['source_repository']}",
+        f"Revision: {model['source_revision']}",
         f"Runtime: {runtime}",
         f"Download: {size_gib:.2f} GiB",
-        f"Context capacity: {context_label}",
-        f"Selection: {inspection.get('selection_reason')}",
-        f"License: {model.get('license_posture')}",
+        f"Context capacity: up to {model['context_window']:,} tokens",
+        f"Selection: {inspection['selection_reason']}",
+        f"License: {model['license_posture']}",
         "",
-        str(model.get("minimum_resource_envelope") or "Resource estimate unavailable."),
-        str(model.get("recommended_resource_envelope") or ""),
+        model["minimum_resource_envelope"] or "Resource estimate unavailable.",
+        model["recommended_resource_envelope"] or "",
     ]
     lines.extend(
         (
@@ -1545,30 +1468,26 @@ def _handle_skills(
     return 0
 
 
-def _format_skill_settings(settings: dict[str, object]) -> str:
+def _format_skill_settings(settings: SkillSettingsResponse) -> str:
     lines = ["Heartwood Skills", ""]
-    skills = settings.get("skills", [])
-    if not isinstance(skills, list) or not skills:
+    skills = settings["skills"]
+    if not skills:
         return "\n".join((*lines, "No Skills available."))
     for item in skills:
-        if isinstance(item, dict):
-            lines.append(
-                f"{item.get('name')}  trust={item.get('trust_tier')}  source={item.get('source')}"
-            )
-            lines.append(f"    {item.get('description')}")
+        lines.append(f"{item['name']}  trust={item['trust_tier']}  source={item['source']}")
+        lines.append(f"    {item['description']}")
     return "\n".join(lines)
 
 
-def _format_skill_summary(summary: dict[str, object]) -> str:
-    tools = summary.get("declared_tools", [])
-    tool_text = ", ".join(str(tool) for tool in tools) if isinstance(tools, list) else ""
+def _format_skill_summary(summary: SkillSummaryResponse) -> str:
+    tool_text = ", ".join(summary["declared_tools"])
     return "\n".join(
         (
-            f"Skill: {summary.get('name')}",
-            f"Trust: {summary.get('trust_tier')}",
+            f"Skill: {summary['name']}",
+            f"Trust: {summary['trust_tier']}",
             f"Tools: {tool_text}",
-            f"Network: {'required' if summary.get('requires_network') else 'disabled'}",
-            f"Permissions: {summary.get('approval_summary')}",
+            f"Network: {'required' if summary['requires_network'] else 'disabled'}",
+            f"Permissions: {summary['approval_summary']}",
         )
     )
 

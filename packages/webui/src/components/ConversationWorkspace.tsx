@@ -20,11 +20,18 @@ import {
   MessageSquareText,
   Send,
   Settings,
+  ShieldAlert,
   TerminalSquare,
 } from "lucide-react";
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import {
+  actionCountLabel,
+  actionRiskPresentation,
+  actionToolLabel,
+} from "../actionPresentation";
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
 import type {
+  ActionPresentation,
   ConversationMessage,
   ProjectionApprovalGroup,
   SessionProjection,
@@ -32,6 +39,8 @@ import type {
 
 interface ConversationWorkspaceProps {
   conversationEndRef: RefObject<HTMLDivElement | null>;
+  actionModeLabel: string | null;
+  actionPresentation: ActionPresentation | null;
   modelConfigured: boolean;
   modelMessage: string;
   projection: SessionProjection | null;
@@ -50,6 +59,8 @@ interface ConversationWorkspaceProps {
 
 export const ConversationWorkspace = ({
   conversationEndRef,
+  actionModeLabel,
+  actionPresentation,
   modelConfigured,
   modelMessage,
   projection,
@@ -113,6 +124,8 @@ export const ConversationWorkspace = ({
       <div className="composer-area">
         {pendingApproval ?
           <ApprovalRequest
+            actionModeLabel={actionModeLabel}
+            actionPresentation={actionPresentation}
             approval={pendingApproval}
             canApprove={availableCommands.includes("approve")}
             canDeny={availableCommands.includes("deny")}
@@ -409,12 +422,16 @@ const RuntimeStatus = ({
 };
 
 const ApprovalRequest = ({
+  actionModeLabel,
+  actionPresentation,
   approval,
   busy,
   canApprove,
   canDeny,
   onDecision,
 }: {
+  actionModeLabel: string | null;
+  actionPresentation: ActionPresentation | null;
   approval: ProjectionApprovalGroup;
   busy: boolean;
   canApprove: boolean;
@@ -424,67 +441,98 @@ const ApprovalRequest = ({
     approval: ProjectionApprovalGroup,
   ) => void;
 }) => {
-  const label = approval.actions.length === 1 ? "action" : "actions";
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [approval.groupId]);
+  const countLabel = actionCountLabel(approval.actions.length);
+  const allowLabel =
+    approval.actions.length === 1 ? "Allow Once" : "Allow All Once";
+  const rejectLabel = approval.actions.length === 1 ? "Reject" : "Reject All";
   return (
     <section
       className="approval-request"
-      aria-label="Approval required for OpenHands action set"
+      aria-labelledby="action-review-heading"
       aria-busy={busy}
     >
       <div className="approval-copy">
-        <div className="approval-heading">
-          <small>Approval required</small>
-          <Badge variant="secondary">
-            {approval.actions.length} {label}
-          </Badge>
-        </div>
-        <strong>Review the complete action set</strong>
-        <p>
-          OpenHands proposed these actions together. One decision applies to
-          every action below.
-        </p>
-        <ol className="approval-batch-list">
-          {approval.actions.map((control) => (
-            <li key={control.targetId}>
-              <span>{control.summary ?? control.toolName}</span>
-              <small>
-                {control.toolName || "tool"}
-                {control.risk ? ` · ${control.risk} risk` : ""}
-              </small>
-              {Object.keys(control.arguments).length > 0 ?
-                <details className="approval-details">
-                  <summary>Exact arguments</summary>
-                  <pre
-                    tabIndex={0}
-                    aria-label={`Arguments for ${control.toolName || "tool"}`}
-                  >
-                    {JSON.stringify(control.arguments, null, 2)}
-                  </pre>
-                </details>
+        <div className="approval-introduction">
+          <span className="approval-icon" aria-hidden="true">
+            <ShieldAlert size={18} />
+          </span>
+          <div>
+            <div className="approval-heading">
+              <small>Action Review</small>
+              <Badge variant="secondary">{countLabel}</Badge>
+              {actionModeLabel ?
+                <span>Paused by {actionModeLabel}</span>
               : null}
-            </li>
-          ))}
+            </div>
+            <h2 id="action-review-heading" ref={headingRef} tabIndex={-1}>
+              One Decision for This Action Set
+            </h2>
+            <p>
+              These actions were proposed together. Allowing runs every action
+              once; rejecting runs none of them.
+            </p>
+          </div>
+        </div>
+        <ol className="approval-batch-list" role="list">
+          {approval.actions.map((control, index) => {
+            const risk = actionRiskPresentation(
+              control.risk,
+              actionPresentation,
+            );
+            const tool = actionToolLabel(control.toolName, actionPresentation);
+            return (
+              <li key={control.targetId}>
+                <span className="approval-action-index" aria-hidden="true">
+                  {index + 1}
+                </span>
+                <div className="approval-action-content">
+                  <strong>{control.summary ?? tool}</strong>
+                  <div className="approval-action-meta">
+                    <span>{tool}</span>
+                    <Badge className={risk.className} variant="outline">
+                      {risk.label}
+                    </Badge>
+                  </div>
+                  {Object.keys(control.arguments).length > 0 ?
+                    <details className="approval-details">
+                      <summary>Review Exact Arguments</summary>
+                      <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
+                        {JSON.stringify(control.arguments, null, 2)}
+                      </pre>
+                    </details>
+                  : null}
+                </div>
+              </li>
+            );
+          })}
         </ol>
       </div>
       <div className="approval-actions">
+        <span>
+          Your decision applies to all <strong>{countLabel}</strong>.
+        </span>
         <Button
-          aria-label={`Allow all ${approval.actions.length} ${label} once`}
-          disabled={busy || !canApprove}
-          size="sm"
-          onClick={() => onDecision("approve", approval)}
-        >
-          <Check size={16} />
-          Allow all once
-        </Button>
-        <Button
-          aria-label={`Reject all ${approval.actions.length} ${label}`}
+          aria-label={`Reject ${countLabel}`}
           disabled={busy || !canDeny}
           size="sm"
           variant="outline"
           onClick={() => onDecision("deny", approval)}
         >
           <Ban size={16} />
-          Reject all
+          {rejectLabel}
+        </Button>
+        <Button
+          aria-label={`Allow ${countLabel} once`}
+          disabled={busy || !canApprove}
+          size="sm"
+          onClick={() => onDecision("approve", approval)}
+        >
+          <Check size={16} />
+          {allowLabel}
         </Button>
       </div>
     </section>

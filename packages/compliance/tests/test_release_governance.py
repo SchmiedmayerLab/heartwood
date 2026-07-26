@@ -130,6 +130,18 @@ def test_current_release_guides_match_declared_version() -> None:
     assert _release_verifier().source_version_errors(Path.cwd(), _declared_version()) == []
 
 
+def test_python_packages_publish_pep_561_markers() -> None:
+    for package_metadata in Path("packages").glob("*/pyproject.toml"):
+        namespace_root = package_metadata.parent / "src" / "heartwood"
+        modules = [
+            path
+            for path in namespace_root.iterdir()
+            if path.is_dir() and path.name != "__pycache__"
+        ]
+        assert modules, package_metadata.parent
+        assert all((module / "py.typed").is_file() for module in modules), package_metadata.parent
+
+
 def test_support_and_security_policies_define_current_ownership() -> None:
     security = Path("SECURITY.md").read_text(encoding="utf-8")
     support = Path("documentation/operate/support.md").read_text(encoding="utf-8")

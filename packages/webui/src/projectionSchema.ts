@@ -41,6 +41,16 @@ const eventKindSchema = z.enum([
   "error.recorded",
 ]);
 
+const commandKindSchema = z.enum([
+  "approve",
+  "deny",
+  "chat",
+  "pause",
+  "resume",
+  "replay",
+  "audit.export",
+]);
+
 const sessionEventSchema: z.ZodType<SessionEvent> = z
   .object({
     schema_version: z.literal("heartwood.session-event.v1"),
@@ -71,7 +81,7 @@ const messageSchema = z
     label: z.string(),
     content: z.string(),
     detail: z.string().nullable(),
-    technicalDetail: z.string().nullable().optional(),
+    technicalDetail: z.string().nullable(),
   })
   .strict();
 
@@ -79,7 +89,7 @@ const approvalActionSchema = z
   .object({
     targetId: z.string(),
     toolName: z.string(),
-    risk: z.string().nullable(),
+    risk: z.enum(["high", "low", "medium", "unknown"]).nullable(),
     summary: z.string().nullable(),
     arguments: z.record(z.string(), jsonValueSchema),
   })
@@ -154,7 +164,7 @@ const subagentSchema = z
 const commandOutcomeSchema = z
   .object({
     commandId: z.string(),
-    commandKind: z.string(),
+    commandKind: commandKindSchema,
     status: z.enum(["accepted", "rejected"]),
     errorCode: z.string().nullable(),
     message: z.string().nullable(),

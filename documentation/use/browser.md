@@ -28,7 +28,7 @@ On a workstation the default is `http://127.0.0.1:8767/`.
 Opening the page is read-only until you select **Use this project**.
 The setup panel then presents model sources available in the detected environment, models returned by the selected service, and credential handling supported by the platform.
 
-The project, model selection, and action-confirmation setting are shared with the terminal and notebook bridge.
+The project, model selection, and action-review setting are shared with the terminal and notebook bridge.
 Provider API keys and subscription tokens are never stored in browser storage.
 
 For **Sign in with ChatGPT**, select the connection and choose **Sign in with ChatGPT**.
@@ -49,9 +49,10 @@ The first browser conversation is the same **Main session** used by the terminal
 - Enter requests in the composer after model readiness is confirmed.
 - Send additional guidance or pause while OpenHands is working.
 - Inspect task progress, model-call totals, and sequential specialist status below the conversation.
-- Open **Activity** to inspect route decisions, tool results, and errors.
+- Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
-- Open **Settings** to change the selected model or action-confirmation mode.
+- Select the current **Action review** value in the session header to change when Heartwood pauses.
+- Open **Settings** to change the selected model or action-review mode.
 - Export the audit record from the session controls.
 
 ## Review an Action Set
@@ -59,7 +60,7 @@ The first browser conversation is the same **Main session** used by the terminal
 ![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review.png)
 
 The review panel lists all proposed members together with tool names, risk labels, summaries, and relevant arguments.
-**Allow all once** and **Reject all** resolve the complete OpenHands action set.
+One decision resolves the complete OpenHands action set: allowing runs every listed action once, while rejecting runs none of them.
 
 ## Keep the Interface Reachable
 

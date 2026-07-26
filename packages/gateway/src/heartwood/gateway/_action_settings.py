@@ -13,7 +13,9 @@ from typing import cast
 
 from heartwood.schemas import ActionConfirmationMode
 
-_CONFIRMATION_MODES = {"always-confirm", "confirm-risky"}
+ACTION_MODE_SCOPE_DESCRIPTION = (
+    "Shared by every Heartwood interface in this project and applied to future action sets."
+)
 
 
 class ActionSettingsError(ValueError):
@@ -25,7 +27,12 @@ class ActionModeOption:
     """One stable OpenHands confirmation mode and its researcher-facing label."""
 
     mode: ActionConfirmationMode
+    command_value: str
     label: str
+    description: str
+    automatic_risks: tuple[str, ...]
+    reviewed_risks: tuple[str, ...]
+    recommended: bool = False
 
     def safe_dict(self) -> dict[str, object]:
         """Return serializable non-secret metadata."""
@@ -33,9 +40,32 @@ class ActionModeOption:
 
 
 ACTION_MODE_OPTIONS: tuple[ActionModeOption, ...] = (
-    ActionModeOption(mode="always-confirm", label="Ask Every Time"),
-    ActionModeOption(mode="confirm-risky", label="Auto-Approve Low Risk"),
+    ActionModeOption(
+        mode="always-confirm",
+        command_value="ask-every-time",
+        label="Review Every Action",
+        description=(
+            "Heartwood pauses before every proposed action set so you can inspect it "
+            "before anything runs."
+        ),
+        automatic_risks=(),
+        reviewed_risks=("low", "medium", "high", "unknown"),
+        recommended=True,
+    ),
+    ActionModeOption(
+        mode="confirm-risky",
+        command_value="auto-approve-low-risk",
+        label="Low-Risk Automation",
+        description=(
+            "An action set continues automatically only when every action is low risk. "
+            "Any medium-, high-, or unclassified-risk action pauses the complete set for review."
+        ),
+        automatic_risks=("low",),
+        reviewed_risks=("medium", "high", "unknown"),
+    ),
 )
+
+_CONFIRMATION_MODES = frozenset(option.mode for option in ACTION_MODE_OPTIONS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +89,7 @@ class ActionSettings:
         if mode not in _CONFIRMATION_MODES:
             msg = f"unsupported action confirmation mode: {mode}"
             raise ActionSettingsError(msg)
-        updated = replace(self, confirmation_mode=cast(ActionConfirmationMode, mode))
+        updated = replace(self, confirmation_mode=mode)
         updated.validate()
         return updated
 

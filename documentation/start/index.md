@@ -78,7 +78,7 @@ When the agent proposes one or more related actions, Heartwood presents them as 
 ## Review the Action Set
 
 Inspect every proposed action.
-Use the arrow keys to select **Allow all once** or **Reject all**, then press Enter.
+Use the arrow keys to allow the complete set once or reject it, then press Enter.
 In the plain terminal, enter `/allow` or `/reject`.
 
 ## Verify and Resume

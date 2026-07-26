@@ -30,6 +30,7 @@ dev = [
     "mypy>=2.3.0",
     "pytest>=8.4",
     "pytest-cov>=7.0",
+    "vulture>=2.16",
 ]
 docs = [
     "mike @ git+https://github.com/squidfunk/mike.git@0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3",
@@ -85,6 +86,7 @@ ban-relative-imports = "all"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+plugins = ["pydantic.mypy"]
 warn_unreachable = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -106,6 +108,18 @@ mypy_path = [
     "packages/session/src",
     "packages/skills/src",
 ]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ---------------------------------------------------------------------------
+# Vulture — high-confidence dead-code detection
+# ---------------------------------------------------------------------------
+[tool.vulture]
+min_confidence = 100
+paths = ["packages"]
 
 # ---------------------------------------------------------------------------
 # pytest + coverage

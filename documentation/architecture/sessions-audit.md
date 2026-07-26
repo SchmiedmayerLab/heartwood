@@ -24,7 +24,7 @@ sequenceDiagram
     OpenHands-->>Gateway: Typed state and transient tokens
     Gateway-->>Interface: Shared session projection
     Interface-->>User: Review complete action set
-    User->>Interface: Allow all once or reject all
+    User->>Interface: Allow the complete set once or reject it
     Interface->>Gateway: Confirmation command
     Gateway->>Gateway: Persist complete-set decision
     Gateway->>OpenHands: Resolve callback

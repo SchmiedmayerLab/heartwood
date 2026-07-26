@@ -114,19 +114,20 @@ grep -q '"path": "/v1/chat/completions"' "${request_log}"
 grep -q "Policy: allow" "${transcript}"
 grep -q "build the aggregate synthetic target-condition cohort" "${transcript}"
 grep -q "as one OpenHands action set" "${transcript}"
-grep -q "Allow all once: /allow" "${transcript}"
+grep -q "Allow the complete set once: /allow" "${transcript}"
 grep -q "Action set approved" "${transcript}"
-grep -q "Tool: Ran terminal command" "${transcript}"
+grep -q "Tool: Ran Terminal Command" "${transcript}"
 grep -q "Action set rejected" "${transcript}"
 grep -q "Agent: The synthetic target-condition cohort summary is ready for review." "${transcript}"
-grep -q "Tool: Ran terminal command" "${automatic_transcript}"
+grep -q "Tool: Ran Terminal Command" "${automatic_transcript}"
 if grep -q "as one OpenHands action set" "${automatic_transcript}"; then
   echo "low-risk action unexpectedly required confirmation" >&2
   exit 1
 fi
-grep -q "run a medium-risk network command \[tool=terminal, risk=medium\]" "${risky_transcript}"
+grep -q "run a medium-risk network command" "${risky_transcript}"
+grep -q "Terminal Command · Medium Risk" "${risky_transcript}"
 grep -q "as one OpenHands action set" "${risky_transcript}"
-grep -q "Reject all: /reject" "${risky_transcript}"
+grep -q "Reject the complete set: /reject" "${risky_transcript}"
 grep -q "Action set rejected" "${risky_transcript}"
 "${heartwood_python}" - <<'PY'
 import json

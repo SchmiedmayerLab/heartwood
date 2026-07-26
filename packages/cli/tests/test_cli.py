@@ -25,13 +25,6 @@ from heartwood.cli import (
     __version__,
     _consume_prompt,
     _float_payload,
-    _format_action_settings,
-    _format_model_artifacts,
-    _format_model_catalog,
-    _format_model_repository,
-    _format_model_settings,
-    _format_model_validation,
-    _format_skill_settings,
     _handle_replay,
     _mapping_payload,
     _submit_and_wait,
@@ -39,7 +32,10 @@ from heartwood.cli import (
     _supports_full_screen_terminal,
     main,
 )
-from heartwood.cli._interactive import InteractionResult, InteractiveSession
+from heartwood.cli._interactive import (
+    InteractionResult,
+    InteractiveSession,
+)
 from heartwood.gateway import (
     CredentialStore,
     LocalModelChoice,
@@ -61,6 +57,11 @@ from heartwood.gateway import (
 )
 from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
+)
+from heartwood.schemas import (
+    ModelRepositoryPlanResponse,
+    ModelValidationResponse,
+    api_response,
 )
 from heartwood.session import EventKind, SessionEvent
 
@@ -466,7 +467,7 @@ def test_bare_command_configures_session_token_and_opens_conversation(
     monkeypatch.setattr("sys.stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
     monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
-    opened: list[dict[str, object]] = []
+    opened: list[ModelValidationResponse] = []
 
     def open_chat(
         gateway: RealSessionGateway,
@@ -557,7 +558,7 @@ def test_bare_command_signs_in_with_chatgpt_through_openhands(
     inputs = iter(["1", "3", "y", "1"])
     monkeypatch.setattr("sys.stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
-    opened: list[dict[str, object]] = []
+    opened: list[ModelValidationResponse] = []
 
     def open_chat(
         gateway: RealSessionGateway,
@@ -731,12 +732,7 @@ def test_tokenless_loopback_custom_setup_survives_restart_and_reconfiguration(
     restarted = RealSessionGateway(project=ProjectContext(project), env={})
     settings = restarted.model_settings()
     source_options = settings["source_options"]
-    assert isinstance(source_options, list)
-    selected = next(
-        option
-        for option in source_options
-        if isinstance(option, dict) and option.get("selected") is True
-    )
+    selected = next(option for option in source_options if option["selected"])
     assert selected["source_id"] == "custom"
     assert observed_tokens == [None, None]
     assert "Setup complete" in capsys.readouterr().out
@@ -1330,7 +1326,7 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     assert 'active_profile = "local-test"' in contents
     assert 'confirmation_mode = "confirm-risky"' in contents
     assert "Profile: local-test" in output
-    assert "Auto-Approve Low Risk" in output
+    assert "Low-Risk Automation" in output
 
 
 def test_cli_and_browser_gateway_observe_the_same_project_configuration(
@@ -1388,7 +1384,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     assert _run(project, monkeypatch, ["actions"]) == 0
     assert _run(project, monkeypatch, ["models", "list"]) == 0
     output = capsys.readouterr().out
-    assert "* Ask Every Time" in output
+    assert "* Review Every Action" in output
     assert "* heartwood  openai/local-model" in output
 
 
@@ -1481,27 +1477,45 @@ def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
 ) -> None:
     project = tmp_path / "analysis"
     calls: list[tuple[str, str | None]] = []
-    plan: dict[str, object] = {
-        "model": {
-            "model_id": "hf-research-model-123456789abc",
-            "label": "Research Model Q4_K_M",
-            "runtime": "llama-cpp",
-            "source_repository": "example/research-model-gguf",
-            "source_revision": "1" * 40,
-            "size_bytes": 4 * 1024**3,
-            "license_posture": "Source model card reports apache-2.0.",
-            "minimum_resource_envelope": "Estimated minimum: 4 CPU cores.",
-            "recommended_resource_envelope": "Recommended: 8 CPU cores.",
+    choice = LocalModelChoice(
+        model_id="hf-research-model-123456789abc",
+        label="Research Model Q4_K_M",
+        purpose="User-selected Hugging Face model.",
+        runtime="llama-cpp",
+        source_repository="example/research-model-gguf",
+        source_revision="1" * 40,
+        source_path="model-q4_k_m.gguf",
+        size_bytes=4 * 1024**3,
+        minimum_free_bytes=5 * 1024**3,
+        license_posture="Source model card reports apache-2.0.",
+        catalog_source="user-selected",
+        artifact_sha256="a" * 64,
+        minimum_resource_envelope="Estimated minimum: 4 CPU cores.",
+        recommended_resource_envelope="Recommended: 8 CPU cores.",
+        recommended_ram_bytes=16 * 1024**3,
+        recommended_disk_bytes=6 * 1024**3,
+    )
+    plan = api_response(
+        ModelRepositoryPlanResponse,
+        {
+            "model": {
+                **choice.safe_dict(),
+                "active": False,
+                "available": True,
+                "selected": False,
+                "availability_reason": "Available on this deployment",
+                "recommended": False,
+            },
+            "selection_reason": "Selected a balanced single-file GGUF variant.",
         },
-        "selection_reason": "Selected a balanced single-file GGUF variant.",
-    }
+    )
 
     def inspect(
         _gateway: RealSessionGateway,
         repository: str,
         *,
         revision: str | None = None,
-    ) -> dict[str, object]:
+    ) -> ModelRepositoryPlanResponse:
         calls.append((f"inspect:{repository}", revision))
         return plan
 
@@ -1703,7 +1717,9 @@ def test_serve_starts_gateway_for_current_project(
     observed: list[tuple[str, int]] = []
     monkeypatch.setattr(
         "heartwood.cli.uvicorn.run",
-        lambda _app, *, host, port, log_level: observed.append((host, port)),  # noqa: ARG005
+        lambda _app, *, host, port, log_level: observed.append(  # noqa: ARG005, F841, RUF100
+            (host, port)
+        ),
     )
     monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
     monkeypatch.setenv("GOOGLE_PROJECT", "terra-project")
@@ -1733,59 +1749,9 @@ def test_serve_starts_gateway_for_current_project(
     assert capsys.readouterr().out == ""
 
 
-def test_cli_formatters_fail_closed_on_malformed_projection_data(
+def test_cli_helpers_fail_closed_on_malformed_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert "No model profiles configured" in _format_model_settings(
-        {"connections": [None], "profiles": "invalid"}
-    )
-    assert _format_model_catalog({"connection": []}).startswith("Model catalog returned")
-    assert "No models available" in _format_model_catalog(
-        {"connection": {"label": "Run with Heartwood"}, "models": []}
-    )
-    assert _format_model_validation({"profile": [], "policy_decision": {}}).startswith(
-        "Model profile validation returned"
-    )
-    assert _format_skill_settings({"skills": "invalid"}).endswith("No Skills available.")
-    assert "not allowed by policy" in _format_action_settings(
-        {
-            "confirmation_mode": "always-confirm",
-            "modes": [None, {"mode": "confirm-risky", "label": "Automatic", "allowed": False}],
-        }
-    )
-    artifacts = _format_model_artifacts(
-        {
-            "models": [
-                None,
-                {
-                    "model_id": "gguf",
-                    "runtime": "llama-cpp",
-                    "tier": "standard",
-                    "size_bytes": "unknown",
-                    "catalog_source": "catalog",
-                    "qualification": "unvalidated",
-                    "label": "GGUF",
-                    "purpose": "Synthetic",
-                    "availability_reason": "Available",
-                },
-                {
-                    "model_id": "vllm",
-                    "runtime": "vllm",
-                    "tier": "powerful",
-                    "size_bytes": 1024,
-                    "catalog_source": "user-selected",
-                    "label": "vLLM",
-                    "purpose": "Synthetic",
-                    "availability_reason": "Requires GPU",
-                },
-            ],
-        }
-    )
-    assert "gguf  CPU  0.00 GiB  Not tested" in artifacts
-    assert "vllm  NVIDIA GPU  0.00 GiB" in artifacts
-    assert "heartwood models inspect <owner/model>" in artifacts
-    assert "invalid model plan" in _format_model_repository({"model": []})
-
     with pytest.raises(TypeError, match="expected dataset payload"):
         _mapping_payload([], "dataset")
     with pytest.raises(TypeError, match="expected a numeric payload"):

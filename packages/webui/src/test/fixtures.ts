@@ -123,6 +123,7 @@ export const syntheticProjection = (
       label: "You",
       content: "Build the synthetic target-condition cohort",
       detail: null,
+      technicalDetail: null,
     },
     {
       id: "session-test-event-000003-agent",
@@ -131,6 +132,7 @@ export const syntheticProjection = (
       label: "Agent",
       content: "I will run the repository-verified cohort Skill.",
       detail: null,
+      technicalDetail: null,
     },
     {
       id: "session-test-event-000004-trace",

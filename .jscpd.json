@@ -1,0 +1,15 @@
+{
+  "formats": ["python", "typescript", "tsx"],
+  "ignore": [
+    "**/*.generated.ts",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/e2e/**",
+    "**/test/**"
+  ],
+  "minLines": 10,
+  "minTokens": 70,
+  "mode": "strict",
+  "reporters": ["console", "threshold"],
+  "threshold": 0.5
+}

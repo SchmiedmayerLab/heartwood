@@ -12,7 +12,8 @@ import os
 import re
 import tempfile
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -293,6 +294,13 @@ class ProjectConfig:
                 connection.validate()
         except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
             raise ProjectConfigError(str(error)) from error
+        if (
+            self.action_settings.confirmation_mode
+            not in self.policy.allowed_action_confirmation_modes
+        ):
+            raise ProjectConfigError(
+                "action confirmation mode is not allowed by the project policy"
+            )
         if any(connection.source != "platform" for connection in self.additional_connections):
             raise ProjectConfigError("project connections must be platform-provided")
         connection_ids = [
@@ -355,14 +363,12 @@ class ProjectConfigStore:
     def save(self, config: ProjectConfig) -> None:
         """Persist validated configuration as owner-only TOML."""
         config.validate(self.project)
-        self.project.initialize()
-        with FileLock(self.project.config_lock_path, mode=0o600):
+        with self.locked():
             self._save_unlocked(config)
 
     def update(self, transform: Callable[[ProjectConfig], ProjectConfig]) -> ProjectConfig:
         """Apply one read-modify-write operation under the project configuration lock."""
-        self.project.initialize()
-        with FileLock(self.project.config_lock_path, mode=0o600):
+        with self.locked():
             current = self.load()
             updated = transform(current)
             updated.validate(self.project)
@@ -373,12 +379,22 @@ class ProjectConfigStore:
 
     def restore(self, config: ProjectConfig | None) -> None:
         """Restore a configuration snapshot after a larger transaction fails."""
-        self.project.initialize()
-        with FileLock(self.project.config_lock_path, mode=0o600):
+        with self.locked():
             if config is None:
                 self.project.config_path.unlink(missing_ok=True)
             else:
                 self._save_unlocked(config)
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Hold the reentrant cross-process project-configuration lock."""
+        self.project.initialize()
+        with FileLock(
+            self.project.config_lock_path,
+            mode=0o600,
+            is_singleton=True,
+        ):
+            yield
 
     def _save_unlocked(self, config: ProjectConfig) -> None:
         config.validate(self.project)

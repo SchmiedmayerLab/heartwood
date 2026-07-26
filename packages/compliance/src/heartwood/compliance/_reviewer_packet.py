@@ -145,18 +145,18 @@ class ReviewerPacketGenerator:
                     "model capability and unattended operation remain deployment-specific gates."
                 ),
                 (
-                    "- Ask Every Time is the action-confirmation default. Auto-Approve Low Risk "
-                    "remains a deployment-policy opt-in and still confirms medium-, high-, and "
-                    "unknown-risk actions."
+                    "- `always-confirm` is the default action policy. `confirm-risky` is a "
+                    "deployment-policy opt-in that automatically allows only action sets made "
+                    "entirely of low-risk actions."
                 ),
                 (
-                    "- A published documentation site and stable release channel are not yet "
-                    "implemented; checked-in Markdown remains the source of truth."
+                    "- Published documentation and artifacts are release-scoped; development "
+                    "branches and moving image tags are not qualification evidence."
                 ),
                 (
                     "- The web UI, Server-Sent Events fallback, Jupyter-style proxy smoke, "
-                    "and Terra-style packaged demo smoke are implemented synthetic paths; "
-                    "live controlled-platform validation remains future work."
+                    "and Terra-style packaged demo smoke are CI paths; live validation evidence "
+                    "is release- and platform-specific and must be reviewed separately."
                 ),
                 (
                     "- Platform-specific policy, identity, network, and live-platform evidence "
@@ -202,10 +202,9 @@ class ReviewerPacketGenerator:
                     "installation review."
                 ),
                 (
-                    "- OpenHands Ask Every Time requires Allow all once or Reject all "
-                    "for each pending action set. "
-                    "The optional Auto-Approve Low Risk mode still confirms medium-, high-, "
-                    "and unknown-risk actions."
+                    "- `always-confirm` requires one allow or reject decision for each pending "
+                    "OpenHands action set. The optional `confirm-risky` mode continues only sets "
+                    "made entirely of low-risk actions."
                 ),
                 "- Audit exports use scrubbed JSONL records with a verified hash chain.",
                 "",

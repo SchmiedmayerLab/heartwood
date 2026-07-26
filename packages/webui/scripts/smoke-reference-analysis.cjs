@@ -143,6 +143,20 @@ async function main() {
     ).toBeVisible();
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
+    await page.getByLabel("Open action review settings").click();
+    await expect(
+      page.getByRole("tab", { name: "Action Review" }),
+    ).toHaveAttribute("aria-selected", "true");
+    await expect(
+      page.getByRole("radio", { name: /Review Every Action/u }),
+    ).toBeChecked();
+    await captureDesktopScreenshot(
+      page,
+      "browser-action-settings.png",
+      "action review settings",
+    );
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+
     await runApprovedTask(page, task, {
       captureApproval: true,
       finalMessage:
@@ -331,7 +345,7 @@ async function runApprovedTask(page, task, taskSpec) {
   await task.fill(taskSpec.prompt);
   await task.press("Enter");
   const approval = page
-    .getByRole("region", { name: "Approval required for OpenHands action set" })
+    .getByRole("region", { name: "One Decision for This Action Set" })
     .last();
   await expect(approval).toBeVisible({ timeout: 60_000 });
   await expect(
@@ -345,7 +359,7 @@ async function runApprovedTask(page, task, taskSpec) {
     );
   }
   await approval
-    .getByRole("button", { name: /^Allow all \d+ actions? once$/u })
+    .getByRole("button", { name: /^Allow \d+ actions? once$/u })
     .click();
   await expect(
     page.getByText(taskSpec.finalMessage, { exact: true }),
@@ -371,7 +385,7 @@ async function captureDesktopScreenshot(page, filename, stateName) {
   fs.mkdirSync(screenshotDirectory, { recursive: true });
   const screenshotPath = path.join(screenshotDirectory, filename);
   await assertNoHorizontalOverflow(page, stateName);
-  await page.screenshot({ path: screenshotPath });
+  await page.screenshot({ animations: "disabled", path: screenshotPath });
   if (fs.statSync(screenshotPath).size < 1_000) {
     throw new Error(
       `reference screenshot is unexpectedly small: ${screenshotPath}`,

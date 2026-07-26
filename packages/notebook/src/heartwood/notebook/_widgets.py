@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Protocol, cast
 
+from heartwood.gateway import action_risk_label, action_tool_label
 from heartwood.notebook._view_model import NotebookViewModel
 
 
@@ -45,7 +46,7 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
             ),
         ),
         WidgetSpec(
-            "Approval",
+            "Action Review",
             _approval_items(view_model),
         ),
         WidgetSpec(
@@ -83,8 +84,9 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     action_label = "action" if len(group.actions) == 1 else "actions"
     items = [(f"Review action set {group.group_id} ({len(group.actions)} {action_label}): pending")]
     items.extend(
-        f"{index}. {action.summary or action.tool_name} "
-        f"({action.tool_name}, {action.risk or 'unknown'} risk)"
+        f"{index}. {action.summary or action.tool_name}"
+        f"\n{action_tool_label(action.tool_name)} · "
+        f"{action_risk_label(action.risk or 'unknown')}"
         + (
             f"\nArguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}"
             if action.arguments

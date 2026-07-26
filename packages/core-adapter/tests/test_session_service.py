@@ -231,6 +231,33 @@ def test_second_writer_cannot_mutate_until_owner_closes(tmp_path: Path) -> None:
     assert result.events[-1].kind == EventKind.SESSION_RESUMED.value
 
 
+def test_writer_lease_can_be_released_from_a_gateway_worker_thread(
+    tmp_path: Path,
+) -> None:
+    owner = FileSessionStore(tmp_path, "session-main")
+    owner.acquire_writer()
+    errors: list[BaseException] = []
+
+    def release() -> None:
+        try:
+            owner.release_writer()
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=release)
+    worker.start()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert not owner.owns_writer
+
+    successor = FileSessionStore(tmp_path, "session-main")
+    successor.acquire_writer()
+    assert successor.owns_writer
+    successor.release_writer()
+
+
 def test_writer_lease_excludes_another_process(tmp_path: Path) -> None:
     owner = SessionService.synthetic_default(tmp_path)
     owner.handle(_command(CommandKind.PAUSE))

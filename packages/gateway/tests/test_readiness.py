@@ -606,11 +606,8 @@ def test_stanford_setup_is_available_after_gateway_restart(tmp_path: Path) -> No
     )
     settings = gateway.model_settings()
     connections = settings["connections"]
-    assert isinstance(connections, list)
     connection = next(
-        item
-        for item in connections
-        if isinstance(item, dict) and item["connection_id"] == "stanford-ai-api-gateway"
+        item for item in connections if item["connection_id"] == "stanford-ai-api-gateway"
     )
 
     assert connection["catalog_endpoint"] == "https://aiapi-prod.stanford.edu/v1/models"

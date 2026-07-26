@@ -6,8 +6,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* global console, process */
-
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 

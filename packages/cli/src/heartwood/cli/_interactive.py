@@ -15,11 +15,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from heartwood.gateway import (
+    ACTION_MODE_OPTIONS,
+    ActionSettingsError,
     ModelSettingsError,
     ProjectionApprovalGroup,
     SessionGateway,
     SessionProjection,
+    action_mode_label,
+    action_risk_label,
+    action_tool_label,
 )
+from heartwood.schemas import ActionSettingsResponse
 from heartwood.session import (
     CommandKind,
     JsonValue,
@@ -106,6 +112,11 @@ _COMMAND_ACTIVITIES = {
         waiting_label="Still checking the session",
         guidance="Heartwood is waiting for the project services to respond.",
     ),
+    "/permissions": InteractionActivity(
+        label="Updating action review",
+        waiting_label="Still updating action review",
+        guidance="Heartwood is waiting for the active project services to close safely.",
+    ),
 }
 
 
@@ -131,6 +142,34 @@ class InteractiveSession:
             if projection.lifecycle.status != "running":
                 return projection
             time.sleep(poll_interval)
+
+    def action_settings(self) -> ActionSettingsResponse:
+        """Return the shared project action-confirmation settings."""
+        return self.gateway.action_settings()
+
+    def select_action_mode(self, value: str) -> ActionSettingsResponse:
+        """Select an action-confirmation mode by its public command value."""
+        mode = next(
+            (
+                option.mode
+                for option in ACTION_MODE_OPTIONS
+                if value in {option.command_value, option.mode}
+            ),
+            None,
+        )
+        if mode is None:
+            raise ActionSettingsError(f"unsupported action confirmation mode: {value}")
+        projection = self.replay()
+        if projection.pending_approval is not None:
+            raise ActionSettingsError(
+                "resolve the pending action set before changing the action-review mode"
+            )
+        if projection.lifecycle.status == "running":
+            raise ActionSettingsError(
+                "wait for the active task to reach a review point before changing "
+                "the action-review mode"
+            )
+        return self.gateway.select_action_confirmation_mode(mode)
 
     def submit(self, line: str) -> InteractionResult:
         """Submit a prompt or slash command."""
@@ -179,6 +218,14 @@ class InteractiveSession:
                 return InteractionResult(message=format_model_status(self.gateway))
             except ModelSettingsError as error:
                 return InteractionResult(message=str(error))
+        if directive == "/permissions" and len(parts) in {1, 2}:
+            try:
+                settings = (
+                    self.action_settings() if len(parts) == 1 else self.select_action_mode(parts[1])
+                )
+            except ActionSettingsError as error:
+                return InteractionResult(message=str(error), error=True)
+            return InteractionResult(message=format_action_settings(settings))
         if directive == "/help" and len(parts) == 1:
             return InteractionResult(message=command_help())
         return InteractionResult(message=f"Unknown command: {directive}")
@@ -211,7 +258,10 @@ class InteractiveSession:
 
 def command_help() -> str:
     """Return the commands common to terminal clients."""
-    return "/allow  /reject  /pause  /resume  /status  /replay  /audit-export  /help  /exit"
+    return (
+        "/allow  /reject  /permissions  /pause  /resume  /status  "
+        "/replay  /audit-export  /help  /exit"
+    )
 
 
 def interaction_activity(line: str) -> InteractionActivity:
@@ -278,29 +328,52 @@ def format_projection_lines(
         label = "action" if len(approval.actions) == 1 else "actions"
         lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
         for index, action in enumerate(approval.actions, 1):
-            lines.append(
-                f"  {index}. {action.summary or action.tool_name} "
-                f"[tool={action.tool_name}, risk={action.risk or 'unknown'}]"
-            )
+            tool_label = action_tool_label(action.tool_name)
+            risk_label = action_risk_label(action.risk or "unknown")
+            lines.append(f"  {index}. {action.summary or tool_label} [{tool_label} · {risk_label}]")
             if argument_lines := format_action_arguments(action.arguments):
                 lines.append("     Arguments:")
                 lines.extend(f"       {line}" for line in argument_lines)
-        lines.extend(("Allow all once: /allow", "Reject all: /reject"))
+        lines.extend(
+            (
+                "Allow the complete set once: /allow",
+                "Reject the complete set: /reject",
+            )
+        )
     return tuple(lines)
 
 
 def format_model_status(gateway: SessionGateway) -> str:
     """Format the active model route without exposing credentials."""
     validation = gateway.validate_model_profile()
-    profile = validation.get("profile", {})
-    decision = validation.get("policy_decision", {})
-    if not isinstance(profile, dict) or not isinstance(decision, dict):
-        return "Model profile validation returned malformed data."
+    profile = validation["profile"]
+    decision = validation["policy_decision"]
     return "\n".join(
         (
-            f"Model: {profile.get('model')}",
-            f"Credentials: {validation.get('credential_status')}",
-            f"Action confirmation: {validation.get('action_confirmation_mode')}",
-            f"Policy: {decision.get('decision')} ({decision.get('reason')})",
+            f"Model: {profile['model']}",
+            f"Credentials: {validation['credential_status']}",
+            f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
+            f"Policy: {decision['decision']} ({decision['reason']})",
         )
     )
+
+
+def format_action_settings(settings: ActionSettingsResponse) -> str:
+    """Format gateway-owned action-mode metadata for terminal interfaces."""
+    lines = ["Action review", "", settings["scope_description"], ""]
+    if not settings["change_allowed"] and settings["change_blocked_reason"]:
+        lines.extend((settings["change_blocked_reason"], ""))
+    selected = settings["confirmation_mode"]
+    for item in settings["modes"]:
+        marker = "*" if item["mode"] == selected else " "
+        recommended = " (recommended)" if item["recommended"] else ""
+        allowed = item["allowed"]
+        availability = "" if allowed else " (unavailable)"
+        lines.append(f"{marker} {item['label']}{recommended}{availability}")
+        lines.append(f"  {item['description']}")
+        if not allowed and (reason := item["unavailable_reason"]):
+            lines.append(f"  {reason}")
+        else:
+            lines.append(f"  Select: /permissions {item['command_value']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()

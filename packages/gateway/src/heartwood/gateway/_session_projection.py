@@ -12,9 +12,10 @@ import json
 from enum import StrEnum
 from typing import ClassVar, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from heartwood.session import EventKind, JsonValue, SessionEvent
+from heartwood.gateway._action_presentation import action_tool_label
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
 
 class SessionLifecycle(StrEnum):
@@ -32,6 +33,7 @@ class _ProjectionRecord(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         extra="forbid",
         frozen=True,
+        json_schema_serialization_defaults_required=True,
         populate_by_name=True,
         use_enum_values=True,
     )
@@ -39,7 +41,7 @@ class _ProjectionRecord(BaseModel):
 
 class ProjectionActivity(_ProjectionRecord):
     sequence: int
-    kind: str
+    kind: EventKind
     label: str
     detail: str
 
@@ -59,7 +61,7 @@ class ProjectionApprovalAction(_ProjectionRecord):
 
     target_id: str = Field(serialization_alias="targetId")
     tool_name: str = Field(serialization_alias="toolName")
-    risk: str | None = None
+    risk: Literal["high", "low", "medium", "unknown"] | None = None
     summary: str | None = None
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -93,7 +95,7 @@ class ProjectionCommandOutcome(_ProjectionRecord):
     """Gateway-owned outcome of the most recently accepted command."""
 
     command_id: str = Field(serialization_alias="commandId")
-    command_kind: str = Field(serialization_alias="commandKind")
+    command_kind: CommandKind = Field(serialization_alias="commandKind")
     status: Literal["accepted", "rejected"]
     error_code: str | None = Field(default=None, serialization_alias="errorCode")
     message: str | None = None
@@ -159,16 +161,15 @@ class SessionProjection(_ProjectionRecord):
         default=("chat",), serialization_alias="availableCommands"
     )
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def paused(self) -> bool:
-        """Return the legacy convenience state used by presentation adapters."""
+        """Return whether the projected session is paused."""
         return self.lifecycle.status == SessionLifecycle.PAUSED
 
     def safe_dict(self) -> dict[str, object]:
         """Return the complete interface-safe projection payload."""
-        payload = self.model_dump(mode="json", by_alias=True)
-        payload["paused"] = self.paused
-        return cast(dict[str, object], payload)
+        return cast(dict[str, object], self.model_dump(mode="json", by_alias=True))
 
 
 def project_session(
@@ -207,7 +208,7 @@ def project_session(
         elif kind == EventKind.COMMAND_RECEIVED.value:
             command_outcome = ProjectionCommandOutcome(
                 command_id=_string(event.payload.get("command_id")),
-                command_kind=_string(event.payload.get("command_kind")),
+                command_kind=CommandKind(_string(event.payload.get("command_kind"))),
                 status="accepted",
             )
         elif kind == EventKind.AGENT_MESSAGE_EMITTED.value:
@@ -226,7 +227,7 @@ def project_session(
                 event,
                 role="trace",
                 label="Trace",
-                content=f"Proposed {_tool_label(tool_name)}",
+                content=f"Proposed {action_tool_label(tool_name)}",
                 detail=_string(event.payload.get("summary")) or None,
                 technical_detail=(
                     json.dumps(arguments, indent=2, sort_keys=True) if arguments else None
@@ -239,7 +240,7 @@ def project_session(
                 event,
                 role="trace",
                 label="Tool",
-                content=f"Ran {_tool_label(tool_name)}",
+                content=f"Ran {action_tool_label(tool_name)}",
                 detail=(
                     _string(event.payload.get("summary"))
                     or f"Exit {_string(event.payload.get('exit_code')) or 'unknown'}"
@@ -253,7 +254,7 @@ def project_session(
                 action = ProjectionApprovalAction(
                     target_id=tool_call_id,
                     tool_name=_string(request.get("tool_name")),
-                    risk=_string(request.get("risk")) or None,
+                    risk=_action_risk(request.get("risk")),
                     summary=_string(request.get("summary")) or None,
                     arguments=_mapping(request.get("arguments")),
                 )
@@ -422,11 +423,11 @@ def _append_message(
 
 
 def _activity(event: SessionEvent) -> ProjectionActivity:
-    kind = str(event.kind)
+    kind = EventKind(str(event.kind))
     return ProjectionActivity(
         sequence=event.sequence,
         kind=kind,
-        label=_ACTIVITY_LABELS.get(kind, kind),
+        label=_ACTIVITY_LABELS.get(kind.value, kind.value),
         detail=_activity_detail(event),
     )
 
@@ -577,6 +578,14 @@ def _string(value: JsonValue | None) -> str:
     return ""
 
 
+def _action_risk(
+    value: JsonValue | None,
+) -> Literal["high", "low", "medium", "unknown"]:
+    if value in {"high", "low", "medium", "unknown"}:
+        return cast(Literal["high", "low", "medium", "unknown"], value)
+    return "unknown"
+
+
 def _integer(value: JsonValue | None) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
@@ -594,13 +603,6 @@ def _number(value: JsonValue | None) -> float:
 def _error_detail(*, reason: str, code: str) -> str:
     message = reason or "Review Activity & audit, then try again."
     return f"{code}: {message}" if code else message
-
-
-def _tool_label(tool_name: str) -> str:
-    return {
-        "file_editor": "file change",
-        "terminal": "terminal command",
-    }.get(tool_name, f"{tool_name} action" if tool_name else "tool action")
 
 
 _ACTIVITY_LABELS = {

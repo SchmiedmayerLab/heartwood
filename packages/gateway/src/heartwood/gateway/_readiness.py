@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Literal, assert_never
 
 from heartwood.adapters.platform import select_platform_adapter
+from heartwood.gateway._action_presentation import action_mode_label
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._model_catalog import (
     ModelCatalogError,
@@ -370,7 +371,7 @@ def inspect_deployment(
             ReadinessCheck(
                 "action-confirmation",
                 "pass",
-                f"Action confirmation: {action_mode}",
+                f"Action review: {action_mode_label(action_mode)}",
             )
         )
         coherent = active_model is not None and _configuration_is_coherent(config)

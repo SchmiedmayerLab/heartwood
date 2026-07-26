@@ -19,6 +19,7 @@ import {
 } from "@stanfordspezi/spezi-web-design-system/components/Dialog";
 import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Progress } from "@stanfordspezi/spezi-web-design-system/components/Progress";
+import { RadioGroup } from "@stanfordspezi/spezi-web-design-system/components/RadioGroup";
 import {
   Select,
   SelectContent,
@@ -47,6 +48,7 @@ import {
   Cloud,
   Download,
   HardDrive,
+  LoaderCircle,
   RotateCcw,
   Search,
   Server,
@@ -69,6 +71,7 @@ import type {
   ModelConnectRequest,
   ModelConnection,
   ModelProfile,
+  ModelProfileDraft,
   ModelRepositoryPlan,
   ModelRepositoryRequest,
   ModelSource,
@@ -84,10 +87,11 @@ import type {
 import type { UtilityPanel } from "./SessionRail";
 
 interface UtilitySheetProps {
+  actionModeLockedReason: string | null;
   actions: ActionSettings | null;
   artifacts: ModelArtifacts | null;
   panel: UtilityPanel;
-  profileDraft: ModelProfile;
+  profileDraft: ModelProfileDraft;
   projection: SessionProjection | null;
   projectReadiness: ProjectReadiness | null;
   startupPlan: StartupPlan | null;
@@ -116,14 +120,14 @@ interface UtilitySheetProps {
   onImportLocalModel: (request: LocalModelImportRequest) => Promise<void>;
   onInitializeProject: () => Promise<void>;
   onInstallSkill: () => void;
-  onProfileDraft: (profile: ModelProfile) => void;
+  onProfileDraft: (profile: ModelProfileDraft) => void;
   onRefreshActivity: () => void;
   onRefreshSettings: () => void;
   onRestoreFocus: () => void;
   onRemoveProfile: (profileId: string) => void;
   onRemoveSkill: (name: string) => void;
   onSaveProfile: () => void;
-  onSelectActionMode: (mode: ActionConfirmationMode) => void;
+  onSelectActionMode: (mode: ActionConfirmationMode) => Promise<void>;
   onSelectProfile: (profileId: string) => void;
   onSetSkillApproved: (approved: boolean) => void;
   onSetSkillSource: (source: string) => void;
@@ -152,12 +156,20 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
       {props.panel === "skills" ?
         <SkillsContent {...props} />
       : null}
-      {props.panel === "settings" ?
-        <SettingsContent {...props} />
+      {props.panel === "settings" || props.panel === "action-review" ?
+        <SettingsContent key={props.panel} {...props} />
       : null}
     </SheetContent>
   </Sheet>
 );
+
+const profileDraftFrom = ({
+  credential_status: credentialStatus,
+  ...profile
+}: ModelProfile): ModelProfileDraft => {
+  void credentialStatus;
+  return profile;
+};
 
 const ActivityContent = ({
   onExportAudit,
@@ -325,8 +337,8 @@ const SettingsContent = (props: UtilitySheetProps) => {
     onStartSubscriptionLogin,
     onValidateProfile,
   } = props;
-  const [settingsView, setSettingsView] = useState<"models" | "approvals">(
-    "models",
+  const [settingsView, setSettingsView] = useState<"actions" | "models">(
+    props.panel === "action-review" ? "actions" : "models",
   );
   const [downloadConfirmation, setDownloadConfirmation] =
     useState<LocalModelChoice | null>(null);
@@ -364,18 +376,18 @@ const SettingsContent = (props: UtilitySheetProps) => {
         <SheetDescription>
           {projectReadiness?.state === "setup-required" ?
             "Choose a model for this project"
-          : "Project model and action approvals"}
+          : "Project model and action review"}
         </SheetDescription>
       </SheetHeader>
       <Tabs
         value={settingsView}
         onValueChange={(value) =>
-          setSettingsView(value === "approvals" ? "approvals" : "models")
+          setSettingsView(value === "actions" ? "actions" : "models")
         }
       >
         <TabsList aria-label="Settings view" className="settings-tabs" grow>
           <TabsTrigger value="models">Models</TabsTrigger>
-          <TabsTrigger value="approvals">Approvals</TabsTrigger>
+          <TabsTrigger value="actions">Action Review</TabsTrigger>
         </TabsList>
 
         <TabsContent className="settings-tab-content" value="models">
@@ -619,7 +631,9 @@ const SettingsContent = (props: UtilitySheetProps) => {
                     <div className="profile-row" key={profile.profile_id}>
                       <button
                         type="button"
-                        onClick={() => onProfileDraft(profile)}
+                        onClick={() =>
+                          onProfileDraft(profileDraftFrom(profile))
+                        }
                       >
                         <strong>{profile.profile_id}</strong>
                         <span>{profile.model}</span>
@@ -647,38 +661,113 @@ const SettingsContent = (props: UtilitySheetProps) => {
             </div>
           </details>
         </TabsContent>
-        <TabsContent className="settings-tab-content" value="approvals">
-          <section className="panel-section">
-            <h3>Action approvals</h3>
-            <div
-              aria-label="Action approval mode"
-              className="mode-control"
-              role="group"
-            >
-              {actions?.modes.map((option) => (
-                <button
-                  aria-pressed={actions.confirmation_mode === option.mode}
-                  disabled={!option.allowed || !actions.change_allowed}
-                  key={option.mode}
-                  title={
-                    !actions.change_allowed ?
-                      (actions.change_blocked_reason ??
-                      "Finish active work before changing approvals")
-                    : option.allowed ?
-                      option.label
-                    : `${option.label} is not allowed by platform policy`
-                  }
-                  type="button"
-                  onClick={() => onSelectActionMode(option.mode)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </section>
+        <TabsContent className="settings-tab-content" value="actions">
+          <ActionReviewSettings
+            actions={actions}
+            lockedReason={props.actionModeLockedReason}
+            onSelect={onSelectActionMode}
+          />
         </TabsContent>
       </Tabs>
     </>
+  );
+};
+
+const ActionReviewSettings = ({
+  actions,
+  lockedReason,
+  onSelect,
+}: {
+  actions: ActionSettings | null;
+  lockedReason: string | null;
+  onSelect: (mode: ActionConfirmationMode) => Promise<void>;
+}) => {
+  const [pendingMode, setPendingMode] = useState<ActionConfirmationMode | null>(
+    null,
+  );
+  if (actions === null) {
+    return (
+      <section className="panel-section action-mode-section" aria-live="polite">
+        <h3>Action review</h3>
+        <span>Loading project settings</span>
+      </section>
+    );
+  }
+  const available = actions.modes.filter((option) => option.allowed);
+  const unavailable = actions.modes.filter((option) => !option.allowed);
+  const effectiveLockedReason =
+    lockedReason ??
+    (actions.change_allowed ? null : actions.change_blocked_reason);
+  const disabled = effectiveLockedReason !== null || pendingMode !== null;
+  const select = async (mode: ActionConfirmationMode) => {
+    if (mode === actions.confirmation_mode || disabled) return;
+    setPendingMode(mode);
+    try {
+      await onSelect(mode);
+    } finally {
+      setPendingMode(null);
+    }
+  };
+  return (
+    <section className="panel-section action-mode-section">
+      <div className="action-mode-heading">
+        <div>
+          <h3>Choose when Heartwood pauses</h3>
+          <p>{actions.scope_description}</p>
+        </div>
+        {pendingMode ?
+          <LoaderCircle
+            aria-label="Saving action review mode"
+            className="request-activity-icon"
+            size={18}
+          />
+        : null}
+      </div>
+      {effectiveLockedReason ?
+        <div className="action-mode-notice" role="status">
+          <ShieldCheck size={16} aria-hidden="true" />
+          <span>{effectiveLockedReason}</span>
+        </div>
+      : null}
+      <RadioGroup<ActionConfirmationMode>
+        aria-label="Action review mode"
+        className="action-mode-options"
+        disabled={disabled}
+        options={available.map((option) => ({
+          value: option.mode,
+          label: (
+            <span className="action-mode-option">
+              <span className="action-mode-option-heading">
+                <strong>{option.label}</strong>
+                {option.recommended ?
+                  <Badge variant="secondary">Recommended</Badge>
+                : null}
+                {pendingMode === option.mode ?
+                  <span>Saving</span>
+                : null}
+              </span>
+              <span>{option.description}</span>
+            </span>
+          ),
+        }))}
+        value={actions.confirmation_mode}
+        onChange={(mode) => void select(mode)}
+      />
+      {unavailable.length ?
+        <div className="action-mode-unavailable">
+          <strong>Limited by this environment</strong>
+          {unavailable.map((option) => (
+            <div aria-disabled="true" key={option.mode}>
+              <span>{option.label}</span>
+              <small>
+                {option.unavailable_reason ??
+                  "Unavailable under the active platform policy."}
+              </small>
+            </div>
+          ))}
+        </div>
+      : null}
+    </section>
   );
 };
 
@@ -1802,10 +1891,10 @@ const ProfileEditor = ({
   onDraft,
   onSave,
 }: {
-  draft: ModelProfile;
+  draft: ModelProfileDraft;
   settings: ModelSettings | null;
   onApplyPreset: (presetId: string) => void;
-  onDraft: (profile: ModelProfile) => void;
+  onDraft: (profile: ModelProfileDraft) => void;
   onSave: () => void;
 }) => (
   <div className="profile-editor">

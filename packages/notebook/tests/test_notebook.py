@@ -92,7 +92,10 @@ class _ModelGateway(_CountingGateway):
         assert base_url is None
         assert remember is False
         self.discovered = (connection_id, refresh)
-        return {"connection_id": connection_id, "models": []}
+        return {
+            "connection": {"connection_id": connection_id},
+            "models": [],
+        }
 
     def inspect_model_repository(
         self, repository: str, *, revision: str | None = None
@@ -189,7 +192,9 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     pending = view_model.pending_approval
     assert pending is not None
     approval_items = next(
-        section.items for section in build_widget_spec(view_model) if section.title == "Approval"
+        section.items
+        for section in build_widget_spec(view_model)
+        if section.title == "Action Review"
     )
 
     assert pending.group_id == "action-set-synthetic"
@@ -197,12 +202,13 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     assert approval_items == (
         "Review action set action-set-synthetic (2 actions): pending",
         (
-            "1. Run the synthetic cohort command (terminal, medium risk)\n"
+            "1. Run the synthetic cohort command\n"
+            "Terminal Command · Medium Risk\n"
             "Arguments:\n{\n"
             '  "command": "python run.py --output cohort-summary.json"\n'
             "}"
         ),
-        "2. Write the aggregate result (file_editor, unknown risk)",
+        "2. Write the aggregate result\nFile Change · Not Classified",
     )
 
 
@@ -249,7 +255,7 @@ def test_notebook_reuses_gateway_model_inspection_and_download_contract(tmp_path
     assert gateway.inspected == ("example/model", "main")
     assert gateway.downloaded == ("example/model", "1" * 40)
     assert gateway.discovered == ("heartwood", True)
-    assert discovered["connection_id"] == "heartwood"
+    assert discovered["connection"]["connection_id"] == "heartwood"
     assert cast(dict[str, object], plan["model"])["source_repository"] == "example/model"
     assert download["status"] == "downloading"
 
@@ -340,7 +346,7 @@ def test_notebook_imports_a_local_model_and_releases_gateway(tmp_path: Path) -> 
             license_posture="Apache-2.0",
         )
 
-    imported_path = Path(cast(str, imported["path"]))
+    imported_path = Path(imported["path"])
     assert imported_path.is_file()
     assert gateway.config_store.load().local_model is not None
 
@@ -605,7 +611,7 @@ def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
     assert [section.title for section in sections] == [
         "Conversation",
         "Activity",
-        "Approval",
+        "Action Review",
         "Tasks",
         "Runtime",
         "Specialists",

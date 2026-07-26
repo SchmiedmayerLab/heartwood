@@ -36,7 +36,10 @@ class _AcpProvider(Protocol):
 
 
 class _AcpProviderModule(Protocol):
-    def get_acp_provider(self, provider_id: str) -> _AcpProvider | None:
+    def get_acp_provider(
+        self,
+        provider_id: str,  # noqa: F841, RUF100
+    ) -> _AcpProvider | None:
         """Return one OpenHands ACP provider."""
 
 
