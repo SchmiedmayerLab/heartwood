@@ -62,16 +62,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          metadata="${RUNNER_TEMP}/immutable-tag-candidate.json"
+          metadata="${RUNNER_TEMP}/immutable-tag-manifest.json"
           docker buildx build \
             --platform linux/amd64 \
-            --provenance=mode=max \
+            --provenance=false \
             --output "type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" \
             --metadata-file "${metadata}" \
             packages/compliance/tests/fixtures/immutable-image
-          digest="$(jq -r '."containerimage.digest"' "${metadata}")"
+          manifest_digest="$(jq -r '."containerimage.digest"' "${metadata}")"
+          if [[ ! "${manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Buildx returned an invalid manifest digest: ${manifest_digest}" >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:candidate-index" \
+            "${IMAGE_NAME}@${manifest_digest}"
+          inspect_output="$(docker buildx imagetools inspect "${IMAGE_NAME}:candidate-index")"
+          digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
           if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Buildx returned an invalid candidate digest: ${digest}" >&2
+            echo "Buildx returned an invalid index digest: ${digest}" >&2
             exit 1
           fi
           reference="${IMAGE_NAME}@${digest}"
