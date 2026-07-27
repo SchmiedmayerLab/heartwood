@@ -811,6 +811,10 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     runner_cleanup = _read("deploy/reclaim-github-runner-space.sh")
     dependency_review = _read(".github/workflows/dependency-review.yml")
     main_build = workflow.split("  build:\n", maxsplit=1)[1].split("\n  promote:\n", maxsplit=1)[0]
+    pull_request_publication = pull_request_workflow.split("  publication:\n", maxsplit=1)[1].split(
+        "\n  build:\n", maxsplit=1
+    )[0]
+    pull_request_build = pull_request_workflow.split("  build:\n", maxsplit=1)[1]
 
     assert "runtime-gpu-nvidia" in workflow
     assert "terra-runtime-gpu-nvidia" in workflow
@@ -828,7 +832,6 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     assert "bash -n images/scripts/verify_image_revision.sh" in contract_action
     assert "test -x images/scripts/verify_image_revision.sh" in contract_action
     assert ".output=type=cacheonly" in pull_request_workflow
-    assert "push-by-digest=true" not in pull_request_workflow
     assert "packages: write" not in pull_request_workflow
     assert "workflow_call:" in pull_request_workflow
     assert "workflow_dispatch:" not in pull_request_workflow
@@ -849,7 +852,7 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     assert "packages: write" in publish_job
     assert "push-by-digest=true" in manual_workflow
     assert "targets: runtime-gpu-nvidia" not in manual_workflow
-    assert "mode=max" not in pull_request_workflow
+    assert "mode=max" not in pull_request_build
     assert "mode=max" not in main_build
     assert "cache-from=type=gha" not in main_build
     assert "cache-to=type=gha" not in main_build
@@ -858,6 +861,13 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     assert "/usr/share/dotnet" in runner_cleanup
     assert "sbom: false" in pull_request_workflow
     assert "provenance: false" in pull_request_workflow
+    assert "registry:2" in pull_request_publication
+    assert "localhost:5000/heartwood/immutable-tag-test" in pull_request_publication
+    assert "push-by-digest=true" in pull_request_publication
+    assert "ghcr.io" not in pull_request_publication
+    assert pull_request_publication.count("uses: ./.github/actions/create-immutable-image-tag") == 2
+    assert "validation-mode: linux-amd64-index" in pull_request_publication
+    assert "Verify idempotent publication" in pull_request_publication
     assert "Promote GPU Channel Tags" in workflow
     assert "workflow_dispatch:" not in workflow
     assert "qualification_configuration:" in qualification

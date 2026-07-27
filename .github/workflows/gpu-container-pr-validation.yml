@@ -27,6 +27,105 @@ jobs:
           persist-credentials: false
       - name: Validate GPU runtime contract
         uses: ./.github/actions/validate-gpu-contract
+
+  publication:
+    name: Validate Immutable GPU Tag Publication
+    needs: contract
+    runs-on: ubuntu-24.04
+    services:
+      registry:
+        image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        ports:
+          - 5000:5000
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Wait for local registry
+        run: |
+          curl --fail --silent --show-error \
+            --retry 10 --retry-connrefused --retry-delay 1 \
+            http://localhost:5000/v2/ >/dev/null
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."localhost:5000"]
+              http = true
+              insecure = true
+      - name: Build single-platform OCI index by digest
+        id: candidate
+        env:
+          IMAGE_NAME: localhost:5000/heartwood/immutable-tag-test
+        run: |
+          set -euo pipefail
+
+          metadata="${RUNNER_TEMP}/immutable-tag-manifest.json"
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false \
+            --output "type=image,name=${IMAGE_NAME},push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "${metadata}" \
+            packages/compliance/tests/fixtures/immutable-image
+          manifest_digest="$(jq -r '."containerimage.digest"' "${metadata}")"
+          if [[ ! "${manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Buildx returned an invalid manifest digest: ${manifest_digest}" >&2
+            exit 1
+          fi
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:candidate-index" \
+            "${IMAGE_NAME}@${manifest_digest}"
+          inspect_output="$(docker buildx imagetools inspect "${IMAGE_NAME}:candidate-index")"
+          digest="$(awk '$1 == "Digest:" {print $2; exit}' <<<"${inspect_output}")"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Buildx returned an invalid index digest: ${digest}" >&2
+            exit 1
+          fi
+          reference="${IMAGE_NAME}@${digest}"
+          raw="$(docker buildx imagetools inspect --raw "${reference}")"
+          jq --exit-status '
+            .mediaType == "application/vnd.oci.image.index.v1+json"
+            and (
+              [.manifests[] | select(.platform.os == "linux") | .platform.architecture]
+              == ["amd64"]
+            )
+          ' <<<"${raw}" >/dev/null
+          {
+            echo "digest=${digest}"
+            echo "reference=${reference}"
+            echo "tag=${IMAGE_NAME}:immutable"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Create and verify immutable tag
+        id: publish
+        uses: ./.github/actions/create-immutable-image-tag
+        with:
+          candidate-tag: ${{ steps.candidate.outputs.tag }}
+          candidate-references: ${{ steps.candidate.outputs.reference }}
+          candidate-digest: ${{ steps.candidate.outputs.digest }}
+          diagnostic-name: test GPU commit tag
+          flatten: "false"
+          validation-mode: linux-amd64-index
+      - name: Verify idempotent publication
+        id: repeat
+        uses: ./.github/actions/create-immutable-image-tag
+        with:
+          candidate-tag: ${{ steps.candidate.outputs.tag }}
+          candidate-references: ${{ steps.candidate.outputs.reference }}
+          candidate-digest: ${{ steps.candidate.outputs.digest }}
+          diagnostic-name: test GPU commit tag
+          flatten: "false"
+          validation-mode: linux-amd64-index
+      - name: Verify published digest
+        env:
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
+          PUBLISHED_DIGEST: ${{ steps.publish.outputs.digest }}
+          REPEATED_DIGEST: ${{ steps.repeat.outputs.digest }}
+        run: |
+          test "${PUBLISHED_DIGEST}" = "${CANDIDATE_DIGEST}"
+          test "${REPEATED_DIGEST}" = "${CANDIDATE_DIGEST}"
+
   build:
     name: Build GPU candidate ${{ matrix.target }}
     needs: contract

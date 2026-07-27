@@ -211,9 +211,9 @@ runs:
             ;;
         esac
 
-        validated_candidate_digest="${tag_digest}"
+        platform_manifest_digest=""
         if [ "${VALIDATION_MODE}" = "linux-amd64-index" ]; then
-          validated_candidate_digest="$(
+          platform_manifest_digest="$(
             jq -r '
               .manifests[]
               | select(
@@ -225,13 +225,18 @@ runs:
           )"
         fi
         if [ -n "${CANDIDATE_DIGEST}" ] \
-          && [ "${validated_candidate_digest}" != "${CANDIDATE_DIGEST}" ]; then
+          && [ "${tag_digest}" != "${CANDIDATE_DIGEST}" ] \
+          && [ "${platform_manifest_digest}" != "${CANDIDATE_DIGEST}" ]; then
           if [ "${tag_existed}" = "true" ]; then
             echo "immutable ${DIAGNOSTIC_NAME} already exists with a different digest" >&2
           else
             echo "newly created ${DIAGNOSTIC_NAME} does not match validated candidate digest" >&2
           fi
-          echo "expected digest: ${CANDIDATE_DIGEST}; observed digest: ${validated_candidate_digest}" >&2
+          observed_digests="${tag_digest}"
+          if [ -n "${platform_manifest_digest}" ]; then
+            observed_digests="${observed_digests}, ${platform_manifest_digest}"
+          fi
+          echo "expected digest: ${CANDIDATE_DIGEST}; observed digests: ${observed_digests}" >&2
           exit 1
         fi
 
