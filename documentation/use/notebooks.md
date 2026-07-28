@@ -49,8 +49,7 @@ The notebook API also exposes the shared connection catalog and model-selection 
 
 ```python
 view = session.chat(
-    "Inspect the analysis code and explain the existing data-quality checks. "
-    "Do not modify files."
+    "Inspect the analysis code and explain the existing data-quality checks. Do not modify files."
 )
 view.lifecycle.status
 ```
