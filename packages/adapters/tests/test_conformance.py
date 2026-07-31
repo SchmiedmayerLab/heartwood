@@ -137,8 +137,34 @@ def test_platform_adapter_conformance() -> None:
 def test_platform_capabilities_reject_contradictory_security_claims() -> None:
     capabilities = FakePlatformAdapter().capabilities()
 
+    with pytest.raises(ValueError, match="at least one ingress"):
+        replace(capabilities, ingress_modes=())
+    with pytest.raises(ValueError, match="must be unique"):
+        replace(
+            capabilities,
+            ingress_modes=("direct-loopback", "direct-loopback"),
+        )
     with pytest.raises(ValueError, match="default ingress"):
         replace(capabilities, default_ingress_mode="trusted-proxy")
+    with pytest.raises(ValueError, match="direct browser routing"):
+        replace(
+            capabilities,
+            browser_route="direct",
+            ingress_modes=("trusted-proxy",),
+            default_ingress_mode="trusted-proxy",
+        )
+    with pytest.raises(ValueError, match="Jupyter browser routing"):
+        replace(
+            capabilities,
+            browser_route="jupyter-proxy",
+            ingress_modes=("direct-loopback",),
+        )
+    with pytest.raises(ValueError, match="must be unique"):
+        replace(
+            capabilities,
+            platform_isolated_model_sources=("openai", "openai"),
+            validation_level="ci-and-live-synthetic",
+        )
     with pytest.raises(ValueError, match="live synthetic validation"):
         replace(
             capabilities,

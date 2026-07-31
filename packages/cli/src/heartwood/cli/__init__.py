@@ -24,6 +24,7 @@ from pathlib import Path
 
 import uvicorn
 
+from heartwood.adapters import INGRESS_MODES
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._interactive import (
     InteractionActivity,
@@ -165,6 +166,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=8767, help="Browser interface port.")
+    parser.add_argument(
+        "--host-loopback-publication",
+        action="store_true",
+        help=(
+            "Assert that a wildcard container bind is published only on the host's "
+            "loopback interface."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     doctor = subparsers.add_parser("doctor", help="Inspect environment and setup readiness.")
     doctor.add_argument("--json", action="store_true", help="Print machine-readable diagnostics.")
@@ -402,8 +411,17 @@ def _build_parser() -> argparse.ArgumentParser:
     gateway_serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
     gateway_serve.add_argument(
         "--ingress-mode",
-        choices=("direct-loopback", "jupyter-proxy", "trusted-proxy"),
+        choices=INGRESS_MODES,
         help="Explicit network route to the gateway; defaults to the platform capability.",
+    )
+    gateway_serve.add_argument(
+        "--host-loopback-publication",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=(
+            "Assert that a wildcard container bind is published only on the host's "
+            "loopback interface."
+        ),
     )
     gateway_serve.add_argument(
         "--public-origin",
@@ -482,6 +500,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             trusted_identity_header=args.trusted_identity_header,
             trusted_identity=args.trusted_identity,
             proxy_strips_prefix=args.proxy_strips_prefix,
+            host_loopback_publication=args.host_loopback_publication,
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
@@ -515,6 +534,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 port=args.port,
                 web_root=_DEFAULT_WEB_ROOT,
                 base_path="/",
+                host_loopback_publication=args.host_loopback_publication,
             )
         if startup.phase == "project-review" and not _review_project(project):
             print("No project files were changed.")
@@ -558,6 +578,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 port=args.port,
                 web_root=_DEFAULT_WEB_ROOT,
                 base_path="/",
+                host_loopback_publication=args.host_loopback_publication,
             )
 
     gateway = configured_gateway or _run_with_progress(
@@ -692,6 +713,7 @@ def _launch_options(project: ProjectContext, args: argparse.Namespace) -> Launch
         web=args.interface == "web",
         web_host=args.host,
         web_port=args.port,
+        host_loopback_publication=args.host_loopback_publication,
         startup_timeout=getattr(args, "startup_timeout", 600),
         prompt=args.prompt,
         prompt_file=args.prompt_file,
@@ -1758,6 +1780,7 @@ def _handle_serve(
     trusted_identity_header: str | None = None,
     trusted_identity: str | None = None,
     proxy_strips_prefix: bool = False,
+    host_loopback_publication: bool = False,
 ) -> int:
     if not web_root.exists():
         msg = f"web UI assets not found: {web_root}"
@@ -1781,7 +1804,7 @@ def _handle_serve(
             trusted_proxy_sources=trusted_proxy_sources,
             trusted_identity_header=trusted_identity_header,
             trusted_identity=trusted_identity,
-            container_loopback=bool(os.environ.get("HEARTWOOD_IMAGE_FLAVOR")),
+            host_loopback_publication=host_loopback_publication,
         )
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error

@@ -73,11 +73,11 @@ A separate service identity or platform proxy can enforce a technical credential
 Heartwood accepts browser and API traffic through one configured ingress mode:
 
 - **Direct loopback** binds to a loopback address by default and rejects forwarding headers.
-- **Jupyter proxy** binds to loopback, requires the exact external origin and stripped proxy prefix, and accepts requests only from the local Jupyter proxy.
+- **Jupyter proxy** binds to loopback, requires the exact external origin and stripped proxy prefix, accepts requests only from the local Jupyter proxy, and validates the bounded route metadata emitted by `jupyter-server-proxy`.
 - **Trusted proxy** accepts traffic only from configured source ranges, requires one complete forwarded client, host, protocol, and prefix set, and can require an exact non-secret proxy identity assertion.
 
 All modes validate the request host, browser origin, WebSocket origin, path, query encoding, and external base path before routing.
-Heartwood rejects duplicated security headers, forwarded metadata outside a trusted-proxy mode, encoded or traversing paths, wildcard origins, and contradictory prefixes.
+Heartwood rejects duplicated security headers, forwarded metadata outside the declared Jupyter or trusted-proxy contract, encoded or traversing paths, wildcard origins, and contradictory prefixes.
 
 Heartwood does not authenticate end users or terminate public TLS.
 The platform proxy must authenticate users, authorize project access, remove untrusted forwarding and identity headers, set the validated values, and restrict network reachability to the configured gateway bind.

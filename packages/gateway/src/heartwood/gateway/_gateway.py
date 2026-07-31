@@ -83,6 +83,7 @@ from heartwood.gateway._model_catalog import (
     ModelCatalogError,
     ModelCatalogService,
     ModelConnection,
+    active_model_connections,
     custom_model_connection,
     load_model_connections,
     matching_model_connection,
@@ -852,7 +853,7 @@ class SessionGateway:
         """Return capabilities owned by the detected platform adapter."""
         return api_response(
             PlatformCapabilitiesResponse,
-            select_platform_adapter(self.env).capabilities().safe_dict(),
+            self._platform_capabilities.safe_dict(),
         )
 
     def startup(
@@ -2113,16 +2114,11 @@ class SessionGateway:
     def _reload_model_connections(self) -> None:
         configured = self.config_store.load().additional_connections
         allowed_connection_ids = {option.connection_id for option in model_source_options(self.env)}
-        loaded = tuple(
-            connection
-            for connection in (*self._base_model_connections, *configured)
-            if connection.connection_id in allowed_connection_ids or connection.source == "platform"
+        loaded = active_model_connections(
+            self._base_model_connections,
+            configured,
+            allowed_connection_ids=allowed_connection_ids,
         )
-        for connection in loaded:
-            connection.validate(configurable=connection.connection_id == "custom-api")
-        connection_ids = [connection.connection_id for connection in loaded]
-        if len(connection_ids) != len(set(connection_ids)):
-            raise ModelCatalogError("model connection ids must be unique")
         previous_ids = set(self._model_connections)
         self._model_connections = {connection.connection_id: connection for connection in loaded}
         for connection_id in previous_ids | set(self._model_connections):

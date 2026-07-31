@@ -677,6 +677,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     json(route, {
       profile: modelSettings.profiles[0],
       credential_status: "configured",
+      credential_isolation: credentialIsolation(),
       action_confirmation_mode: "always-confirm",
       policy_decision: {
         decision: "allow",

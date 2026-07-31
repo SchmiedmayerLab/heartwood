@@ -91,14 +91,20 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-heartwood_html="$(curl --fail --silent --show-error "${heartwood_url}")"
+if ! heartwood_html="$(curl --fail --silent --show-error "${heartwood_url}")"; then
+  dump_logs
+  exit 1
+fi
 if ! grep -q '<div id="root"></div>' <<<"${heartwood_html}"; then
   echo "Heartwood web UI did not load through ${heartwood_url}" >&2
   dump_logs
   exit 1
 fi
 
-readiness="$(curl --fail --silent --show-error "${heartwood_url}project/readiness")"
+if ! readiness="$(curl --fail --silent --show-error "${heartwood_url}project/readiness")"; then
+  dump_logs
+  exit 1
+fi
 HEARTWOOD_EXPECTED_PROJECT="${project_root}" python3 -c '
 import json
 import os

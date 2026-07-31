@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal, cast
 from urllib.parse import SplitResult, urlsplit
 
-from heartwood.adapters import IngressMode
+from heartwood.adapters import INGRESS_MODES, IngressMode
 
 type PrefixHandling = Literal["preserve", "strip"]
 
@@ -39,7 +39,15 @@ _UNSUPPORTED_FORWARDED_HEADERS = frozenset(
         "x-real-ip",
     }
 )
-_FORWARDED_HEADERS = _SUPPORTED_FORWARDED_HEADERS | _UNSUPPORTED_FORWARDED_HEADERS
+_JUPYTER_CONTEXT_HEADERS = frozenset(
+    {
+        "x-forwarded-context",
+        "x-proxycontextpath",
+    }
+)
+_FORWARDED_HEADERS = (
+    _SUPPORTED_FORWARDED_HEADERS | _UNSUPPORTED_FORWARDED_HEADERS | _JUPYTER_CONTEXT_HEADERS
+)
 _SENSITIVE_SINGLETON_HEADERS = _FORWARDED_HEADERS | {
     "host",
     "origin",
@@ -83,7 +91,7 @@ class IngressPolicy:
     trusted_proxy_sources: tuple[str, ...] = ()
     trusted_identity_header: str | None = None
     trusted_identity: str | None = None
-    container_loopback: bool = False
+    host_loopback_publication: bool = False
 
     @classmethod
     def create(
@@ -98,10 +106,10 @@ class IngressPolicy:
         trusted_proxy_sources: Sequence[str] = (),
         trusted_identity_header: str | None = None,
         trusted_identity: str | None = None,
-        container_loopback: bool = False,
+        host_loopback_publication: bool = False,
     ) -> IngressPolicy:
         """Validate and normalize one deployment-owned ingress configuration."""
-        if mode not in {"direct-loopback", "jupyter-proxy", "trusted-proxy"}:
+        if mode not in INGRESS_MODES:
             raise IngressConfigurationError(f"unsupported gateway ingress mode: {mode}")
         if not 1 <= bind_port <= 65_535:
             raise IngressConfigurationError("gateway bind port must be between 1 and 65535")
@@ -109,7 +117,7 @@ class IngressPolicy:
         if (
             mode == "direct-loopback"
             and not loopback_bind
-            and not (container_loopback and wildcard_bind)
+            and not (host_loopback_publication and wildcard_bind)
         ):
             raise IngressConfigurationError(
                 "direct-loopback ingress requires a loopback bind; a container may use "
@@ -119,10 +127,8 @@ class IngressPolicy:
             raise IngressConfigurationError(
                 "Jupyter proxy ingress requires a loopback gateway bind"
             )
-        if mode == "jupyter-proxy" and external_origin is None:
-            raise IngressConfigurationError(
-                "Jupyter proxy ingress requires the exact external origin"
-            )
+        if mode in {"jupyter-proxy", "trusted-proxy"} and not external_origin:
+            raise IngressConfigurationError(f"{mode} ingress requires the exact external origin")
         normalized_base = normalize_base_path(external_base_path)
         normalized_origin = _normalize_origin(
             external_origin
@@ -130,7 +136,7 @@ class IngressPolicy:
                 f"http://{_authority(normalized_host, bind_port)}"
                 if loopback_bind
                 else f"http://127.0.0.1:{bind_port}"
-                if container_loopback and wildcard_bind
+                if host_loopback_publication and wildcard_bind
                 else ""
             )
         )
@@ -167,8 +173,8 @@ class IngressPolicy:
                 )
             if sources or identity_header is not None:
                 raise IngressConfigurationError(
-                    "Jupyter proxy ingress uses the loopback proxy boundary and cannot accept "
-                    "forwarded metadata"
+                    "Jupyter proxy ingress uses the loopback proxy boundary and cannot configure "
+                    "trusted-proxy source or identity assertions"
                 )
             if normalized_prefix_handling != "strip":
                 raise IngressConfigurationError(
@@ -179,13 +185,13 @@ class IngressPolicy:
                 raise IngressConfigurationError(
                     "trusted-proxy ingress requires at least one exact proxy source range"
                 )
-            if container_loopback:
+            if host_loopback_publication:
                 raise IngressConfigurationError(
-                    "trusted-proxy ingress cannot use the container-loopback exception"
+                    "trusted-proxy ingress cannot use the host-loopback publication boundary"
                 )
 
         return cls(
-            mode=cast(IngressMode, mode),
+            mode=mode,
             bind_host=normalized_host,
             bind_port=bind_port,
             external_origin=normalized_origin,
@@ -194,7 +200,7 @@ class IngressPolicy:
             trusted_proxy_sources=sources,
             trusted_identity_header=identity_header,
             trusted_identity=identity,
-            container_loopback=container_loopback,
+            host_loopback_publication=host_loopback_publication,
         )
 
     def safe_dict(self) -> dict[str, object]:
@@ -237,7 +243,7 @@ class IngressPolicy:
         address = ipaddress.ip_address(client_ip)
         if self.mode == "direct-loopback":
             allowed = address.is_loopback or (
-                self.container_loopback and (address.is_private or address.is_link_local)
+                self.host_loopback_publication and (address.is_private or address.is_link_local)
             )
             if not allowed:
                 raise IngressRequestError(
@@ -263,20 +269,20 @@ class IngressPolicy:
         headers: Mapping[str, tuple[str, ...]],
     ) -> str | None:
         forwarded = _FORWARDED_HEADERS.intersection(headers)
-        if self.mode != "trusted-proxy":
+        if self.mode == "direct-loopback":
             if forwarded:
                 raise IngressRequestError(
                     "forwarded metadata is not accepted by this ingress mode",
                     status_code=403,
                 )
             return None
-        if "forwarded" in forwarded:
-            raise IngressRequestError(
-                "RFC Forwarded metadata is unsupported; configure one X-Forwarded header set"
-            )
-        if forwarded.intersection({"x-original-url", "x-rewrite-url"}):
-            raise IngressRequestError("rewritten URL metadata is not accepted")
-        unsupported = forwarded.intersection(_UNSUPPORTED_FORWARDED_HEADERS)
+        _reject_ambiguous_forwarding(forwarded)
+        if self.mode == "jupyter-proxy":
+            self._validate_jupyter_forwarding(headers, forwarded)
+            return None
+        unsupported = forwarded.intersection(
+            _UNSUPPORTED_FORWARDED_HEADERS | _JUPYTER_CONTEXT_HEADERS
+        )
         if unsupported:
             raise IngressRequestError(
                 f"unsupported forwarded metadata is not accepted: {', '.join(sorted(unsupported))}"
@@ -291,13 +297,7 @@ class IngressPolicy:
             raise IngressRequestError(
                 "trusted proxy metadata must include client, host, protocol, and prefix"
             )
-        forwarded_for = _one_header(headers, "x-forwarded-for")
-        if "," in forwarded_for:
-            raise IngressRequestError("forwarded client must contain one address")
-        try:
-            forwarded_client = str(ipaddress.ip_address(forwarded_for))
-        except ValueError as error:
-            raise IngressRequestError("forwarded client is not a valid IP address") from error
+        forwarded_client = _forwarded_clients(headers, allow_chain=False)[0]
         expected = urlsplit(self.external_origin)
         if _normalize_authority(_one_header(headers, "x-forwarded-host")) != _origin_authority(
             expected
@@ -328,6 +328,59 @@ class IngressPolicy:
                     status_code=403,
                 )
         return forwarded_client
+
+    def _validate_jupyter_forwarding(
+        self,
+        headers: Mapping[str, tuple[str, ...]],
+        forwarded: frozenset[str],
+    ) -> None:
+        unsupported = forwarded.intersection(_UNSUPPORTED_FORWARDED_HEADERS)
+        if unsupported:
+            raise IngressRequestError(
+                f"unsupported forwarded metadata is not accepted: {', '.join(sorted(unsupported))}"
+            )
+        context_headers = forwarded.intersection(_JUPYTER_CONTEXT_HEADERS)
+        if context_headers and not (_JUPYTER_CONTEXT_HEADERS | {"x-forwarded-prefix"}).issubset(
+            forwarded
+        ):
+            raise IngressRequestError(
+                "Jupyter proxy context metadata must include context, proxy context, and prefix"
+            )
+        route_headers = forwarded.intersection({"x-forwarded-host", "x-forwarded-proto"})
+        if route_headers and route_headers != {"x-forwarded-host", "x-forwarded-proto"}:
+            raise IngressRequestError(
+                "Jupyter forwarded route metadata must include host and protocol"
+            )
+        if "x-forwarded-for" in forwarded:
+            _forwarded_clients(headers, allow_chain=True)
+        expected = urlsplit(self.external_origin)
+        if "x-forwarded-host" in forwarded and _normalize_authority(
+            _one_header(headers, "x-forwarded-host")
+        ) != _origin_authority(expected):
+            raise IngressRequestError(
+                "forwarded host does not match the configured external origin",
+                status_code=403,
+            )
+        if (
+            "x-forwarded-proto" in forwarded
+            and _one_header(headers, "x-forwarded-proto").lower() != expected.scheme
+        ):
+            raise IngressRequestError(
+                "forwarded protocol does not match the configured external origin",
+                status_code=403,
+            )
+        for name in (*sorted(_JUPYTER_CONTEXT_HEADERS), "x-forwarded-prefix"):
+            if name not in forwarded:
+                continue
+            try:
+                value = normalize_base_path(_one_header(headers, name))
+            except IngressConfigurationError as error:
+                raise IngressRequestError(f"{name} is malformed") from error
+            if value != self.external_base_path:
+                raise IngressRequestError(
+                    f"{name} does not match the configured external base path",
+                    status_code=403,
+                )
 
     def _validate_host(self, headers: Mapping[str, tuple[str, ...]]) -> None:
         host = _normalize_authority(_one_header(headers, "host"))
@@ -518,7 +571,8 @@ def _headers(scope: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
     values: dict[str, list[str]] = {}
     for item in raw:
         if (
-            not isinstance(item, tuple)
+            not isinstance(item, Sequence)
+            or isinstance(item, (str, bytes))
             or len(item) != 2
             or not isinstance(item[0], bytes)
             or not isinstance(item[1], bytes)
@@ -549,6 +603,31 @@ def _one_header(headers: Mapping[str, tuple[str, ...]], name: str) -> str:
     if any(character in value for character in "\r\n\0"):
         raise IngressRequestError(f"request {name} header is malformed")
     return value
+
+
+def _reject_ambiguous_forwarding(forwarded: frozenset[str]) -> None:
+    if "forwarded" in forwarded:
+        raise IngressRequestError(
+            "RFC Forwarded metadata is unsupported; configure one X-Forwarded header set"
+        )
+    if forwarded.intersection({"x-original-url", "x-rewrite-url"}):
+        raise IngressRequestError("rewritten URL metadata is not accepted")
+
+
+def _forwarded_clients(
+    headers: Mapping[str, tuple[str, ...]],
+    *,
+    allow_chain: bool,
+) -> tuple[str, ...]:
+    raw_clients = _one_header(headers, "x-forwarded-for").split(",")
+    if not allow_chain and len(raw_clients) != 1:
+        raise IngressRequestError("forwarded client must contain one address")
+    if not 1 <= len(raw_clients) <= 8:
+        raise IngressRequestError("forwarded client chain is too long")
+    try:
+        return tuple(str(ipaddress.ip_address(value.strip())) for value in raw_clients)
+    except ValueError as error:
+        raise IngressRequestError("forwarded client is not a valid IP address") from error
 
 
 def _client_ip(scope: Mapping[str, object]) -> str:

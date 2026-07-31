@@ -12,6 +12,7 @@ import asyncio
 import html
 import json
 import mimetypes
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from pathlib import Path
@@ -28,6 +29,7 @@ AsgiMessage = dict[str, object]
 AsgiReceive = Callable[[], Awaitable[AsgiMessage]]
 AsgiScope = Mapping[str, object]
 AsgiSend = Callable[[AsgiMessage], Awaitable[None]]
+_HEAD_TAG = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
 
 
 class GatewayAsgiApp:
@@ -40,6 +42,7 @@ class GatewayAsgiApp:
         static_dir: Path | None = None,
         ingress: IngressPolicy | None = None,
     ) -> None:
+        """Create an app with safe direct-loopback ingress when no policy is supplied."""
         self.gateway = gateway
         self.rest = RestGateway(gateway)
         self.static_dir = static_dir
@@ -459,6 +462,7 @@ def _inject_browser_base_path(body: bytes, *, browser_base_path: str) -> bytes:
         return body
     escaped = html.escape(browser_base_path, quote=True)
     metadata = f'<meta name="heartwood-gateway-base" content="{escaped}" />'
-    if "<head>" not in document:
+    head = _HEAD_TAG.search(document)
+    if head is None:
         return body
-    return document.replace("<head>", f"<head>\n    {metadata}", 1).encode("utf-8")
+    return f"{document[: head.end()]}\n    {metadata}{document[head.end() :]}".encode()

@@ -27,7 +27,7 @@ from heartwood.gateway import (
     RestResponse,
     SessionGateway,
 )
-from heartwood.gateway._asgi import _wait_for_stream_signal
+from heartwood.gateway._asgi import _inject_browser_base_path, _wait_for_stream_signal
 from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
@@ -610,6 +610,9 @@ def test_asgi_base_path_cannot_be_bypassed_by_a_direct_api_route(tmp_path: Path)
     sent = asyncio.run(scenario())
 
     assert sent[0]["status"] == 404
+    response_headers = cast(list[tuple[bytes, bytes]], sent[0]["headers"])
+    assert (b"cache-control", b"no-store") in response_headers
+    assert (b"x-content-type-options", b"nosniff") in response_headers
     assert json.loads(cast(bytes, sent[1]["body"])) == {
         "code": "HW-INGRESS-002",
         "error": "request path is outside the configured gateway base path",
@@ -620,7 +623,7 @@ def test_asgi_injects_the_gateway_owned_jupyter_base_path(tmp_path: Path) -> Non
     static_dir = tmp_path / "dist"
     static_dir.mkdir()
     (static_dir / "index.html").write_text(
-        '<html><head></head><body><div id="root"></div></body></html>',
+        '<html><HEAD lang="en"></HEAD><body><div id="root"></div></body></html>',
         encoding="utf-8",
     )
     external_base = "/proxy/project/runtime/jupyter/proxy/8767"
@@ -647,6 +650,16 @@ def test_asgi_injects_the_gateway_owned_jupyter_base_path(tmp_path: Path) -> Non
 
     assert sent[0]["status"] == 200
     assert f'<meta name="heartwood-gateway-base" content="{external_base}" />' in body
+
+
+def test_browser_base_path_injection_is_idempotent_and_binary_safe() -> None:
+    existing = (
+        b'<html><head><meta name="heartwood-gateway-base" content="/existing" /></head></html>'
+    )
+    binary = b"<html><head>\xff</head></html>"
+
+    assert _inject_browser_base_path(existing, browser_base_path="/new") == existing
+    assert _inject_browser_base_path(binary, browser_base_path="/new") == binary
 
 
 def test_asgi_jupyter_proxy_uses_one_stripped_route_for_rest_sse_and_websocket(

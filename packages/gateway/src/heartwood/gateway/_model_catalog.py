@@ -235,20 +235,31 @@ class ModelConnection:
 
     def matches_profile(self, profile: ModelProfile) -> bool:
         """Return whether a profile preserves this connection's complete route contract."""
-        if (
-            profile.profile_id != self.connection_id
-            or not profile.model.startswith(self.model_prefix)
-            or profile.credential_kind != self.credential_kind
-            or profile.auth_type
-            != ("subscription" if self.protocol == "subscription" else "api_key")
-            or profile.subscription_vendor != self.subscription_vendor
-            or profile.base_url != self.base_url
-            or profile.api_key_env != self.api_key_env
-            or profile.api_key_file != self.api_key_file
-            or profile.api_version != self.api_version
-            or profile.aws_region_name != self.aws_region_name
-            or profile.aws_profile_name != self.aws_profile_name
-        ):
+        profile_route = (
+            profile.profile_id,
+            profile.credential_kind,
+            profile.auth_type,
+            profile.subscription_vendor,
+            profile.base_url,
+            profile.api_key_env,
+            profile.api_key_file,
+            profile.api_version,
+            profile.aws_region_name,
+            profile.aws_profile_name,
+        )
+        connection_route = (
+            self.connection_id,
+            self.credential_kind,
+            "subscription" if self.protocol == "subscription" else "api_key",
+            self.subscription_vendor,
+            self.base_url,
+            self.api_key_env,
+            self.api_key_file,
+            self.api_version,
+            self.aws_region_name,
+            self.aws_profile_name,
+        )
+        if not profile.model.startswith(self.model_prefix) or profile_route != connection_route:
             return False
         try:
             return profile.policy_endpoint == self.request_endpoint(profile.model)
@@ -323,6 +334,27 @@ def matching_model_connection(
         (connection for connection in connections if connection.matches_profile(profile)),
         None,
     )
+
+
+def active_model_connections(
+    base_connections: Iterable[ModelConnection],
+    configured_connections: Iterable[ModelConnection],
+    *,
+    allowed_connection_ids: Iterable[str],
+) -> tuple[ModelConnection, ...]:
+    """Return the one validated connection set used by readiness and execution."""
+    allowed = frozenset(allowed_connection_ids)
+    loaded = tuple(
+        connection
+        for connection in (*base_connections, *configured_connections)
+        if connection.connection_id in allowed or connection.source == "platform"
+    )
+    for connection in loaded:
+        connection.validate(configurable=connection.connection_id == "custom-api")
+    connection_ids = [connection.connection_id for connection in loaded]
+    if len(connection_ids) != len(set(connection_ids)):
+        raise ModelCatalogError("model connection ids must be unique")
+    return loaded
 
 
 @dataclass(frozen=True, slots=True)

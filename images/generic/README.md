@@ -23,6 +23,6 @@ The image contains no model weights, provider credentials, generated model profi
 
 The recommended Qwen2.5 7B Instruct GGUF artifact remains the portable CPU tool-use demonstration. CUDA configurations are recommended only after the complete acceptance contract passes on the named GPU platform.
 
-Run `heartwood --interface web --host 0.0.0.0` for the browser interface. Heartwood uses the configured hosted or managed connection directly, or starts the selected downloaded model before opening the same interface. `heartwood runtime start` and `heartwood gateway serve` remain operator commands; the lower-level runtime scripts are test fixtures, not a separate researcher setup contract.
+Run `heartwood --interface web --host 0.0.0.0 --host-loopback-publication` for the browser interface when the container port is published only on host loopback. Heartwood uses the configured hosted or managed connection directly, or starts the selected downloaded model before opening the same interface. `heartwood runtime start` and `heartwood gateway serve` remain operator commands; the lower-level runtime scripts are test fixtures, not a separate researcher setup contract.
 
 Public generic tags are `edge` and `sha-<git-sha>`. Native architecture builds are staged without tags and tested by digest before their validated descriptors are merged into the immutable commit tag; `edge` is moved to that verified manifest last. No persistent architecture helper tags are created.

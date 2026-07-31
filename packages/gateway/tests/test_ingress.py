@@ -92,7 +92,16 @@ def test_direct_loopback_normalizes_one_prefixed_route() -> None:
                 "trusted_identity_header": "x-heartwood-proxy",
                 "trusted_identity": "platform",
             },
-            "cannot accept forwarded metadata",
+            "cannot configure trusted-proxy source or identity assertions",
+        ),
+        (
+            {
+                "mode": "jupyter-proxy",
+                "external_origin": "https://notebooks.example",
+                "external_base_path": "/proxy/8767",
+                "prefix_handling": "preserve",
+            },
+            "must strip",
         ),
         (
             {
@@ -100,9 +109,46 @@ def test_direct_loopback_normalizes_one_prefixed_route() -> None:
                 "bind_host": "0.0.0.0",
                 "external_origin": "https://heartwood.example",
                 "trusted_proxy_sources": ("10.0.0.4",),
-                "container_loopback": True,
+                "host_loopback_publication": True,
             },
-            "container-loopback exception",
+            "host-loopback publication boundary",
+        ),
+        ({"external_base_path": 42}, "must be a string"),
+        ({"external_base_path": "/../gateway"}, "traversal"),
+        ({"external_origin": "https://heartwood .example"}, "whitespace"),
+        ({"external_origin": "https://heartwood.example:invalid"}, "invalid port"),
+        ({"trusted_proxy_sources": ("not-a-network",)}, "invalid trusted proxy"),
+        ({"trusted_identity_header": "x-heartwood-proxy"}, "configured together"),
+        (
+            {
+                "trusted_identity_header": "authorization",
+                "trusted_identity": "proxy",
+            },
+            "invalid or reserved",
+        ),
+        (
+            {
+                "trusted_identity_header": "x-heartwood-proxy",
+                "trusted_identity": "",
+            },
+            "identity value is invalid",
+        ),
+        (
+            {
+                "mode": "trusted-proxy",
+                "bind_host": "0.0.0.0",
+                "external_origin": "",
+                "trusted_proxy_sources": ("10.0.0.4",),
+            },
+            "requires the exact external origin",
+        ),
+        (
+            {
+                "mode": "trusted-proxy",
+                "bind_host": "0.0.0.0",
+                "trusted_proxy_sources": ("10.0.0.4",),
+            },
+            "requires the exact external origin",
         ),
     ],
 )
@@ -120,10 +166,10 @@ def test_direct_loopback_rejects_non_loopback_bind(host: str) -> None:
         IngressPolicy.create(bind_host=host)
 
 
-def test_container_loopback_requires_an_explicit_loopback_public_route() -> None:
+def test_host_loopback_publication_requires_an_explicit_loopback_public_route() -> None:
     policy = IngressPolicy.create(
         bind_host="0.0.0.0",
-        container_loopback=True,
+        host_loopback_publication=True,
     )
 
     assert policy.external_origin == "http://127.0.0.1:8767"
@@ -131,8 +177,18 @@ def test_container_loopback_requires_an_explicit_loopback_public_route() -> None
         IngressPolicy.create(
             bind_host="0.0.0.0",
             external_origin="http://192.0.2.20:8767",
-            container_loopback=True,
+            host_loopback_publication=True,
         )
+
+
+def test_ingress_normalizes_localhost_and_an_exact_base_route() -> None:
+    policy = IngressPolicy.create(
+        bind_host="localhost",
+        external_base_path="/heartwood",
+    )
+
+    assert policy.bind_host == "127.0.0.1"
+    assert policy.validate_scope(_scope("/heartwood")).path == "/"
 
 
 def test_direct_loopback_validates_the_actual_request_source() -> None:
@@ -141,15 +197,15 @@ def test_direct_loopback_validates_the_actual_request_source() -> None:
     with pytest.raises(IngressRequestError, match="local boundary"):
         policy.validate_scope(_scope(client="8.8.8.8"))
 
-    container_policy = IngressPolicy.create(
+    published_policy = IngressPolicy.create(
         bind_host="0.0.0.0",
-        container_loopback=True,
+        host_loopback_publication=True,
     )
-    assert container_policy.validate_scope(_scope(client="172.17.0.1")).path.startswith(
+    assert published_policy.validate_scope(_scope(client="172.17.0.1")).path.startswith(
         "/sessions/"
     )
     with pytest.raises(IngressRequestError, match="local boundary"):
-        container_policy.validate_scope(_scope(client="8.8.8.8"))
+        published_policy.validate_scope(_scope(client="8.8.8.8"))
 
 
 @pytest.mark.parametrize(
@@ -191,6 +247,11 @@ def test_websocket_requires_the_exact_origin() -> None:
             _scope(origin="https://attacker.example"),
             websocket=True,
         )
+
+
+def test_request_rejects_a_malformed_origin() -> None:
+    with pytest.raises(IngressRequestError, match="origin is malformed"):
+        IngressPolicy.create().validate_scope(_scope(origin="not-an-origin"))
 
 
 def test_same_origin_http_request_can_omit_origin() -> None:
@@ -266,6 +327,23 @@ def test_jupyter_proxy_accepts_only_the_stripped_loopback_route() -> None:
             "/sessions/session-1/events",
             host="127.0.0.1:8767",
             origin="https://notebooks.firecloud.org",
+            headers=[
+                (
+                    "x-forwarded-context",
+                    "/proxy/project/runtime/jupyter/proxy/8767",
+                ),
+                (
+                    "x-proxycontextpath",
+                    "/proxy/project/runtime/jupyter/proxy/8767",
+                ),
+                (
+                    "x-forwarded-prefix",
+                    "/proxy/project/runtime/jupyter/proxy/8767",
+                ),
+                ("x-forwarded-for", "198.51.100.22, 10.10.0.4"),
+                ("x-forwarded-host", "notebooks.firecloud.org"),
+                ("x-forwarded-proto", "https"),
+            ],
         )
     )
 
@@ -284,11 +362,50 @@ def test_jupyter_proxy_accepts_only_the_stripped_loopback_route() -> None:
                 client="10.0.0.8",
             )
         )
-    with pytest.raises(IngressRequestError, match="forwarded metadata"):
+    with pytest.raises(IngressRequestError, match="forwarded host"):
         policy.validate_scope(
             _scope(
                 origin="https://notebooks.firecloud.org",
-                headers=[("x-forwarded-host", "notebooks.firecloud.org")],
+                headers=[
+                    ("x-forwarded-host", "attacker.example"),
+                    ("x-forwarded-proto", "https"),
+                ],
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("headers", "message"),
+    [
+        ([("x-forwarded-context", "/proxy/8767")], "context metadata must include"),
+        ([("x-forwarded-host", "notebooks.firecloud.org")], "must include host and protocol"),
+        ([("x-forwarded-for", "not-an-ip")], "valid IP"),
+        ([("x-real-ip", "198.51.100.22")], "unsupported forwarded metadata"),
+        (
+            [
+                ("x-forwarded-context", "/proxy/other"),
+                ("x-proxycontextpath", "/proxy/other"),
+                ("x-forwarded-prefix", "/proxy/other"),
+            ],
+            "configured external base path",
+        ),
+    ],
+)
+def test_jupyter_proxy_rejects_ambiguous_forwarding_metadata(
+    headers: Sequence[tuple[str, str]],
+    message: str,
+) -> None:
+    policy = IngressPolicy.create(
+        mode="jupyter-proxy",
+        external_origin="https://notebooks.firecloud.org",
+        external_base_path="/proxy/project/runtime/jupyter/proxy/8767",
+    )
+
+    with pytest.raises(IngressRequestError, match=message):
+        policy.validate_scope(
+            _scope(
+                origin="https://notebooks.firecloud.org",
+                headers=headers,
             )
         )
 
@@ -434,6 +551,31 @@ def test_trusted_proxy_rejects_unmodeled_forwarding_metadata() -> None:
         )
 
 
+def test_trusted_proxy_rejects_jupyter_context_metadata() -> None:
+    policy = IngressPolicy.create(
+        mode="trusted-proxy",
+        bind_host="0.0.0.0",
+        external_origin="https://heartwood.example",
+        trusted_proxy_sources=("10.10.0.0/24",),
+    )
+
+    with pytest.raises(IngressRequestError, match="unsupported forwarded metadata"):
+        policy.validate_scope(
+            _scope(
+                host="heartwood.example",
+                origin="https://heartwood.example",
+                client="10.10.0.4",
+                headers=[
+                    ("x-forwarded-context", "/"),
+                    ("x-forwarded-for", "198.51.100.22"),
+                    ("x-forwarded-host", "heartwood.example"),
+                    ("x-forwarded-prefix", "/"),
+                    ("x-forwarded-proto", "https"),
+                ],
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("headers", "message"),
     [
@@ -556,15 +698,55 @@ def test_ingress_rejects_malformed_asgi_scope_values() -> None:
     policy = IngressPolicy.create()
     malformed_headers = _scope()
     malformed_headers["headers"] = "not-headers"
+    malformed_header_item = _scope()
+    malformed_header_item["headers"] = [b"not-a-pair"]
+    list_header_pairs = _scope()
+    list_header_pairs["headers"] = [
+        [b"host", b"127.0.0.1:8767"],
+        [b"origin", b"http://127.0.0.1:8767"],
+    ]
+    non_ascii_header = _scope()
+    non_ascii_header["headers"] = [(b"\xff", b"value")]
+    missing_host = _scope()
+    missing_host["headers"] = [(b"origin", b"http://127.0.0.1:8767")]
+    malformed_host = _scope()
+    malformed_host["headers"] = [
+        (b"host", b"127.0.0.1:\n8767"),
+        (b"origin", b"http://127.0.0.1:8767"),
+    ]
+    empty_authority = _scope(host=":")
+    invalid_port = _scope(host="127.0.0.1:not-a-port")
+    malformed_client_shape = _scope()
+    malformed_client_shape["client"] = "not-a-client"
     malformed_client = _scope()
     malformed_client["client"] = ("not-an-ip", 43123)
+    malformed_path = _scope()
+    malformed_path["path"] = 42
+    implicit_raw_path = _scope()
+    implicit_raw_path.pop("raw_path")
+    malformed_raw_path = _scope()
+    malformed_raw_path["raw_path"] = "not-bytes"
+    non_utf8_raw_path = _scope()
+    non_utf8_raw_path["raw_path"] = b"/sessions/\xff"
     mismatched_path = _scope(raw_path=b"/other")
     malformed_query = _scope()
     malformed_query["query_string"] = "not-bytes"
 
+    assert policy.validate_scope(implicit_raw_path).path == "/sessions/session-1/events"
+    assert policy.validate_scope(list_header_pairs).path == "/sessions/session-1/events"
     for scope, message in (
         (malformed_headers, "headers are malformed"),
+        (malformed_header_item, "headers are malformed"),
+        (non_ascii_header, "header name is not ASCII"),
+        (missing_host, "requires one host header"),
+        (malformed_host, "host header is malformed"),
+        (empty_authority, "authority is malformed"),
+        (invalid_port, "authority has an invalid port"),
+        (malformed_client_shape, "could not identify"),
         (malformed_client, "not a valid IP"),
+        (malformed_path, "path must be absolute"),
+        (malformed_raw_path, "raw request path is malformed"),
+        (non_utf8_raw_path, "path is not valid UTF-8"),
         (mismatched_path, "do not agree"),
         (malformed_query, "query is malformed"),
     ):

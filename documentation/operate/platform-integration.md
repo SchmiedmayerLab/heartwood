@@ -49,7 +49,7 @@ User-entered compatible endpoints must not silently widen managed-platform polic
 Choose from the shared ingress modes instead of adding platform-specific request parsing:
 
 - `direct-loopback` for a client that connects directly to a loopback gateway;
-- `jupyter-proxy` for an authenticated local Jupyter proxy that strips one exact external prefix; or
+- `jupyter-proxy` for an authenticated local Jupyter proxy that strips one exact external prefix and supplies only validated Jupyter route metadata; or
 - `trusted-proxy` for a non-loopback deployment with exact proxy source ranges, external origin, base path, and forwarded metadata.
 
 The deployment supplies route values to `heartwood gateway serve`.

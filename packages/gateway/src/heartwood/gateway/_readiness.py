@@ -27,6 +27,7 @@ from heartwood.gateway._model_catalog import (
     BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalogError,
     ModelConnection,
+    active_model_connections,
     model_connections_from_mapping,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
@@ -352,9 +353,12 @@ def inspect_deployment(
             active_model,
             adapter.capabilities(),
             model_source=None if config is None else config.model_source,
-            model_connections=(
-                *BUILT_IN_MODEL_CONNECTIONS,
-                *(() if config is None else config.additional_connections),
+            model_connections=active_model_connections(
+                BUILT_IN_MODEL_CONNECTIONS,
+                () if config is None else config.additional_connections,
+                allowed_connection_ids=(
+                    option.connection_id for option in model_source_options(active_env)
+                ),
             ),
         )
         isolation_action_mode = (

@@ -32,7 +32,7 @@ from heartwood.gateway import (
     custom_model_connection,
     load_model_connections,
 )
-from heartwood.gateway._model_catalog import _model_compatibility
+from heartwood.gateway._model_catalog import _model_compatibility, active_model_connections
 from heartwood.schemas import PolicyProfile
 
 
@@ -340,6 +340,37 @@ def test_connection_manifest_accepts_only_platform_sources(tmp_path: Path) -> No
 
     with pytest.raises(ModelCatalogError, match="must use source platform"):
         load_model_connections(path)
+
+
+def test_active_model_connections_share_filtering_and_validation() -> None:
+    research = ModelConnection(
+        connection_id="research-ai",
+        label="Research AI",
+        protocol="static",
+        model_prefix="openai/",
+        source="platform",
+        credential_kind="managed-identity",
+        policy_endpoint="https://models.example/v1/chat/completions",
+        catalog_endpoint=None,
+        static_models=("coding-model",),
+    )
+
+    active = active_model_connections(
+        BUILT_IN_MODEL_CONNECTIONS,
+        (research,),
+        allowed_connection_ids=("heartwood",),
+    )
+
+    assert [connection.connection_id for connection in active] == [
+        "heartwood",
+        "research-ai",
+    ]
+    with pytest.raises(ModelCatalogError, match="ids must be unique"):
+        active_model_connections(
+            (research,),
+            (research,),
+            allowed_connection_ids=(),
+        )
 
 
 def test_catalog_normalizes_exact_ids_sorts_status_and_caches() -> None:

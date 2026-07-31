@@ -24,6 +24,11 @@ type ModelSourceId = Literal[
     "stanford-ai-api-gateway",
 ]
 type IngressMode = Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]
+INGRESS_MODES: tuple[IngressMode, ...] = (
+    "direct-loopback",
+    "jupyter-proxy",
+    "trusted-proxy",
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,7 +14,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
-const { chromium } = require("playwright");
+const { chromium } = require("@playwright/test");
 
 const scriptDir = __dirname;
 const packageRoot = path.resolve(scriptDir, "..");

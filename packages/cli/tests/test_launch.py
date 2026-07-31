@@ -140,6 +140,7 @@ def _options(
         "web": False,
         "web_host": "127.0.0.1",
         "web_port": 8767,
+        "host_loopback_publication": False,
         "startup_timeout": 600,
         "prompt": None,
         "prompt_file": None,
@@ -1266,14 +1267,16 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
             web=True,
             web_host="0.0.0.0",
             web_port=9876,
+            host_loopback_publication=True,
         )
     )
 
-    assert command[-11:] == (
+    assert command[-12:] == (
         "--interface",
         "web",
         "--host",
         "0.0.0.0",
+        "--host-loopback-publication",
         "--port",
         "9876",
         "runtime",
@@ -1284,15 +1287,22 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     )
 
     interaction, label = _interaction_command(
-        _options(tmp_path, web=True, web_host="0.0.0.0", web_port=9876)
+        _options(
+            tmp_path,
+            web=True,
+            web_host="0.0.0.0",
+            web_port=9876,
+            host_loopback_publication=True,
+        )
     )
-    assert interaction[-6:] == [
+    assert interaction[-7:] == [
         "gateway",
         "serve",
         "--host",
         "0.0.0.0",
         "--port",
         "9876",
+        "--host-loopback-publication",
     ]
     assert label == "Open the web interface on 0.0.0.0:9876"
 

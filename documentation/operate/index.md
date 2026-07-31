@@ -50,7 +50,7 @@ A platform adapter can advertise managed connections and credential backends.
 Operator-supplied model manifests define non-secret connection metadata, while platform policy defines allowed catalog and completion endpoints, credential references, capability tiers, and action-confirmation modes.
 
 Never add raw tokens to container layers, image labels, project configuration, command arguments, examples, or CI logs.
-Secret-backed routes require **Review Every Action** unless the active platform reports a live-qualified model credential boundary.
+Secret-backed routes require **Review Every Action** unless the active platform reports a live-qualified platform-isolated model credential boundary for that exact source.
 See [Security and Controlled Data](security.md#model-credential-isolation) for the distinction between application scrubbing and platform isolation.
 
 ## Validate the Deployment

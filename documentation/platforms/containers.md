@@ -66,12 +66,13 @@ docker run --rm -it \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
   ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
-  heartwood --interface web --host 0.0.0.0
+  heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
 Open `http://127.0.0.1:8767/` and keep the container running.
 The host publication is loopback-only even though the process must listen on the container interface.
-Heartwood enables its container-loopback ingress exception only for a packaged image and still validates the external loopback origin.
+`--host-loopback-publication` is the operator's explicit assertion that the wildcard container bind is published only through the host loopback mapping shown above.
+Heartwood still validates the external loopback origin and accepts only loopback or private bridge sources.
 Do not change the host publication to a shared-network address or place an unauthenticated proxy in front of it.
 When the setup page reports that a managed model is downloaded, stop the container with `Ctrl-C` and repeat this command to load the model and return to the browser.
 

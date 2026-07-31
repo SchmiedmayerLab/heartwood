@@ -95,7 +95,8 @@ These commands support deployment automation and diagnostics.
 Researchers should normally use `heartwood` with `--interface` when needed.
 
 `heartwood gateway serve` uses the detected platform's declared default ingress mode.
-Workstations, generic containers, and Carina default to direct loopback and refuse a non-loopback bind.
+Workstations and Carina default to direct loopback and refuse a non-loopback bind.
+A generic container can use a wildcard bind only when the operator explicitly declares loopback-only host publication.
 Terra defaults to Jupyter proxy mode and requires its exact public origin and proxy base path.
 Platform operators can select one explicit route:
 
@@ -110,8 +111,10 @@ Platform operators can select one explicit route:
 | `--trusted-identity-header NAME` | Require an additional non-secret proxy identity assertion header |
 | `--trusted-identity VALUE` | Set the exact non-secret assertion value; configure it with the header |
 | `--proxy-strips-prefix` | Declare that a trusted proxy removes the external prefix before forwarding |
+| `--host-loopback-publication` | Assert that a wildcard container bind is published only on the host loopback interface |
 
 The trusted identity assertion is a route marker, not a credential or substitute for proxy authentication.
+The host-loopback assertion is valid only with a host mapping such as `-p 127.0.0.1:8767:8767`; it does not inspect or authenticate the container image.
 The proxy must remove client-supplied forwarding and identity headers before setting its own values.
 See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
 
