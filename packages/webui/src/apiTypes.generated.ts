@@ -106,6 +106,9 @@ export interface ActionPresentationResponse {
   risk_labels: {
     [k: string]: string;
   };
+  state_labels: {
+    [k: string]: string;
+  };
   tool_labels: {
     [k: string]: string;
   };

@@ -30,6 +30,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   actionCountLabel,
   actionRiskPresentation,
+  actionStateLabel,
   actionToolLabel,
 } from "../actionPresentation";
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
@@ -351,7 +352,7 @@ const ActionHistory = ({
                 <div className="action-history-heading">
                   <strong>{actionHeading(action)}</strong>
                   <Badge variant="secondary">
-                    {actionStateLabel(action.state)}
+                    {actionStateLabel(action.state, actionPresentation)}
                   </Badge>
                 </div>
                 <div className="approval-action-meta">
@@ -442,12 +443,6 @@ const actionHeading = (action: ProjectionActionRecord) => {
   }
   return action.summary;
 };
-
-const actionStateLabel = (state: ProjectionActionRecord["state"]) =>
-  state
-    .split("-")
-    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
 
 const RuntimeStatus = ({
   projection,

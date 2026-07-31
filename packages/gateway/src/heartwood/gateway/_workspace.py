@@ -17,6 +17,7 @@ from codecs import getincrementaldecoder
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from heapq import nsmallest
 from pathlib import Path, PurePosixPath
 from threading import RLock
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -99,6 +100,24 @@ class WorkspaceLimits:
 class _GitBaseline:
     status: Literal["available", "binary", "truncated", "unsupported", "unavailable"]
     content: str | None = None
+
+
+type _WorkspaceFileStatus = Literal[
+    "available",
+    "binary",
+    "truncated",
+    "unavailable",
+    "unsupported",
+]
+type _WorkspaceDiffStatus = Literal[
+    "available",
+    "binary",
+    "truncated",
+    "unavailable",
+    "non-git",
+    "unsupported",
+]
+type _WorkspaceDiffSource = Literal["git", "session-action", "unavailable"]
 
 
 class WorkspaceInspector:
@@ -213,8 +232,12 @@ class WorkspaceInspector:
                             append_directory(child_descriptor, child_parts, child_depth)
                         except WorkspaceInspectionError:
                             entry["kind"] = "unsupported"
-                    elif _directory_has_public_entry(child_descriptor):
-                        truncated = True
+                    else:
+                        try:
+                            if _directory_has_public_entry(child_descriptor):
+                                truncated = True
+                        except OSError:
+                            entry["kind"] = "unsupported"
                 finally:
                     os.close(child_descriptor)
             if directory_truncated:
@@ -305,7 +328,7 @@ class WorkspaceInspector:
         """Return Git changes or explicit structured session-derived changes."""
         git_error, repository_error = _git_error_types()
         try:
-            with _sanitized_git_environment():
+            with _openhands_git_context():
                 git_changes = self._openhands_workspace().git_changes(".")
         except repository_error:
             return self._session_changes(projection)
@@ -467,7 +490,7 @@ class WorkspaceInspector:
             )
         git_error, _ = _git_error_types()
         try:
-            with _sanitized_git_environment():
+            with _openhands_git_context():
                 diff = self._openhands_workspace().git_diff(display_path)
         except (git_error, OSError):
             return self._diff_response(
@@ -481,7 +504,7 @@ class WorkspaceInspector:
             current_after["status"] != "available"
             or current_after["content"] != current_before["content"]
             or _openhands_current_text(current_before["content"]) != diff.modified
-            or baseline.content != diff.original
+            or _openhands_original_text(baseline.content) != diff.original
         ):
             return self._diff_response(
                 path=display_path,
@@ -528,7 +551,7 @@ class WorkspaceInspector:
 
         git_error, _ = _git_error_types()
         try:
-            with _sanitized_git_environment():
+            with _openhands_git_context():
                 reference = get_valid_ref(self.project.root, purpose="display")
         except (git_error, OSError):
             return _GitBaseline(status="unavailable")
@@ -570,10 +593,9 @@ class WorkspaceInspector:
             content = content_result.decode("utf-8")
         except UnicodeDecodeError:
             return _GitBaseline(status="unsupported")
-        return _GitBaseline(status="available", content=content.strip())
+        return _GitBaseline(status="available", content=content)
 
     def _openhands_workspace(self) -> _OpenHandsWorkspace:
-        _configure_openhands_git_logging()
         if self._workspace_client is None:
             from openhands.sdk.workspace import LocalWorkspace
 
@@ -633,9 +655,6 @@ class WorkspaceInspector:
                 return stat.S_ISREG(metadata.st_mode)
         except WorkspaceInspectionError:
             return False
-
-    def _safe_existing_file(self, relative: PurePosixPath) -> bool:
-        return self._safe_path(relative, allow_missing_final=False)
 
     def _read_regular_file(
         self,
@@ -703,11 +722,9 @@ class WorkspaceInspector:
                 else:
                     status = "modified"
                 current = by_path.get(affected.path)
-                action_ids = (
-                    [action.tool_call_id]
-                    if current is None
-                    else [*current["action_ids"], action.tool_call_id]
-                )
+                action_ids = [] if current is None else list(current["action_ids"])
+                if action.action_id is not None:
+                    action_ids.append(action.action_id)
                 by_path[affected.path] = {
                     "path": affected.path,
                     "status": (
@@ -738,7 +755,7 @@ class WorkspaceInspector:
     def _file_response(
         *,
         path: str,
-        status: str,
+        status: _WorkspaceFileStatus,
         content: str | None = None,
         size_bytes: int | None = None,
         bytes_read: int = 0,
@@ -765,8 +782,8 @@ class WorkspaceInspector:
     def _diff_response(
         *,
         path: str,
-        status: str,
-        source: str = "unavailable",
+        status: _WorkspaceDiffStatus,
+        source: _WorkspaceDiffSource = "unavailable",
         original: str | None = None,
         modified: str | None = None,
         truncated: bool = False,
@@ -833,6 +850,11 @@ def _openhands_current_text(value: str) -> str:
     return "\n".join(value.splitlines())
 
 
+def _openhands_original_text(value: str) -> str:
+    """Match OpenHands command-output normalization without changing displayed content."""
+    return value.strip()
+
+
 def _bounded_text(value: str | None, limit: int) -> tuple[str | None, bool]:
     if value is None:
         return None, False
@@ -846,11 +868,6 @@ def _git_error_types() -> tuple[type[Exception], type[Exception]]:
     from openhands.sdk.git.exceptions import GitError, GitRepositoryError
 
     return GitError, GitRepositoryError
-
-
-def _configure_openhands_git_logging() -> None:
-    """Keep upstream Git probes behind Heartwood's typed workspace responses."""
-    logging.getLogger("openhands.sdk.git").setLevel(logging.CRITICAL)
 
 
 def _run_anchored_git(project_descriptor: int, *arguments: str) -> bytes | None:
@@ -883,13 +900,18 @@ def _run_anchored_git(project_descriptor: int, *arguments: str) -> bytes | None:
 
 
 @contextmanager
-def _sanitized_git_environment() -> Iterator[None]:
-    """Isolate OpenHands Git calls from inherited repository routing."""
+def _openhands_git_context() -> Iterator[None]:
+    """Scope process settings required by the public OpenHands Git API."""
     with _GIT_ENVIRONMENT_LOCK:
+        # The pinned SDK has no per-call environment or logger arguments. Keep
+        # this compatibility scope serialized and restore every process value.
         original = {key: value for key, value in os.environ.items() if key.startswith("GIT_")}
+        sdk_logger = logging.getLogger("openhands.sdk.git")
+        original_log_level = sdk_logger.level
         for key in tuple(original):
             os.environ.pop(key, None)
         os.environ.update(_SAFE_GIT_ENVIRONMENT)
+        sdk_logger.setLevel(logging.CRITICAL)
         try:
             yield
         finally:
@@ -897,6 +919,7 @@ def _sanitized_git_environment() -> Iterator[None]:
                 if key.startswith("GIT_"):
                     os.environ.pop(key, None)
             os.environ.update(original)
+            sdk_logger.setLevel(original_log_level)
 
 
 def _descriptor_directory_path(descriptor: int) -> str | None:
@@ -1015,17 +1038,17 @@ def _bounded_directory_entries(
     *,
     limit: int,
 ) -> tuple[list[os.DirEntry[str]], bool]:
-    entries: list[os.DirEntry[str]] = []
-    truncated = False
     with os.scandir(descriptor) as iterator:
-        for entry in iterator:
-            if entry.name.casefold() in RESERVED_PROJECT_COMPONENTS:
-                continue
-            if len(entries) >= limit:
-                truncated = True
-                break
-            entries.append(entry)
-    return sorted(entries, key=lambda entry: entry.name), truncated
+        entries = nsmallest(
+            limit + 1,
+            (
+                entry
+                for entry in iterator
+                if entry.name.casefold() not in RESERVED_PROJECT_COMPONENTS
+            ),
+            key=lambda entry: entry.name,
+        )
+    return entries[:limit], len(entries) > limit
 
 
 def _directory_has_public_entry(descriptor: int) -> bool:

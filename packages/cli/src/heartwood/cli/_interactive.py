@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from heartwood.cli._terminal_text import terminal_safe_text
 from heartwood.cli._workspace_presentation import (
     format_workspace_changes,
     format_workspace_diff,
@@ -32,7 +31,11 @@ from heartwood.gateway import (
     WorkspaceInspectionError,
     action_mode_label,
     action_risk_label,
+    action_state_label,
     action_tool_label,
+)
+from heartwood.gateway import (
+    display_safe_text as terminal_safe_text,
 )
 from heartwood.schemas import (
     ActionSettingsResponse,
@@ -475,7 +478,7 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
 
 def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     """Render one correlated action record without reconstructing its state."""
-    state = action.state.replace("-", " ")
+    state = action_state_label(action.state)
     details = action.details
     if details.kind == "terminal":
         heading = f"  [{state}] $ {terminal_safe_text(details.command)}"

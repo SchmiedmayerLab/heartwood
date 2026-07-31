@@ -305,7 +305,7 @@ def test_coding_agent_qualification_rejects_incomplete_replay(tmp_path: Path) ->
     ("current_marker", "legacy_marker", "missing_label"),
     [
         ("Action set rejected", "Action set denied", "rejected action set"),
-        ("[succeeded] $", "Tool terminal exit=0", "terminal action"),
+        ("[Succeeded] $", "Tool terminal exit=0", "terminal action"),
     ],
 )
 def test_coding_agent_qualification_requires_current_shared_projection(

@@ -2377,6 +2377,25 @@ def test_audit_export_does_not_initialize_the_agent_backend(tmp_path: Path) -> N
     assert service.store.read_audit_export()
 
 
+def test_preflighted_command_does_not_reconcile_the_backend_twice(tmp_path: Path) -> None:
+    backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    service = SessionService.local_default(
+        tmp_path,
+        session_id="session-synthetic-001",
+        backend=backend,
+        env={},
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.reconcile()
+
+    service.handle(
+        _command(CommandKind.PAUSE),
+        reconcile_before_command=False,
+    )
+
+    assert backend.reconcile_calls == 1
+
+
 def test_backend_shutdown_failure_retains_session_ownership(tmp_path: Path) -> None:
     backend = _FailingCloseBackend(endpoint="https://model.local.invalid/v1/chat/completions")
     service = SessionService.local_default(

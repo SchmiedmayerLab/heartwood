@@ -484,7 +484,7 @@ describe("ProjectWorkspace", () => {
     expect(screen.getByRole("button", { name: "failed.txt" })).toBeVisible();
   });
 
-  it("keeps independent file and change selections", async () => {
+  it("resets selection when an instance is repurposed for another workspace mode", async () => {
     const tree: WorkspaceTree = {
       ...emptyTree(),
       entries: [
@@ -570,7 +570,7 @@ describe("ProjectWorkspace", () => {
     );
 
     expect(
-      await screen.findByRole("region", { name: "Read-only file: source.py" }),
+      await screen.findByText("Select a text file to inspect it."),
     ).toBeInTheDocument();
   });
 });

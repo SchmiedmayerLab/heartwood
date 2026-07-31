@@ -127,7 +127,7 @@ grep -q "build the aggregate synthetic target-condition cohort" "${transcript}"
 grep -q "as one OpenHands action set" "${transcript}"
 grep -q "Allow the complete set once: /allow" "${transcript}"
 grep -q "Action set approved" "${transcript}"
-grep -Fq '[succeeded] $' "${transcript}"
+grep -Fq '[Succeeded] $' "${transcript}"
 grep -q "Action set rejected" "${transcript}"
 grep -q "Agent: The synthetic target-condition cohort summary is ready for review." "${transcript}"
 grep -q "Project files · ." "${transcript}"
@@ -135,7 +135,7 @@ grep -q "File · cohort-summary.json · available" "${transcript}"
 grep -q "Project changes · Git" "${transcript}"
 grep -q "A  cohort-summary.json" "${transcript}"
 grep -q "Change · cohort-summary.json · available" "${transcript}"
-grep -Fq '[succeeded] $' "${automatic_transcript}"
+grep -Fq '[Succeeded] $' "${automatic_transcript}"
 if grep -q "as one OpenHands action set" "${automatic_transcript}"; then
   echo "low-risk action unexpectedly required confirmation" >&2
   exit 1

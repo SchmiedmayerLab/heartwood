@@ -108,6 +108,7 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     create_openai_subscription_llm,
 )
+from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
 from heartwood.schemas import ActionConfirmationMode, JsonValue
 
 
@@ -1315,19 +1316,8 @@ class OpenHandsSdkBackend:
             }
         ):
             lifecycle = BackendLifecycle.RUNNING
-        interrupted_outcome = (
-            state.execution_status == ConversationExecutionStatus.RUNNING and not execution_active
-        )
-        intentional_pause = (
-            run_cancelled and state.execution_status == ConversationExecutionStatus.PAUSED
-        )
-        inactive_with_unmatched_actions = (
-            unmatched_group is not None
-            and not execution_active
-            and state.execution_status != ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
-            and not intentional_pause
-        )
-        if run_failed or interrupted_outcome or inactive_with_unmatched_actions:
+        outcome_error = self._interrupted_outcome_error(conversation)
+        if run_failed or outcome_error is not None:
             lifecycle = BackendLifecycle.ERROR
         events: list[BackendEvent] = [
             BackendLifecycleEvent(
@@ -1335,12 +1325,7 @@ class OpenHandsSdkBackend:
                 source_event_id=(f"openhands-state:{anchor}:{lifecycle.value}:lifecycle"),
             )
         ]
-        if interrupted_outcome or inactive_with_unmatched_actions:
-            outcome_error = (
-                BackendErrorCode.ACTION_OUTCOME_UNKNOWN
-                if unmatched_group is not None
-                else BackendErrorCode.AGENT_OUTCOME_UNKNOWN
-            )
+        if outcome_error is not None:
             events.append(
                 BackendErrorEvent(
                     error_code=outcome_error,
@@ -1412,6 +1397,7 @@ def _tool_call(
     tool_name = event.tool_name or "unknown-tool"
     risk_value = analyzed_risk or event.security_risk.value.lower()
     risk = risk_value if risk_value in {"low", "medium", "high"} else "unknown"
+    project_path = _project_path(event, workspace=workspace)
     return ProposedToolCall(
         tool_call_id=event.tool_call_id,
         tool_name=tool_name,
@@ -1420,8 +1406,8 @@ def _tool_call(
         arguments=_tool_arguments(event),
         action_id=event.id,
         kind=_tool_kind(event),
-        affected_paths=_affected_paths(event, workspace=workspace),
-        project_path=_project_path(event, workspace=workspace),
+        affected_paths=_affected_paths(event, project_path=project_path),
+        project_path=project_path,
     )
 
 
@@ -1453,10 +1439,9 @@ def _tool_kind(
     return "other"
 
 
-def _affected_paths(event: ActionEvent, *, workspace: Path | None) -> tuple[str, ...]:
+def _affected_paths(event: ActionEvent, *, project_path: str | None) -> tuple[str, ...]:
     """Return only paths proven to be modified by a typed file-editor action."""
     action = event.action
-    project_path = _project_path(event, workspace=workspace)
     if not isinstance(action, FileEditorAction) or action.command == "view":
         return ()
     if project_path is None:
@@ -1476,9 +1461,11 @@ def _project_path(event: ActionEvent, *, workspace: Path | None) -> str | None:
         relative = resolved.relative_to(root)
     except ValueError:
         return None
-    if not relative.parts or ".heartwood" in relative.parts or ".git" in relative.parts:
+    try:
+        validated = project_relative_path(relative.as_posix(), allow_root=False)
+    except ProjectPathError:
         return None
-    return relative.as_posix()
+    return validated.as_posix()
 
 
 def _json_mapping(value: object) -> dict[str, JsonValue]:

@@ -238,29 +238,29 @@ class RestGateway:
             except ModelSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(model_settings))
-        if (
-            len(parts) == 4
-            and parts[0] == "sessions"
-            and parts[2] == "workspace"
-            and request.method == "GET"
-        ):
+        if len(parts) == 4 and parts[0] == "sessions" and parts[2] == "workspace":
+            if request.method != "GET":
+                return _error(405, "method is not allowed for workspace route")
             try:
                 session_id = validate_session_id(parts[1])
                 self.gateway.session(session_id)
                 query = parse_qs(parsed.query)
-                path = query.get("path", ["."])[0]
+                path = query.get("path", [None])[0]
                 response: object
                 if parts[3] == "tree":
-                    depth = _optional_int(query.get("depth", [None])[0])
-                    response = self.gateway.workspace_tree(path=path, depth=depth)
+                    try:
+                        depth = _optional_int(query.get("depth", [None])[0])
+                    except ValueError:
+                        return _error(400, "depth query parameter must be an integer")
+                    response = self.gateway.workspace_tree(path=path or ".", depth=depth)
                 elif parts[3] == "file":
-                    if path == ".":
+                    if path is None:
                         return _error(422, "path query parameter is required")
                     response = self.gateway.workspace_file(path=path)
                 elif parts[3] == "changes":
                     response = self.gateway.workspace_changes(session_id=session_id)
                 elif parts[3] == "diff":
-                    if path == ".":
+                    if path is None:
                         return _error(422, "path query parameter is required")
                     response = self.gateway.workspace_diff(
                         session_id=session_id,

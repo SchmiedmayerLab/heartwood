@@ -603,7 +603,7 @@ summary:focus-visible {
 .action-history-heading strong {
   min-width: 0;
   color: #26382e;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
   overflow-wrap: anywhere;
 }
 

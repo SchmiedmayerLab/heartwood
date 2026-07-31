@@ -405,6 +405,40 @@ def test_action_execution_identity_mismatch_fails_closed(
     assert projection.available_commands == ()
 
 
+def test_action_execution_recovers_an_action_id_missing_from_an_older_proposal() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "call-1",
+                    "tool_name": "terminal",
+                    "kind": "terminal",
+                    "risk": "low",
+                    "arguments": {"command": "printf safe"},
+                },
+            ),
+            _event(
+                1,
+                EventKind.TOOL_EXECUTION_RECORDED,
+                {
+                    "tool_call_id": "call-1",
+                    "action_id": "action-1",
+                    "tool_name": "terminal",
+                    "exit_code": 0,
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    action = projection.actions[0]
+    assert action.action_id == "action-1"
+    assert action.state == "succeeded"
+    assert projection.lifecycle.status != SessionLifecycle.ERROR
+
+
 def test_resolution_contradicting_atomic_group_decision_fails_closed() -> None:
     projection = project_session(
         (
@@ -1076,6 +1110,41 @@ def test_projection_normalizes_incomplete_runtime_events_without_client_logic() 
     assert projection.usage.call_count == 0
     assert projection.usage.prompt_tokens == 0
     assert projection.usage.accumulated_cost == 0
+
+
+def test_projection_normalizes_malformed_action_enums_without_raising() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "call-1",
+                    "tool_name": "unexpected",
+                    "kind": ["terminal"],
+                    "risk": {"level": "high"},
+                    "arguments": {},
+                },
+            ),
+            _confirmation_event(1, "group-1", "call-1", "unexpected"),
+            _event(
+                2,
+                EventKind.CONFIRMATION_RESOLVED,
+                {
+                    "group_id": "group-1",
+                    "tool_call_id": "call-1",
+                    "decision": ["approved"],
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    action = projection.actions[0]
+    assert action.details.kind == "other"
+    assert action.risk == "unknown"
+    assert action.state == "awaiting-review"
+    assert projection.pending_approval is not None
 
 
 def _event(

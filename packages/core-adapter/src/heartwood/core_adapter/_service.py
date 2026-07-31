@@ -168,6 +168,7 @@ class SessionService:
         command: SessionCommand,
         *,
         unavailable_reason: str | None = None,
+        reconcile_before_command: bool = True,
     ) -> SessionResult:
         """Handle one command, persist events, and append audit records."""
         if command.session_id != self.store.session_id:
@@ -182,7 +183,7 @@ class SessionService:
             command_kind = _kind_value(command.kind)
             reconciled = (
                 ()
-                if command_kind == CommandKind.AUDIT_EXPORT.value
+                if command_kind == CommandKind.AUDIT_EXPORT.value or not reconcile_before_command
                 else (
                     *self._reconcile_locked(),
                     *self._recover_approval_commands_locked(),
@@ -776,9 +777,7 @@ class SessionService:
             intent = _approval_intent(events, record)
             if intent is None:
                 continue
-            if not (
-                _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
-            ):
+            if not _approval_intent_finished(events, intent):
                 pending_group = self.backend.pending_action_group(session_id=self.store.session_id)
                 if (
                     pending_group is not None
@@ -793,17 +792,13 @@ class SessionService:
                     )
                     translated = self._translate_backend_events(backend_events)
                     recovered.extend(translated)
-                elif not _approval_intent_failed(events, intent):
+                else:
                     recovered.append(self._record_unknown_approval_outcome(intent))
                 events = self.replay_events()
-            if not (
-                _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
-            ):
+            if not _approval_intent_finished(events, intent):
                 recovered.append(self._record_unknown_approval_outcome(intent))
                 events = self.replay_events()
-            if not (
-                _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
-            ):
+            if not _approval_intent_finished(events, intent):
                 continue
             first_sequence = record.get("first_sequence")
             command_hash = record.get("command_hash")
@@ -1227,6 +1222,13 @@ def _approval_intent_failed(
         and event.payload.get("group_id") == intent.group_id
         for event in events
     )
+
+
+def _approval_intent_finished(
+    events: tuple[SessionEvent, ...],
+    intent: _ApprovalIntent,
+) -> bool:
+    return _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
 
 
 def _backend_confirmation_resolved(

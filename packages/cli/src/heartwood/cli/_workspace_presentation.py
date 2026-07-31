@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from difflib import unified_diff
 
-from heartwood.cli._terminal_text import terminal_safe_text
+from heartwood.gateway import display_safe_text as terminal_safe_text
 from heartwood.schemas import (
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,

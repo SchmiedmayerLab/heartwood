@@ -27,6 +27,7 @@ from heartwood.gateway import (
     ProjectContext,
     ProjectionActionOutcome,
     ProjectionActionRecord,
+    ProjectionAffectedPath,
     ProjectionApprovalGroup,
     ProjectionFileEditorActionDetails,
     ProjectionLifecycleState,
@@ -34,6 +35,7 @@ from heartwood.gateway import (
     ProjectionOtherActionDetails,
     ProjectionSubagent,
     ProjectionTask,
+    ProjectionTaskActionDetails,
     ProjectionTerminalActionDetails,
     ProjectionUsage,
     ProviderModel,
@@ -625,11 +627,70 @@ def test_notebook_marks_bounded_action_output_as_truncated() -> None:
     }
 
     assert sections["Agent Actions"] == (
-        "failed: $ pytest tests/test_analysis.py · exit 1: terminal failed · output truncated\n"
+        "Failed: $ pytest tests/test_analysis.py · exit 1: terminal failed · output truncated\n"
         "Action set: action-set-synthetic · decision: approved\n"
         'Arguments:\n{\n  "command": "pytest tests/test_analysis.py"\n}\n'
         "Output:\nsynthetic failure\n",
     )
+
+
+def test_notebook_renders_every_typed_action_and_automatic_decision() -> None:
+    file_action = _approval_action(
+        "file-1",
+        tool_name="file_editor",
+        summary="Edit a file",
+    ).model_copy(
+        update={
+            "group_id": None,
+            "decision": "approved",
+            "state": "succeeded",
+            "affected_paths": (
+                ProjectionAffectedPath(
+                    path="results/summary.txt",
+                    effect="created",
+                ),
+            ),
+        }
+    )
+    specialist_action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Delegate the analysis",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(subagent_type="research-planner"),
+        }
+    )
+    fallback_task = specialist_action.model_copy(
+        update={
+            "tool_call_id": "task-2",
+            "summary": "Use the fallback task summary",
+            "details": ProjectionTaskActionDetails(),
+        }
+    )
+    other_action = _approval_action(
+        "other-1",
+        tool_name="synthetic_tool",
+        summary="Run a custom action",
+    )
+    projection = SessionProjection(
+        session_id="notebook-action-types",
+        event_count=4,
+        revision=3,
+        actions=(file_action, specialist_action, fallback_task, other_action),
+    )
+
+    sections = {
+        section.title: section.items for section in build_widget_spec(build_view_model(projection))
+    }
+    rendered = "\n".join(sections["Agent Actions"])
+
+    assert "Succeeded: unknown path unavailable" in rendered
+    assert "Decision: approved (automatic policy)" in rendered
+    assert "Paths: created results/summary.txt (file-editor-action)" in rendered
+    assert "research-planner" in rendered
+    assert "Use the fallback task summary" in rendered
+    assert "Run a custom action" in rendered
 
 
 def test_notebook_initialization_does_not_advertise_a_terra_web_route(
@@ -786,6 +847,21 @@ def test_widget_html_preserves_exact_action_whitespace() -> None:
 
     assert "white-space: pre-wrap" in rendered
     assert "$ printf &#x27;first  value&#x27;\n  second line" in rendered
+
+
+def test_widget_html_renders_action_control_characters_visibly() -> None:
+    rendered = _section_html(
+        "Action\x1b Review",
+        ("$ printf unsafe\x07\u202e\noutput\x00",),
+    )
+
+    assert "\x1b" not in rendered
+    assert "\x07" not in rendered
+    assert "\u202e" not in rendered
+    assert "\x00" not in rendered
+    assert r"Action\x1b Review" in rendered
+    assert r"$ printf unsafe\x07\u202e" in rendered
+    assert r"output\x00" in rendered
 
 
 def _deterministic_session(workspace: Path, session_id: str) -> NotebookSession:

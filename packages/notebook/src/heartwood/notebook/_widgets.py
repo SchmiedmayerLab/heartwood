@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Protocol, cast
 
-from heartwood.gateway import action_risk_label, action_tool_label
+from heartwood.gateway import (
+    action_risk_label,
+    action_state_label,
+    action_tool_label,
+    display_safe_text,
+)
 from heartwood.notebook._view_model import NotebookViewModel
 
 
@@ -123,7 +128,7 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
             if action.outcome is not None and action.outcome.result_truncated
             else ""
         )
-        lines = [f"{action.state}: {label}{outcome}{truncated}"]
+        lines = [f"{action_state_label(action.state)}: {label}{outcome}{truncated}"]
         if action.group_id is not None:
             lines.append(
                 f"Action set: {action.group_id} · decision: {action.decision or 'pending'}"
@@ -197,13 +202,14 @@ def _factory(module: ModuleType, name: str) -> _WidgetFactory:
 
 
 def _section_html(title: str, items: tuple[str, ...]) -> str:
-    escaped_title = html.escape(title)
+    escaped_title = html.escape(display_safe_text(title))
     if not items:
         return f"<section><h3>{escaped_title}</h3><p>None</p></section>"
     rendered_items = "".join(
         (
             '<li><pre style="margin: 0; overflow-wrap: anywhere; '
-            f'white-space: pre-wrap">{html.escape(item)}</pre></li>'
+            f'white-space: pre-wrap">{html.escape(display_safe_text(item, preserve_newlines=True))}'
+            "</pre></li>"
         )
         for item in items
     )

@@ -89,6 +89,21 @@ def _gateway(workspace: Path, *, env: dict[str, str] | None = None) -> SessionGa
     )
 
 
+class _FailingResolutionBackend(DeterministicAgentBackend):
+    def resolve_confirmation(
+        self,
+        *,
+        session_id: str,  # noqa: ARG002
+        action_group_id: str,  # noqa: ARG002
+        approved: bool,  # noqa: ARG002
+    ) -> tuple[BackendErrorEvent, ...]:
+        return (
+            BackendErrorEvent(
+                error_code=BackendErrorCode.WORKER_STOPPED,
+            ),
+        )
+
+
 def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -141,20 +156,6 @@ def test_persisted_projection_does_not_construct_an_agent_backend(
 def test_fatal_approval_outcome_rejects_fresh_commands_without_backend_reconciliation(
     tmp_path: Path,
 ) -> None:
-    class FailingResolutionBackend(DeterministicAgentBackend):
-        def resolve_confirmation(
-            self,
-            *,
-            session_id: str,  # noqa: ARG002
-            action_group_id: str,  # noqa: ARG002
-            approved: bool,  # noqa: ARG002
-        ) -> tuple[BackendErrorEvent, ...]:
-            return (
-                BackendErrorEvent(
-                    error_code=BackendErrorCode.WORKER_STOPPED,
-                ),
-            )
-
     writer = SessionGateway(
         project=ProjectContext(tmp_path),
         env={},
@@ -162,7 +163,7 @@ def test_fatal_approval_outcome_rejects_fresh_commands_without_backend_reconcili
         service_factory=lambda root, session_id: SessionService.local_default(
             root,
             session_id=session_id,
-            backend=FailingResolutionBackend(),
+            backend=_FailingResolutionBackend(),
             env={},
         ),
     )
@@ -221,24 +222,10 @@ def test_fatal_approval_receipt_recovers_in_fresh_snapshot_without_backend_acces
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FailingResolutionBackend(DeterministicAgentBackend):
-        def resolve_confirmation(
-            self,
-            *,
-            session_id: str,  # noqa: ARG002
-            action_group_id: str,  # noqa: ARG002
-            approved: bool,  # noqa: ARG002
-        ) -> tuple[BackendErrorEvent, ...]:
-            return (
-                BackendErrorEvent(
-                    error_code=BackendErrorCode.WORKER_STOPPED,
-                ),
-            )
-
     use_fresh_backend = False
     fresh_service_requests: list[str] = []
 
-    class InaccessibleFreshBackend(FailingResolutionBackend):
+    class InaccessibleFreshBackend(_FailingResolutionBackend):
         def reconcile(
             self,
             *,
@@ -257,7 +244,7 @@ def test_fatal_approval_receipt_recovers_in_fresh_snapshot_without_backend_acces
     def service_factory(root: Path, session_id: str) -> SessionService:
         if use_fresh_backend:
             fresh_service_requests.append(session_id)
-        backend_type = InaccessibleFreshBackend if use_fresh_backend else FailingResolutionBackend
+        backend_type = InaccessibleFreshBackend if use_fresh_backend else _FailingResolutionBackend
         return SessionService.local_default(
             root,
             session_id=session_id,
@@ -523,7 +510,15 @@ class _BlockingSessionService:
     release: Event
     closed: Event
 
-    def handle(self, _command: SessionCommand) -> SessionResult:
+    def handle(
+        self,
+        _command: SessionCommand,
+        *,
+        unavailable_reason: str | None = None,
+        reconcile_before_command: bool = True,
+    ) -> SessionResult:
+        assert unavailable_reason is None
+        assert reconcile_before_command is False
         self.entered.set()
         if not self.release.wait(timeout=2):
             raise TimeoutError("test session was not released")
@@ -544,7 +539,15 @@ class _FailingSessionService:
     publish_token: Callable[[str], None]
     events: tuple[SessionEvent, ...] = ()
 
-    def handle(self, _command: SessionCommand) -> SessionResult:
+    def handle(
+        self,
+        _command: SessionCommand,
+        *,
+        unavailable_reason: str | None = None,
+        reconcile_before_command: bool = True,
+    ) -> SessionResult:
+        assert unavailable_reason is None
+        assert reconcile_before_command is False
         self.publish_token("partial response")
         raise RuntimeError("synthetic service failure")
 
@@ -563,7 +566,15 @@ class _ClosingSessionService:
     closed: Event
     fail: bool = False
 
-    def handle(self, _command: SessionCommand) -> SessionResult:
+    def handle(
+        self,
+        _command: SessionCommand,
+        *,
+        unavailable_reason: str | None = None,
+        reconcile_before_command: bool = True,
+    ) -> SessionResult:
+        assert unavailable_reason is None
+        assert reconcile_before_command is False
         return SessionResult(events=())
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
@@ -583,7 +594,15 @@ class _PublishingCloseSessionService:
     publish: Callable[[], None]
     closed: Event
 
-    def handle(self, _command: SessionCommand) -> SessionResult:
+    def handle(
+        self,
+        _command: SessionCommand,
+        *,
+        unavailable_reason: str | None = None,
+        reconcile_before_command: bool = True,
+    ) -> SessionResult:
+        assert unavailable_reason is None
+        assert reconcile_before_command is False
         return SessionResult(events=())
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
@@ -608,7 +627,15 @@ class _RacingFinalSessionService:
     worker_finished: Event
     events: list[SessionEvent]
 
-    def handle(self, command: SessionCommand) -> SessionResult:
+    def handle(
+        self,
+        command: SessionCommand,
+        *,
+        unavailable_reason: str | None = None,
+        reconcile_before_command: bool = True,
+    ) -> SessionResult:
+        assert unavailable_reason is None
+        assert reconcile_before_command is False
         running = SessionEvent(
             event_id="running-event",
             session_id=command.session_id,

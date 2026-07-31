@@ -767,8 +767,12 @@ def _deterministic_confirmation_source(tool_call_id: str) -> str:
 def _persisted_tool_kind(
     value: object,
 ) -> Literal["terminal", "file-editor", "task", "other"]:
-    if value in {"terminal", "file-editor", "task"}:
-        return value
+    if value == "terminal":
+        return "terminal"
+    if value == "file-editor":
+        return "file-editor"
+    if value == "task":
+        return "task"
     return "other"
 
 

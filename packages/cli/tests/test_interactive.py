@@ -47,6 +47,7 @@ from heartwood.gateway import (
     ProjectionOtherActionDetails,
     ProjectionSubagent,
     ProjectionTask,
+    ProjectionTaskActionDetails,
     ProjectionTerminalActionDetails,
     ProjectionUsage,
     RestGateway,
@@ -58,7 +59,11 @@ from heartwood.gateway import (
     action_risk_label,
     action_tool_label,
 )
-from heartwood.schemas import ActionModeOptionResponse, ActionSettingsResponse
+from heartwood.schemas import (
+    ActionModeOptionResponse,
+    ActionSettingsResponse,
+    WorkspaceTreeResponse,
+)
 from heartwood.session import EventKind, JsonValue
 
 
@@ -87,6 +92,16 @@ def _test_action_settings() -> ActionSettingsResponse:
                 "low": "Low Risk",
                 "medium": "Medium Risk",
                 "high": "High Risk",
+            },
+            "state_labels": {
+                "approved": "Approved",
+                "awaiting-review": "Awaiting Review",
+                "failed": "Failed",
+                "outcome-unknown": "Outcome Unknown",
+                "proposed": "Proposed",
+                "rejected": "Rejected",
+                "running": "Running",
+                "succeeded": "Succeeded",
             },
             "tool_labels": {
                 "file_editor": "File Change",
@@ -206,6 +221,52 @@ def test_plain_terminal_marks_bounded_action_output_as_truncated() -> None:
     assert "[output truncated]" in rendered
 
 
+def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> None:
+    file_action = _approval_action(
+        "file-1",
+        tool_name="file_editor",
+        summary="Edit a file",
+    ).model_copy(
+        update={
+            "group_id": None,
+            "decision": "approved",
+            "state": "succeeded",
+            "affected_paths": (
+                ProjectionAffectedPath(
+                    path="results/summary.txt",
+                    effect="created",
+                ),
+            ),
+        }
+    )
+    specialist_action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Delegate the analysis",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(subagent_type="research-planner"),
+        }
+    )
+    other_action = _approval_action(
+        "other-1",
+        tool_name="synthetic_tool",
+        summary="Run a custom action",
+    )
+
+    rendered = "\n".join(
+        line
+        for action in (file_action, specialist_action, other_action)
+        for line in format_action_record_lines(action)
+    )
+
+    assert "[Succeeded] unknown path unavailable" in rendered
+    assert "decision approved (automatic policy)" in rendered
+    assert "created results/summary.txt (file-editor-action)" in rendered
+    assert "specialist research-planner" in rendered
+    assert "Run a custom action" in rendered
+
+
 def test_terminal_projection_renders_control_sequences_visibly() -> None:
     action = _approval_action(
         "tool-control",
@@ -272,6 +333,40 @@ def test_invalid_workspace_command_does_not_end_the_interactive_session(
     assert continued.error is False
     assert continued.message is not None
     assert "/files" in continued.message
+
+
+def test_interactive_workspace_commands_share_the_gateway_inspector(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "analysis.py").write_text("answer = 42\n", encoding="utf-8")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    session = InteractiveSession(
+        gateway,
+        session_id=gateway.default_session()["session_id"],
+    )
+
+    files = session.submit("/files")
+    nested_files = session.submit("/files .")
+    shown = session.submit("/show analysis.py")
+    changes = session.submit("/changes")
+    diff = session.submit("/changes analysis.py")
+    unknown = session.submit("/future-command")
+
+    assert files.message is not None
+    assert "analysis.py" in files.message
+    assert nested_files.message is not None
+    assert "analysis.py" in nested_files.message
+    assert shown.message is not None
+    assert "answer = 42" in shown.message
+    assert changes.message is not None
+    assert "Project changes" in changes.message
+    assert diff.message is not None
+    assert "analysis.py" in diff.message
+    assert unknown.message == "Unknown command: /future-command"
 
 
 def test_interactive_session_stable_wait_has_a_deterministic_deadline() -> None:
@@ -556,6 +651,55 @@ def test_textual_terminal_inspects_files_and_changes_without_a_local_reducer(
                 ),
                 description="the preserved file and change selections after refresh",
             )
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gateway.stop()
+
+
+def test_textual_terminal_discards_a_stale_workspace_overview(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "current.txt").write_text("current\n", encoding="utf-8")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    gateway.start()
+
+    async def exercise() -> None:
+        session = InteractiveSession(gateway, session_id="workspace-generation")
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await asyncio.wait_for(app.workers.wait_for_complete(), timeout=10.0)
+            current = session.workspace_tree()
+            changes = session.workspace_changes()
+            stale = cast(
+                WorkspaceTreeResponse,
+                {
+                    **current,
+                    "entries": [
+                        {
+                            "path": "stale.txt",
+                            "name": "stale.txt",
+                            "kind": "file",
+                            "depth": 1,
+                            "size_bytes": 6,
+                        }
+                    ],
+                },
+            )
+            app._workspace_overview_generation = 100
+
+            app._finish_workspace_overview(stale, changes, None, 99)
+            tree = app.query_one("#file-tree", Tree)
+            assert all(node.data != "stale.txt" for node in tree.root.children)
+
+            app._finish_workspace_overview(current, changes, None, 100)
+            await pilot.pause()
+            assert any(node.data == "current.txt" for node in tree.root.children)
 
     try:
         asyncio.run(exercise())

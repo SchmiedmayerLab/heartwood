@@ -19,7 +19,9 @@ from heartwood.core_adapter import (
 from heartwood.gateway._action_presentation import (
     action_mode_label,
     action_risk_label,
+    action_state_label,
     action_tool_label,
+    display_safe_text,
 )
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -287,6 +289,7 @@ __all__ = [
     "action_mode_label",
     "action_risk_label",
     "action_settings_from_mapping",
+    "action_state_label",
     "action_tool_label",
     "automatic_model_tier",
     "catalog_model_choices",
@@ -296,6 +299,7 @@ __all__ = [
     "diagnostic_for",
     "discover_slurm_gpu_partitions",
     "discover_visible_gpus",
+    "display_safe_text",
     "download_model_artifact",
     "download_model_snapshot",
     "estimate_local_runtime_memory",

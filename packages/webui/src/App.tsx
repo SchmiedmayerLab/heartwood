@@ -115,6 +115,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [workspaceView, setWorkspaceView] =
     useState<WorkspaceView>("conversation");
+  const [visitedWorkspaceViews, setVisitedWorkspaceViews] = useState<
+    ReadonlySet<WorkspaceView>
+  >(() => new Set(["conversation"]));
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(
     null,
   );
@@ -857,7 +860,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           <Tabs
             className="workbench-content"
             value={workspaceView}
-            onValueChange={(value) => setWorkspaceView(value as WorkspaceView)}
+            onValueChange={(value) => {
+              const nextView = value as WorkspaceView;
+              setWorkspaceView(nextView);
+              setVisitedWorkspaceViews(
+                (current) => new Set([...current, nextView]),
+              );
+            }}
           >
             <TabsList aria-label="Project view" className="workspace-tabs">
               <TabsTrigger value="conversation">
@@ -904,7 +913,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               forceMount
               value="files"
             >
-              {sessionId === null ?
+              {!visitedWorkspaceViews.has("files") ?
+                null
+              : sessionId === null ?
                 <div className="workspace-state" role="status">
                   Select a session to inspect project files.
                 </div>
@@ -922,7 +933,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               forceMount
               value="changes"
             >
-              {sessionId === null ?
+              {!visitedWorkspaceViews.has("changes") ?
+                null
+              : sessionId === null ?
                 <div className="workspace-state" role="status">
                   Select a session to inspect project changes.
                 </div>

@@ -820,6 +820,16 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           medium: "Medium Risk",
           unknown: "Not Classified",
         },
+        state_labels: {
+          approved: "Approved",
+          "awaiting-review": "Awaiting Review",
+          failed: "Failed",
+          "outcome-unknown": "Outcome Unknown",
+          proposed: "Proposed",
+          rejected: "Rejected",
+          running: "Running",
+          succeeded: "Succeeded",
+        },
         tool_labels: {
           file_editor: "File Change",
           terminal: "Terminal Command",

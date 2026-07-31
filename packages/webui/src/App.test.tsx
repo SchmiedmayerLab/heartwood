@@ -146,6 +146,16 @@ const actions = (): ActionSettings => ({
       medium: "Medium Risk",
       unknown: "Not Classified",
     },
+    state_labels: {
+      approved: "Approved",
+      "awaiting-review": "Awaiting Review",
+      failed: "Failed",
+      "outcome-unknown": "Outcome Unknown",
+      proposed: "Proposed",
+      rejected: "Rejected",
+      running: "Running",
+      succeeded: "Succeeded",
+    },
     tool_labels: {
       file_editor: "File Change",
       terminal: "Terminal Command",
@@ -246,6 +256,8 @@ class FakeClient implements HeartwoodClient {
   auditExportCalls = 0;
   listCalls = 0;
   replayCalls = 0;
+  workspaceChangeCalls = 0;
+  workspaceTreeCalls = 0;
   artifactCalls = 0;
   artifactFailures = 0;
   activeManagedModel = false;
@@ -342,6 +354,7 @@ class FakeClient implements HeartwoodClient {
   }
 
   getWorkspaceTree(): Promise<WorkspaceTree> {
+    this.workspaceTreeCalls += 1;
     return Promise.resolve({
       schema_version: "heartwood.workspace-tree.v1",
       path: ".",
@@ -375,6 +388,7 @@ class FakeClient implements HeartwoodClient {
   }
 
   getWorkspaceChanges(): Promise<WorkspaceChanges> {
+    this.workspaceChangeCalls += 1;
     return Promise.resolve({
       schema_version: "heartwood.workspace-changes.v1",
       status: "available",
@@ -1124,11 +1138,15 @@ describe("App", () => {
     };
     render(<App client={client} initialSessionId="session-test" />);
     await screen.findByRole("heading", { name: "Synthetic analysis" });
+    expect(client.workspaceTreeCalls).toBe(0);
+    expect(client.workspaceChangeCalls).toBe(0);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Files" }), {
       button: 0,
     });
     const files = await screen.findByRole("region", { name: "Project files" });
+    expect(client.workspaceTreeCalls).toBe(1);
+    expect(client.workspaceChangeCalls).toBe(0);
     fireEvent.click(within(files).getByRole("button", { name: "analysis.py" }));
     const file = await screen.findByRole("region", {
       name: "Read-only file: analysis.py",
@@ -1143,6 +1161,7 @@ describe("App", () => {
     const changes = await screen.findByRole("region", {
       name: "Project changes",
     });
+    expect(client.workspaceChangeCalls).toBe(1);
     fireEvent.click(
       within(changes).getByRole("button", {
         name: "analysis.py, Modified",
@@ -1162,6 +1181,7 @@ describe("App", () => {
         name: "Read-only file: analysis.py",
       }),
     ).toBeVisible();
+    expect(client.workspaceTreeCalls).toBe(1);
   });
 
   it("presents correlated action outcomes and bounded-output state", async () => {

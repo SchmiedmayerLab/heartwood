@@ -392,7 +392,7 @@ def project_session(
                     continue
                 action_id = _string(event.payload.get("action_id")) or None
                 if (
-                    action.action_id != action_id
+                    (action.action_id is not None and action.action_id != action_id)
                     or action.tool_name != tool_name
                     or action.outcome is not None
                 ):
@@ -410,6 +410,7 @@ def project_session(
                     continue
                 actions[tool_call_id] = action.model_copy(
                     update={
+                        "action_id": action.action_id or action_id,
                         "decision": action.decision or "approved",
                         "state": "failed" if exit_code != 0 else "succeeded",
                         "outcome": outcome,
@@ -825,16 +826,22 @@ def _safe_project_relative_path(value: JsonValue) -> str | None:
 def _action_kind(
     value: JsonValue | None,
 ) -> Literal["terminal", "file-editor", "task", "other"]:
-    if value in {"terminal", "file-editor", "task"}:
-        return cast(Literal["terminal", "file-editor", "task"], value)
+    if value == "terminal":
+        return "terminal"
+    if value == "file-editor":
+        return "file-editor"
+    if value == "task":
+        return "task"
     return "other"
 
 
 def _approval_decision(
     value: JsonValue | None,
 ) -> Literal["approved", "denied"] | None:
-    if value in {"approved", "denied"}:
-        return cast(Literal["approved", "denied"], value)
+    if value == "approved":
+        return "approved"
+    if value == "denied":
+        return "denied"
     return None
 
 
@@ -1113,8 +1120,12 @@ def _string(value: JsonValue | None) -> str:
 def _action_risk(
     value: JsonValue | None,
 ) -> Literal["high", "low", "medium", "unknown"]:
-    if value in {"high", "low", "medium", "unknown"}:
-        return cast(Literal["high", "low", "medium", "unknown"], value)
+    if value == "high":
+        return "high"
+    if value == "low":
+        return "low"
+    if value == "medium":
+        return "medium"
     return "unknown"
 
 
@@ -1169,11 +1180,13 @@ _ACTIVITY_LABELS = {
 }
 
 __all__ = [
+    "ProjectionActionDetails",
     "ProjectionActionOutcome",
     "ProjectionActionRecord",
     "ProjectionActivity",
     "ProjectionAffectedPath",
     "ProjectionApprovalGroup",
+    "ProjectionCommandOutcome",
     "ProjectionFileEditorActionDetails",
     "ProjectionLifecycleState",
     "ProjectionMessage",

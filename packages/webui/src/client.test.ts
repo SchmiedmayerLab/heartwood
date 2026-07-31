@@ -800,6 +800,7 @@ describe("GatewayClient", () => {
         "Shared by every Heartwood interface in this project and applied to future action sets.",
       presentation: {
         risk_labels: {},
+        state_labels: {},
         tool_labels: {},
         other_tool_label_template: "{tool_name} Action",
         unknown_risk_label: "Not Classified",

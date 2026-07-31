@@ -362,6 +362,7 @@ class ActionPresentationResponse(_ApiResponse):
     """Shared researcher-facing action terminology."""
 
     risk_labels: dict[str, str]
+    state_labels: dict[str, str]
     tool_labels: dict[str, str]
     other_tool_label_template: str
     unknown_risk_label: str

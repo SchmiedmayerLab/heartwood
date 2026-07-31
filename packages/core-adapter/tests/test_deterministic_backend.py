@@ -131,3 +131,41 @@ def test_deterministic_restart_preserves_typed_pending_action_evidence(
             project_path="results/summary.txt",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("persisted_kind", "expected_kind"),
+    [
+        ("terminal", "terminal"),
+        ("file-editor", "file-editor"),
+        ("task", "task"),
+        ("future-kind", "other"),
+        (None, "other"),
+    ],
+)
+def test_deterministic_restart_restores_only_known_action_kinds(
+    tmp_path: Path,
+    persisted_kind: object,
+    expected_kind: str,
+) -> None:
+    state_path = tmp_path / "session" / "deterministic.json"
+    _write_private_json_atomic(
+        state_path,
+        {
+            "tool_call_id": "call-1",
+            "action_id": "action-1",
+            "tool_name": "synthetic_tool",
+            "risk": "unknown",
+            "summary": "Run a synthetic action",
+            "arguments": {},
+            "kind": persisted_kind,
+            "affected_paths": "not-a-list",
+        },
+    )
+
+    restored = DeterministicAgentBackend(persistence_path=state_path)
+    pending = restored.pending_action_group(session_id="session-1")
+
+    assert pending is not None
+    assert pending.actions[0].kind == expected_kind
+    assert pending.actions[0].affected_paths == ()

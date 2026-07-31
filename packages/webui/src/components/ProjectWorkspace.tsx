@@ -57,43 +57,51 @@ export const ProjectWorkspace = ({
   revision,
   sessionId,
 }: ProjectWorkspaceProps) => {
-  const [selectedPaths, setSelectedPaths] = useState<{
-    changes: string | null;
-    files: string | null;
-  }>({ changes: null, files: null });
+  const [selection, setSelection] = useState<{
+    key: string;
+    path: string;
+  } | null>(null);
   const [overview, setOverview] = useState<OverviewSnapshot | null>(null);
   const [preview, setPreview] = useState<PreviewSnapshot | null>(null);
-  const selectedPath = selectedPaths[mode];
+  const selectionKey = `${sessionId}:${mode}`;
+  const selectedPath = selection?.key === selectionKey ? selection.path : null;
   const overviewKey = JSON.stringify([sessionId, mode, revision]);
   const previewKey =
     selectedPath === null ? null : `${overviewKey}:${selectedPath}`;
 
   useEffect(() => {
     let active = true;
-    const request =
-      mode === "files" ?
-        client.getWorkspaceTree(sessionId)
-      : client.getWorkspaceChanges(sessionId);
-    void request
-      .then((response) => {
-        if (!active) return;
-        if (mode === "files") {
+    if (mode === "files") {
+      void client
+        .getWorkspaceTree(sessionId)
+        .then((response) => {
+          if (!active) return;
           setOverview({
             key: overviewKey,
-            tree: response as WorkspaceTree,
+            tree: response,
           });
-        } else {
+        })
+        .catch((caught: unknown) => {
+          if (active) {
+            setOverview({ error: errorMessage(caught), key: overviewKey });
+          }
+        });
+    } else {
+      void client
+        .getWorkspaceChanges(sessionId)
+        .then((response) => {
+          if (!active) return;
           setOverview({
-            changes: response as WorkspaceChanges,
+            changes: response,
             key: overviewKey,
           });
-        }
-      })
-      .catch((caught: unknown) => {
-        if (active) {
-          setOverview({ error: errorMessage(caught), key: overviewKey });
-        }
-      });
+        })
+        .catch((caught: unknown) => {
+          if (active) {
+            setOverview({ error: errorMessage(caught), key: overviewKey });
+          }
+        });
+    }
     return () => {
       active = false;
     };
@@ -156,7 +164,7 @@ export const ProjectWorkspace = ({
       "No project files are available."
     : (changes?.message ?? "No changes are available.");
   const selectPath = (path: string) =>
-    setSelectedPaths((current) => ({ ...current, [mode]: path }));
+    setSelection({ key: selectionKey, path });
 
   return (
     <section

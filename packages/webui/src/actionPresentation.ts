@@ -11,6 +11,7 @@ import type {
   ActionPresentation,
   ActionRisk,
   ActionSettings,
+  ProjectionActionRecord,
 } from "./types";
 
 export const actionCountLabel = (count: number): string =>
@@ -49,6 +50,16 @@ export const actionToolLabel = (
     `${toolName} Action`
   );
 };
+
+export const actionStateLabel = (
+  state: ProjectionActionRecord["state"],
+  presentation: ActionPresentation | null,
+): string =>
+  presentation?.state_labels[state] ??
+  state
+    .split("-")
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
 
 export const selectedActionMode = (
   settings: ActionSettings | null,

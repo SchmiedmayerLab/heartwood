@@ -2555,6 +2555,52 @@ def test_typed_action_evidence_uses_openhands_ids_and_only_structured_file_paths
     assert task_call.kind == "task"
 
 
+@pytest.mark.parametrize(
+    "private_path",
+    [
+        "results/.HeArTwOoD/private.txt",
+        "results/.GiT/config",
+    ],
+)
+def test_typed_action_evidence_excludes_case_variant_private_paths(
+    tmp_path: Path,
+    private_path: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    absolute_path = workspace / private_path
+    arguments = {
+        "command": "create",
+        "path": str(absolute_path),
+        "file_text": "private\n",
+    }
+    action = _terminal_action_event(
+        "action-private",
+        "call-private",
+        "placeholder",
+    ).model_copy(
+        update={
+            "tool_name": "file_editor",
+            "tool_call": MessageToolCall(
+                id="call-private",
+                name="file_editor",
+                arguments=json.dumps(arguments),
+                origin="completion",
+            ),
+            "action": FileEditorAction(
+                command="create",
+                path=str(absolute_path),
+                file_text="private\n",
+            ),
+        }
+    )
+
+    tool_call = _tool_call(action, workspace=workspace)
+
+    assert tool_call.project_path is None
+    assert tool_call.affected_paths == ()
+
+
 def test_tool_result_is_bounded_before_private_session_persistence() -> None:
     output = "head-sentinel\n" + ("result\n" * 5_000) + "tail-sentinel\n"
     observation = ObservationEvent(

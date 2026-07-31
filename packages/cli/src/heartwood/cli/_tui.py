@@ -44,7 +44,6 @@ from heartwood.cli._interactive import (
     format_runtime_lines,
     interaction_activity,
 )
-from heartwood.cli._terminal_text import terminal_safe_text
 from heartwood.cli._workspace_presentation import (
     format_workspace_changes,
     format_workspace_diff,
@@ -56,6 +55,9 @@ from heartwood.gateway import (
     action_mode_label,
     action_risk_label,
     action_tool_label,
+)
+from heartwood.gateway import (
+    display_safe_text as terminal_safe_text,
 )
 from heartwood.schemas import (
     ActionConfirmationMode,
@@ -269,8 +271,7 @@ class HeartwoodTerminalApp(App[None]):
         self._retired_stream_epochs: set[str] = set()
         self._mode_label = "Action Review"
         self._workspace_revision: int | None = None
-        self._workspace_read_in_flight = False
-        self._workspace_refresh_pending = False
+        self._workspace_overview_generation = 0
         self._workspace_file_generation = 0
         self._workspace_diff_generation = 0
         self._change_paths: dict[str, str] = {}
@@ -667,6 +668,8 @@ class HeartwoodTerminalApp(App[None]):
         self.query_one("#change-list", OptionList).focus()
 
     def _request_workspace_overview(self) -> None:
+        self._workspace_overview_generation += 1
+        generation = self._workspace_overview_generation
         file_preview = self.query_one("#file-preview", RichLog)
         file_preview.clear()
         file_preview.write(
@@ -681,14 +684,10 @@ class HeartwoodTerminalApp(App[None]):
             if self._selected_change_path is not None
             else "Loading project changes..."
         )
-        self._load_workspace_overview()
+        self._load_workspace_overview(generation)
 
-    @work(thread=True, group="workspace-overview")
-    def _load_workspace_overview(self) -> None:
-        if self._workspace_read_in_flight:
-            self._workspace_refresh_pending = True
-            return
-        self._workspace_read_in_flight = True
+    @work(thread=True, group="workspace-overview", exclusive=True)
+    def _load_workspace_overview(self, generation: int) -> None:
         try:
             tree = self.session.workspace_tree()
             changes = self.session.workspace_changes()
@@ -698,6 +697,7 @@ class HeartwoodTerminalApp(App[None]):
                 None,
                 None,
                 error,
+                generation,
             )
         else:
             self.call_from_thread(
@@ -705,6 +705,7 @@ class HeartwoodTerminalApp(App[None]):
                 tree,
                 changes,
                 None,
+                generation,
             )
 
     def _finish_workspace_overview(
@@ -712,8 +713,10 @@ class HeartwoodTerminalApp(App[None]):
         tree: WorkspaceTreeResponse | None,
         changes: WorkspaceChangesResponse | None,
         error: Exception | None,
+        generation: int,
     ) -> None:
-        self._workspace_read_in_flight = False
+        if generation != self._workspace_overview_generation:
+            return
         if error is not None:
             message = (
                 "Workspace inspection unavailable: "
@@ -726,9 +729,6 @@ class HeartwoodTerminalApp(App[None]):
             assert changes is not None
             self._render_workspace_tree(tree)
             self._render_workspace_changes(changes)
-        if self._workspace_refresh_pending:
-            self._workspace_refresh_pending = False
-            self._request_workspace_overview()
 
     def _render_workspace_tree(self, response: WorkspaceTreeResponse) -> None:
         tree = cast(Tree[str], self.query_one("#file-tree", Tree))

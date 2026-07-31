@@ -1156,6 +1156,42 @@ def test_cli_inspects_bounded_project_files_and_changes(
     assert "\x1b[" not in output
 
 
+def test_cli_file_commands_report_invalid_paths_and_statuses(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_deterministic_gateway(monkeypatch)
+    project = tmp_path / "analysis"
+    project.mkdir()
+    (project / "analysis.py").write_text("answer = 42\n", encoding="utf-8")
+
+    assert _run(project, monkeypatch, ["files", "show", "missing.py"]) == 1
+    assert _run(project, monkeypatch, ["changes", "analysis.py"]) == 1
+    assert _run(project, monkeypatch, ["files", "show", "../outside.txt"]) == 64
+
+    captured = capsys.readouterr()
+    assert "File does not exist" in captured.out
+    assert "not present in the bounded changed-file list" in captured.out
+    assert "Project files unavailable: HW-WORKSPACE-001" in captured.err
+
+
+def test_cli_file_commands_reject_invalid_subcommands_and_depth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_deterministic_gateway(monkeypatch)
+    project = tmp_path / "analysis"
+
+    with pytest.raises(SystemExit) as missing_subcommand:
+        _run(project, monkeypatch, ["files"])
+    with pytest.raises(SystemExit) as invalid_depth:
+        _run(project, monkeypatch, ["files", "list", "--depth", "0"])
+
+    assert missing_subcommand.value.code == 2
+    assert invalid_depth.value.code == 2
+
+
 def test_internal_prompt_handoff_is_project_private_and_consumed(tmp_path: Path) -> None:
     project = ProjectContext(tmp_path)
     project.initialize()

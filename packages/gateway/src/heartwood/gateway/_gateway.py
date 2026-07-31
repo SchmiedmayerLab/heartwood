@@ -522,13 +522,14 @@ class SessionGateway:
             else:
                 service = self._service(command.session_id)
             try:
+                state_reconciled = not storage_only and fatal_unavailable_reason is None
                 all_events = (
-                    service.replay_events()
-                    if storage_only or fatal_unavailable_reason is not None
-                    else self._reconciled_session_events(
+                    self._reconciled_session_events(
                         session_id=command.session_id,
                         service=service,
                     )
+                    if state_reconciled
+                    else service.replay_events()
                 )
                 with self._stream_lock:
                     projection = self._snapshot_from_events_locked(
@@ -552,9 +553,16 @@ class SessionGateway:
                         self._streaming_active.add(command.session_id)
                 try:
                     result = (
-                        service.handle(command)
+                        service.handle(
+                            command,
+                            reconcile_before_command=not state_reconciled,
+                        )
                         if unavailable_reason is None
-                        else service.handle(command, unavailable_reason=unavailable_reason)
+                        else service.handle(
+                            command,
+                            unavailable_reason=unavailable_reason,
+                            reconcile_before_command=not state_reconciled,
+                        )
                     )
                 except Exception:
                     if streaming_started and not streaming_was_active:
@@ -633,10 +641,12 @@ class SessionGateway:
         depth: int | None = None,
     ) -> WorkspaceTreeResponse:
         """Return the bounded project tree shared by every interface."""
+        self.project.initialize()
         return self.workspace_inspector.tree(path, depth=depth)
 
     def workspace_file(self, *, path: str) -> WorkspaceFileResponse:
         """Return one bounded read-only project file."""
+        self.project.initialize()
         return self.workspace_inspector.file(path)
 
     def workspace_changes(self, *, session_id: str) -> WorkspaceChangesResponse:
