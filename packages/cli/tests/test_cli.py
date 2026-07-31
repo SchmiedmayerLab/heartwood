@@ -1611,6 +1611,7 @@ def test_model_catalog_refresh_and_connect_use_shared_gateway_service(
     output = capsys.readouterr().out
     assert "Heartwood Model (local-model)" in output
     assert "Active and saved profiles" in output
+    assert "Credential isolation:" in output
     assert "Profile: heartwood" in output
     assert "selected Heartwood-managed model" in output
     assert "model profile local" not in output
@@ -1766,7 +1767,7 @@ def test_serve_starts_gateway_for_current_project(
     observed: list[tuple[str, int]] = []
     monkeypatch.setattr(
         "heartwood.cli.uvicorn.run",
-        lambda _app, *, host, port, log_level: observed.append(  # noqa: ARG005, F841, RUF100
+        lambda _app, *, host, port, log_level, proxy_headers: observed.append(  # noqa: ARG005, F841, RUF100
             (host, port)
         ),
     )
@@ -1782,20 +1783,98 @@ def test_serve_starts_gateway_for_current_project(
                 "gateway",
                 "serve",
                 "--host",
-                "0.0.0.0",
+                "127.0.0.1",
                 "--port",
                 "9876",
                 "--web-root",
                 str(web_root),
+                "--ingress-mode",
+                "jupyter-proxy",
+                "--public-origin",
+                "https://notebooks.firecloud.org",
                 "--base-path",
                 "/proxy/9876/",
             ],
         )
         == 0
     )
-    assert observed == [("0.0.0.0", 9876)]
+    assert observed == [("127.0.0.1", 9876)]
     assert not (project / ".heartwood").exists()
     assert capsys.readouterr().out == ""
+
+
+def test_serve_rejects_non_loopback_and_incomplete_proxy_routes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.run",
+        lambda *_args, **_kwargs: pytest.fail("unsafe gateway was started"),
+    )
+
+    with pytest.raises(SystemExit, match=r"HW-INGRESS-001.*loopback bind"):
+        _run(
+            tmp_path,
+            monkeypatch,
+            [
+                "gateway",
+                "serve",
+                "--host",
+                "0.0.0.0",
+                "--web-root",
+                str(web_root),
+            ],
+        )
+    with pytest.raises(SystemExit, match=r"HW-INGRESS-001.*proxy source"):
+        _run(
+            tmp_path,
+            monkeypatch,
+            [
+                "gateway",
+                "serve",
+                "--host",
+                "0.0.0.0",
+                "--web-root",
+                str(web_root),
+                "--ingress-mode",
+                "trusted-proxy",
+                "--public-origin",
+                "https://heartwood.example",
+            ],
+        )
+
+
+def test_serve_uses_the_detected_platform_ingress_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    web_root = tmp_path / "web"
+    web_root.mkdir()
+    (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
+    monkeypatch.setenv("GOOGLE_PROJECT", "terra-project")
+    monkeypatch.setenv("CLUSTER_NAME", "saturn-runtime")
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.run",
+        lambda *_args, **_kwargs: pytest.fail("incomplete gateway route was started"),
+    )
+
+    with pytest.raises(SystemExit, match=r"HW-INGRESS-001.*exact external origin"):
+        _run(
+            tmp_path,
+            monkeypatch,
+            [
+                "gateway",
+                "serve",
+                "--web-root",
+                str(web_root),
+                "--base-path",
+                "/proxy/8767",
+            ],
+        )
 
 
 def test_cli_helpers_fail_closed_on_malformed_inputs(

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import mimetypes
 from collections.abc import Awaitable, Callable, Mapping
@@ -17,7 +18,9 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import parse_qs
 
+from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._ingress import IngressPolicy, IngressRequestError
 from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.session import JsonValue, SessionEvent, validate_session_id
 
@@ -35,12 +38,12 @@ class GatewayAsgiApp:
         gateway: SessionGateway,
         *,
         static_dir: Path | None = None,
-        static_base_path: str = "/",
+        ingress: IngressPolicy | None = None,
     ) -> None:
         self.gateway = gateway
         self.rest = RestGateway(gateway)
         self.static_dir = static_dir
-        self.static_base_path = _normalize_base_path(static_base_path)
+        self.ingress = IngressPolicy.create() if ingress is None else ingress
 
     async def __call__(self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend) -> None:
         """Handle one ASGI connection."""
@@ -68,9 +71,20 @@ class GatewayAsgiApp:
                 return
 
     async def _handle_http(self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend) -> None:
-        raw_path = _scope_string(scope, "path")
-        gateway_path = _gateway_path(raw_path, static_base_path=self.static_base_path)
-        route = None if gateway_path is None else _session_events_stream_route(gateway_path)
+        try:
+            request = self.ingress.validate_scope(scope)
+        except IngressRequestError as error:
+            diagnostic = diagnostic_for("gateway-request")
+            await _send_json_response(
+                send,
+                status_code=error.status_code,
+                body={
+                    "code": diagnostic.code,
+                    "error": str(error),
+                },
+            )
+            return
+        route = _session_events_stream_route(request.path)
         if route is not None and _scope_string(scope, "method") == "GET":
             try:
                 route = validate_session_id(route)
@@ -78,7 +92,7 @@ class GatewayAsgiApp:
                 await _send_json_response(send, status_code=422, body={"error": str(error)})
                 return
             try:
-                after = _optional_int(_query_values(scope).get("after", [None])[0])
+                after = _optional_int(_query_values(request.query_string).get("after", [None])[0])
             except ValueError:
                 await _send_json_response(send, status_code=400, body={"error": "invalid after"})
                 return
@@ -87,28 +101,28 @@ class GatewayAsgiApp:
             )
             return
 
-        if gateway_path is not None:
-            body = await _read_http_body(receive)
-            response = await asyncio.to_thread(
-                self.rest.handle,
-                RestRequest(
-                    method=_scope_string(scope, "method"),
-                    path=_path_with_query(scope, path=gateway_path),
-                    body=body.decode("utf-8"),
+        body = await _read_http_body(receive)
+        response = await asyncio.to_thread(
+            self.rest.handle,
+            RestRequest(
+                method=_scope_string(scope, "method"),
+                path=_path_with_query(
+                    path=request.path,
+                    query_string=request.query_string,
                 ),
-            )
-            if response.status_code != 404 or _is_gateway_api_path(gateway_path):
-                await _send_json_response(
-                    send, status_code=response.status_code, body=response.body
-                )
-                return
+                body=body.decode("utf-8"),
+            ),
+        )
+        if response.status_code != 404 or _is_gateway_api_path(request.path):
+            await _send_json_response(send, status_code=response.status_code, body=response.body)
+            return
 
         if self.static_dir is not None and _scope_string(scope, "method") == "GET":
             await _send_static_response(
                 send,
                 static_dir=self.static_dir,
-                static_base_path=self.static_base_path,
-                path=raw_path,
+                path=request.path,
+                browser_base_path=self.ingress.browser_base_path,
             )
             return
         await _send_json_response(send, status_code=404, body={"error": "unknown gateway route"})
@@ -175,17 +189,18 @@ class GatewayAsgiApp:
     async def _handle_websocket(
         self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend
     ) -> None:
-        gateway_path = _gateway_path(
-            _scope_string(scope, "path"),
-            static_base_path=self.static_base_path,
-        )
-        route = None if gateway_path is None else _session_events_route(gateway_path)
+        try:
+            request = self.ingress.validate_scope(scope, websocket=True)
+        except IngressRequestError:
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        route = _session_events_route(request.path)
         if route is None:
             await send({"type": "websocket.close", "code": 1008})
             return
         try:
             route = validate_session_id(route)
-            after = _optional_int(_query_values(scope).get("after", [None])[0])
+            after = _optional_int(_query_values(request.query_string).get("after", [None])[0])
         except ValueError:
             await send({"type": "websocket.close", "code": 1008})
             return
@@ -288,7 +303,11 @@ async def _send_json_response(
         {
             "type": "http.response.start",
             "status": status_code,
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"cache-control", b"no-store"),
+                (b"x-content-type-options", b"nosniff"),
+            ],
         }
     )
     await send(
@@ -303,10 +322,10 @@ async def _send_static_response(
     send: AsgiSend,
     *,
     static_dir: Path,
-    static_base_path: str,
     path: str,
+    browser_base_path: str,
 ) -> None:
-    resolved = _static_file_path(static_dir, static_base_path=static_base_path, path=path)
+    resolved = _static_file_path(static_dir, path=path)
     if resolved is None:
         await _send_json_response(send, status_code=404, body={"error": "static asset not found"})
         return
@@ -322,6 +341,8 @@ async def _send_static_response(
         }
     )
     body = await asyncio.to_thread(resolved.read_bytes)
+    if resolved.name == "index.html":
+        body = _inject_browser_base_path(body, browser_base_path=browser_base_path)
     await send({"type": "http.response.body", "body": body})
 
 
@@ -354,19 +375,14 @@ async def _wait_for_stream_signal(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def _path_with_query(scope: AsgiScope, *, path: str | None = None) -> str:
-    path = _scope_string(scope, "path") if path is None else path
-    query_string = scope.get("query_string", b"")
-    if not isinstance(query_string, bytes) or not query_string:
+def _path_with_query(*, path: str, query_string: str) -> str:
+    if not query_string:
         return path
-    return f"{path}?{query_string.decode('utf-8')}"
+    return f"{path}?{query_string}"
 
 
-def _query_values(scope: AsgiScope) -> dict[str, list[str | None]]:
-    query_string = scope.get("query_string", b"")
-    if not isinstance(query_string, bytes):
-        return {}
-    return cast(dict[str, list[str | None]], parse_qs(query_string.decode("utf-8")))
+def _query_values(query_string: str) -> dict[str, list[str | None]]:
+    return cast(dict[str, list[str | None]], parse_qs(query_string))
 
 
 def _session_events_route(path: str) -> str | None:
@@ -386,14 +402,10 @@ def _session_events_stream_route(path: str) -> str | None:
 def _static_file_path(
     static_dir: Path,
     *,
-    static_base_path: str,
     path: str,
 ) -> Path | None:
     root = static_dir.resolve()
-    stripped = _strip_static_base(path, static_base_path=static_base_path)
-    if stripped is None:
-        return None
-    relative = stripped.lstrip("/")
+    relative = path.lstrip("/")
     if not relative:
         relative = "index.html"
     candidate = (root / relative).resolve()
@@ -409,35 +421,11 @@ def _static_file_path(
     return None
 
 
-def _strip_static_base(path: str, *, static_base_path: str) -> str | None:
-    if static_base_path == "/":
-        return path
-    if path == static_base_path:
-        return "/"
-    prefix = f"{static_base_path}/"
-    if path.startswith(prefix):
-        return "/" + path[len(prefix) :]
-    return None
-
-
-def _gateway_path(path: str, *, static_base_path: str) -> str | None:
-    if path.startswith("/sessions/"):
-        return path
-    return _strip_static_base(path, static_base_path=static_base_path)
-
-
 def _is_gateway_api_path(path: str) -> bool:
     return path.startswith(("/sessions/", "/settings/")) or path in {
         "/sessions",
         "/settings",
     }
-
-
-def _normalize_base_path(value: str) -> str:
-    if not value or value == "/":
-        return "/"
-    normalized = value if value.startswith("/") else f"/{value}"
-    return normalized.rstrip("/")
 
 
 def _optional_int(value: str | None) -> int | None:
@@ -458,3 +446,19 @@ def _message_type(message: Mapping[str, object]) -> str:
     if isinstance(value, str):
         return value
     return ""
+
+
+def _inject_browser_base_path(body: bytes, *, browser_base_path: str) -> bytes:
+    """Inject the one gateway-owned browser route into the built index."""
+    try:
+        document = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body
+    marker = '<meta name="heartwood-gateway-base"'
+    if marker in document:
+        return body
+    escaped = html.escape(browser_base_path, quote=True)
+    metadata = f'<meta name="heartwood-gateway-base" content="{escaped}" />'
+    if "<head>" not in document:
+        return body
+    return document.replace("<head>", f"<head>\n    {metadata}", 1).encode("utf-8")

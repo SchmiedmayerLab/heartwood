@@ -23,6 +23,7 @@ type ModelSourceId = Literal[
     "openai-subscription",
     "stanford-ai-api-gateway",
 ]
+type IngressMode = Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,8 @@ class PlatformCapabilities:
     display_name: str
     interfaces: tuple[Literal["terminal", "web", "notebook"], ...]
     browser_route: Literal["direct", "jupyter-proxy", "unavailable"]
+    ingress_modes: tuple[IngressMode, ...]
+    default_ingress_mode: IngressMode
     managed_runtimes: tuple[Literal["llama-cpp", "vllm"], ...]
     scheduler: Literal["none", "provisioned", "slurm"]
     persistent_storage: str
@@ -49,8 +52,30 @@ class PlatformCapabilities:
         Literal["process", "keyring", "mounted-file", "managed-identity"], ...
     ]
     model_sources: tuple[ModelSourceId, ...]
+    platform_isolated_model_sources: tuple[ModelSourceId, ...]
     managed_model_connections: tuple[str, ...]
     validation_level: Literal["ci", "ci-and-live-synthetic"]
+
+    def __post_init__(self) -> None:
+        if not self.ingress_modes:
+            raise ValueError("platform capabilities require at least one ingress mode")
+        if len(set(self.ingress_modes)) != len(self.ingress_modes):
+            raise ValueError("platform ingress modes must be unique")
+        if self.default_ingress_mode not in self.ingress_modes:
+            raise ValueError("default ingress mode must be supported by the platform")
+        if self.browser_route == "direct" and "direct-loopback" not in self.ingress_modes:
+            raise ValueError("direct browser routing requires direct-loopback ingress")
+        if self.browser_route == "jupyter-proxy" and "jupyter-proxy" not in self.ingress_modes:
+            raise ValueError("Jupyter browser routing requires Jupyter proxy ingress")
+        isolated_sources = set(self.platform_isolated_model_sources)
+        if len(isolated_sources) != len(self.platform_isolated_model_sources):
+            raise ValueError("platform-isolated model sources must be unique")
+        if not isolated_sources.issubset(self.model_sources):
+            raise ValueError("platform-isolated model sources must be supported by the platform")
+        if isolated_sources and self.validation_level != "ci-and-live-synthetic":
+            raise ValueError(
+                "platform-isolated model credentials require live synthetic validation"
+            )
 
     def safe_dict(self) -> dict[str, object]:
         """Return a serializable capability representation."""
@@ -59,11 +84,14 @@ class PlatformCapabilities:
             "display_name": self.display_name,
             "interfaces": list(self.interfaces),
             "browser_route": self.browser_route,
+            "ingress_modes": list(self.ingress_modes),
+            "default_ingress_mode": self.default_ingress_mode,
             "managed_runtimes": list(self.managed_runtimes),
             "scheduler": self.scheduler,
             "persistent_storage": self.persistent_storage,
             "credential_backends": list(self.credential_backends),
             "model_sources": list(self.model_sources),
+            "platform_isolated_model_sources": list(self.platform_isolated_model_sources),
             "managed_model_connections": list(self.managed_model_connections),
             "validation_level": self.validation_level,
         }

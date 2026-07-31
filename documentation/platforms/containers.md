@@ -70,7 +70,9 @@ docker run --rm -it \
 ```
 
 Open `http://127.0.0.1:8767/` and keep the container running.
-The host binding is loopback-only; do not expose the unauthenticated service on a shared network.
+The host publication is loopback-only even though the process must listen on the container interface.
+Heartwood enables its container-loopback ingress exception only for a packaged image and still validates the external loopback origin.
+Do not change the host publication to a shared-network address or place an unauthenticated proxy in front of it.
 When the setup page reports that a managed model is downloaded, stop the container with `Ctrl-C` and repeat this command to load the model and return to the browser.
 
 ## Use an NVIDIA GPU

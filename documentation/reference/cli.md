@@ -94,6 +94,27 @@ Interactive users should use the visible controls or `/allow` and `/reject` with
 These commands support deployment automation and diagnostics.
 Researchers should normally use `heartwood` with `--interface` when needed.
 
+`heartwood gateway serve` uses the detected platform's declared default ingress mode.
+Workstations, generic containers, and Carina default to direct loopback and refuse a non-loopback bind.
+Terra defaults to Jupyter proxy mode and requires its exact public origin and proxy base path.
+Platform operators can select one explicit route:
+
+| Option | Meaning |
+|---|---|
+| `--ingress-mode direct-loopback` | Accept direct requests through a loopback boundary; the default |
+| `--ingress-mode jupyter-proxy` | Accept a loopback Jupyter proxy that strips one exact external prefix |
+| `--ingress-mode trusted-proxy` | Accept only configured proxy source ranges and one complete forwarding set |
+| `--public-origin ORIGIN` | Set the exact browser-visible `http` or `https` origin |
+| `--base-path PATH` | Set the exact browser-visible gateway prefix |
+| `--trusted-proxy-source IP_OR_CIDR` | Trust one proxy source; repeat the option for multiple exact ranges |
+| `--trusted-identity-header NAME` | Require an additional non-secret proxy identity assertion header |
+| `--trusted-identity VALUE` | Set the exact non-secret assertion value; configure it with the header |
+| `--proxy-strips-prefix` | Declare that a trusted proxy removes the external prefix before forwarding |
+
+The trusted identity assertion is a route marker, not a credential or substitute for proxy authentication.
+The proxy must remove client-supplied forwarding and identity headers before setting its own values.
+See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
+
 `heartwood runtime start --dry-run` prints the model, resource, and scheduler plan without downloading, starting inference, or requesting compute.
 On a scheduler-managed GPU platform, `--task-profile standard|powerful|maximum` constrains automatic recommendation to the requested capability tier.
 `--gpus` is an advanced constraint and must match a qualified catalog tensor-parallel configuration.

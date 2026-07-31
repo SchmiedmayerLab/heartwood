@@ -21,6 +21,7 @@ from heartwood.gateway import (
     ModelCatalogError,
     ModelCatalogService,
     ModelConnection,
+    ModelProfile,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -118,6 +119,30 @@ def test_built_in_connections_are_non_secret_and_researcher_facing() -> None:
         assert serialized["group_label"]
         assert "token" not in serialized
         assert "api_key" not in serialized
+
+
+def test_connection_profile_match_covers_route_and_credential_contract() -> None:
+    connection = next(item for item in BUILT_IN_MODEL_CONNECTIONS if item.connection_id == "openai")
+    model = "openai/synthetic-model"
+    profile = ModelProfile(
+        profile_id=connection.connection_id,
+        model=model,
+        policy_endpoint=connection.request_endpoint(model),
+        credential_kind=connection.credential_kind,
+        api_key_env=connection.api_key_env,
+    )
+
+    assert connection.matches_profile(profile)
+    assert not connection.matches_profile(
+        replace(profile, policy_endpoint="https://example.org/v1/chat/completions")
+    )
+    assert not connection.matches_profile(
+        replace(
+            profile,
+            credential_kind="managed-identity",
+            api_key_env=None,
+        )
+    )
 
 
 def test_subscription_login_uses_shared_catalog_policy_and_profile(tmp_path: Path) -> None:

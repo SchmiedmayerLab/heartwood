@@ -40,6 +40,11 @@ from heartwood.gateway._action_settings import (
     ActionSettings,
     ActionSettingsError,
 )
+from heartwood.gateway._credential_isolation import (
+    CredentialIsolation,
+    assess_credential_isolation,
+    credential_isolation_unavailable_reason,
+)
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
 from heartwood.gateway._gpu_environment import (
     GpuEnvironment,
@@ -80,6 +85,7 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     custom_model_connection,
     load_model_connections,
+    matching_model_connection,
 )
 from heartwood.gateway._model_settings import (
     MODEL_PRESETS,
@@ -365,6 +371,7 @@ class SessionGateway:
         self._stream_epoch = uuid4().hex
         self._gpu_environment: GpuEnvironment | None = None
         adapter = select_platform_adapter(self.env)
+        self._platform_capabilities = adapter.capabilities()
         self.config_store = ProjectConfigStore(
             self.project,
             ProjectConfig(
@@ -386,7 +393,7 @@ class SessionGateway:
         self._reload_model_connections()
         self.credential_store = credential_store or CredentialStore(
             project_root=self.project.root,
-            capabilities=adapter.capabilities(),
+            capabilities=self._platform_capabilities,
             env=self.env,
             use_system_keyring=env is None,
         )
@@ -714,6 +721,10 @@ class SessionGateway:
             for profile in profiles:
                 if isinstance(profile, dict) and profile.get("auth_type") == "subscription":
                     profile["credential_status"] = subscription_status
+        credential_isolation = self._credential_isolation(
+            settings,
+            model_source=config.model_source,
+        )
         return api_response(
             ModelSettingsResponse,
             {
@@ -736,6 +747,7 @@ class SessionGateway:
                     self.credential_store.status(binding).safe_dict()
                     for binding in credential_bindings
                 ],
+                "credential_isolation": credential_isolation.safe_dict(),
             },
         )
 
@@ -1016,8 +1028,17 @@ class SessionGateway:
             if isinstance(self.action_settings_store, ProjectActionSettingsStore)
             else self.action_settings_store.load()
         )
+        model_settings = (
+            config.model_settings
+            if isinstance(self.settings_store, ProjectModelSettingsStore)
+            else self.settings_store.load()
+        )
         policy_profile = config.policy
-        allowed = set(policy_profile.allowed_action_confirmation_modes)
+        policy_allowed = set(policy_profile.allowed_action_confirmation_modes)
+        isolation = self._credential_isolation(
+            model_settings,
+            model_source=config.model_source,
+        )
         blocking_sessions = self._active_service_session_ids()
         return api_response(
             ActionSettingsResponse,
@@ -1034,11 +1055,20 @@ class SessionGateway:
                 "modes": [
                     {
                         **option.safe_dict(),
-                        "allowed": option.mode in allowed,
+                        "allowed": (
+                            option.mode in policy_allowed and isolation.allows(option.mode)
+                        ),
                         "unavailable_reason": (
                             None
-                            if option.mode in allowed
-                            else "Unavailable under the active platform policy."
+                            if (option.mode in policy_allowed and isolation.allows(option.mode))
+                            else (
+                                "Unavailable under the active platform policy."
+                                if option.mode not in policy_allowed
+                                else credential_isolation_unavailable_reason(
+                                    isolation,
+                                    option.mode,
+                                )
+                            )
                         ),
                     }
                     for option in ACTION_MODE_OPTIONS
@@ -1054,6 +1084,18 @@ class SessionGateway:
             raise ActionSettingsError(
                 "action confirmation mode cannot change while a session is active"
             )
+        validated_mode = ActionSettings().selecting(mode).confirmation_mode
+        config = self.config_store.load()
+        isolation = self._credential_isolation(
+            self.settings_store.load(),
+            model_source=config.model_source,
+        )
+        reason = credential_isolation_unavailable_reason(
+            isolation,
+            validated_mode,
+        )
+        if reason is not None:
+            raise ActionSettingsError(reason)
         if isinstance(self.action_settings_store, ProjectActionSettingsStore):
             try:
                 self.config_store.update(
@@ -1081,6 +1123,16 @@ class SessionGateway:
                 f"model profile id is reserved by Heartwood: {profile.profile_id}"
             )
         settings = self.settings_store.load().with_profile(profile)
+        isolation = self._credential_isolation(
+            settings,
+            model_source=self.config_store.load().model_source,
+        )
+        reason = credential_isolation_unavailable_reason(
+            isolation,
+            self.action_settings_store.load().confirmation_mode,
+        )
+        if reason is not None:
+            raise ModelSettingsError(reason)
         self.settings_store.save(settings)
         self._reset_services()
         return self.model_settings()
@@ -1134,6 +1186,12 @@ class SessionGateway:
                     if profile.auth_type == "subscription"
                     else profile.credential_status(self._credential_environment())
                 ),
+                "credential_isolation": assess_credential_isolation(
+                    profile,
+                    self._platform_capabilities,
+                    model_source=self._model_source_for_profile(profile),
+                    model_connections=self._model_connections.values(),
+                ).safe_dict(),
                 "action_confirmation_mode": action_settings.confirmation_mode,
                 "policy_decision": decision.model_dump(mode="json"),
             },
@@ -1519,6 +1577,16 @@ class SessionGateway:
             if isinstance(self.action_settings_store, ProjectActionSettingsStore)
             else self.action_settings_store.load()
         )
+        isolation = self._credential_isolation(
+            model_settings,
+            model_source=config.model_source,
+        )
+        reason = credential_isolation_unavailable_reason(
+            isolation,
+            action_settings.confirmation_mode,
+        )
+        if reason is not None:
+            raise ActionSettingsError(reason)
         return _ServiceConfiguration(
             model_settings=model_settings,
             action_settings=action_settings,
@@ -2007,11 +2075,39 @@ class SessionGateway:
 
     @_serialized_state
     def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:
+        isolation = self._credential_isolation(
+            settings,
+            model_source=source,
+        )
+        action_settings = self.action_settings_store.load()
+        reason = credential_isolation_unavailable_reason(
+            isolation,
+            action_settings.confirmation_mode,
+        )
+        if reason is not None:
+            raise ModelSettingsError(reason)
         if isinstance(self.settings_store, ProjectModelSettingsStore):
             self.settings_store.save_selection(source, settings)
             return
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
+
+    def _credential_isolation(
+        self,
+        settings: ModelSettings,
+        *,
+        model_source: str | None,
+    ) -> CredentialIsolation:
+        try:
+            profile = settings.profile()
+        except ModelSettingsError:
+            profile = None
+        return assess_credential_isolation(
+            profile,
+            self._platform_capabilities,
+            model_source=model_source,
+            model_connections=self._model_connections.values(),
+        )
 
     @_serialized_state
     def _reload_model_connections(self) -> None:
@@ -2043,17 +2139,10 @@ class SessionGateway:
     def _model_source_for_profile(self, profile: ModelProfile) -> str:
         if profile.is_local:
             return "heartwood"
-        for connection in self._model_connections.values():
-            if connection.policy_endpoint == profile.policy_endpoint:
-                return self._model_source_for_connection(connection)
-            try:
-                request_endpoint = connection.request_endpoint(profile.model)
-            except ModelCatalogError:
-                continue
-            if request_endpoint == profile.policy_endpoint:
-                return self._model_source_for_connection(connection)
-        source = self.config_store.load().model_source
-        return "custom" if source is None else source
+        connection = matching_model_connection(profile, self._model_connections.values())
+        if connection is not None:
+            return self._model_source_for_connection(connection)
+        return "custom"
 
     @_serialized_state
     def _select_downloaded_local_model(

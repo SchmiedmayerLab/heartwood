@@ -94,6 +94,9 @@ The built-in **Run with Heartwood** route is different: Heartwood downloads or i
 ## Credentials
 
 Heartwood never accepts provider API keys as normal command-line arguments and never writes API keys or subscription tokens to project configuration, session events, logs, browser storage, or audit exports.
+On the built-in platforms, these routes are application-scrubbed rather than process-isolated: OpenHands model calls and tools share the Heartwood operating-system identity.
+Heartwood therefore requires **Review Every Action** for API keys, subscription credentials, mounted secrets, and managed identities.
+Credential-free local inference can use Low-Risk Automation when platform policy permits it.
 
 API-key resolution follows this order:
 

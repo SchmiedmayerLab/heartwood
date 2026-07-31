@@ -49,6 +49,8 @@ class GenericPlatformAdapter:
             display_name="Workstation or container",
             interfaces=("terminal", "web", "notebook"),
             browser_route="direct",
+            ingress_modes=("direct-loopback", "jupyter-proxy", "trusted-proxy"),
+            default_ingress_mode="direct-loopback",
             managed_runtimes=("llama-cpp", "vllm"),
             scheduler="none",
             persistent_storage="The project directory",
@@ -61,6 +63,7 @@ class GenericPlatformAdapter:
                 "anthropic",
                 "custom",
             ),
+            platform_isolated_model_sources=(),
             managed_model_connections=("Stanford AI API Gateway",),
             validation_level="ci",
         )

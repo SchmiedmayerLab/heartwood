@@ -11,14 +11,14 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
-from heartwood.gateway._model_settings import CredentialKind
+from heartwood.gateway._model_settings import CredentialKind, ModelProfile
 from heartwood.gateway._openhands_models import (
     OpenHandsModelError,
     prepare_openhands_import,
@@ -233,6 +233,28 @@ class ModelConnection:
         except OpenHandsModelError as error:
             raise ModelCatalogError(str(error)) from error
 
+    def matches_profile(self, profile: ModelProfile) -> bool:
+        """Return whether a profile preserves this connection's complete route contract."""
+        if (
+            profile.profile_id != self.connection_id
+            or not profile.model.startswith(self.model_prefix)
+            or profile.credential_kind != self.credential_kind
+            or profile.auth_type
+            != ("subscription" if self.protocol == "subscription" else "api_key")
+            or profile.subscription_vendor != self.subscription_vendor
+            or profile.base_url != self.base_url
+            or profile.api_key_env != self.api_key_env
+            or profile.api_key_file != self.api_key_file
+            or profile.api_version != self.api_version
+            or profile.aws_region_name != self.aws_region_name
+            or profile.aws_profile_name != self.aws_profile_name
+        ):
+            return False
+        try:
+            return profile.policy_endpoint == self.request_endpoint(profile.model)
+        except ModelCatalogError:
+            return False
+
     @property
     def group(self) -> ConnectionGroup:
         """Return the shared researcher-facing category for this connection."""
@@ -290,6 +312,17 @@ class ModelConnection:
             "auth_type": "subscription" if self.protocol == "subscription" else "api_key",
             "credential_status": self.credential_status(env),
         }
+
+
+def matching_model_connection(
+    profile: ModelProfile,
+    connections: Iterable[ModelConnection],
+) -> ModelConnection | None:
+    """Return the connection whose complete route contract matches a profile."""
+    return next(
+        (connection for connection in connections if connection.matches_profile(profile)),
+        None,
+    )
 
 
 @dataclass(frozen=True, slots=True)

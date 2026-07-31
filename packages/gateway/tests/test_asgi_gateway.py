@@ -22,6 +22,7 @@ from heartwood.core_adapter import BackendLifecycle, BackendLifecycleEvent
 from heartwood.gateway import (
     GatewayAsgiApp,
     GatewayEventStream,
+    IngressPolicy,
     ProjectContext,
     RestResponse,
     SessionGateway,
@@ -163,11 +164,7 @@ def test_asgi_websocket_closes_gateway_stream_when_send_fails(
 
         with pytest.raises(RuntimeError, match="synthetic send failure"):
             await app(
-                {
-                    "type": "websocket",
-                    "path": "/sessions/session-1/events",
-                    "query_string": b"",
-                },
+                _websocket_scope("/sessions/session-1/events"),
                 receive,
                 send,
             )
@@ -191,7 +188,7 @@ def test_asgi_http_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path) -> 
         )
         app = GatewayAsgiApp(
             gateway,
-            static_base_path="/proxy/8767",
+            ingress=IngressPolicy.create(external_base_path="/proxy/8767"),
         )
         return await _http_call(
             app,
@@ -220,7 +217,7 @@ def test_asgi_session_lifecycle_does_not_fall_through_to_static_assets(
         app = GatewayAsgiApp(
             _gateway(tmp_path / "sessions"),
             static_dir=static_dir,
-            static_base_path="/proxy/8767",
+            ingress=IngressPolicy.create(external_base_path="/proxy/8767"),
         )
         created = await _http_call(
             app,
@@ -307,11 +304,7 @@ def test_asgi_websocket_streams_live_gateway_events(tmp_path: Path) -> None:
 
         task = asyncio.create_task(
             app(
-                {
-                    "type": "websocket",
-                    "path": "/sessions/session-1/events",
-                    "query_string": b"",
-                },
+                _websocket_scope("/sessions/session-1/events"),
                 receive,
                 send,
             )
@@ -359,11 +352,7 @@ def test_asgi_websocket_streams_transient_tokens_with_monotonic_snapshots(
 
         task = asyncio.create_task(
             app(
-                {
-                    "type": "websocket",
-                    "path": "/sessions/session-1/events",
-                    "query_string": b"",
-                },
+                _websocket_scope("/sessions/session-1/events"),
                 receive,
                 send,
             )
@@ -427,11 +416,10 @@ def test_asgi_websocket_replays_events_after_sequence(tmp_path: Path) -> None:
 
         await incoming.put({"type": "websocket.disconnect"})
         await app(
-            {
-                "type": "websocket",
-                "path": "/sessions/session-1/events",
-                "query_string": b"after=0",
-            },
+            _websocket_scope(
+                "/sessions/session-1/events",
+                query_string=b"after=0",
+            ),
             receive,
             send,
         )
@@ -448,7 +436,10 @@ def test_asgi_websocket_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path
     async def scenario() -> list[dict[str, object]]:
         gateway = _gateway(tmp_path)
         gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
-        app = GatewayAsgiApp(gateway, static_base_path="/proxy/8767")
+        app = GatewayAsgiApp(
+            gateway,
+            ingress=IngressPolicy.create(external_base_path="/proxy/8767"),
+        )
         incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         sent: list[dict[str, object]] = []
 
@@ -460,11 +451,10 @@ def test_asgi_websocket_accepts_gateway_routes_under_proxy_prefix(tmp_path: Path
 
         await incoming.put({"type": "websocket.disconnect"})
         await app(
-            {
-                "type": "websocket",
-                "path": "/proxy/8767/sessions/session-1/events",
-                "query_string": b"after=0",
-            },
+            _websocket_scope(
+                "/proxy/8767/sessions/session-1/events",
+                query_string=b"after=0",
+            ),
             receive,
             send,
         )
@@ -493,12 +483,11 @@ def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
 
         task = asyncio.create_task(
             app(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/sessions/session-1/events/stream",
-                    "query_string": b"after=0",
-                },
+                _http_scope(
+                    "GET",
+                    "/sessions/session-1/events/stream",
+                    query_string=b"after=0",
+                ),
                 receive,
                 send,
             )
@@ -534,12 +523,7 @@ def test_asgi_sse_streams_transient_projection_updates(tmp_path: Path) -> None:
 
         task = asyncio.create_task(
             app(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/sessions/session-1/events/stream",
-                    "query_string": b"",
-                },
+                _http_scope("GET", "/sessions/session-1/events/stream"),
                 receive,
                 send,
             )
@@ -601,7 +585,7 @@ def test_asgi_static_serves_web_assets_under_proxy_prefix(tmp_path: Path) -> Non
         app = GatewayAsgiApp(
             _gateway(tmp_path / "sessions"),
             static_dir=static_dir,
-            static_base_path="/proxy/8767",
+            ingress=IngressPolicy.create(external_base_path="/proxy/8767"),
         )
         return await _http_call(
             app,
@@ -613,6 +597,188 @@ def test_asgi_static_serves_web_assets_under_proxy_prefix(tmp_path: Path) -> Non
 
     assert sent[0]["status"] == 200
     assert cast(bytes, sent[1]["body"]).decode("utf-8") == "console.log('heartwood')"
+
+
+def test_asgi_base_path_cannot_be_bypassed_by_a_direct_api_route(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        app = GatewayAsgiApp(
+            _gateway(tmp_path),
+            ingress=IngressPolicy.create(external_base_path="/proxy/8767"),
+        )
+        return await _http_call(app, method="GET", path="/sessions")
+
+    sent = asyncio.run(scenario())
+
+    assert sent[0]["status"] == 404
+    assert json.loads(cast(bytes, sent[1]["body"])) == {
+        "code": "HW-INGRESS-002",
+        "error": "request path is outside the configured gateway base path",
+    }
+
+
+def test_asgi_injects_the_gateway_owned_jupyter_base_path(tmp_path: Path) -> None:
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(
+        '<html><head></head><body><div id="root"></div></body></html>',
+        encoding="utf-8",
+    )
+    external_base = "/proxy/project/runtime/jupyter/proxy/8767"
+
+    async def scenario() -> list[dict[str, object]]:
+        app = GatewayAsgiApp(
+            _gateway(tmp_path / "project"),
+            static_dir=static_dir,
+            ingress=IngressPolicy.create(
+                mode="jupyter-proxy",
+                external_origin="https://notebooks.firecloud.org",
+                external_base_path=external_base,
+            ),
+        )
+        return await _http_call(
+            app,
+            method="GET",
+            path="/",
+            origin="https://notebooks.firecloud.org",
+        )
+
+    sent = asyncio.run(scenario())
+    body = cast(bytes, sent[1]["body"]).decode("utf-8")
+
+    assert sent[0]["status"] == 200
+    assert f'<meta name="heartwood-gateway-base" content="{external_base}" />' in body
+
+
+def test_asgi_jupyter_proxy_uses_one_stripped_route_for_rest_sse_and_websocket(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> tuple[
+        list[dict[str, object]],
+        list[dict[str, object]],
+        list[dict[str, object]],
+    ]:
+        gateway = _gateway(tmp_path)
+        gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="hi")))
+        app = GatewayAsgiApp(
+            gateway,
+            ingress=IngressPolicy.create(
+                mode="jupyter-proxy",
+                external_origin="https://notebooks.firecloud.org",
+                external_base_path="/proxy/project/runtime/jupyter/proxy/8767",
+            ),
+        )
+        rest = await _http_call(
+            app,
+            method="GET",
+            path="/sessions",
+            origin="https://notebooks.firecloud.org",
+        )
+
+        sse_incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        sse_sent: list[dict[str, object]] = []
+
+        async def sse_receive() -> dict[str, object]:
+            return await sse_incoming.get()
+
+        async def sse_send(message: dict[str, object]) -> None:
+            sse_sent.append(message)
+
+        sse_task = asyncio.create_task(
+            app(
+                _http_scope(
+                    "GET",
+                    "/sessions/session-1/events/stream",
+                    origin="https://notebooks.firecloud.org",
+                ),
+                sse_receive,
+                sse_send,
+            )
+        )
+        await _wait_for_sent(sse_sent, 2)
+        await sse_incoming.put({"type": "http.disconnect"})
+        await asyncio.wait_for(sse_task, timeout=1)
+
+        websocket_incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        websocket_sent: list[dict[str, object]] = []
+
+        async def websocket_receive() -> dict[str, object]:
+            return await websocket_incoming.get()
+
+        async def websocket_send(message: dict[str, object]) -> None:
+            websocket_sent.append(message)
+
+        await websocket_incoming.put({"type": "websocket.disconnect"})
+        await app(
+            _websocket_scope(
+                "/sessions/session-1/events",
+                origin="https://notebooks.firecloud.org",
+            ),
+            websocket_receive,
+            websocket_send,
+        )
+        return rest, sse_sent, websocket_sent
+
+    rest, sse, websocket = asyncio.run(scenario())
+
+    assert rest[0]["status"] == 200
+    assert sse[0]["status"] == 200
+    assert websocket[0]["type"] == "websocket.accept"
+
+
+def test_asgi_trusted_proxy_uses_one_preserved_route_for_api_and_assets(
+    tmp_path: Path,
+) -> None:
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(
+        '<html><head></head><body><div id="root"></div></body></html>',
+        encoding="utf-8",
+    )
+    forwarded = (
+        (b"x-forwarded-for", b"198.51.100.22"),
+        (b"x-forwarded-host", b"heartwood.example"),
+        (b"x-forwarded-prefix", b"/research/heartwood"),
+        (b"x-forwarded-proto", b"https"),
+    )
+    app = GatewayAsgiApp(
+        _gateway(tmp_path / "project"),
+        static_dir=static_dir,
+        ingress=IngressPolicy.create(
+            mode="trusted-proxy",
+            bind_host="0.0.0.0",
+            external_origin="https://heartwood.example",
+            external_base_path="/research/heartwood",
+            trusted_proxy_sources=("10.10.0.0/24",),
+        ),
+    )
+
+    async def scenario() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        api = await _http_call(
+            app,
+            method="GET",
+            path="/research/heartwood/sessions",
+            headers=forwarded,
+            client=("10.10.0.4", 43123),
+            host="heartwood.example",
+            origin="https://heartwood.example",
+        )
+        asset = await _http_call(
+            app,
+            method="GET",
+            path="/research/heartwood/",
+            headers=forwarded,
+            client=("10.10.0.4", 43123),
+            host="heartwood.example",
+            origin="https://heartwood.example",
+        )
+        return api, asset
+
+    api, asset = asyncio.run(scenario())
+
+    assert api[0]["status"] == 200
+    body = cast(bytes, asset[1]["body"]).decode("utf-8")
+    assert asset[0]["status"] == 200
+    assert '<meta name="heartwood-gateway-base" content="/research/heartwood" />' in body
 
 
 def test_asgi_static_falls_back_to_index_for_client_routes(tmp_path: Path) -> None:
@@ -670,7 +836,7 @@ def test_asgi_websocket_rejects_invalid_route(tmp_path: Path) -> None:
         async def send(message: dict[str, object]) -> None:
             sent.append(message)
 
-        await app({"type": "websocket", "path": "/unknown", "query_string": b""}, receive, send)
+        await app(_websocket_scope("/unknown"), receive, send)
         return sent
 
     sent = asyncio.run(scenario())
@@ -690,11 +856,7 @@ def test_asgi_websocket_rejects_invalid_session_id(tmp_path: Path) -> None:
             sent.append(message)
 
         await app(
-            {
-                "type": "websocket",
-                "path": "/sessions/invalid!session/events",
-                "query_string": b"",
-            },
+            _websocket_scope("/sessions/invalid!session/events"),
             receive,
             send,
         )
@@ -753,6 +915,10 @@ async def _http_call(
     path: str,
     query_string: bytes = b"",
     body: bytes = b"",
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+    client: tuple[str, int] = ("127.0.0.1", 43123),
+    host: str = "127.0.0.1:8767",
+    origin: str | None = "http://127.0.0.1:8767",
 ) -> list[dict[str, object]]:
     messages = iter(({"type": "http.request", "body": body, "more_body": False},))
     sent: list[dict[str, object]] = []
@@ -764,11 +930,65 @@ async def _http_call(
         sent.append(message)
 
     await app(
-        {"type": "http", "method": method, "path": path, "query_string": query_string},
+        _http_scope(
+            method,
+            path,
+            query_string=query_string,
+            headers=headers,
+            client=client,
+            host=host,
+            origin=origin,
+        ),
         receive,
         send,
     )
     return sent
+
+
+def _http_scope(
+    method: str,
+    path: str,
+    *,
+    query_string: bytes = b"",
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+    client: tuple[str, int] = ("127.0.0.1", 43123),
+    host: str = "127.0.0.1:8767",
+    origin: str | None = "http://127.0.0.1:8767",
+) -> dict[str, object]:
+    request_headers = [(b"host", host.encode("ascii")), *headers]
+    if origin is not None:
+        request_headers.append((b"origin", origin.encode("ascii")))
+    return {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": query_string,
+        "headers": request_headers,
+        "client": client,
+    }
+
+
+def _websocket_scope(
+    path: str,
+    *,
+    query_string: bytes = b"",
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+    client: tuple[str, int] = ("127.0.0.1", 43123),
+    host: str = "127.0.0.1:8767",
+    origin: str | None = "http://127.0.0.1:8767",
+) -> dict[str, object]:
+    request_headers = [(b"host", host.encode("ascii")), *headers]
+    if origin is not None:
+        request_headers.append((b"origin", origin.encode("ascii")))
+    return {
+        "type": "websocket",
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": query_string,
+        "headers": request_headers,
+        "client": client,
+    }
 
 
 async def _wait_for_sent(sent: list[dict[str, object]], count: int) -> None:

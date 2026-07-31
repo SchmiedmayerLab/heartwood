@@ -78,7 +78,11 @@ fi
 
 docker exec "${container_name}" mkdir -p "${project_root}"
 docker exec --detach --workdir "${project_root}" "${container_name}" \
-  sh -c "exec heartwood gateway serve --host 0.0.0.0 --port ${gateway_port} > /tmp/heartwood-web.log 2>&1"
+  sh -c "exec heartwood gateway serve --host 127.0.0.1 --port ${gateway_port} \
+    --ingress-mode jupyter-proxy \
+    --public-origin http://127.0.0.1:${host_port} \
+    --base-path ${notebook_path}proxy/${gateway_port} \
+    > /tmp/heartwood-web.log 2>&1"
 
 for _ in $(seq 1 60); do
   if curl --fail --silent "${heartwood_url}" >/dev/null; then

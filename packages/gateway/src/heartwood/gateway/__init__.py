@@ -30,6 +30,10 @@ from heartwood.gateway._action_settings import (
     action_settings_from_mapping,
 )
 from heartwood.gateway._asgi import GatewayAsgiApp
+from heartwood.gateway._credential_isolation import (
+    CredentialIsolation,
+    assess_credential_isolation,
+)
 from heartwood.gateway._credentials import (
     CredentialBindingStatus,
     CredentialStore,
@@ -51,6 +55,12 @@ from heartwood.gateway._gpu_environment import (
     discover_visible_gpus,
     inspect_gpu_environment,
     minimum_compute_capability_for_model,
+)
+from heartwood.gateway._ingress import (
+    IngressConfigurationError,
+    IngressPolicy,
+    IngressRequest,
+    IngressRequestError,
 )
 from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
@@ -182,6 +192,7 @@ __all__ = [
     "ActionSettingsError",
     "CommandConflictError",
     "CredentialBindingStatus",
+    "CredentialIsolation",
     "CredentialStore",
     "CredentialStoreAvailability",
     "CredentialStoreError",
@@ -193,6 +204,10 @@ __all__ = [
     "GpuDevice",
     "GpuEnvironment",
     "HuggingFaceModelRepository",
+    "IngressConfigurationError",
+    "IngressPolicy",
+    "IngressRequest",
+    "IngressRequestError",
     "InterfaceKind",
     "LocalContextPlan",
     "LocalModelChoice",
@@ -268,6 +283,7 @@ __all__ = [
     "action_risk_label",
     "action_settings_from_mapping",
     "action_tool_label",
+    "assess_credential_isolation",
     "automatic_model_tier",
     "catalog_model_choices",
     "custom_model_connection",

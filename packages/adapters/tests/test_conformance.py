@@ -9,7 +9,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from heartwood.adapters import (
     AdapterDetection,
@@ -44,11 +47,14 @@ class FakePlatformAdapter:
             display_name="Synthetic platform",
             interfaces=("terminal",),
             browser_route="unavailable",
+            ingress_modes=("direct-loopback",),
+            default_ingress_mode="direct-loopback",
             managed_runtimes=(),
             scheduler="none",
             persistent_storage="Synthetic project storage",
             credential_backends=("process",),
-            model_sources=("heartwood",),
+            model_sources=("heartwood", "openai"),
+            platform_isolated_model_sources=(),
             managed_model_connections=(),
             validation_level="ci",
         )
@@ -126,6 +132,24 @@ class FakeRegistryAdapter:
 
 def test_platform_adapter_conformance() -> None:
     assert_platform_adapter_conforms(FakePlatformAdapter())
+
+
+def test_platform_capabilities_reject_contradictory_security_claims() -> None:
+    capabilities = FakePlatformAdapter().capabilities()
+
+    with pytest.raises(ValueError, match="default ingress"):
+        replace(capabilities, default_ingress_mode="trusted-proxy")
+    with pytest.raises(ValueError, match="live synthetic validation"):
+        replace(
+            capabilities,
+            platform_isolated_model_sources=("openai",),
+        )
+    with pytest.raises(ValueError, match="supported by the platform"):
+        replace(
+            capabilities,
+            platform_isolated_model_sources=("anthropic",),
+            validation_level="ci-and-live-synthetic",
+        )
 
 
 def test_data_source_adapter_conformance() -> None:

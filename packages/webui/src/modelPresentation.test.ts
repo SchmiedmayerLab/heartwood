@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import { modelProfileLabel } from "./modelPresentation";
+import { credentialIsolation } from "./test/fixtures";
 import type { ModelProfile, ModelSettings } from "./types";
 
 const profile = (profileId: string, model: string): ModelProfile => ({
@@ -106,6 +107,7 @@ const settings: ModelSettings = {
     persistence_description: "Current Heartwood process only",
   },
   credential_bindings: [],
+  credential_isolation: credentialIsolation(),
 };
 
 describe("modelProfileLabel", () => {

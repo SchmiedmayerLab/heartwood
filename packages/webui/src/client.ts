@@ -599,22 +599,27 @@ const parseProjectionPayload = (payload: string): SessionProjectionResponse => {
 const gatewayBasePath = (): string => {
   const env = import.meta.env as unknown;
   if (typeof env !== "object" || env === null) {
-    return inferGatewayBasePath();
+    return gatewayBaseFromDocument();
   }
   const value = (env as { VITE_HEARTWOOD_GATEWAY_BASE?: unknown })
     .VITE_HEARTWOOD_GATEWAY_BASE;
   if (typeof value === "string" && value !== "") {
     return value;
   }
-  return inferGatewayBasePath();
+  return gatewayBaseFromDocument();
 };
 
-const inferGatewayBasePath = (): string => {
-  if (typeof window === "undefined") {
+const gatewayBaseFromDocument = (): string => {
+  if (typeof document === "undefined") {
     return "";
   }
-  const match = /^(.*\/proxy\/[^/]+)(?:\/.*)?$/.exec(window.location.pathname);
-  return match?.[1] ?? "";
+  const value = document
+    .querySelector<HTMLMetaElement>('meta[name="heartwood-gateway-base"]')
+    ?.content.trim();
+  if (value === undefined || value === "" || value === "/") {
+    return "";
+  }
+  return value.startsWith("/") && !value.endsWith("/") ? value : "";
 };
 
 const joinPath = (basePath: string, path: string): string => {
