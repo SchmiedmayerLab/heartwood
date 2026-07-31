@@ -909,9 +909,11 @@ def _descriptor_directory_path(descriptor: int) -> str | None:
     try:
         import fcntl
 
-        get_path = fcntl.F_GETPATH
+        get_path = getattr(fcntl, "F_GETPATH", None)
+        if get_path is None:
+            return None
         value = fcntl.fcntl(descriptor, get_path, b"\0" * 1024)
-    except (AttributeError, ImportError, OSError, ValueError):
+    except (ImportError, OSError, ValueError):
         return None
     encoded = bytes(value).split(b"\0", 1)[0]
     try:
