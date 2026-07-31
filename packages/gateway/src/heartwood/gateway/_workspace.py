@@ -905,6 +905,7 @@ def _descriptor_directory_path(descriptor: int) -> str | None:
         if stat.S_ISDIR(Path(proc_path).stat().st_mode):
             return proc_path
     except OSError:
+        # macOS does not expose /proc, so continue with its descriptor API.
         pass
     try:
         import fcntl

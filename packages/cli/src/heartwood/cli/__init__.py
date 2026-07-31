@@ -1727,6 +1727,7 @@ def _handle_files(
         print("\n".join(format_workspace_file(file)))
         return 0 if file["status"] in {"available", "truncated"} else 1
     parser.error("files requires list or show")
+    raise AssertionError("argparse returned after reporting an invalid files command")
 
 
 def _handle_changes(
