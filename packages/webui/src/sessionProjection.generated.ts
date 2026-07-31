@@ -12,6 +12,20 @@
  * Run `npm run contracts:generate` after changing a shared request or response.
  */
 
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | {
+      [k: string]: JsonValue;
+    };
+export type ProjectionActionDetails =
+  | ProjectionTerminalActionDetails
+  | ProjectionFileEditorActionDetails
+  | ProjectionTaskActionDetails
+  | ProjectionOtherActionDetails;
 /**
  * Events emitted by a Heartwood session.
  *
@@ -44,20 +58,12 @@ export type EventKind =
  */
 export type CommandKind =
   "approve" | "deny" | "chat" | "pause" | "resume" | "replay" | "audit.export";
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | {
-      [k: string]: JsonValue;
-    };
 
 /**
  * Complete session projection owned by the gateway.
  */
 export interface SessionProjection {
+  actions: ProjectionActionRecord[];
   activity: ProjectionActivity[];
   availableCommands: ("chat" | "pause" | "resume" | "approve" | "deny")[];
   context: ProjectionModelContext;
@@ -80,6 +86,89 @@ export interface SessionProjection {
   taskPlan: ProjectionTask[];
   usage: ProjectionUsage | null;
   usageByPurpose: ProjectionUsage[];
+  workspaceRevision: number;
+}
+/**
+ * One versioned action record correlated across the OpenHands lifecycle.
+ */
+export interface ProjectionActionRecord {
+  actionId: string | null;
+  affectedPaths: ProjectionAffectedPath[];
+  arguments: {
+    [k: string]: JsonValue;
+  };
+  decision: ("approved" | "rejected") | null;
+  details: ProjectionActionDetails;
+  groupId: string | null;
+  outcome: ProjectionActionOutcome | null;
+  proposedSequence: number;
+  risk: "high" | "low" | "medium" | "unknown";
+  schema_version: "heartwood.action-record.v1";
+  state:
+    | "proposed"
+    | "awaiting-review"
+    | "approved"
+    | "rejected"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "outcome-unknown";
+  summary: string;
+  toolCallId: string;
+  toolName: string;
+  updatedSequence: number;
+}
+/**
+ * Project-relative path attributed to a typed mutating action.
+ */
+export interface ProjectionAffectedPath {
+  effect: "created" | "modified" | "deleted" | "unknown";
+  path: string;
+  provenance: "file-editor-action";
+}
+/**
+ * Typed terminal arguments from one OpenHands action.
+ */
+export interface ProjectionTerminalActionDetails {
+  command: string;
+  isInput: boolean;
+  kind: "terminal";
+  reset: boolean;
+  timeout: number | null;
+}
+/**
+ * Typed file-editor arguments from one OpenHands action.
+ */
+export interface ProjectionFileEditorActionDetails {
+  kind: "file-editor";
+  operation:
+    "view" | "create" | "str_replace" | "insert" | "undo_edit" | "unknown";
+  path: string | null;
+}
+/**
+ * Typed sequential-specialist arguments from one OpenHands action.
+ */
+export interface ProjectionTaskActionDetails {
+  description: string | null;
+  kind: "task";
+  prompt: string | null;
+  resume: string | null;
+  subagentType: string | null;
+}
+/**
+ * Typed fallback for an OpenHands tool without a specialized renderer.
+ */
+export interface ProjectionOtherActionDetails {
+  kind: "other";
+}
+/**
+ * Bounded private result of an executed action.
+ */
+export interface ProjectionActionOutcome {
+  exitCode: number;
+  result: string | null;
+  resultTruncated: boolean;
+  summary: string;
 }
 export interface ProjectionActivity {
   detail: string;
@@ -130,22 +219,10 @@ export interface ProjectionLifecycleState {
  * One decision that applies to every listed OpenHands action.
  */
 export interface ProjectionApprovalGroup {
-  actions: ProjectionApprovalAction[];
+  actions: ProjectionActionRecord[];
   decision: ("approved" | "denied") | null;
   decisionScope: "all";
   groupId: string;
-}
-/**
- * One member of an atomic OpenHands action group.
- */
-export interface ProjectionApprovalAction {
-  arguments: {
-    [k: string]: JsonValue;
-  };
-  risk: ("high" | "low" | "medium" | "unknown") | null;
-  summary: string | null;
-  targetId: string;
-  toolName: string;
 }
 export interface ProjectionSubagent {
   agentName: string;

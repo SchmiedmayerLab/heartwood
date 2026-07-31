@@ -35,6 +35,12 @@ from heartwood.cli._interactive import (
     interaction_activity,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
+from heartwood.cli._workspace_presentation import (
+    format_workspace_changes,
+    format_workspace_diff,
+    format_workspace_file,
+    format_workspace_tree,
+)
 from heartwood.gateway import (
     ACTION_MODE_OPTIONS,
     BUILT_IN_MODEL_CONNECTIONS,
@@ -61,6 +67,7 @@ from heartwood.gateway import (
     SessionRecoveryError,
     SkillSettingsError,
     StartupPlan,
+    WorkspaceInspectionError,
     action_mode_label,
     custom_model_connection_requires_token,
     inspect_deployment,
@@ -384,6 +391,21 @@ def _build_parser() -> argparse.ArgumentParser:
     remove_skill = skill_subparsers.add_parser("remove", help="Remove an installed extension.")
     remove_skill.add_argument("name")
 
+    files = subparsers.add_parser("files", help="Inspect bounded project files.")
+    file_subparsers = files.add_subparsers(dest="files_command", metavar="<files-command>")
+    file_list = file_subparsers.add_parser("list", help="List the bounded project tree.")
+    file_list.add_argument("path", nargs="?", default=".")
+    file_list.add_argument("--depth", type=int)
+    file_show = file_subparsers.add_parser("show", help="Show one bounded UTF-8 project file.")
+    file_show.add_argument("path")
+
+    changes = subparsers.add_parser("changes", help="Inspect changed project files.")
+    changes.add_argument(
+        "path",
+        nargs="?",
+        help="Show one changed file; omit to list changed paths.",
+    )
+
     audit = subparsers.add_parser("audit", help="Audit-log operations.")
     audit_subparsers = audit.add_subparsers(dest="audit_command", metavar="<audit-command>")
     audit_export = audit_subparsers.add_parser("export", help="Export scrubbed audit JSONL.")
@@ -408,6 +430,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
         print(f"Session unavailable: {error}", file=sys.stderr)
         return 75
+    except WorkspaceInspectionError as error:
+        print(f"Project files unavailable: {error}", file=sys.stderr)
+        return 64
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         return 130
@@ -531,6 +556,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return _handle_actions(parser, gateway, args)
         if args.command == "skills":
             return _handle_skills(parser, gateway, args)
+        if args.command == "files":
+            return _handle_files(parser, gateway, args)
+        if args.command == "changes":
+            return _handle_changes(gateway, session_id=args.session_id, path=args.path)
         if args.command is None:
             if has_prompt:
                 try:
@@ -1680,6 +1709,39 @@ def _handle_replay(gateway: SessionGateway, *, session_id: str) -> int:
     lines = format_projection_lines(projection)
     print("\n".join(lines) if lines else "No session events recorded.")
     return 0
+
+
+def _handle_files(
+    parser: argparse.ArgumentParser,
+    gateway: SessionGateway,
+    args: argparse.Namespace,
+) -> int:
+    if args.files_command == "list":
+        if args.depth is not None and args.depth < 1:
+            parser.error("--depth must be positive")
+        tree = gateway.workspace_tree(path=args.path, depth=args.depth)
+        print("\n".join(format_workspace_tree(tree)))
+        return 0
+    if args.files_command == "show":
+        file = gateway.workspace_file(path=args.path)
+        print("\n".join(format_workspace_file(file)))
+        return 0 if file["status"] in {"available", "truncated"} else 1
+    parser.error("files requires list or show")
+
+
+def _handle_changes(
+    gateway: SessionGateway,
+    *,
+    session_id: str,
+    path: str | None,
+) -> int:
+    if path is None:
+        changes = gateway.workspace_changes(session_id=session_id)
+        print("\n".join(format_workspace_changes(changes)))
+        return 0 if changes["status"] not in {"unavailable", "unsupported"} else 1
+    diff = gateway.workspace_diff(session_id=session_id, path=path)
+    print("\n".join(format_workspace_diff(diff)))
+    return 0 if diff["status"] in {"available", "non-git", "truncated"} else 1
 
 
 def _handle_audit_export(

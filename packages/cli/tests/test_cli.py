@@ -1098,6 +1098,7 @@ def test_chat_grouped_approval_and_replay_share_project_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_deterministic_gateway(monkeypatch)
+    monkeypatch.setenv("NO_COLOR", "1")
     project = tmp_path / "analysis"
     base = ["--session-id", "synthetic"]
     model_args = [
@@ -1124,6 +1125,35 @@ def test_chat_grouped_approval_and_replay_share_project_state(
     assert "Review 1 action as one OpenHands action set" in output
     assert "Action set approved (1 action)" in output
     assert (project / ".heartwood" / "sessions" / "synthetic" / "events.jsonl").is_file()
+
+
+def test_cli_inspects_bounded_project_files_and_changes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_deterministic_gateway(monkeypatch)
+    project = tmp_path / "analysis"
+    project.mkdir()
+    (project / "analysis.py").write_text("answer = 42\n", encoding="utf-8")
+    private = project / "nested" / ".heartwood"
+    private.mkdir(parents=True)
+    (private / "private.txt").write_text(
+        "not visible",
+        encoding="utf-8",
+    )
+
+    assert _run(project, monkeypatch, ["files", "list"]) == 0
+    assert _run(project, monkeypatch, ["files", "show", "analysis.py"]) == 0
+    assert _run(project, monkeypatch, ["changes"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Project files · ." in output
+    assert "analysis.py" in output
+    assert "answer = 42" in output
+    assert "Project changes · Session actions" in output
+    assert "private.txt" not in output
+    assert "\x1b[" not in output
 
 
 def test_internal_prompt_handoff_is_project_private_and_consumed(tmp_path: Path) -> None:

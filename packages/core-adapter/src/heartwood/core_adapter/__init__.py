@@ -36,6 +36,7 @@ from heartwood.core_adapter._facade import (
     ProposedToolCall,
     TokenDeltaSink,
     ToolExecution,
+    backend_error_is_fatal,
     backend_error_message,
     pending_action_group,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "TokenDeltaSink",
     "ToolExecution",
     "__version__",
+    "backend_error_is_fatal",
     "backend_error_message",
     "pending_action_group",
 ]

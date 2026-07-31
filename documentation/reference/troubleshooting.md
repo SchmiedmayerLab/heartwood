@@ -28,6 +28,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `MODEL` | Model selection, compatibility, and managed model files |
 | `CREDENTIAL` | Provider API key, subscription credential, or managed-identity availability |
 | `AGENT` | OpenHands agent runtime availability |
+| `WORKSPACE` | Read-only project file and change inspection |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |
 | `ENV` | Conditions that cannot yet be classified more precisely |
@@ -146,6 +147,37 @@ Inspect the session replay and Activity & audit, then continue in a new session.
 
 An execution backend returned an error without a more specific stable code.
 Review Activity & audit, run `heartwood doctor`, and try the task again.
+
+## Project Inspection
+
+### `HW-WORKSPACE-001` — Project Path Is Invalid
+
+Use a normalized path relative to the current project.
+Do not use an absolute path, `..`, backslashes, repeated separators, control characters, or a trailing separator.
+
+### `HW-WORKSPACE-002` — Private Project State Is Not Available
+
+The Files and Changes interfaces never expose `.heartwood/` or `.git/`, including nested directories with either name.
+Use the documented audit export or Git commands from a trusted terminal when you are authorized to inspect that state.
+
+### `HW-WORKSPACE-003` — Symbolic Link Inspection Is Not Available
+
+Heartwood does not follow symbolic links through its read-only project API.
+Inspect the intended regular file through its project-relative path.
+
+### `HW-WORKSPACE-004` — Expected a Directory
+
+Use `heartwood files show FILE` for a file or choose a directory for `heartwood files list`.
+
+### `HW-WORKSPACE-005` — Project Entry Is Unavailable
+
+The path does not exist or its metadata cannot be read.
+Confirm the spelling and project permissions, then retry from the same project directory.
+
+### `HW-WORKSPACE-006` — Requested Tree Depth Is Unsupported
+
+Choose a positive depth no greater than the limit reported by the workspace response.
+Omit `--depth` to use the default bounded depth.
 
 ## Managed Compute
 

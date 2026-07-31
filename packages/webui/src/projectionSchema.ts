@@ -85,20 +85,91 @@ const messageSchema = z
   })
   .strict();
 
-const approvalActionSchema = z
+const actionDetailsSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("terminal"),
+      command: z.string(),
+      isInput: z.boolean(),
+      reset: z.boolean(),
+      timeout: z.number().nonnegative().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("file-editor"),
+      operation: z.enum([
+        "view",
+        "create",
+        "str_replace",
+        "insert",
+        "undo_edit",
+        "unknown",
+      ]),
+      path: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("task"),
+      description: z.string().nullable(),
+      prompt: z.string().nullable(),
+      subagentType: z.string().nullable(),
+      resume: z.string().nullable(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("other") }).strict(),
+]);
+
+const actionRecordSchema = z
   .object({
-    targetId: z.string(),
+    schema_version: z.literal("heartwood.action-record.v1"),
+    toolCallId: z.string(),
+    actionId: z.string().nullable(),
+    groupId: z.string().nullable(),
     toolName: z.string(),
-    risk: z.enum(["high", "low", "medium", "unknown"]).nullable(),
-    summary: z.string().nullable(),
+    risk: z.enum(["high", "low", "medium", "unknown"]),
+    summary: z.string(),
     arguments: z.record(z.string(), jsonValueSchema),
+    details: actionDetailsSchema,
+    affectedPaths: z.array(
+      z
+        .object({
+          path: z.string(),
+          effect: z.enum(["created", "modified", "deleted", "unknown"]),
+          provenance: z.literal("file-editor-action"),
+        })
+        .strict(),
+    ),
+    state: z.enum([
+      "proposed",
+      "awaiting-review",
+      "approved",
+      "rejected",
+      "running",
+      "succeeded",
+      "failed",
+      "outcome-unknown",
+    ]),
+    decision: z.enum(["approved", "rejected"]).nullable(),
+    outcome: z
+      .object({
+        exitCode: z.number().int(),
+        summary: z.string(),
+        result: z.string().nullable(),
+        resultTruncated: z.boolean(),
+      })
+      .strict()
+      .nullable(),
+    proposedSequence: z.number().int().nonnegative(),
+    updatedSequence: z.number().int().nonnegative(),
   })
   .strict();
 
 const approvalGroupSchema = z
   .object({
     groupId: z.string(),
-    actions: z.array(approvalActionSchema),
+    actions: z.array(actionRecordSchema),
     decision: z.enum(["approved", "denied"]).nullable(),
     decisionScope: z.literal("all"),
   })
@@ -177,10 +248,12 @@ export const sessionProjectionSchema: z.ZodType<SessionProjection> = z
     sessionId: z.string(),
     eventCount: z.number().int().nonnegative(),
     revision: z.number().int().min(-1),
+    workspaceRevision: z.number().int().min(-1),
     streamEpoch: z.string(),
     streamRevision: z.number().int().nonnegative(),
     activity: z.array(activitySchema),
     conversation: z.array(messageSchema),
+    actions: z.array(actionRecordSchema),
     pendingApproval: approvalGroupSchema.nullable(),
     context: modelContextSchema,
     lifecycle: lifecycleSchema,

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from heartwood.core_adapter import DeterministicAgentBackend
+from heartwood.core_adapter import DeterministicAgentBackend, ProposedToolCall
 from heartwood.core_adapter._state import _write_private_json_atomic
 
 
@@ -87,3 +87,47 @@ def test_deterministic_state_uses_shared_private_atomic_writer(
     assert writes[0][0] == state_path
     assert writes[0][1]["tool_name"] == "heartwood.synthetic.noop"
     assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+
+
+def test_deterministic_restart_preserves_typed_pending_action_evidence(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "session" / "deterministic.json"
+    _write_private_json_atomic(
+        state_path,
+        {
+            "tool_call_id": "call-1",
+            "action_id": "action-1",
+            "tool_name": "file_editor",
+            "risk": "medium",
+            "summary": "Create the synthetic result",
+            "arguments": {
+                "command": "create",
+                "path": "/project/results/summary.txt",
+            },
+            "kind": "file-editor",
+            "affected_paths": ["results/summary.txt"],
+            "project_path": "results/summary.txt",
+        },
+    )
+
+    restored = DeterministicAgentBackend(persistence_path=state_path)
+    pending = restored.pending_action_group(session_id="session-1")
+
+    assert pending is not None
+    assert pending.actions == (
+        ProposedToolCall(
+            tool_call_id="call-1",
+            action_id="action-1",
+            tool_name="file_editor",
+            risk="medium",
+            summary="Create the synthetic result",
+            arguments={
+                "command": "create",
+                "path": "/project/results/summary.txt",
+            },
+            kind="file-editor",
+            affected_paths=("results/summary.txt",),
+            project_path="results/summary.txt",
+        ),
+    )

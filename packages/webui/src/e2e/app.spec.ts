@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+import AccessibilityScanner from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import {
   emptyProjection,
@@ -58,6 +59,7 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByText("Workstation or container", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
+  await expectNoAccessibilityViolations(page);
 
   const approval = page.getByRole("region", {
     name: "One Decision for This Action Set",
@@ -200,7 +202,33 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await expect(
     page.getByRole("radio", { name: /Review Every Action/u }),
   ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  const conversationTab = page.getByRole("tab", { name: "Conversation" });
+  await conversationTab.focus();
+  await conversationTab.press("ArrowRight");
+  const files = page.getByRole("region", { name: "Project files" });
+  await expect(files).toBeVisible();
+  const fileEntry = files.getByRole("button", { name: "analysis.py" });
+  await fileEntry.focus();
+  await fileEntry.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Read-only file: analysis.py" }),
+  ).toContainText("cohort_size = 42");
+  const filesTab = page.getByRole("tab", { name: "Files" });
+  await filesTab.focus();
+  await filesTab.press("ArrowRight");
+  const changes = page.getByRole("region", { name: "Project changes" });
+  await expect(changes).toBeVisible();
+  const changeEntry = changes.getByRole("button", {
+    name: "analysis.py, Modified",
+  });
+  await changeEntry.focus();
+  await changeEntry.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Read-only change: analysis.py" }),
+  ).toContainText("cohort_size = 42");
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
+  await expectNoAccessibilityViolations(page);
 });
 
 test("confirms a new project before creating private state", async ({
@@ -227,6 +255,11 @@ test("confirms a new project before creating private state", async ({
     page.getByRole("heading", { name: "Main session" }),
   ).toBeVisible();
 });
+
+const expectNoAccessibilityViolations = async (page: Page): Promise<void> => {
+  const results = await new AccessibilityScanner({ page }).analyze();
+  expect(results.violations).toEqual([]);
+};
 
 const installGatewayRoutes = async (page: Page): Promise<void> => {
   let projectInitialized: boolean | null = null;
@@ -467,6 +500,82 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       });
       return;
     }
+    if (resource === "workspace") {
+      const workspaceResource = parts[sessionsIndex + 3];
+      const limits = {
+        max_change_entries: 200,
+        max_diff_bytes: 262_144,
+        max_file_bytes: 262_144,
+        max_file_lines: 4_000,
+        max_tree_depth: 8,
+        max_tree_entries: 1_000,
+      };
+      if (workspaceResource === "tree") {
+        await json(route, {
+          schema_version: "heartwood.workspace-tree.v1",
+          path: ".",
+          status: "available",
+          entries: [
+            {
+              path: "analysis.py",
+              name: "analysis.py",
+              kind: "file",
+              depth: 1,
+              size_bytes: 17,
+            },
+          ],
+          truncated: false,
+          limits,
+        });
+        return;
+      }
+      if (workspaceResource === "file") {
+        await json(route, {
+          schema_version: "heartwood.workspace-file.v1",
+          path: "analysis.py",
+          status: "available",
+          content: "cohort_size = 42\n",
+          size_bytes: 17,
+          bytes_read: 17,
+          line_count: 1,
+          truncated: false,
+          message: null,
+        });
+        return;
+      }
+      if (workspaceResource === "changes") {
+        await json(route, {
+          schema_version: "heartwood.workspace-changes.v1",
+          status: "available",
+          source: "git",
+          changes: [
+            {
+              path: "analysis.py",
+              status: "modified",
+              source: "git",
+              action_ids: [],
+            },
+          ],
+          truncated: false,
+          message: null,
+          limits,
+        });
+        return;
+      }
+      if (workspaceResource === "diff") {
+        await json(route, {
+          schema_version: "heartwood.workspace-diff.v1",
+          path: "analysis.py",
+          status: "available",
+          source: "git",
+          original: "cohort_size = 20\n",
+          modified: "cohort_size = 42\n",
+          truncated: false,
+          message: null,
+        });
+        return;
+      }
+    }
     if (resource === "commands") {
       const payload = request.postDataJSON() as {
         command_id?: string;
@@ -499,6 +608,13 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
             canResume: false,
             canSteer: true,
           },
+          actions: sessionProjection.actions.map((action) => ({
+            ...action,
+            state: "approved" as const,
+            decision: "approved" as const,
+            updatedSequence:
+              sessionEvents.at(-1)?.sequence ?? action.updatedSequence,
+          })),
           availableCommands: ["chat"],
         };
       } else if (

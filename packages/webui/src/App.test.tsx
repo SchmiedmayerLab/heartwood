@@ -19,6 +19,7 @@ import { App } from "./App";
 import type { HeartwoodClient, SessionProjectionResponse } from "./client";
 import {
   emptyProjection,
+  syntheticAction,
   syntheticEvents,
   syntheticProjection,
 } from "./test/fixtures";
@@ -53,6 +54,10 @@ import type {
   SkillSummary,
   StartupPlan,
   SubscriptionDeviceLogin,
+  WorkspaceChanges,
+  WorkspaceDiff,
+  WorkspaceFile,
+  WorkspaceTree,
 } from "./types";
 
 const settings = (): ModelSettings => ({
@@ -177,6 +182,15 @@ const actions = (): ActionSettings => ({
       unavailable_reason: null,
     },
   ],
+});
+
+const workspaceLimits = () => ({
+  max_tree_entries: 2_000,
+  max_tree_depth: 8,
+  max_file_bytes: 512 * 1_024,
+  max_file_lines: 10_000,
+  max_change_entries: 500,
+  max_diff_bytes: 1_024 * 1_024,
 });
 
 const localModelChoice = (
@@ -324,6 +338,71 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({
       filename: `${sessionId}-audit.jsonl`,
       content: '{"kind":"audit.export.recorded"}\n',
+    });
+  }
+
+  getWorkspaceTree(): Promise<WorkspaceTree> {
+    return Promise.resolve({
+      schema_version: "heartwood.workspace-tree.v1",
+      path: ".",
+      status: "available",
+      entries: [
+        {
+          path: "analysis.py",
+          name: "analysis.py",
+          kind: "file",
+          depth: 1,
+          size_bytes: 31,
+        },
+      ],
+      truncated: false,
+      limits: workspaceLimits(),
+    });
+  }
+
+  getWorkspaceFile(_sessionId: string, path: string): Promise<WorkspaceFile> {
+    return Promise.resolve({
+      schema_version: "heartwood.workspace-file.v1",
+      path,
+      status: "available",
+      content: 'print("synthetic analysis")\n',
+      size_bytes: 28,
+      bytes_read: 28,
+      line_count: 1,
+      truncated: false,
+      message: null,
+    });
+  }
+
+  getWorkspaceChanges(): Promise<WorkspaceChanges> {
+    return Promise.resolve({
+      schema_version: "heartwood.workspace-changes.v1",
+      status: "available",
+      source: "git",
+      changes: [
+        {
+          path: "analysis.py",
+          status: "modified",
+          source: "git",
+          action_ids: [],
+        },
+      ],
+      truncated: false,
+      message: null,
+      limits: workspaceLimits(),
+    });
+  }
+
+  getWorkspaceDiff(_sessionId: string, path: string): Promise<WorkspaceDiff> {
+    return Promise.resolve({
+      schema_version: "heartwood.workspace-diff.v1",
+      path,
+      status: "available",
+      source: "git",
+      original: 'print("before")\n',
+      modified: 'print("synthetic analysis")\n',
+      truncated: false,
+      message: null,
     });
   }
 
@@ -1034,6 +1113,129 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Synthetic analysis" }),
     ).toBeInTheDocument();
+  });
+
+  it("inspects project files and changes through the shared workspace service", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Files" }), {
+      button: 0,
+    });
+    const files = await screen.findByRole("region", { name: "Project files" });
+    fireEvent.click(within(files).getByRole("button", { name: "analysis.py" }));
+    const file = await screen.findByRole("region", {
+      name: "Read-only file: analysis.py",
+    });
+    await waitFor(() =>
+      expect(file).toHaveTextContent('print("synthetic analysis")'),
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Changes" }), {
+      button: 0,
+    });
+    const changes = await screen.findByRole("region", {
+      name: "Project changes",
+    });
+    fireEvent.click(
+      within(changes).getByRole("button", {
+        name: "analysis.py, Modified",
+      }),
+    );
+    expect(
+      await screen.findByRole("region", {
+        name: "Read-only change: analysis.py",
+      }),
+    ).toBeVisible();
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Files" }), {
+      button: 0,
+    });
+    expect(
+      await screen.findByRole("region", {
+        name: "Read-only file: analysis.py",
+      }),
+    ).toBeVisible();
+  });
+
+  it("presents correlated action outcomes and bounded-output state", async () => {
+    const client = new FakeClient();
+    const action = syntheticAction({
+      toolName: "file_editor",
+      state: "failed",
+      decision: "approved",
+      arguments: {
+        command: "create",
+        path: "/project/results/cohort-summary.json",
+        file_text: "{}\n",
+      },
+      details: {
+        kind: "file-editor",
+        operation: "create",
+        path: "results/cohort-summary.json",
+      },
+      affectedPaths: [
+        {
+          path: "results/cohort-summary.json",
+          effect: "created",
+          provenance: "file-editor-action",
+        },
+      ],
+      outcome: {
+        exitCode: 1,
+        summary: "terminal failed",
+        result: "synthetic failure\n",
+        resultTruncated: true,
+      },
+    });
+    client.projections.set(
+      "session-test",
+      syntheticProjection({
+        actions: [action],
+        pendingApproval: null,
+        lifecycle: {
+          status: "idle",
+          canPause: false,
+          canResume: false,
+          canSteer: true,
+        },
+        availableCommands: ["chat"],
+      }),
+    );
+
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const history = await screen.findByRole("region", {
+      name: "Agent actions",
+    });
+    expect(
+      within(history).getByText("create results/cohort-summary.json"),
+    ).toBeInTheDocument();
+    expect(within(history).getByText("Failed")).toBeInTheDocument();
+    expect(
+      within(history).getByText("Exit 1 · terminal failed"),
+    ).toBeInTheDocument();
+    expect(
+      within(history).getByText(
+        "created: results/cohort-summary.json (file-editor-action)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(history).getByText(
+        "Action set action-set-session-test · approved",
+      ),
+    ).toBeInTheDocument();
+    expect(within(history).getByText("Exact arguments")).toBeInTheDocument();
+    expect(
+      within(history).getByText("Action output (truncated)"),
+    ).toBeInTheDocument();
+    expect(within(history).getByText("synthetic failure")).toBeInTheDocument();
   });
 
   it("ignores a delayed command response after selecting another session", async () => {
@@ -2623,33 +2825,40 @@ class PendingClient extends FakeClient {
 class BatchPendingClient extends PendingClient {
   override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
     this.replayCalls += 1;
+    const actionSet = [
+      syntheticAction(),
+      syntheticAction({
+        toolCallId: "session-test-toolcall-1",
+        actionId: "session-test-action-1",
+        toolName: "file_editor",
+        risk: "unknown",
+        summary: "Write the aggregate cohort summary",
+        arguments: {
+          command: "create",
+          path: "/project/cohort-summary.md",
+        },
+        details: {
+          kind: "file-editor",
+          operation: "create",
+          path: "cohort-summary.md",
+        },
+        affectedPaths: [
+          {
+            path: "cohort-summary.md",
+            effect: "created",
+            provenance: "file-editor-action",
+          },
+        ],
+      }),
+    ];
     const projection = syntheticProjection({
       sessionId,
       eventCount: 7,
       revision: 6,
+      actions: actionSet,
       pendingApproval: {
         groupId: "action-set-session-test",
-        actions: [
-          {
-            targetId: "session-test-toolcall-0",
-            toolName: "terminal",
-            risk: "low",
-            summary: "build the aggregate synthetic target-condition cohort",
-            arguments: {
-              command: "python run.py --output /project/cohort-summary.json",
-            },
-          },
-          {
-            targetId: "session-test-toolcall-1",
-            toolName: "file_editor",
-            risk: "unknown",
-            summary: "Write the aggregate cohort summary",
-            arguments: {
-              command: "create",
-              path: "/project/cohort-summary.md",
-            },
-          },
-        ],
+        actions: actionSet,
         decision: null,
         decisionScope: "all",
       },

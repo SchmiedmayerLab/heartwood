@@ -50,7 +50,12 @@ const failurePrompt =
 const processes = [];
 const logs = [];
 const runtimeEnvironment = Object.assign({}, process.env, {
-  HEARTWOOD_MODEL_REQUEST_LOG: path.join(stateRoot, "model-requests.jsonl"),
+  HEARTWOOD_MODEL_REQUEST_LOG: path.join(
+    stateRoot,
+    ".heartwood",
+    "runtime",
+    "reference-model-requests.jsonl",
+  ),
   HEARTWOOD_RUNTIME_ROOT: repoRoot,
   HEARTWOOD_TOOL_PYTHON: "python",
   LITELLM_LOCAL_MODEL_COST_MAP: "True",
@@ -85,6 +90,7 @@ async function main() {
         path.join(inputRoot, filename),
       );
     }
+    initializeGitProject();
     startProcess(pythonExecutable, [
       path.join(repoRoot, "images/generic/scripts/local_model_stub.py"),
       "--host",
@@ -165,6 +171,7 @@ async function main() {
       summary: "build the aggregate synthetic target-condition cohort",
     });
     await captureReferenceScreenshots(page);
+    await inspectProjectEvidence(page);
     await runApprovedTask(page, task, {
       finalMessage: "The training-only age baseline is ready for review.",
       prompt: baselinePrompt,
@@ -276,10 +283,30 @@ async function main() {
 
     terminateProcessGroup(gateway);
     await waitForExit(gateway);
+    const inspectedFile = runCli("files", "show", "cohort-summary.json");
+    if (!inspectedFile.includes('"participant_count": 20')) {
+      throw new Error(
+        `CLI did not inspect the browser-created project file:\n${inspectedFile}`,
+      );
+    }
+    const inspectedDiff = runCli(
+      "--session-id",
+      sessionId,
+      "changes",
+      "cohort-summary.json",
+    );
+    if (
+      !inspectedDiff.includes("Change · cohort-summary.json") ||
+      !inspectedDiff.includes('"participant_count": 20')
+    ) {
+      throw new Error(
+        `CLI did not inspect the browser-created project diff:\n${inspectedDiff}`,
+      );
+    }
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/Tool: Ran Terminal Command/gu)?.length !== 5 ||
+      replay.match(/\[succeeded\] \$/gu)?.length !== 5 ||
       replay.match(/terminal completed/gu)?.length !== 4 ||
       replay.match(/terminal failed/gu)?.length !== 1 ||
       !replay.includes(
@@ -381,6 +408,42 @@ async function captureReferenceScreenshots(page) {
   );
 }
 
+async function inspectProjectEvidence(page) {
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  const files = page.getByRole("region", { name: "Project files" });
+  await expect(files).toBeVisible();
+  await files
+    .getByRole("button", { name: "cohort-summary.json", exact: true })
+    .click();
+  await expect(
+    page.getByRole("region", {
+      name: "Read-only file: cohort-summary.json",
+    }),
+  ).toContainText('"target_condition_concept_id": 201826');
+  await captureDesktopScreenshot(page, "browser-files.png", "project files");
+
+  await page.getByRole("tab", { name: "Changes", exact: true }).click();
+  const changes = page.getByRole("region", { name: "Project changes" });
+  await expect(changes).toBeVisible();
+  await changes
+    .getByRole("button", {
+      name: "cohort-summary.json, Added",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("region", {
+      name: "Read-only change: cohort-summary.json",
+    }),
+  ).toContainText('"target_condition_concept_id": 201826');
+  await captureDesktopScreenshot(
+    page,
+    "browser-changes.png",
+    "project changes",
+  );
+  await page.getByRole("tab", { name: "Conversation", exact: true }).click();
+}
+
 async function captureDesktopScreenshot(page, filename, stateName) {
   if (screenshotDirectory === null) return;
   fs.mkdirSync(screenshotDirectory, { recursive: true });
@@ -415,6 +478,28 @@ function readJsonArtifact(root, filename) {
     throw new Error(`reference artifact is missing at ${artifact}`);
   }
   return JSON.parse(fs.readFileSync(artifact, "utf8"));
+}
+
+function initializeGitProject() {
+  fs.writeFileSync(path.join(stateRoot, ".gitignore"), ".heartwood/\n", "utf8");
+  runGit("init");
+  runGit("config", "user.email", "heartwood@example.invalid");
+  runGit("config", "user.name", "Heartwood Test");
+  runGit("add", ".gitignore", "input");
+  runGit("-c", "commit.gpgsign=false", "commit", "-m", "Synthetic inputs");
+}
+
+function runGit(...args) {
+  const result = spawnSync("git", args, {
+    cwd: stateRoot,
+    encoding: "utf8",
+    env: runtimeEnvironment,
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`,
+    );
+  }
 }
 
 function startProcess(command, args) {

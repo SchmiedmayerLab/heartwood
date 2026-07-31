@@ -45,13 +45,25 @@ Incremental token text is transient and is never appended to the session or audi
 ### Interface Projections
 
 The gateway reduces durable events and current transient text into one session projection.
-That projection contains the conversation, lifecycle, complete pending action set, task plan, total and per-purpose model usage, specialist lineage, activity, and available commands.
+That projection contains the conversation, versioned correlated action records, lifecycle, complete pending action set, task plan, total and per-purpose model usage, specialist lineage, activity, and available commands.
 The gateway enforces those available commands before dispatch, so terminal, browser, and notebook clients share the same lifecycle rules.
 REST and streaming transports return events and that projection from one serialized snapshot; a transient revision orders token-only updates between durable events.
 The terminal, browser, and notebook bridge render the projection without maintaining their own event reducers.
 
 The gateway also owns researcher-facing setup choices, model-connection categories, readiness diagnostics, and action settings.
 Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
+
+### Workspace Inspection
+
+The gateway owns one bounded read-only workspace service for project trees, UTF-8 text files, changed paths, and per-file diffs.
+It accepts normalized project-relative paths, excludes `.heartwood/` and `.git/` at every depth, does not follow symbolic links, and rejects special files.
+Every operation applies fixed count, depth, line, and byte bounds.
+Tree and changed-path responses publish the active limits, and all responses report unavailable, binary, truncated, non-Git, or unsupported state when applicable.
+
+For Git projects, the service delegates changed-file and diff inspection to the pinned OpenHands `LocalWorkspace` API.
+For non-Git projects, it projects only successful paths attributed to typed OpenHands file-editor actions in the selected session.
+Terminal command text is never parsed into file evidence.
+The terminal, REST API, browser, and notebook bridge adapt this service without maintaining separate workspace roots or change stores.
 
 ### OpenHands Adapter
 

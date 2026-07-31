@@ -16,6 +16,7 @@ from heartwood.gateway import (
     DEFAULT_SESSION_ID,
     ModelProfile,
     ProjectContext,
+    ProjectionActionRecord,
     ProjectionActivity,
     ProjectionApprovalGroup,
     ProjectionLifecycleState,
@@ -41,6 +42,10 @@ from heartwood.schemas import (
     PlatformCapabilitiesResponse,
     ProjectReadinessResponse,
     StartupPlanResponse,
+    WorkspaceChangesResponse,
+    WorkspaceDiffResponse,
+    WorkspaceFileResponse,
+    WorkspaceTreeResponse,
 )
 from heartwood.session import CommandKind, JsonValue, SessionCommand, new_command_id
 
@@ -75,6 +80,11 @@ class NotebookViewModel:
     def conversation(self) -> tuple[ProjectionMessage, ...]:
         """Return the shared conversation and trace presentation."""
         return self.projection.conversation
+
+    @property
+    def actions(self) -> tuple[ProjectionActionRecord, ...]:
+        """Return correlated OpenHands actions and their current outcomes."""
+        return self.projection.actions
 
     @property
     def pending_approval(self) -> ProjectionApprovalGroup | None:
@@ -299,6 +309,27 @@ class NotebookSession:
     def browser_url(self, *, port: int = 8767) -> str | None:
         """Return the supported browser URL, or ``None`` on terminal-only platforms."""
         return self.gateway.startup_plan(interface="web", port=port)["access_url"]
+
+    def files(
+        self,
+        path: str = ".",
+        *,
+        depth: int | None = None,
+    ) -> WorkspaceTreeResponse:
+        """Return the same bounded project tree used by terminal and browser clients."""
+        return self.gateway.workspace_tree(path=path, depth=depth)
+
+    def file(self, path: str) -> WorkspaceFileResponse:
+        """Return one bounded read-only project file."""
+        return self.gateway.workspace_file(path=path)
+
+    def changes(self) -> WorkspaceChangesResponse:
+        """Return Git or structured session-derived project changes."""
+        return self.gateway.workspace_changes(session_id=self.session_id)
+
+    def diff(self, path: str) -> WorkspaceDiffResponse:
+        """Return one bounded project diff."""
+        return self.gateway.workspace_diff(session_id=self.session_id, path=path)
 
     def close(self) -> None:
         """Release active conversations and process-scoped credentials."""

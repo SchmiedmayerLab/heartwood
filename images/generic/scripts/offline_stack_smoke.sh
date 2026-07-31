@@ -40,6 +40,12 @@ mkdir -p "${project}/input"
 cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv \
   "${project}/input/"
 cd "${project}"
+printf '.heartwood/\n' > .gitignore
+git init >/dev/null
+git config user.email heartwood@example.invalid
+git config user.name "Heartwood Test"
+git add .gitignore input
+git -c commit.gpgsign=false commit -m "Synthetic inputs" >/dev/null
 
 HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback \
   bash "${runtime_root}/images/generic/scripts/start_local_runtime.sh" &
@@ -93,6 +99,11 @@ heartwood --session-id "${risky_session_id}" reject \
   | tee -a "${risky_transcript}" | tee -a "${transcript}"
 heartwood --session-id "${session_id}" audit export \
   --output "${audit_copy}" | tee -a "${transcript}"
+heartwood files list | tee -a "${transcript}"
+heartwood files show cohort-summary.json | tee -a "${transcript}"
+heartwood --session-id "${session_id}" changes | tee -a "${transcript}"
+heartwood --session-id "${session_id}" changes cohort-summary.json \
+  | tee -a "${transcript}"
 
 "${heartwood_python}" - <<'PY'
 import os
@@ -116,10 +127,15 @@ grep -q "build the aggregate synthetic target-condition cohort" "${transcript}"
 grep -q "as one OpenHands action set" "${transcript}"
 grep -q "Allow the complete set once: /allow" "${transcript}"
 grep -q "Action set approved" "${transcript}"
-grep -q "Tool: Ran Terminal Command" "${transcript}"
+grep -Fq '[succeeded] $' "${transcript}"
 grep -q "Action set rejected" "${transcript}"
 grep -q "Agent: The synthetic target-condition cohort summary is ready for review." "${transcript}"
-grep -q "Tool: Ran Terminal Command" "${automatic_transcript}"
+grep -q "Project files · ." "${transcript}"
+grep -q "File · cohort-summary.json · available" "${transcript}"
+grep -q "Project changes · Git" "${transcript}"
+grep -q "A  cohort-summary.json" "${transcript}"
+grep -q "Change · cohort-summary.json · available" "${transcript}"
+grep -Fq '[succeeded] $' "${automatic_transcript}"
 if grep -q "as one OpenHands action set" "${automatic_transcript}"; then
   echo "low-risk action unexpectedly required confirmation" >&2
   exit 1

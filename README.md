@@ -22,7 +22,7 @@ Heartwood reuses OpenHands for the agent loop and coding tools, then adds projec
 ## What Heartwood Provides
 
 - A conversation-first coding workflow for the current project directory.
-- Full-screen and plain terminal interfaces, a browser interface, and a notebook bridge.
+- Full-screen and plain terminal interfaces, a browser interface, and a notebook bridge with shared read-only file and change inspection.
 - Research-environment, ChatGPT sign-in, hosted API, compatible-service, and Heartwood-managed model connections through one setup flow.
 - Recommended Heartwood-managed models plus best-effort support for arbitrary public Hugging Face repositories and reviewed offline imports.
 - Clear review of complete OpenHands action sets before execution.

@@ -134,6 +134,7 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     SubscriptionProvider,
 )
+from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import (
     ActionSettingsResponse,
@@ -155,6 +156,10 @@ from heartwood.schemas import (
     SkillSummaryResponse,
     StartupPlanResponse,
     SubscriptionDeviceLoginResponse,
+    WorkspaceChangesResponse,
+    WorkspaceDiffResponse,
+    WorkspaceFileResponse,
+    WorkspaceTreeResponse,
     api_response,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
@@ -354,6 +359,7 @@ class SessionGateway:
         model_repository: HuggingFaceModelRepository | None = None,
         credential_store: CredentialStore | None = None,
         subscription_provider: SubscriptionProvider | None = None,
+        workspace_inspector: WorkspaceInspector | None = None,
         backend_id: str = "auto",
     ) -> None:
         self.project = ProjectContext.current() if project is None else project
@@ -391,6 +397,7 @@ class SessionGateway:
             use_system_keyring=env is None,
         )
         self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
+        self.workspace_inspector = workspace_inspector or WorkspaceInspector(self.project)
         self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
         repository_root = _repository_root()
         catalog_path = (
@@ -488,10 +495,28 @@ class SessionGateway:
                 self.session_catalog.ensure(command.session_id)
             command_kind = str(command.kind)
             storage_only = command_kind == CommandKind.AUDIT_EXPORT.value
+            fatal_unavailable_reason: str | None = None
+            if not storage_only and command_kind in _PROJECTED_COMMANDS:
+                persisted = FileSessionStore(
+                    self.sessions_root,
+                    command.session_id,
+                ).replay_events()
+                persisted_projection = project_session(
+                    persisted,
+                    session_id=command.session_id,
+                )
+                if (
+                    persisted_projection.lifecycle.status == SessionLifecycle.ERROR
+                    and not persisted_projection.lifecycle.can_steer
+                ):
+                    fatal_unavailable_reason = (
+                        f"{command_kind} is unavailable while the agent is "
+                        f"{persisted_projection.lifecycle.status}"
+                    )
             close_service = False
-            if storage_only:
+            if storage_only or fatal_unavailable_reason is not None:
                 service = self._services.get(command.session_id)
-                if service is None:
+                if service is None or fatal_unavailable_reason is not None:
                     service = self._storage_service(command.session_id)
                     close_service = True
             else:
@@ -499,7 +524,7 @@ class SessionGateway:
             try:
                 all_events = (
                     service.replay_events()
-                    if storage_only
+                    if storage_only or fatal_unavailable_reason is not None
                     else self._reconciled_session_events(
                         session_id=command.session_id,
                         service=service,
@@ -510,7 +535,7 @@ class SessionGateway:
                         session_id=command.session_id,
                         all_events=all_events,
                     ).projection
-                    unavailable_reason = (
+                    unavailable_reason = fatal_unavailable_reason or (
                         None
                         if command_kind not in _PROJECTED_COMMANDS
                         or command_kind in projection.available_commands
@@ -600,6 +625,34 @@ class SessionGateway:
                 "content": content,
             },
         )
+
+    def workspace_tree(
+        self,
+        *,
+        path: str = ".",
+        depth: int | None = None,
+    ) -> WorkspaceTreeResponse:
+        """Return the bounded project tree shared by every interface."""
+        return self.workspace_inspector.tree(path, depth=depth)
+
+    def workspace_file(self, *, path: str) -> WorkspaceFileResponse:
+        """Return one bounded read-only project file."""
+        return self.workspace_inspector.file(path)
+
+    def workspace_changes(self, *, session_id: str) -> WorkspaceChangesResponse:
+        """Return Git or structured session-derived project changes."""
+        projection = self.session_projection(session_id=session_id)
+        return self.workspace_inspector.changes(projection)
+
+    def workspace_diff(
+        self,
+        *,
+        session_id: str,
+        path: str,
+    ) -> WorkspaceDiffResponse:
+        """Return one bounded project diff."""
+        projection = self.session_projection(session_id=session_id)
+        return self.workspace_inspector.diff(projection, path)
 
     @_serialized_state
     def replay_events(
@@ -1659,14 +1712,17 @@ class SessionGateway:
         """Resolve the service and reconcile durable state without holding the stream lock."""
         self.project.initialize()
         if service is None:
-            persisted_events = FileSessionStore(
+            store = FileSessionStore(
                 self.sessions_root,
                 session_id,
-            ).replay_events()
-            lifecycle = project_session(
+            )
+            persisted_events = store.replay_events()
+            persisted_projection = project_session(
                 persisted_events,
                 session_id=session_id,
-            ).lifecycle.status
+            )
+            lifecycle = persisted_projection.lifecycle.status
+            unresolved_command_ids = store.unresolved_command_ids()
             if (
                 lifecycle
                 not in {
@@ -1674,14 +1730,30 @@ class SessionGateway:
                     SessionLifecycle.PAUSED,
                     SessionLifecycle.WAITING_FOR_CONFIRMATION,
                 }
+                and not unresolved_command_ids
                 and session_id not in self._services
             ):
                 return persisted_events
-            active_service = self._service(session_id)
+            close_service = False
+            if (
+                lifecycle == SessionLifecycle.ERROR
+                and not persisted_projection.lifecycle.can_steer
+                and unresolved_command_ids
+                and session_id not in self._services
+            ):
+                active_service = self._storage_service(session_id)
+                close_service = True
+            else:
+                active_service = self._service(session_id)
         else:
             active_service = service
-        active_service.reconcile()
-        return active_service.replay_events()
+            close_service = False
+        try:
+            active_service.reconcile()
+            return active_service.replay_events()
+        finally:
+            if close_service:
+                active_service.close()
 
     def _snapshot_from_events_locked(
         self,

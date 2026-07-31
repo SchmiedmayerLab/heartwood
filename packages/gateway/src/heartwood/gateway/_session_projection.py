@@ -8,14 +8,13 @@
 
 from __future__ import annotations
 
-import json
 from enum import StrEnum
-from typing import ClassVar, Literal, cast
+from typing import Annotated, ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from heartwood.core_adapter import BackendErrorCode
-from heartwood.gateway._action_presentation import action_tool_label
+from heartwood.core_adapter import backend_error_is_fatal
+from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
 
@@ -57,21 +56,103 @@ class ProjectionMessage(_ProjectionRecord):
     technical_detail: str | None = Field(default=None, serialization_alias="technicalDetail")
 
 
-class ProjectionApprovalAction(_ProjectionRecord):
-    """One member of an atomic OpenHands action group."""
+class ProjectionTerminalActionDetails(_ProjectionRecord):
+    """Typed terminal arguments from one OpenHands action."""
 
-    target_id: str = Field(serialization_alias="targetId")
+    kind: Literal["terminal"] = "terminal"
+    command: str
+    is_input: bool = Field(default=False, serialization_alias="isInput")
+    timeout: float | None = None
+    reset: bool = False
+
+
+class ProjectionFileEditorActionDetails(_ProjectionRecord):
+    """Typed file-editor arguments from one OpenHands action."""
+
+    kind: Literal["file-editor"] = "file-editor"
+    operation: Literal["view", "create", "str_replace", "insert", "undo_edit", "unknown"]
+    path: str | None = None
+
+
+class ProjectionTaskActionDetails(_ProjectionRecord):
+    """Typed sequential-specialist arguments from one OpenHands action."""
+
+    kind: Literal["task"] = "task"
+    description: str | None = None
+    prompt: str | None = None
+    subagent_type: str | None = Field(default=None, serialization_alias="subagentType")
+    resume: str | None = None
+
+
+class ProjectionOtherActionDetails(_ProjectionRecord):
+    """Typed fallback for an OpenHands tool without a specialized renderer."""
+
+    kind: Literal["other"] = "other"
+
+
+type ProjectionActionDetails = Annotated[
+    ProjectionTerminalActionDetails
+    | ProjectionFileEditorActionDetails
+    | ProjectionTaskActionDetails
+    | ProjectionOtherActionDetails,
+    Field(discriminator="kind"),
+]
+
+
+class ProjectionAffectedPath(_ProjectionRecord):
+    """Project-relative path attributed to a typed mutating action."""
+
+    path: str
+    effect: Literal["created", "modified", "deleted", "unknown"]
+    provenance: Literal["file-editor-action"] = "file-editor-action"
+
+
+class ProjectionActionOutcome(_ProjectionRecord):
+    """Bounded private result of an executed action."""
+
+    exit_code: int = Field(serialization_alias="exitCode")
+    summary: str
+    result: str | None = None
+    result_truncated: bool = Field(default=False, serialization_alias="resultTruncated")
+
+
+class ProjectionActionRecord(_ProjectionRecord):
+    """One versioned action record correlated across the OpenHands lifecycle."""
+
+    schema_version: Literal["heartwood.action-record.v1"] = "heartwood.action-record.v1"
+    tool_call_id: str = Field(serialization_alias="toolCallId")
+    action_id: str | None = Field(default=None, serialization_alias="actionId")
+    group_id: str | None = Field(default=None, serialization_alias="groupId")
     tool_name: str = Field(serialization_alias="toolName")
-    risk: Literal["high", "low", "medium", "unknown"] | None = None
-    summary: str | None = None
+    risk: Literal["high", "low", "medium", "unknown"]
+    summary: str
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
+    details: ProjectionActionDetails
+    affected_paths: tuple[ProjectionAffectedPath, ...] = Field(
+        default=(),
+        serialization_alias="affectedPaths",
+    )
+    state: Literal[
+        "proposed",
+        "awaiting-review",
+        "approved",
+        "rejected",
+        "running",
+        "succeeded",
+        "failed",
+        "outcome-unknown",
+    ]
+    decision: Literal["approved", "rejected"] | None = None
+    outcome: ProjectionActionOutcome | None = None
+    proposed_sequence: int = Field(serialization_alias="proposedSequence")
+    updated_sequence: int = Field(serialization_alias="updatedSequence")
 
 
 class ProjectionApprovalGroup(_ProjectionRecord):
     """One decision that applies to every listed OpenHands action."""
 
     group_id: str = Field(serialization_alias="groupId")
-    actions: tuple[ProjectionApprovalAction, ...]
+    actions: tuple[ProjectionActionRecord, ...]
     decision: Literal["approved", "denied"] | None = None
     decision_scope: Literal["all"] = Field(
         default="all",
@@ -136,10 +217,16 @@ class SessionProjection(_ProjectionRecord):
     session_id: str = Field(serialization_alias="sessionId")
     event_count: int = Field(ge=0, serialization_alias="eventCount")
     revision: int = Field(ge=-1)
+    workspace_revision: int = Field(
+        default=-1,
+        ge=-1,
+        serialization_alias="workspaceRevision",
+    )
     stream_epoch: str = Field(default="standalone", serialization_alias="streamEpoch")
     stream_revision: int = Field(default=0, ge=0, serialization_alias="streamRevision")
     activity: tuple[ProjectionActivity, ...] = ()
     conversation: tuple[ProjectionMessage, ...] = ()
+    actions: tuple[ProjectionActionRecord, ...] = ()
     pending_approval: ProjectionApprovalGroup | None = Field(
         default=None,
         serialization_alias="pendingApproval",
@@ -184,10 +271,18 @@ def project_session(
     """Reduce durable session events once at the gateway boundary."""
     activity: list[ProjectionActivity] = []
     conversation: list[ProjectionMessage] = []
-    approval_groups: dict[str, ProjectionApprovalGroup] = {}
+    actions: dict[str, ProjectionActionRecord] = {}
+    approval_group_actions: dict[str, list[str]] = {}
+    approval_group_decisions: dict[str, Literal["approved", "denied"] | None] = {}
+    approval_group_resolutions: dict[
+        str,
+        dict[str, Literal["approved", "denied"]],
+    ] = {}
+    integrity_failed_action_ids: set[str] = set()
     reported_resolutions: set[str] = set()
     context = ProjectionModelContext()
     lifecycle_status = SessionLifecycle.IDLE
+    lifecycle_sequence = -1
     lifecycle_error_recoverable = True
     command_outcome: ProjectionCommandOutcome | None = None
     tasks: tuple[ProjectionTask, ...] = ()
@@ -224,90 +319,242 @@ def project_session(
         elif kind == EventKind.TOOL_CALL_PROPOSED.value:
             tool_name = _string(event.payload.get("tool_name"))
             arguments = _mapping(event.payload.get("arguments"))
-            _append_message(
-                conversation,
-                event,
-                role="trace",
-                label="Trace",
-                content=f"Proposed {action_tool_label(tool_name)}",
-                detail=_string(event.payload.get("summary")) or None,
-                technical_detail=(
-                    json.dumps(arguments, indent=2, sort_keys=True) if arguments else None
-                ),
-            )
+            tool_call_id = _string(event.payload.get("tool_call_id"))
+            if tool_call_id:
+                if tool_call_id in actions:
+                    integrity_failed_action_ids.add(tool_call_id)
+                    _mark_projection_integrity_failure(
+                        actions,
+                        conversation,
+                        event,
+                        tool_call_ids=(tool_call_id,),
+                        detail="An action identity was proposed more than once.",
+                    )
+                    lifecycle_status = SessionLifecycle.ERROR
+                    lifecycle_sequence = event.sequence
+                    lifecycle_error_recoverable = False
+                    continue
+                actions[tool_call_id] = _action_record(
+                    event,
+                    payload=event.payload,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                )
         elif kind == EventKind.TOOL_EXECUTION_RECORDED.value:
             tool_name = _string(event.payload.get("tool_name"))
-            _append_message(
-                conversation,
-                event,
-                role="trace",
-                label="Tool",
-                content=f"Ran {action_tool_label(tool_name)}",
-                detail=(
+            tool_call_id = _string(event.payload.get("tool_call_id"))
+            action = actions.get(tool_call_id)
+            exit_code = _signed_integer(event.payload.get("exit_code"))
+            outcome = ProjectionActionOutcome(
+                exit_code=exit_code,
+                summary=(
                     _string(event.payload.get("summary"))
-                    or f"Exit {_string(event.payload.get('exit_code')) or 'unknown'}"
+                    or f"{tool_name} {'failed' if exit_code != 0 else 'completed'}"
                 ),
+                result=_string(event.payload.get("result")) or None,
+                result_truncated=event.payload.get("result_truncated") is True,
             )
+            if tool_call_id:
+                if action is not None and action.decision == "rejected":
+                    integrity_failed_action_ids.add(tool_call_id)
+                    _mark_projection_integrity_failure(
+                        actions,
+                        conversation,
+                        event,
+                        tool_call_ids=(tool_call_id,),
+                        detail="A rejected action has a recorded execution.",
+                    )
+                    lifecycle_status = SessionLifecycle.ERROR
+                    lifecycle_sequence = event.sequence
+                    lifecycle_error_recoverable = False
+                    continue
+                if action is None:
+                    action = _action_record(
+                        event,
+                        payload=event.payload,
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        arguments={},
+                    )
+                    actions[tool_call_id] = action
+                    integrity_failed_action_ids.add(tool_call_id)
+                    _mark_projection_integrity_failure(
+                        actions,
+                        conversation,
+                        event,
+                        tool_call_ids=(tool_call_id,),
+                        detail="An action execution has no matching proposal.",
+                    )
+                    lifecycle_status = SessionLifecycle.ERROR
+                    lifecycle_sequence = event.sequence
+                    lifecycle_error_recoverable = False
+                    continue
+                action_id = _string(event.payload.get("action_id")) or None
+                if (
+                    action.action_id != action_id
+                    or action.tool_name != tool_name
+                    or action.outcome is not None
+                ):
+                    integrity_failed_action_ids.add(tool_call_id)
+                    _mark_projection_integrity_failure(
+                        actions,
+                        conversation,
+                        event,
+                        tool_call_ids=(tool_call_id,),
+                        detail="An action execution conflicts with its stable identity.",
+                    )
+                    lifecycle_status = SessionLifecycle.ERROR
+                    lifecycle_sequence = event.sequence
+                    lifecycle_error_recoverable = False
+                    continue
+                actions[tool_call_id] = action.model_copy(
+                    update={
+                        "decision": action.decision or "approved",
+                        "state": "failed" if exit_code != 0 else "succeeded",
+                        "outcome": outcome,
+                        "updated_sequence": event.sequence,
+                    }
+                )
         elif kind == EventKind.CONFIRMATION_REQUESTED.value:
             request = _mapping(event.payload.get("request"))
             tool_call_id = _string(request.get("tool_call_id"))
             if tool_call_id:
                 group_id = _string(request.get("group_id")) or "pending-action-set"
-                action = ProjectionApprovalAction(
-                    target_id=tool_call_id,
-                    tool_name=_string(request.get("tool_name")),
-                    risk=_action_risk(request.get("risk")),
-                    summary=_string(request.get("summary")) or None,
+                existing_action = actions.get(tool_call_id)
+                request_action_id = _string(request.get("action_id")) or None
+                request_tool_name = _string(request.get("tool_name"))
+                if existing_action is not None and (
+                    (
+                        request_action_id is not None
+                        and existing_action.action_id is not None
+                        and request_action_id != existing_action.action_id
+                    )
+                    or request_tool_name != existing_action.tool_name
+                    or (
+                        existing_action.group_id is not None
+                        and existing_action.group_id != group_id
+                    )
+                ):
+                    integrity_failed_action_ids.add(tool_call_id)
+                    _mark_projection_integrity_failure(
+                        actions,
+                        conversation,
+                        event,
+                        tool_call_ids=(tool_call_id,),
+                        detail="An approval request conflicts with its stable action identity.",
+                    )
+                    lifecycle_status = SessionLifecycle.ERROR
+                    lifecycle_sequence = event.sequence
+                    lifecycle_error_recoverable = False
+                    continue
+                action = existing_action or _action_record(
+                    event,
+                    payload=request,
+                    tool_call_id=tool_call_id,
+                    tool_name=request_tool_name,
                     arguments=_mapping(request.get("arguments")),
                 )
-                current_group = approval_groups.get(group_id)
-                current_actions = () if current_group is None else current_group.actions
-                if not any(item.target_id == tool_call_id for item in current_actions):
-                    current_actions = (*current_actions, action)
-                approval_groups[group_id] = ProjectionApprovalGroup(
-                    group_id=group_id,
-                    actions=current_actions,
+                actions[tool_call_id] = action.model_copy(
+                    update={
+                        "group_id": group_id,
+                        "state": "awaiting-review",
+                        "updated_sequence": event.sequence,
+                    }
                 )
+                group_actions = approval_group_actions.setdefault(group_id, [])
+                if tool_call_id not in group_actions:
+                    group_actions.append(tool_call_id)
+                approval_group_decisions[group_id] = None
                 lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
+        elif kind == EventKind.APPROVAL_RECORDED.value:
+            group_id = _string(event.payload.get("group_id"))
+            decision = _approval_decision(event.payload.get("decision"))
+            tool_call_ids = tuple(
+                item
+                for item in (
+                    _string(value) for value in _sequence(event.payload.get("tool_call_ids"))
+                )
+                if item
+            )
+            if group_id and decision is not None and tool_call_ids:
+                group_actions = approval_group_actions.setdefault(group_id, [])
+                for tool_call_id in tool_call_ids:
+                    if tool_call_id not in group_actions:
+                        group_actions.append(tool_call_id)
+                    action = actions.get(tool_call_id)
+                    if action is not None:
+                        actions[tool_call_id] = _resolved_action(
+                            action,
+                            group_id=group_id,
+                            decision=decision,
+                            sequence=event.sequence,
+                        )
+                approval_group_decisions[group_id] = decision
+                approval_group_resolutions[group_id] = dict.fromkeys(tool_call_ids, decision)
+                _append_approval_message(
+                    conversation,
+                    event,
+                    group_id=group_id,
+                    decision=decision,
+                    action_count=len(tool_call_ids),
+                    reported_resolutions=reported_resolutions,
+                )
+                lifecycle_status = SessionLifecycle.IDLE
         elif kind == EventKind.CONFIRMATION_RESOLVED.value:
             tool_call_id = _string(event.payload.get("tool_call_id"))
             group_id = _string(event.payload.get("group_id"))
             if not group_id:
                 group_id = next(
                     (
-                        candidate.group_id
-                        for candidate in approval_groups.values()
-                        if any(action.target_id == tool_call_id for action in candidate.actions)
+                        candidate_group_id
+                        for candidate_group_id, candidate_actions in approval_group_actions.items()
+                        if tool_call_id in candidate_actions
                     ),
                     "",
                 )
-            decision_value = _string(event.payload.get("decision"))
-            approval_decision: Literal["approved", "denied"] = (
-                "denied" if decision_value == "denied" else "approved"
-            )
-            current = approval_groups.get(group_id)
-            if current is not None:
-                was_pending = current.decision is None
-                approval_groups[group_id] = current.model_copy(
-                    update={"decision": approval_decision}
-                )
-                if group_id not in reported_resolutions:
-                    reported_resolutions.add(group_id)
-                    action_count = len(current.actions)
-                    action_label = "action" if action_count == 1 else "actions"
-                    _append_message(
+            approval_decision = _approval_decision(event.payload.get("decision"))
+            current_actions = approval_group_actions.get(group_id)
+            if current_actions is not None and approval_decision is not None:
+                group_decision = approval_group_decisions.get(group_id)
+                if group_decision is not None and group_decision != approval_decision:
+                    integrity_failed_action_ids.update(current_actions)
+                    _mark_projection_integrity_failure(
+                        actions,
                         conversation,
                         event,
-                        role="trace",
-                        label="Approval",
-                        content=(
-                            f"Action set approved ({action_count} {action_label})"
-                            if approval_decision == "approved"
-                            else f"Action set rejected ({action_count} {action_label})"
-                        ),
-                        detail="The decision applied to every action in the set.",
+                        tool_call_ids=tuple(current_actions),
+                        detail="An action-set resolution contradicts its recorded decision.",
                     )
-                if was_pending:
+                    lifecycle_status = SessionLifecycle.ERROR
+                    lifecycle_sequence = event.sequence
+                    lifecycle_error_recoverable = False
+                    continue
+                resolutions = approval_group_resolutions.setdefault(group_id, {})
+                resolutions[tool_call_id] = approval_decision
+                action = actions.get(tool_call_id)
+                if action is not None:
+                    actions[tool_call_id] = _resolved_action(
+                        action,
+                        group_id=group_id,
+                        decision=approval_decision,
+                        sequence=event.sequence,
+                    )
+                resolved_decisions = {resolutions.get(candidate) for candidate in current_actions}
+                if (
+                    None not in resolved_decisions
+                    and len(resolved_decisions) == 1
+                    and group_decision is None
+                ):
+                    approval_group_decisions[group_id] = approval_decision
+                    _append_approval_message(
+                        conversation,
+                        event,
+                        group_id=group_id,
+                        decision=approval_decision,
+                        action_count=len(current_actions),
+                        reported_resolutions=reported_resolutions,
+                    )
                     lifecycle_status = SessionLifecycle.IDLE
         elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
             model_decision = _mapping(event.payload.get("decision"))
@@ -318,8 +565,7 @@ def project_session(
             )
         elif kind == EventKind.AGENT_LIFECYCLE_UPDATED.value:
             lifecycle_status = _lifecycle(_string(event.payload.get("status")))
-            if lifecycle_status != SessionLifecycle.ERROR:
-                lifecycle_error_recoverable = True
+            lifecycle_sequence = event.sequence
         elif kind == EventKind.TASK_PLAN_UPDATED.value:
             tasks = tuple(_task(item) for item in _sequence(event.payload.get("tasks")))
         elif kind == EventKind.MODEL_USAGE_UPDATED.value:
@@ -335,8 +581,10 @@ def project_session(
                 subagents[subagent.invocation_id] = subagent
         elif kind == EventKind.SESSION_PAUSED.value:
             lifecycle_status = SessionLifecycle.PAUSED
+            lifecycle_sequence = event.sequence
         elif kind == EventKind.SESSION_RESUMED.value:
             lifecycle_status = SessionLifecycle.RUNNING
+            lifecycle_sequence = event.sequence
         elif kind == EventKind.ERROR_RECORDED.value:
             error_code = _string(event.payload.get("code"))
             error_message = _error_detail(
@@ -361,10 +609,66 @@ def project_session(
                 )
             if event.payload.get("affects_lifecycle") is not False:
                 lifecycle_status = SessionLifecycle.ERROR
+                lifecycle_sequence = event.sequence
                 lifecycle_error_recoverable = (
-                    lifecycle_error_recoverable and error_code not in _FATAL_ERROR_CODES
+                    lifecycle_error_recoverable and not backend_error_is_fatal(error_code)
                 )
 
+    if lifecycle_status == SessionLifecycle.RUNNING:
+        actions = {
+            tool_call_id: (
+                action.model_copy(
+                    update={
+                        "state": "running",
+                        "updated_sequence": max(
+                            action.updated_sequence,
+                            lifecycle_sequence,
+                        ),
+                    }
+                )
+                if action.state in {"approved", "proposed"}
+                else action
+            )
+            for tool_call_id, action in actions.items()
+        }
+    if not lifecycle_error_recoverable:
+        lifecycle_status = SessionLifecycle.ERROR
+        actions = {
+            tool_call_id: (
+                action.model_copy(
+                    update={
+                        "state": "outcome-unknown",
+                        "updated_sequence": max(
+                            action.updated_sequence,
+                            lifecycle_sequence,
+                        ),
+                    }
+                )
+                if action.outcome is None and action.state not in {"rejected", "awaiting-review"}
+                else action
+            )
+            for tool_call_id, action in actions.items()
+        }
+    for tool_call_id in integrity_failed_action_ids:
+        action = actions.get(tool_call_id)
+        if action is not None:
+            actions[tool_call_id] = action.model_copy(
+                update={
+                    "state": "outcome-unknown",
+                    "outcome": None,
+                }
+            )
+
+    pending_approval = _pending_approval(
+        actions,
+        approval_group_actions=approval_group_actions,
+        approval_group_decisions=approval_group_decisions,
+    )
+    if pending_approval is not None and lifecycle_status not in {
+        SessionLifecycle.ERROR,
+        SessionLifecycle.PAUSED,
+    }:
+        lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
     lifecycle = ProjectionLifecycleState(
         status=lifecycle_status,
         can_pause=lifecycle_status == SessionLifecycle.RUNNING,
@@ -380,18 +684,23 @@ def project_session(
             or (lifecycle_status == SessionLifecycle.ERROR and lifecycle_error_recoverable)
         ),
     )
-    pending_approval = next(
-        (group for group in reversed(tuple(approval_groups.values())) if group.decision is None),
-        None,
-    )
     return SessionProjection(
         session_id=session_id,
         event_count=len(events),
         revision=events[-1].sequence if events else -1,
+        workspace_revision=max(
+            (
+                event.sequence
+                for event in events
+                if str(event.kind) == EventKind.TOOL_EXECUTION_RECORDED.value
+            ),
+            default=-1,
+        ),
         stream_epoch=stream_epoch,
         stream_revision=stream_revision,
         activity=tuple(activity),
         conversation=tuple(conversation),
+        actions=tuple(actions.values()),
         pending_approval=pending_approval,
         context=context,
         lifecycle=lifecycle,
@@ -407,6 +716,215 @@ def project_session(
             error_recoverable=lifecycle_error_recoverable,
         ),
     )
+
+
+def _action_record(
+    event: SessionEvent,
+    *,
+    payload: dict[str, JsonValue],
+    tool_call_id: str,
+    tool_name: str,
+    arguments: dict[str, JsonValue],
+) -> ProjectionActionRecord:
+    affected_paths = _affected_paths(
+        payload.get("affected_paths"),
+        arguments=arguments,
+    )
+    kind = _action_kind(payload.get("kind"))
+    return ProjectionActionRecord(
+        tool_call_id=tool_call_id,
+        action_id=_string(payload.get("action_id")) or None,
+        tool_name=tool_name or "unknown-tool",
+        risk=_action_risk(payload.get("risk")),
+        summary=_string(payload.get("summary")) or f"Run {tool_name or 'tool'}",
+        arguments=arguments,
+        details=_action_details(
+            kind,
+            arguments=arguments,
+            affected_paths=affected_paths,
+            project_path=_safe_project_relative_path(payload.get("project_path")),
+        ),
+        affected_paths=affected_paths,
+        state="proposed",
+        proposed_sequence=event.sequence,
+        updated_sequence=event.sequence,
+    )
+
+
+def _action_details(
+    kind: Literal["terminal", "file-editor", "task", "other"],
+    *,
+    arguments: dict[str, JsonValue],
+    affected_paths: tuple[ProjectionAffectedPath, ...],
+    project_path: str | None,
+) -> ProjectionActionDetails:
+    if kind == "terminal":
+        return ProjectionTerminalActionDetails(
+            command=_string(arguments.get("command")),
+            is_input=arguments.get("is_input") is True,
+            timeout=_optional_number(arguments.get("timeout")),
+            reset=arguments.get("reset") is True,
+        )
+    if kind == "file-editor":
+        operation_value = _string(arguments.get("command"))
+        operation: Literal["view", "create", "str_replace", "insert", "undo_edit", "unknown"]
+        if operation_value in {"view", "create", "str_replace", "insert", "undo_edit"}:
+            operation = cast(
+                Literal["view", "create", "str_replace", "insert", "undo_edit"],
+                operation_value,
+            )
+        else:
+            operation = "unknown"
+        return ProjectionFileEditorActionDetails(
+            operation=operation,
+            path=project_path or (affected_paths[0].path if affected_paths else None),
+        )
+    if kind == "task":
+        return ProjectionTaskActionDetails(
+            description=_string(arguments.get("description")) or None,
+            prompt=_string(arguments.get("prompt")) or None,
+            subagent_type=_string(arguments.get("subagent_type")) or None,
+            resume=_string(arguments.get("resume")) or None,
+        )
+    return ProjectionOtherActionDetails()
+
+
+def _affected_paths(
+    value: JsonValue | None,
+    *,
+    arguments: dict[str, JsonValue],
+) -> tuple[ProjectionAffectedPath, ...]:
+    if not isinstance(value, list):
+        return ()
+    operation = _string(arguments.get("command"))
+    effect: Literal["created", "modified", "deleted", "unknown"]
+    if operation == "create":
+        effect = "created"
+    elif operation in {"str_replace", "insert"}:
+        effect = "modified"
+    else:
+        effect = "unknown"
+    paths: list[ProjectionAffectedPath] = []
+    for item in value:
+        path = _safe_project_relative_path(item)
+        if path is not None and not any(existing.path == path for existing in paths):
+            paths.append(ProjectionAffectedPath(path=path, effect=effect))
+    return tuple(paths)
+
+
+def _safe_project_relative_path(value: JsonValue) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        path = project_relative_path(value, allow_root=False)
+    except ProjectPathError:
+        return None
+    return path.as_posix()
+
+
+def _action_kind(
+    value: JsonValue | None,
+) -> Literal["terminal", "file-editor", "task", "other"]:
+    if value in {"terminal", "file-editor", "task"}:
+        return cast(Literal["terminal", "file-editor", "task"], value)
+    return "other"
+
+
+def _approval_decision(
+    value: JsonValue | None,
+) -> Literal["approved", "denied"] | None:
+    if value in {"approved", "denied"}:
+        return cast(Literal["approved", "denied"], value)
+    return None
+
+
+def _resolved_action(
+    action: ProjectionActionRecord,
+    *,
+    group_id: str,
+    decision: Literal["approved", "denied"],
+    sequence: int,
+) -> ProjectionActionRecord:
+    return action.model_copy(
+        update={
+            "group_id": group_id,
+            "state": "rejected" if decision == "denied" else "approved",
+            "decision": "rejected" if decision == "denied" else "approved",
+            "updated_sequence": sequence,
+        }
+    )
+
+
+def _append_approval_message(
+    conversation: list[ProjectionMessage],
+    event: SessionEvent,
+    *,
+    group_id: str,
+    decision: Literal["approved", "denied"],
+    action_count: int,
+    reported_resolutions: set[str],
+) -> None:
+    if group_id in reported_resolutions:
+        return
+    reported_resolutions.add(group_id)
+    action_label = "action" if action_count == 1 else "actions"
+    _append_message(
+        conversation,
+        event,
+        role="trace",
+        label="Approval",
+        content=(
+            f"Action set approved ({action_count} {action_label})"
+            if decision == "approved"
+            else f"Action set rejected ({action_count} {action_label})"
+        ),
+        detail="The decision applied to every action in the set.",
+    )
+
+
+def _mark_projection_integrity_failure(
+    actions: dict[str, ProjectionActionRecord],
+    conversation: list[ProjectionMessage],
+    event: SessionEvent,
+    *,
+    tool_call_ids: tuple[str, ...],
+    detail: str,
+) -> None:
+    for tool_call_id in tool_call_ids:
+        action = actions.get(tool_call_id)
+        if action is not None:
+            actions[tool_call_id] = action.model_copy(
+                update={
+                    "state": "outcome-unknown",
+                    "outcome": None,
+                    "updated_sequence": event.sequence,
+                }
+            )
+    _append_message(
+        conversation,
+        event,
+        role="trace",
+        label="System",
+        content="Session history failed an integrity check",
+        detail=detail,
+    )
+
+
+def _pending_approval(
+    actions: dict[str, ProjectionActionRecord],
+    *,
+    approval_group_actions: dict[str, list[str]],
+    approval_group_decisions: dict[str, Literal["approved", "denied"] | None],
+) -> ProjectionApprovalGroup | None:
+    for group_id, tool_call_ids in reversed(tuple(approval_group_actions.items())):
+        if approval_group_decisions.get(group_id) is not None:
+            continue
+        group_actions = tuple(
+            action for tool_call_id in tool_call_ids if (action := actions.get(tool_call_id))
+        )
+        if group_actions:
+            return ProjectionApprovalGroup(group_id=group_id, actions=group_actions)
+    return None
 
 
 def _append_message(
@@ -604,8 +1122,18 @@ def _integer(value: JsonValue | None) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _signed_integer(value: JsonValue | None) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+
 def _optional_integer(value: JsonValue | None) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _optional_number(value: JsonValue | None) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool) and value >= 0:
+        return float(value)
+    return None
 
 
 def _number(value: JsonValue | None) -> float:
@@ -640,23 +1168,21 @@ _ACTIVITY_LABELS = {
     EventKind.USER_MESSAGE_RECORDED.value: "Researcher message",
 }
 
-_FATAL_ERROR_CODES = frozenset(
-    {
-        BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
-        BackendErrorCode.AGENT_OUTCOME_UNKNOWN.value,
-    }
-)
-
-
 __all__ = [
+    "ProjectionActionOutcome",
+    "ProjectionActionRecord",
     "ProjectionActivity",
-    "ProjectionApprovalAction",
+    "ProjectionAffectedPath",
     "ProjectionApprovalGroup",
+    "ProjectionFileEditorActionDetails",
     "ProjectionLifecycleState",
     "ProjectionMessage",
     "ProjectionModelContext",
+    "ProjectionOtherActionDetails",
     "ProjectionSubagent",
     "ProjectionTask",
+    "ProjectionTaskActionDetails",
+    "ProjectionTerminalActionDetails",
     "ProjectionUsage",
     "SessionLifecycle",
     "SessionProjection",

@@ -11,16 +11,29 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Iterable, Sequence
-from typing import ClassVar
+from pathlib import PurePosixPath
+from typing import ClassVar, cast
 
+from rich.syntax import Syntax
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
-from textual.widgets import Footer, Header, Input, OptionList, RichLog, Static
+from textual.widgets import (
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+    Tree,
+)
 from textual.widgets.option_list import Option
+from textual.widgets.tree import TreeNode
 
 from heartwood.cli._interactive import (
     InteractionActivity,
@@ -30,6 +43,12 @@ from heartwood.cli._interactive import (
     format_conversation_lines,
     format_runtime_lines,
     interaction_activity,
+)
+from heartwood.cli._terminal_text import terminal_safe_text
+from heartwood.cli._workspace_presentation import (
+    format_workspace_changes,
+    format_workspace_diff,
+    format_workspace_file,
 )
 from heartwood.gateway import (
     ActionSettingsError,
@@ -42,6 +61,10 @@ from heartwood.schemas import (
     ActionConfirmationMode,
     ActionModeOptionResponse,
     ActionSettingsResponse,
+    WorkspaceChangesResponse,
+    WorkspaceDiffResponse,
+    WorkspaceFileResponse,
+    WorkspaceTreeResponse,
 )
 
 
@@ -187,6 +210,8 @@ class HeartwoodTerminalApp(App[None]):
     #status.working { color: $warning; }
     #status.waiting { color: $warning; text-style: bold; }
     #status.error { color: $error; }
+    #workspace-tabs, TabPane { height: 1fr; }
+    #conversation-pane { padding: 0; }
     #conversation { height: 1fr; padding: 1 2; }
     #streaming {
         display: none;
@@ -208,12 +233,18 @@ class HeartwoodTerminalApp(App[None]):
     #approval-actions { height: auto; max-height: 12; padding: 0 1; }
     #approval-options { height: 4; }
     #composer { dock: bottom; margin: 0 1 1 1; }
+    .workspace-split { height: 1fr; }
+    #file-tree, #change-list { width: 36%; min-width: 28; border-right: solid $panel; }
+    #file-preview, #change-preview { width: 1fr; padding: 1 2; }
     """
     TITLE = "Heartwood"
     BINDINGS: ClassVar = [
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+l", "focus_composer", "Prompt"),
         ("ctrl+p", "command_palette", "Commands"),
+        ("ctrl+1", "show_conversation", "Conversation"),
+        ("ctrl+2", "show_files", "Files"),
+        ("ctrl+3", "show_changes", "Changes"),
         ("escape", "pause", "Pause"),
     ]
 
@@ -237,31 +268,54 @@ class HeartwoodTerminalApp(App[None]):
         self._rendered_sequence: int | None = None
         self._retired_stream_epochs: set[str] = set()
         self._mode_label = "Action Review"
+        self._workspace_revision: int | None = None
+        self._workspace_read_in_flight = False
+        self._workspace_refresh_pending = False
+        self._workspace_file_generation = 0
+        self._workspace_diff_generation = 0
+        self._change_paths: dict[str, str] = {}
+        self._selected_file_path: str | None = None
+        self._selected_change_path: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield Static(self._idle_status("ready"), id="status")
-        with Vertical():
-            yield RichLog(id="conversation", wrap=True, markup=False)
-            yield Static(id="streaming", markup=False)
-            yield RichLog(id="projection-details", wrap=True, markup=False)
-            with Vertical(id="approval"):
-                yield Static(id="approval-title")
-                yield Static(id="approval-help")
+        with TabbedContent(initial="conversation-pane", id="workspace-tabs"):
+            with TabPane("Conversation", id="conversation-pane"):
+                yield RichLog(id="conversation", wrap=True, markup=False)
+                yield Static(id="streaming", markup=False)
+                yield RichLog(id="projection-details", wrap=True, markup=False)
+                with Vertical(id="approval"):
+                    yield Static(id="approval-title")
+                    yield Static(id="approval-help")
+                    yield RichLog(
+                        id="approval-actions",
+                        wrap=True,
+                        markup=False,
+                        auto_scroll=False,
+                    )
+                    yield OptionList(
+                        Option("Reject", id="reject"),
+                        Option("Allow Once", id="allow"),
+                        id="approval-options",
+                        markup=False,
+                        compact=True,
+                    )
+                yield Input(placeholder="Ask Heartwood or enter /help", id="composer")
+            with TabPane("Files", id="files-pane"), Horizontal(classes="workspace-split"):
+                yield Tree[str]("Project", id="file-tree")
                 yield RichLog(
-                    id="approval-actions",
-                    wrap=True,
+                    id="file-preview",
+                    wrap=False,
                     markup=False,
-                    auto_scroll=False,
                 )
-                yield OptionList(
-                    Option("Reject", id="reject"),
-                    Option("Allow Once", id="allow"),
-                    id="approval-options",
+            with TabPane("Changes", id="changes-pane"), Horizontal(classes="workspace-split"):
+                yield OptionList(id="change-list", markup=False, compact=True)
+                yield RichLog(
+                    id="change-preview",
+                    wrap=False,
                     markup=False,
-                    compact=True,
                 )
-            yield Input(placeholder="Ask Heartwood or enter /help", id="composer")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -299,7 +353,9 @@ class HeartwoodTerminalApp(App[None]):
             self.exit()
             return
         if result.message:
-            self.query_one("#conversation", RichLog).write(result.message)
+            self.query_one("#conversation", RichLog).write(
+                terminal_safe_text(result.message, preserve_newlines=True)
+            )
         if result.replace_transcript:
             self.query_one("#conversation", RichLog).clear()
         self._set_busy(False, failed=result.failed)
@@ -337,7 +393,10 @@ class HeartwoodTerminalApp(App[None]):
 
     def _sync_streaming_text(self, projection: SessionProjection) -> None:
         streaming = self.query_one("#streaming", Static)
-        text = projection.streaming_text
+        text = terminal_safe_text(
+            projection.streaming_text,
+            preserve_newlines=True,
+        )
         streaming.display = bool(text)
         if not text:
             streaming.update("")
@@ -431,6 +490,9 @@ class HeartwoodTerminalApp(App[None]):
             self._sync_runtime_status(projection)
         else:
             self._projection = projection
+        if projection.workspace_revision != self._workspace_revision:
+            self._workspace_revision = projection.workspace_revision
+            self._request_workspace_overview()
 
     def _set_busy(
         self,
@@ -537,13 +599,15 @@ class HeartwoodTerminalApp(App[None]):
         action_log = self.query_one("#approval-actions", RichLog)
         action_log.clear()
         for index, action in enumerate(actions, 1):
-            risk_label, risk_style = _risk_presentation(action.risk or "unknown")
+            risk_label, risk_style = _risk_presentation(action.risk)
+            summary = terminal_safe_text(action.summary or action_tool_label(action.tool_name))
+            tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             heading = Text()
             heading.append(
-                f"{index}. {action.summary or action_tool_label(action.tool_name)}\n",
+                f"{index}. {summary}\n",
                 style="bold",
             )
-            heading.append(f"   {action_tool_label(action.tool_name)} · ", style="dim")
+            heading.append(f"   {tool_label} · ", style="dim")
             heading.append(risk_label, style=risk_style)
             details: list[Text | str] = [heading]
             if action.arguments:
@@ -579,10 +643,286 @@ class HeartwoodTerminalApp(App[None]):
 
     def action_focus_composer(self) -> None:
         """Focus the prompt input."""
+        self.action_show_conversation()
         if self._projection is not None and self._projection.pending_approval is not None:
             self.query_one("#approval-options", OptionList).focus()
             return
         self.query_one("#composer", Input).focus()
+
+    def action_show_conversation(self) -> None:
+        """Show the conversation and action review."""
+        self.query_one("#workspace-tabs", TabbedContent).active = "conversation-pane"
+
+    def action_show_files(self) -> None:
+        """Show the bounded project tree and file viewer."""
+        self.query_one("#workspace-tabs", TabbedContent).active = "files-pane"
+        self.query_one("#file-tree", Tree).focus()
+
+    def action_show_changes(self) -> None:
+        """Show changed paths and read-only diffs."""
+        self.query_one("#workspace-tabs", TabbedContent).active = "changes-pane"
+        self.query_one("#change-list", OptionList).focus()
+
+    def _request_workspace_overview(self) -> None:
+        file_preview = self.query_one("#file-preview", RichLog)
+        file_preview.clear()
+        file_preview.write(
+            f"Refreshing {self._selected_file_path}..."
+            if self._selected_file_path is not None
+            else "Loading project files..."
+        )
+        change_preview = self.query_one("#change-preview", RichLog)
+        change_preview.clear()
+        change_preview.write(
+            f"Refreshing {self._selected_change_path}..."
+            if self._selected_change_path is not None
+            else "Loading project changes..."
+        )
+        self._load_workspace_overview()
+
+    @work(thread=True, group="workspace-overview")
+    def _load_workspace_overview(self) -> None:
+        if self._workspace_read_in_flight:
+            self._workspace_refresh_pending = True
+            return
+        self._workspace_read_in_flight = True
+        try:
+            tree = self.session.workspace_tree()
+            changes = self.session.workspace_changes()
+        except Exception as error:
+            self.call_from_thread(
+                self._finish_workspace_overview,
+                None,
+                None,
+                error,
+            )
+        else:
+            self.call_from_thread(
+                self._finish_workspace_overview,
+                tree,
+                changes,
+                None,
+            )
+
+    def _finish_workspace_overview(
+        self,
+        tree: WorkspaceTreeResponse | None,
+        changes: WorkspaceChangesResponse | None,
+        error: Exception | None,
+    ) -> None:
+        self._workspace_read_in_flight = False
+        if error is not None:
+            message = (
+                "Workspace inspection unavailable: "
+                f"{terminal_safe_text(error, preserve_newlines=True)}"
+            )
+            self.query_one("#file-preview", RichLog).clear().write(message)
+            self.query_one("#change-preview", RichLog).clear().write(message)
+        else:
+            assert tree is not None
+            assert changes is not None
+            self._render_workspace_tree(tree)
+            self._render_workspace_changes(changes)
+        if self._workspace_refresh_pending:
+            self._workspace_refresh_pending = False
+            self._request_workspace_overview()
+
+    def _render_workspace_tree(self, response: WorkspaceTreeResponse) -> None:
+        tree = cast(Tree[str], self.query_one("#file-tree", Tree))
+        tree.root.remove_children()
+        nodes: dict[str, TreeNode[str]] = {".": tree.root}
+        file_nodes: dict[str, TreeNode[str]] = {}
+        for entry in response["entries"]:
+            path = entry["path"]
+            parent_path = PurePosixPath(path).parent.as_posix()
+            parent = nodes.get(parent_path, tree.root)
+            label = terminal_safe_text(entry["name"])
+            if entry["kind"] == "directory":
+                nodes[path] = parent.add(Text(label), expand=True)
+            elif entry["kind"] == "file":
+                file_nodes[path] = parent.add_leaf(Text(label), data=path)
+            else:
+                unavailable = Text(label)
+                unavailable.append(" [unavailable]", style="dim")
+                parent.add_leaf(unavailable)
+        tree.root.expand()
+        tree.root.label = f"Project files{' · truncated' if response['truncated'] else ''}"
+        if (
+            self._selected_file_path is not None
+            and (selected := file_nodes.get(self._selected_file_path)) is not None
+        ):
+            tree.select_node(selected)
+            self._show_workspace_file(self._selected_file_path)
+        elif self._selected_file_path is not None:
+            self._selected_file_path = None
+            self.query_one("#file-preview", RichLog).clear().write(
+                "The previously selected file is no longer available."
+            )
+
+    def _render_workspace_changes(self, response: WorkspaceChangesResponse) -> None:
+        changes = self.query_one("#change-list", OptionList)
+        changes.clear_options()
+        self._change_paths.clear()
+        marker = {"added": "A", "deleted": "D", "modified": "M"}
+        for index, change in enumerate(response["changes"]):
+            option_id = f"change-{index}"
+            self._change_paths[option_id] = change["path"]
+            changes.add_option(
+                Option(
+                    Text(f"{marker[change['status']]}  {terminal_safe_text(change['path'])}"),
+                    id=option_id,
+                )
+            )
+        if not response["changes"]:
+            changes.add_option(Option("(no changes available)", disabled=True))
+        preview = self.query_one("#change-preview", RichLog)
+        preview.clear()
+        for line in format_workspace_changes(response):
+            preview.write(line)
+        selected_option = next(
+            (
+                option_id
+                for option_id, path in self._change_paths.items()
+                if path == self._selected_change_path
+            ),
+            None,
+        )
+        if selected_option is not None:
+            changes.highlighted = int(selected_option.removeprefix("change-"))
+            assert self._selected_change_path is not None
+            self._show_workspace_diff(self._selected_change_path)
+        elif self._selected_change_path is not None:
+            self._selected_change_path = None
+            preview.clear().write("The previously selected change is no longer available.")
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected[str]) -> None:
+        """Load a selected project file through the bounded gateway service."""
+        if event.control.id == "file-tree" and event.node.data is not None:
+            self._show_workspace_file(event.node.data)
+
+    def _show_workspace_file(self, path: str) -> None:
+        self._selected_file_path = path
+        self._workspace_file_generation += 1
+        generation = self._workspace_file_generation
+        preview = self.query_one("#file-preview", RichLog)
+        preview.clear()
+        preview.write(f"Loading {terminal_safe_text(path)}...")
+        self._load_workspace_file(path, generation)
+
+    @work(thread=True, group="workspace-file", exclusive=True)
+    def _load_workspace_file(self, path: str, generation: int) -> None:
+        try:
+            response = self.session.workspace_file(path)
+        except Exception as error:
+            self.call_from_thread(
+                self._finish_workspace_file,
+                None,
+                error,
+                generation,
+            )
+        else:
+            self.call_from_thread(
+                self._finish_workspace_file,
+                response,
+                None,
+                generation,
+            )
+
+    def _finish_workspace_file(
+        self,
+        response: WorkspaceFileResponse | None,
+        error: Exception | None,
+        generation: int,
+    ) -> None:
+        if generation != self._workspace_file_generation:
+            return
+        preview = self.query_one("#file-preview", RichLog)
+        preview.clear()
+        if error is not None:
+            preview.write(f"File unavailable: {terminal_safe_text(error, preserve_newlines=True)}")
+            return
+        assert response is not None
+        if response["status"] in {"available", "truncated"} and response["content"] is not None:
+            try:
+                lexer = Syntax.guess_lexer(response["path"], response["content"])
+            except Exception:
+                lexer = "text"
+            preview.write(
+                Syntax(
+                    terminal_safe_text(response["content"], preserve_newlines=True),
+                    lexer,
+                    line_numbers=True,
+                    word_wrap=False,
+                )
+            )
+            if response["message"]:
+                preview.write(response["message"])
+            return
+        for line in format_workspace_file(response):
+            preview.write(line)
+
+    def on_option_list_option_highlighted(
+        self,
+        event: OptionList.OptionHighlighted,
+    ) -> None:
+        """Preview the highlighted changed path."""
+        if event.option_list.id != "change-list" or event.option_id is None:
+            return
+        if path := self._change_paths.get(event.option_id):
+            self._show_workspace_diff(path)
+
+    def _show_workspace_diff(self, path: str) -> None:
+        self._selected_change_path = path
+        self._workspace_diff_generation += 1
+        generation = self._workspace_diff_generation
+        preview = self.query_one("#change-preview", RichLog)
+        preview.clear()
+        preview.write(f"Loading {terminal_safe_text(path)}...")
+        self._load_workspace_diff(path, generation)
+
+    @work(thread=True, group="workspace-diff", exclusive=True)
+    def _load_workspace_diff(self, path: str, generation: int) -> None:
+        try:
+            response = self.session.workspace_diff(path)
+        except Exception as error:
+            self.call_from_thread(
+                self._finish_workspace_diff,
+                None,
+                error,
+                generation,
+            )
+        else:
+            self.call_from_thread(
+                self._finish_workspace_diff,
+                response,
+                None,
+                generation,
+            )
+
+    def _finish_workspace_diff(
+        self,
+        response: WorkspaceDiffResponse | None,
+        error: Exception | None,
+        generation: int,
+    ) -> None:
+        if generation != self._workspace_diff_generation:
+            return
+        preview = self.query_one("#change-preview", RichLog)
+        preview.clear()
+        if error is not None:
+            preview.write(
+                f"Change unavailable: {terminal_safe_text(error, preserve_newlines=True)}"
+            )
+            return
+        assert response is not None
+        preview.write(
+            Syntax(
+                "\n".join(format_workspace_diff(response)),
+                "diff",
+                line_numbers=False,
+                word_wrap=False,
+            )
+        )
 
     def action_pause(self) -> None:
         """Pause active agent work through the shared command contract."""
@@ -707,6 +1047,16 @@ class HeartwoodTerminalApp(App[None]):
             "Action Review",
             "Choose how Heartwood confirms proposed actions",
             self.action_show_permissions,
+        )
+        yield SystemCommand(
+            "Project Files",
+            "Inspect the bounded project tree and text files",
+            self.action_show_files,
+        )
+        yield SystemCommand(
+            "Project Changes",
+            "Inspect changed paths and read-only diffs",
+            self.action_show_changes,
         )
         yield SystemCommand(
             "Session Status",

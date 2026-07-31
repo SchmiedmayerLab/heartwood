@@ -50,6 +50,10 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
             _approval_items(view_model),
         ),
         WidgetSpec(
+            "Agent Actions",
+            _action_items(view_model),
+        ),
+        WidgetSpec(
             "Tasks",
             tuple(f"{task.status}: {task.title}" for task in view_model.task_plan),
         ),
@@ -86,7 +90,7 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     items.extend(
         f"{index}. {action.summary or action.tool_name}"
         f"\n{action_tool_label(action.tool_name)} · "
-        f"{action_risk_label(action.risk or 'unknown')}"
+        f"{action_risk_label(action.risk)}"
         + (
             f"\nArguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}"
             if action.arguments
@@ -94,6 +98,51 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         )
         for index, action in enumerate(group.actions, 1)
     )
+    return tuple(items)
+
+
+def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
+    items: list[str] = []
+    for action in view_model.actions:
+        details = action.details
+        if details.kind == "terminal":
+            label = f"$ {details.command}"
+        elif details.kind == "file-editor":
+            label = f"{details.operation} {details.path or 'path unavailable'}"
+        elif details.kind == "task":
+            label = details.description or details.subagent_type or action.summary
+        else:
+            label = action.summary
+        outcome = (
+            ""
+            if action.outcome is None
+            else f" · exit {action.outcome.exit_code}: {action.outcome.summary}"
+        )
+        truncated = (
+            " · output truncated"
+            if action.outcome is not None and action.outcome.result_truncated
+            else ""
+        )
+        lines = [f"{action.state}: {label}{outcome}{truncated}"]
+        if action.group_id is not None:
+            lines.append(
+                f"Action set: {action.group_id} · decision: {action.decision or 'pending'}"
+            )
+        elif action.decision is not None:
+            lines.append(f"Decision: {action.decision} (automatic policy)")
+        if action.arguments:
+            lines.append("Arguments:\n" + json.dumps(action.arguments, indent=2, sort_keys=True))
+        if action.affected_paths:
+            lines.append(
+                "Paths: "
+                + ", ".join(
+                    f"{path.effect} {path.path} ({path.provenance})"
+                    for path in action.affected_paths
+                )
+            )
+        if action.outcome is not None and action.outcome.result:
+            lines.append(f"Output:\n{action.outcome.result}")
+        items.append("\n".join(lines))
     return tuple(items)
 
 
@@ -151,5 +200,11 @@ def _section_html(title: str, items: tuple[str, ...]) -> str:
     escaped_title = html.escape(title)
     if not items:
         return f"<section><h3>{escaped_title}</h3><p>None</p></section>"
-    rendered_items = "".join(f"<li>{html.escape(item)}</li>" for item in items)
+    rendered_items = "".join(
+        (
+            '<li><pre style="margin: 0; overflow-wrap: anywhere; '
+            f'white-space: pre-wrap">{html.escape(item)}</pre></li>'
+        )
+        for item in items
+    )
     return f"<section><h3>{escaped_title}</h3><ul>{rendered_items}</ul></section>"

@@ -31,6 +31,7 @@ from heartwood.core_adapter import (
     BackendTaskPlanEvent,
     BackendTaskStatus,
     BackendToolCallEvent,
+    BackendToolExecutionEvent,
     BackendUsage,
     BackendUsageEvent,
     CommandConflictError,
@@ -45,6 +46,7 @@ from heartwood.core_adapter import (
     SessionStorageCapabilityError,
     SessionStoreBoundaryError,
     TokenDeltaSink,
+    ToolExecution,
     pending_action_group,
 )
 from heartwood.core_adapter._service import _audit_payload
@@ -76,6 +78,107 @@ def test_reserved_audit_event_payloads_fail_closed() -> None:
     assert "synthetic-sensitive-value" not in json.dumps(
         _audit_payload(EventKind.POLICY_DECISION_RECORDED, payload)
     )
+
+
+def test_action_evidence_stays_out_of_content_minimized_audit_payloads() -> None:
+    private_value = "synthetic-private-action-content"
+    proposed: dict[str, JsonValue] = {
+        "tool_call_id": "call-1",
+        "action_id": "action-1",
+        "tool_name": "file_editor",
+        "kind": "file-editor",
+        "arguments": {"path": f"results/{private_value}.txt", "content": private_value},
+        "affected_paths": [f"results/{private_value}.txt"],
+        "risk": "medium",
+    }
+    executed: dict[str, JsonValue] = {
+        **proposed,
+        "backend_id": "openhands",
+        "exit_code": 1,
+        "result": private_value,
+        "result_truncated": False,
+        "error": private_value,
+    }
+
+    proposal_audit = _audit_payload(EventKind.TOOL_CALL_PROPOSED, proposed)
+    execution_audit = _audit_payload(EventKind.TOOL_EXECUTION_RECORDED, executed)
+
+    assert proposal_audit == {
+        "tool_call_id": "call-1",
+        "tool_name": "file_editor",
+        "risk": "medium",
+    }
+    assert execution_audit == {
+        "backend_id": "openhands",
+        "tool_call_id": "call-1",
+        "action_id": "action-1",
+        "tool_name": "file_editor",
+        "exit_code": 1,
+    }
+    assert private_value not in json.dumps([proposal_audit, execution_audit])
+
+
+def test_persisted_action_evidence_remains_private_across_restart_and_audit_export(
+    tmp_path: Path,
+) -> None:
+    private_value = "synthetic-private-action-export-sentinel"
+    tool_call = ProposedToolCall(
+        tool_call_id="call-private",
+        action_id="action-private",
+        tool_name="file_editor",
+        kind="file-editor",
+        risk="medium",
+        summary="Create a synthetic result",
+        arguments={
+            "command": "create",
+            "path": f"results/{private_value}.txt",
+            "file_text": private_value,
+        },
+        affected_paths=(f"results/{private_value}.txt",),
+        project_path=f"results/{private_value}.txt",
+    )
+    first = SessionService.local_default(
+        tmp_path,
+        backend=_RecordingBackend(
+            endpoint="https://model.local.invalid/v1/chat/completions",
+            response=(
+                BackendToolCallEvent(tool_call=tool_call),
+                BackendToolExecutionEvent(
+                    tool_execution=ToolExecution(
+                        tool_call_id=tool_call.tool_call_id,
+                        action_id=tool_call.action_id,
+                        tool_name=tool_call.tool_name,
+                        exit_code=1,
+                        summary="file editor failed",
+                        result=private_value,
+                    )
+                ),
+            ),
+        ),
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    first.handle(
+        _command(CommandKind.CHAT, prompt=private_value).model_copy(
+            update={"session_id": "session-main"}
+        )
+    )
+    private_replay = json.dumps([event.model_dump(mode="json") for event in first.replay_events()])
+    first.close()
+
+    restarted = SessionService.local_default(
+        tmp_path,
+        backend=_RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions"),
+        clock=lambda: "2026-01-01T00:00:01Z",
+    )
+    restarted.handle(
+        _command(CommandKind.AUDIT_EXPORT).model_copy(update={"session_id": "session-main"})
+    )
+    audit_export = restarted.store.read_audit_export()
+
+    assert private_value in private_replay
+    assert private_value not in audit_export
+    assert '"tool_call_id":"call-private"' in audit_export
+    assert '"exit_code":1' in audit_export
 
 
 def test_pause_persists_replayable_events(tmp_path: Path) -> None:
@@ -1374,7 +1477,7 @@ def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> No
     assert result.events[1].payload["decision"] == "denied"
 
 
-def test_failed_backend_decision_keeps_the_action_group_pending(
+def test_failed_backend_decision_records_a_fatal_unknown_action_outcome(
     tmp_path: Path,
 ) -> None:
     action = ProposedToolCall(
@@ -1409,7 +1512,121 @@ def test_failed_backend_decision_keeps_the_action_group_pending(
     assert EventKind.APPROVAL_RECORDED.value in [event.kind for event in result.events]
     assert EventKind.CONFIRMATION_RESOLVED.value not in [event.kind for event in result.events]
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+    assert result.events[-1].payload["code"] == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
     assert backend.pending_action_group(session_id="session-main") is not None
+
+    replayed = service.handle(
+        _command(
+            CommandKind.APPROVE,
+            target_type="action-set",
+            target_id=_action_group_id(action.tool_call_id),
+        ).model_copy(update={"session_id": "session-main"})
+    )
+
+    assert replayed.replayed is True
+    assert backend.resolutions == [(_action_group_id(action.tool_call_id), True)]
+
+
+def test_reconciled_fatal_outcome_blocks_a_new_command_before_backend_work(
+    tmp_path: Path,
+) -> None:
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        reconciled=(
+            BackendErrorEvent(
+                error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN,
+                source_event_id="recording:unknown-action-outcome",
+            ),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+    result = service.handle(
+        _command(
+            CommandKind.CHAT,
+            command_id="command-after-fatal-reconcile",
+            prompt="Do not send this prompt",
+        ).model_copy(update={"session_id": "session-main"})
+    )
+
+    assert backend.prompts == []
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED.value,
+        EventKind.ERROR_RECORDED.value,
+    ]
+    assert result.events[-1].payload["affects_lifecycle"] is False
+    assert "unknown execution outcome" in str(result.events[-1].payload["reason"])
+
+
+def test_fatal_approval_outcome_finishes_an_interrupted_receipt_without_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action = ProposedToolCall(
+        tool_call_id="tool-uncertain",
+        tool_name="terminal",
+        risk="medium",
+        summary="Run the uncertain command",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        pending_actions=(action,),
+        resolution_response=(
+            BackendErrorEvent(
+                error_code=BackendErrorCode.WORKER_STOPPED,
+            ),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    original_write = session_state._write_private_json_atomic
+
+    def interrupt_completion(path: Path, payload: dict[str, object]) -> None:
+        if (
+            path.parent.name == ".commands"
+            and payload.get("command_id") == "command-approve"
+            and payload.get("state") == "completed"
+        ):
+            raise OSError("simulated fatal receipt interruption")
+        original_write(path, payload)
+
+    monkeypatch.setattr(
+        session_state,
+        "_write_private_json_atomic",
+        interrupt_completion,
+    )
+    with pytest.raises(OSError, match="simulated fatal receipt interruption"):
+        service.handle(
+            _command(
+                CommandKind.APPROVE,
+                target_type="action-set",
+                target_id=_action_group_id(action.tool_call_id),
+            ).model_copy(update={"session_id": "session-main"})
+        )
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
+
+    reconcile_calls_before_recovery = backend.reconcile_calls
+    recovered = service.reconcile()
+
+    assert recovered == ()
+    assert backend.reconcile_calls == reconcile_calls_before_recovery
+    assert backend.resolutions == [(_action_group_id(action.tool_call_id), True)]
+    assert service.store.unresolved_command_ids() == ()
+    assert (
+        sum(
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+            for event in service.replay_events()
+        )
+        == 1
+    )
 
 
 def test_interactive_approval_rejects_non_action_targets(tmp_path: Path) -> None:

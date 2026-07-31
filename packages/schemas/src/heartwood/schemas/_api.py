@@ -68,6 +68,13 @@ __all__ = [
     "SubscriptionDeviceLoginRequest",
     "SubscriptionDeviceLoginResponse",
     "SubscriptionDevicePollRequest",
+    "WorkspaceChangeResponse",
+    "WorkspaceChangesResponse",
+    "WorkspaceDiffResponse",
+    "WorkspaceFileResponse",
+    "WorkspaceLimitsResponse",
+    "WorkspaceTreeEntryResponse",
+    "WorkspaceTreeResponse",
     "api_contract_schema",
     "api_response",
 ]
@@ -248,6 +255,93 @@ class AuditExportResponse(_ApiResponse):
 
     filename: str
     content: str
+
+
+class WorkspaceLimitsResponse(_ApiResponse):
+    """Applied workspace-inspection limits."""
+
+    max_tree_entries: int
+    max_tree_depth: int
+    max_file_bytes: int
+    max_file_lines: int
+    max_change_entries: int
+    max_diff_bytes: int
+
+
+class WorkspaceTreeEntryResponse(_ApiResponse):
+    """One safe project entry in a bounded workspace tree."""
+
+    path: str
+    name: str
+    kind: Literal["directory", "file", "unsupported"]
+    depth: int
+    size_bytes: int | None
+
+
+class WorkspaceTreeResponse(_ApiResponse):
+    """Bounded project tree with private state removed."""
+
+    schema_version: Literal["heartwood.workspace-tree.v1"]
+    path: str
+    status: Literal["available", "truncated"]
+    entries: list[WorkspaceTreeEntryResponse]
+    truncated: bool
+    limits: WorkspaceLimitsResponse
+
+
+class WorkspaceFileResponse(_ApiResponse):
+    """Bounded read-only project file."""
+
+    schema_version: Literal["heartwood.workspace-file.v1"]
+    path: str
+    status: Literal["available", "binary", "truncated", "unavailable", "unsupported"]
+    content: str | None
+    size_bytes: int | None
+    bytes_read: int
+    line_count: int
+    truncated: bool
+    message: str | None
+
+
+class WorkspaceChangeResponse(_ApiResponse):
+    """One changed project path from Git or structured session evidence."""
+
+    path: str
+    status: Literal["added", "deleted", "modified"]
+    source: Literal["git", "session-action"]
+    action_ids: list[str]
+
+
+class WorkspaceChangesResponse(_ApiResponse):
+    """Bounded changed-file list for one project and session."""
+
+    schema_version: Literal["heartwood.workspace-changes.v1"]
+    status: Literal["available", "non-git", "truncated", "unavailable", "unsupported"]
+    source: Literal["git", "session-actions", "unavailable"]
+    changes: list[WorkspaceChangeResponse]
+    truncated: bool
+    message: str | None
+    limits: WorkspaceLimitsResponse
+
+
+class WorkspaceDiffResponse(_ApiResponse):
+    """Bounded read-only original and modified file contents."""
+
+    schema_version: Literal["heartwood.workspace-diff.v1"]
+    path: str
+    status: Literal[
+        "available",
+        "binary",
+        "truncated",
+        "unavailable",
+        "non-git",
+        "unsupported",
+    ]
+    source: Literal["git", "session-action", "unavailable"]
+    original: str | None
+    modified: str | None
+    truncated: bool
+    message: str | None
 
 
 class ActionModeOptionResponse(_ApiResponse):
@@ -737,6 +831,10 @@ type ApiResponse = (
     | SkillSummaryResponse
     | StartupPlanResponse
     | SubscriptionDeviceLoginResponse
+    | WorkspaceChangesResponse
+    | WorkspaceDiffResponse
+    | WorkspaceFileResponse
+    | WorkspaceTreeResponse
 )
 
 type PublicApiContract = (

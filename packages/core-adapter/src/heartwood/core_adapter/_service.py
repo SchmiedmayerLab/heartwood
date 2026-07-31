@@ -26,6 +26,7 @@ from heartwood.core_adapter._facade import (
     BackendAgentMessageEvent,
     BackendConfirmationRequestEvent,
     BackendConfirmationResolutionEvent,
+    BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
     BackendLifecycleEvent,
@@ -35,6 +36,7 @@ from heartwood.core_adapter._facade import (
     BackendToolExecutionEvent,
     BackendUsageEvent,
     DeterministicAgentBackend,
+    backend_error_is_fatal,
     backend_error_message,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
@@ -209,6 +211,21 @@ class SessionService:
                     last_sequence=duplicate.events[-1].sequence,
                 )
                 return duplicate
+            if unavailable_reason is None and command_kind != CommandKind.AUDIT_EXPORT.value:
+                fatal_error = next(
+                    (
+                        event
+                        for event in reversed(persisted)
+                        if event.kind == EventKind.ERROR_RECORDED
+                        and backend_error_is_fatal(event.payload.get("code"))
+                    ),
+                    None,
+                )
+                if fatal_error is not None:
+                    unavailable_reason = (
+                        f"{command_kind} is unavailable because this session has "
+                        "an unknown execution outcome"
+                    )
             first_sequence = self.store.next_sequence()
             self.store.accept_command(
                 command_id=command.command_id,
@@ -323,10 +340,13 @@ class SessionService:
         with self._command_lock:
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
-            events = (
-                *self._reconcile_locked(),
-                *self._recover_approval_commands_locked(),
-            )
+            if self._has_failed_approval_recovery_locked():
+                events = self._recover_approval_commands_locked()
+            else:
+                events = (
+                    *self._reconcile_locked(),
+                    *self._recover_approval_commands_locked(),
+                )
         if events:
             self._event_sink(events)
         return events
@@ -493,6 +513,25 @@ class SessionService:
             approved=approved,
         )
         events.extend(self._translate_backend_events(backend_events))
+        if not _backend_confirmation_resolved(
+            backend_events,
+            group_id=pending_group.group_id,
+            tool_call_ids=tuple(action.tool_call_id for action in pending_group.actions),
+            approved=approved,
+        ):
+            events.append(
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "backend_id": self.backend.backend_id,
+                        "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+                        "reason": backend_error_message(BackendErrorCode.ACTION_OUTCOME_UNKNOWN),
+                        "command_id": command.command_id,
+                        "group_id": pending_group.group_id,
+                        "tool_call_ids": [action.tool_call_id for action in pending_group.actions],
+                    },
+                )
+            )
         return tuple(events)
 
     def _translate_backend_events(self, stream: tuple[BackendEvent, ...]) -> list[SessionEvent]:
@@ -523,10 +562,14 @@ class SessionService:
                         EventKind.TOOL_CALL_PROPOSED,
                         {
                             "tool_call_id": tool_call.tool_call_id,
+                            "action_id": tool_call.action_id,
                             "tool_name": tool_call.tool_name,
+                            "kind": tool_call.kind,
                             "risk": tool_call.risk,
                             "summary": tool_call.summary,
                             "arguments": tool_call.arguments,
+                            "affected_paths": list(tool_call.affected_paths),
+                            "project_path": tool_call.project_path,
                             **source_payload,
                         },
                     )
@@ -558,6 +601,8 @@ class SessionService:
                             "tool_name": execution.tool_name,
                             "exit_code": execution.exit_code,
                             "summary": execution.summary,
+                            "result": execution.result,
+                            "result_truncated": execution.result_truncated,
                             **source_payload,
                         },
                     )
@@ -657,6 +702,10 @@ class SessionService:
         )
         request_payload = request.model_dump(mode="json")
         request_payload["group_id"] = event.action_group_id
+        request_payload["action_id"] = tool_call.action_id
+        request_payload["kind"] = tool_call.kind
+        request_payload["affected_paths"] = list(tool_call.affected_paths)
+        request_payload["project_path"] = tool_call.project_path
         if event.source_event_id is not None:
             request_payload["source_event_id"] = event.source_event_id
         return self._record_event(
@@ -702,6 +751,20 @@ class SessionService:
         if self.store.recover_pending_commit() and self._known_source_event_ids is not None:
             self._known_source_event_ids = set(_source_event_ids(self.replay_events()))
 
+    def _has_failed_approval_recovery_locked(self) -> bool:
+        unresolved_command_ids = self.store.unresolved_command_ids()
+        if not unresolved_command_ids:
+            return False
+        events = self.replay_events()
+        for command_id in unresolved_command_ids:
+            record = self.store.command_record(command_id)
+            if record is None:
+                raise SessionRecoveryError(f"missing command receipt for {command_id}")
+            intent = _approval_intent(events, record)
+            if intent is not None and _approval_intent_failed(events, intent):
+                return True
+        return False
+
     def _recover_approval_commands_locked(self) -> tuple[SessionEvent, ...]:
         """Finish an interrupted approval only when persisted state makes it unambiguous."""
         recovered: list[SessionEvent] = []
@@ -713,24 +776,34 @@ class SessionService:
             intent = _approval_intent(events, record)
             if intent is None:
                 continue
-            if not _approval_intent_resolved(events, intent):
+            if not (
+                _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
+            ):
                 pending_group = self.backend.pending_action_group(session_id=self.store.session_id)
                 if (
-                    pending_group is None
-                    or pending_group.group_id != intent.group_id
-                    or tuple(action.tool_call_id for action in pending_group.actions)
-                    != intent.tool_call_ids
+                    pending_group is not None
+                    and pending_group.group_id == intent.group_id
+                    and tuple(action.tool_call_id for action in pending_group.actions)
+                    == intent.tool_call_ids
                 ):
-                    continue
-                backend_events = self.backend.resolve_confirmation(
-                    session_id=self.store.session_id,
-                    action_group_id=intent.group_id,
-                    approved=intent.approved,
-                )
-                translated = self._translate_backend_events(backend_events)
-                recovered.extend(translated)
+                    backend_events = self.backend.resolve_confirmation(
+                        session_id=self.store.session_id,
+                        action_group_id=intent.group_id,
+                        approved=intent.approved,
+                    )
+                    translated = self._translate_backend_events(backend_events)
+                    recovered.extend(translated)
+                elif not _approval_intent_failed(events, intent):
+                    recovered.append(self._record_unknown_approval_outcome(intent))
                 events = self.replay_events()
-            if not _approval_intent_resolved(events, intent):
+            if not (
+                _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
+            ):
+                recovered.append(self._record_unknown_approval_outcome(intent))
+                events = self.replay_events()
+            if not (
+                _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
+            ):
                 continue
             first_sequence = record.get("first_sequence")
             command_hash = record.get("command_hash")
@@ -744,6 +817,19 @@ class SessionService:
                 last_sequence=last_sequence,
             )
         return tuple(recovered)
+
+    def _record_unknown_approval_outcome(self, intent: _ApprovalIntent) -> SessionEvent:
+        return self._record_event(
+            EventKind.ERROR_RECORDED,
+            {
+                "backend_id": self.backend.backend_id,
+                "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+                "reason": backend_error_message(BackendErrorCode.ACTION_OUTCOME_UNKNOWN),
+                "command_id": intent.command_id,
+                "group_id": intent.group_id,
+                "tool_call_ids": list(intent.tool_call_ids),
+            },
+        )
 
     def _handle_audit_export(self) -> SessionEvent:
         event = self._record_event(
@@ -1128,3 +1214,33 @@ def _approval_intent_resolved(
         and isinstance((tool_call_id := event.payload.get("tool_call_id")), str)
     }
     return resolved == set(intent.tool_call_ids)
+
+
+def _approval_intent_failed(
+    events: tuple[SessionEvent, ...],
+    intent: _ApprovalIntent,
+) -> bool:
+    return any(
+        event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+        and event.payload.get("command_id") == intent.command_id
+        and event.payload.get("group_id") == intent.group_id
+        for event in events
+    )
+
+
+def _backend_confirmation_resolved(
+    events: tuple[BackendEvent, ...],
+    *,
+    group_id: str,
+    tool_call_ids: tuple[str, ...],
+    approved: bool,
+) -> bool:
+    resolved = {
+        event.tool_call.tool_call_id
+        for event in events
+        if isinstance(event, BackendConfirmationResolutionEvent)
+        and event.action_group_id == group_id
+        and event.approved is approved
+    }
+    return resolved == set(tool_call_ids)

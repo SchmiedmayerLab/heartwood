@@ -20,10 +20,16 @@ from typing import Any, cast
 
 import pytest
 
+import heartwood.core_adapter._state as session_state
 from heartwood.core_adapter import (
     AgentBackend,
+    BackendErrorCode,
+    BackendErrorEvent,
+    BackendEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
+    DeterministicAgentBackend,
+    PendingActionGroup,
     SessionResult,
     SessionService,
 )
@@ -130,6 +136,304 @@ def test_persisted_projection_does_not_construct_an_agent_backend(
     assert [message.content for message in projection.conversation if message.role == "user"] == [
         "Persist one synthetic task"
     ]
+
+
+def test_fatal_approval_outcome_rejects_fresh_commands_without_backend_reconciliation(
+    tmp_path: Path,
+) -> None:
+    class FailingResolutionBackend(DeterministicAgentBackend):
+        def resolve_confirmation(
+            self,
+            *,
+            session_id: str,  # noqa: ARG002
+            action_group_id: str,  # noqa: ARG002
+            approved: bool,  # noqa: ARG002
+        ) -> tuple[BackendErrorEvent, ...]:
+            return (
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.WORKER_STOPPED,
+                ),
+            )
+
+    writer = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=lambda root, session_id: SessionService.local_default(
+            root,
+            session_id=session_id,
+            backend=FailingResolutionBackend(),
+            env={},
+        ),
+    )
+    started = writer.handle(
+        SessionCommand.model_validate_json(
+            _command(CommandKind.CHAT, prompt="Run the synthetic action")
+        )
+    )
+    pending = writer.session_projection(session_id="session-1").pending_approval
+    assert pending is not None
+    failed = writer.handle(
+        SessionCommand.model_validate_json(
+            _command(
+                CommandKind.APPROVE,
+                command_id="approve-failing-action",
+                target_type="action-set",
+                target_id=pending.group_id,
+            )
+        )
+    )
+    assert started.events
+    assert failed.events[-1].payload["code"] == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    writer.stop()
+
+    constructed: list[str] = []
+
+    def unexpected_service(_root: Path, session_id: str) -> SessionService:
+        constructed.append(session_id)
+        pytest.fail("fatal replay constructed an agent backend")
+
+    reader = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=unexpected_service,
+    )
+    rejected = reader.handle(
+        SessionCommand.model_validate_json(
+            _command(
+                CommandKind.CHAT,
+                command_id="chat-after-fatal-outcome",
+                prompt="Do not run this task",
+            )
+        )
+    )
+    projection = reader.persisted_session_projection(session_id="session-1")
+
+    assert constructed == []
+    assert rejected.events[-1].payload["affects_lifecycle"] is False
+    assert projection.lifecycle.status == "error"
+    assert projection.lifecycle.can_steer is False
+    assert projection.available_commands == ()
+
+
+def test_fatal_approval_receipt_recovers_in_fresh_snapshot_without_backend_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingResolutionBackend(DeterministicAgentBackend):
+        def resolve_confirmation(
+            self,
+            *,
+            session_id: str,  # noqa: ARG002
+            action_group_id: str,  # noqa: ARG002
+            approved: bool,  # noqa: ARG002
+        ) -> tuple[BackendErrorEvent, ...]:
+            return (
+                BackendErrorEvent(
+                    error_code=BackendErrorCode.WORKER_STOPPED,
+                ),
+            )
+
+    use_fresh_backend = False
+    fresh_service_requests: list[str] = []
+
+    class InaccessibleFreshBackend(FailingResolutionBackend):
+        def reconcile(
+            self,
+            *,
+            session_id: str,  # noqa: ARG002
+            known_source_event_ids: frozenset[str],  # noqa: ARG002
+        ) -> tuple[BackendEvent, ...]:
+            pytest.fail("fatal snapshot reconciled the agent backend")
+
+        def pending_action_group(
+            self,
+            *,
+            session_id: str,  # noqa: ARG002
+        ) -> PendingActionGroup | None:
+            pytest.fail("fatal snapshot consulted pending backend actions")
+
+    def service_factory(root: Path, session_id: str) -> SessionService:
+        if use_fresh_backend:
+            fresh_service_requests.append(session_id)
+        backend_type = InaccessibleFreshBackend if use_fresh_backend else FailingResolutionBackend
+        return SessionService.local_default(
+            root,
+            session_id=session_id,
+            backend=backend_type(
+                persistence_path=root / session_id / ".deterministic-backend.json"
+            ),
+            env={},
+            clock=lambda: "2026-01-01T00:00:00Z",
+        )
+
+    writer = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=service_factory,
+    )
+    writer.handle(
+        SessionCommand.model_validate_json(
+            _command(CommandKind.CHAT, prompt="Run one synthetic action")
+        )
+    )
+    pending = writer.session_projection(session_id="session-1").pending_approval
+    assert pending is not None
+    original_write = session_state._write_private_json_atomic
+
+    def interrupt_completion(path: Path, payload: dict[str, object]) -> None:
+        if (
+            path.parent.name == ".commands"
+            and payload.get("command_id") == "fatal-interrupted-approval"
+            and payload.get("state") == "completed"
+        ):
+            raise OSError("synthetic fatal receipt interruption")
+        original_write(path, payload)
+
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", interrupt_completion)
+    with pytest.raises(OSError, match="synthetic fatal receipt interruption"):
+        writer.handle(
+            SessionCommand.model_validate_json(
+                _command(
+                    CommandKind.APPROVE,
+                    command_id="fatal-interrupted-approval",
+                    target_type="action-set",
+                    target_id=pending.group_id,
+                )
+            )
+        )
+    monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
+    writer.stop()
+    use_fresh_backend = True
+
+    reader = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=service_factory,
+    )
+    projection = reader.session_projection(session_id="session-1")
+    replayed = reader.replay_events(session_id="session-1")
+
+    assert projection.lifecycle.status == "error"
+    assert projection.lifecycle.can_steer is False
+    assert projection.available_commands == ()
+    assert fresh_service_requests == []
+    assert (
+        sum(
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+            for event in replayed
+        )
+        == 1
+    )
+    reader.stop()
+
+
+@pytest.mark.parametrize("after_backend_transition", [False, True])
+def test_fresh_gateway_reconciles_an_interrupted_approval_before_idle_replay(
+    tmp_path: Path,
+    after_backend_transition: bool,
+) -> None:
+    interruption_pending = True
+    resolution_calls = 0
+
+    class InterruptingBackend(DeterministicAgentBackend):
+        def resolve_confirmation(
+            self,
+            *,
+            session_id: str,
+            action_group_id: str,
+            approved: bool,
+        ) -> tuple[BackendEvent, ...]:
+            nonlocal interruption_pending, resolution_calls
+            resolution_calls += 1
+            if interruption_pending:
+                interruption_pending = False
+                if after_backend_transition:
+                    super().resolve_confirmation(
+                        session_id=session_id,
+                        action_group_id=action_group_id,
+                        approved=approved,
+                    )
+                raise OSError("synthetic interrupted approval")
+            return super().resolve_confirmation(
+                session_id=session_id,
+                action_group_id=action_group_id,
+                approved=approved,
+            )
+
+    def service_factory(root: Path, session_id: str) -> SessionService:
+        return SessionService.local_default(
+            root,
+            session_id=session_id,
+            backend=InterruptingBackend(
+                persistence_path=root / session_id / ".deterministic-backend.json"
+            ),
+            env={},
+            clock=lambda: "2026-01-01T00:00:00Z",
+        )
+
+    writer = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=service_factory,
+    )
+    writer.handle(
+        SessionCommand.model_validate_json(
+            _command(CommandKind.CHAT, prompt="Run one synthetic action")
+        )
+    )
+    pending = writer.session_projection(session_id="session-1").pending_approval
+    assert pending is not None
+    with pytest.raises(OSError, match="synthetic interrupted approval"):
+        writer.handle(
+            SessionCommand.model_validate_json(
+                _command(
+                    CommandKind.APPROVE,
+                    command_id="interrupted-approval",
+                    target_type="action-set",
+                    target_id=pending.group_id,
+                )
+            )
+        )
+    writer.stop()
+
+    reader = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        service_factory=service_factory,
+    )
+    first = reader.session_projection(session_id="session-1")
+    first_events = reader.replay_events(session_id="session-1")
+    second = reader.session_projection(session_id="session-1")
+    second_events = reader.replay_events(session_id="session-1")
+
+    assert first == second
+    assert first_events == second_events
+    if after_backend_transition:
+        assert first.lifecycle.status == "error"
+        assert first.lifecycle.can_steer is False
+        assert first.available_commands == ()
+        assert resolution_calls == 1
+        assert (
+            sum(
+                event.kind == EventKind.ERROR_RECORDED
+                and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+                for event in first_events
+            )
+            == 1
+        )
+    else:
+        assert first.lifecycle.status == "idle"
+        assert first.actions[0].state == "succeeded"
+        assert resolution_calls == 2
+        assert sum(event.kind == EventKind.TOOL_EXECUTION_RECORDED for event in first_events) == 1
+    reader.stop()
 
 
 def test_browser_replay_of_a_finished_session_does_not_construct_a_backend(

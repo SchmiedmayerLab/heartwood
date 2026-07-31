@@ -36,6 +36,7 @@ from heartwood.gateway._project_config import ProjectConfigError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.gateway._startup import InterfaceKind
+from heartwood.gateway._workspace import WorkspaceInspectionError
 from heartwood.schemas import (
     ActionConfirmationRequest,
     ApiRequest,
@@ -237,6 +238,41 @@ class RestGateway:
             except ModelSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(model_settings))
+        if (
+            len(parts) == 4
+            and parts[0] == "sessions"
+            and parts[2] == "workspace"
+            and request.method == "GET"
+        ):
+            try:
+                session_id = validate_session_id(parts[1])
+                self.gateway.session(session_id)
+                query = parse_qs(parsed.query)
+                path = query.get("path", ["."])[0]
+                response: object
+                if parts[3] == "tree":
+                    depth = _optional_int(query.get("depth", [None])[0])
+                    response = self.gateway.workspace_tree(path=path, depth=depth)
+                elif parts[3] == "file":
+                    if path == ".":
+                        return _error(422, "path query parameter is required")
+                    response = self.gateway.workspace_file(path=path)
+                elif parts[3] == "changes":
+                    response = self.gateway.workspace_changes(session_id=session_id)
+                elif parts[3] == "diff":
+                    if path == ".":
+                        return _error(422, "path query parameter is required")
+                    response = self.gateway.workspace_diff(
+                        session_id=session_id,
+                        path=path,
+                    )
+                else:
+                    return _error(404, "unknown workspace route")
+            except SessionNotFoundError as error:
+                return _error(404, error)
+            except (SessionCatalogError, WorkspaceInspectionError, ValueError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(response))
         if len(parts) != 3 or parts[0] != "sessions":
             return _error(404, "unknown gateway route")
         try:

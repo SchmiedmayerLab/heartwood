@@ -48,6 +48,10 @@ import type {
   SubscriptionDeviceLoginRequest,
   SubscriptionDeviceLogin,
   SubscriptionDevicePollRequest,
+  WorkspaceChanges,
+  WorkspaceDiff,
+  WorkspaceFile,
+  WorkspaceTree,
 } from "./types";
 
 const noopCleanup = (): void => undefined;
@@ -67,6 +71,14 @@ export interface HeartwoodClient {
   getSession(sessionId: string): Promise<SessionSummary>;
   renameSession(sessionId: string, title: string): Promise<SessionSummary>;
   getAuditExport(sessionId: string): Promise<AuditExport>;
+  getWorkspaceTree(
+    sessionId: string,
+    path?: string,
+    depth?: number,
+  ): Promise<WorkspaceTree>;
+  getWorkspaceFile(sessionId: string, path: string): Promise<WorkspaceFile>;
+  getWorkspaceChanges(sessionId: string): Promise<WorkspaceChanges>;
+  getWorkspaceDiff(sessionId: string, path: string): Promise<WorkspaceDiff>;
   postCommand(command: SessionCommand): Promise<SessionProjectionResponse>;
   replayEvents(
     sessionId: string,
@@ -195,6 +207,60 @@ export class GatewayClient implements HeartwoodClient {
     return parseJsonResponse<AuditExport>(
       await fetch(
         this.url(`/sessions/${encodeURIComponent(sessionId)}/audit-export`),
+      ),
+    );
+  }
+
+  async getWorkspaceTree(
+    sessionId: string,
+    path = ".",
+    depth?: number,
+  ): Promise<WorkspaceTree> {
+    const query = new URLSearchParams({ path });
+    if (depth !== undefined) query.set("depth", String(depth));
+    return parseJsonResponse<WorkspaceTree>(
+      await fetch(
+        this.url(
+          `/sessions/${encodeURIComponent(sessionId)}/workspace/tree?${query.toString()}`,
+        ),
+      ),
+    );
+  }
+
+  async getWorkspaceFile(
+    sessionId: string,
+    path: string,
+  ): Promise<WorkspaceFile> {
+    const query = new URLSearchParams({ path });
+    return parseJsonResponse<WorkspaceFile>(
+      await fetch(
+        this.url(
+          `/sessions/${encodeURIComponent(sessionId)}/workspace/file?${query.toString()}`,
+        ),
+      ),
+    );
+  }
+
+  async getWorkspaceChanges(sessionId: string): Promise<WorkspaceChanges> {
+    return parseJsonResponse<WorkspaceChanges>(
+      await fetch(
+        this.url(
+          `/sessions/${encodeURIComponent(sessionId)}/workspace/changes`,
+        ),
+      ),
+    );
+  }
+
+  async getWorkspaceDiff(
+    sessionId: string,
+    path: string,
+  ): Promise<WorkspaceDiff> {
+    const query = new URLSearchParams({ path });
+    return parseJsonResponse<WorkspaceDiff>(
+      await fetch(
+        this.url(
+          `/sessions/${encodeURIComponent(sessionId)}/workspace/diff?${query.toString()}`,
+        ),
       ),
     );
   }
