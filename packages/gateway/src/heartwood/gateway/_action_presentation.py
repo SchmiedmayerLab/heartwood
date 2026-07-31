@@ -64,7 +64,8 @@ def action_risk_label(risk: str) -> str:
 
 def action_state_label(state: str) -> str:
     """Return the researcher-facing label for a projected action state."""
-    return ACTION_STATE_LABELS.get(state, state.replace("-", " ").title())
+    fallback = display_safe_text(state.replace("-", " ").title())
+    return ACTION_STATE_LABELS.get(state, fallback)
 
 
 def display_safe_text(value: object, *, preserve_newlines: bool = False) -> str:

@@ -53,6 +53,7 @@ def test_action_settings_reject_malformed_values(value: object, message: str) ->
 
 def test_shared_action_presentation_handles_unknown_states_and_control_text() -> None:
     assert action_state_label("future-state") == "Future State"
+    assert action_state_label("future-\u202estate") == r"Future \u202eState"
     assert display_safe_text("safe\nline", preserve_newlines=True) == "safe\nline"
     assert display_safe_text("unsafe\x1b\u202e") == r"unsafe\x1b\u202e"
     assert display_safe_text("\U000e0001") == r"\U000e0001"
