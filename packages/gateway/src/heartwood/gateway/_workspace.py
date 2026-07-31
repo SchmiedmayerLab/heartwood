@@ -927,7 +927,7 @@ def _descriptor_matches_path(descriptor: int, path: str) -> bool:
     try:
         return os.path.samestat(
             os.fstat(descriptor),
-            Path(path).stat(follow_symlinks=False),
+            Path(path).stat(),
         )
     except OSError:
         return False

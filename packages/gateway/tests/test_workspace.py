@@ -510,6 +510,16 @@ def test_workspace_file_completes_short_regular_file_reads(
     assert result["bytes_read"] == len(content)
 
 
+def test_descriptor_path_matching_follows_verified_directory_alias(tmp_path: Path) -> None:
+    alias = tmp_path.parent / f"{tmp_path.name}-alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    descriptor = os.open(tmp_path, workspace_module._directory_open_flags())
+    try:
+        assert workspace_module._descriptor_matches_path(descriptor, str(alias))
+    finally:
+        os.close(descriptor)
+
+
 def test_workspace_uses_openhands_git_changes_and_diff(tmp_path: Path) -> None:
     project = ProjectContext(tmp_path)
     _initialize_git_file(
