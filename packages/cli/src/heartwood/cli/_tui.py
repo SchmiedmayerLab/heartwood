@@ -535,7 +535,10 @@ class HeartwoodTerminalApp(App[None]):
                 status.add_class("error")
             status.update(self._idle_status(state))
         if not busy:
-            composer.focus()
+            if self._projection is not None and self._projection.pending_approval is not None:
+                self._sync_approval(self._projection)
+            else:
+                composer.focus()
 
     def _refresh_working_status(self) -> None:
         runtime_running = (

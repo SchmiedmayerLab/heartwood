@@ -1120,6 +1120,59 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
     asyncio.run(exercise())
 
 
+def test_textual_terminal_restores_action_review_after_busy_projection_race() -> None:
+    class PendingSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "pending-race"
+            self.projection = SessionProjection(
+                session_id=self.session_id,
+                event_count=0,
+                revision=-1,
+            )
+
+        def replay(self) -> SessionProjection:
+            return self.projection
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
+    async def exercise() -> None:
+        session = PendingSession()
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(64, 22)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: app.query_one("#composer", Input).has_focus,
+                description="the initial composer focus",
+            )
+            app._set_busy(True, activity=interaction_activity("inspect the project"))
+            session.projection = SessionProjection(
+                session_id=session.session_id,
+                event_count=1,
+                revision=0,
+                pending_approval=ProjectionApprovalGroup(
+                    group_id="action-set-race",
+                    actions=(
+                        _approval_action(
+                            "tool-race",
+                            tool_name="file_editor",
+                            summary="Write the synthetic result",
+                            group_id="action-set-race",
+                        ),
+                    ),
+                ),
+            )
+            app._apply_projection(session.projection)
+            app._set_busy(False)
+            await pilot.pause()
+
+            assert app.query_one("#approval", Vertical).display
+            assert app.query_one("#composer", Input).disabled
+            assert app.query_one("#approval-options", OptionList).has_focus
+
+    asyncio.run(exercise())
+
+
 def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
     class LongBatchSession(InteractiveSession):
         def __init__(self) -> None:
