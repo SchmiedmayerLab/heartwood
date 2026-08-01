@@ -18,7 +18,9 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { HeartwoodClient, SessionProjectionResponse } from "./client";
 import {
+  credentialIsolation,
   emptyProjection,
+  genericCapabilities,
   syntheticEvents,
   syntheticProjection,
 } from "./test/fixtures";
@@ -127,6 +129,7 @@ const settings = (): ModelSettings => ({
       "System credential store for this Heartwood environment",
   },
   credential_bindings: [],
+  credential_isolation: credentialIsolation(),
 });
 
 const actions = (): ActionSettings => ({
@@ -862,6 +865,7 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({
       profile: this.currentSettings.profiles[0] ?? localProfile(),
       credential_status: "configured",
+      credential_isolation: credentialIsolation(),
       action_confirmation_mode: this.currentActions.confirmation_mode,
       policy_decision: {
         schema_version: "heartwood.model-call-decision.v1",
@@ -2980,19 +2984,7 @@ const startupPlan = (readiness: ProjectReadiness): StartupPlan => ({
   requires_confirmation: false,
   interface_supported: true,
   readiness,
-  capabilities: {
-    platform_id: readiness.platform_id,
-    display_name: "Workstation or container",
-    interfaces: ["terminal", "web", "notebook"],
-    browser_route: "direct",
-    managed_runtimes: ["llama-cpp", "vllm"],
-    scheduler: "none",
-    persistent_storage: "The project directory",
-    credential_backends: ["process", "keyring", "mounted-file"],
-    model_sources: ["heartwood", "openai", "anthropic", "custom"],
-    managed_model_connections: [],
-    validation_level: "ci",
-  },
+  capabilities: genericCapabilities({ platform_id: readiness.platform_id }),
 });
 
 const bundledSkill = (): SkillSummary => ({

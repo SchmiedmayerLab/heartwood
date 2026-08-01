@@ -21,10 +21,13 @@ from typing import Literal, assert_never
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._action_presentation import action_mode_label
+from heartwood.gateway._credential_isolation import assess_credential_isolation
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._model_catalog import (
+    BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalogError,
     ModelConnection,
+    active_model_connections,
     model_connections_from_mapping,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
@@ -346,6 +349,35 @@ def inspect_deployment(
             active_model, active_env
         )
         checks.append(ReadinessCheck("model-credential", credential_status, credential_summary))
+        isolation = assess_credential_isolation(
+            active_model,
+            adapter.capabilities(),
+            model_source=None if config is None else config.model_source,
+            model_connections=active_model_connections(
+                BUILT_IN_MODEL_CONNECTIONS,
+                () if config is None else config.additional_connections,
+                allowed_connection_ids=(
+                    option.connection_id for option in model_source_options(active_env)
+                ),
+            ),
+        )
+        isolation_action_mode = (
+            config.action_settings.confirmation_mode if config is not None else "always-confirm"
+        )
+        isolation_status: Literal["pass", "warning", "fail"]
+        if isolation.status in {"not-required", "qualified"}:
+            isolation_status = "pass"
+        elif isolation.allows(isolation_action_mode):
+            isolation_status = "warning"
+        else:
+            isolation_status = "fail"
+        checks.append(
+            ReadinessCheck(
+                "credential-isolation",
+                isolation_status,
+                isolation.summary,
+            )
+        )
     managed_local_available = False
     managed_local_active = False
     if config is not None and config.model_source == "heartwood":

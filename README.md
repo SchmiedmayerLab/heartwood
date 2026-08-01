@@ -46,7 +46,7 @@ docker run --rm -it \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
   ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
-  heartwood --interface web --host 0.0.0.0
+  heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
 Open [http://127.0.0.1:8767/](http://127.0.0.1:8767/), confirm the project, and choose an authorized model connection. Heartwood treats the mounted host directory as the project and keeps private state in `.heartwood/` inside it.

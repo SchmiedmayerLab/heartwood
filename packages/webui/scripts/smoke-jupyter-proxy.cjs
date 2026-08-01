@@ -14,6 +14,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const { chromium } = require("@playwright/test");
 
 const scriptDir = __dirname;
 const packageRoot = path.resolve(scriptDir, "..");
@@ -58,6 +59,8 @@ async function main() {
     await waitForServer(externalBaseUrl);
     trace("verifying web assets");
     await verifyWebAssets(externalBaseUrl);
+    trace("verifying browser route");
+    await verifyBrowserRoute(externalBaseUrl);
     trace("verifying session routes");
     await verifySessionRoutes(externalBaseUrl);
   } finally {
@@ -86,8 +89,12 @@ function startGateway() {
       gatewayPort,
       "--web-root",
       webRoot,
+      "--ingress-mode",
+      "jupyter-proxy",
+      "--public-origin",
+      externalOrigin,
       "--base-path",
-      "/",
+      externalBasePath,
     ],
     {
       cwd: workspace,
@@ -175,6 +182,16 @@ async function verifyWebAssets(baseUrl) {
       "Jupyter proxy web UI index did not contain the React mount point",
     );
   }
+  const normalizedBasePath = externalBasePath.replace(/\/$/, "");
+  if (
+    !html.includes(
+      `<meta name="heartwood-gateway-base" content="${normalizedBasePath}" />`,
+    )
+  ) {
+    throw new Error(
+      "Jupyter proxy web UI did not receive the gateway-owned base path",
+    );
+  }
   const assetMatch = /(?:src|href)="(\.\/assets\/[^"]+)"/.exec(html);
   const assetPath = assetMatch === null ? undefined : assetMatch[1];
   if (assetPath === undefined) {
@@ -185,6 +202,30 @@ async function verifyWebAssets(baseUrl) {
   const asset = await fetchText(new URL(assetPath, baseUrl).toString());
   if (asset.length === 0) {
     throw new Error("Jupyter proxy web UI asset was empty");
+  }
+}
+
+async function verifyBrowserRoute(baseUrl) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const startupUrl = new URL(
+      "project/startup?interface=web",
+      baseUrl,
+    ).toString();
+    const startupResponse = page.waitForResponse(
+      (response) => response.url() === startupUrl,
+    );
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    const response = await startupResponse;
+    if (!response.ok()) {
+      throw new Error(
+        `Jupyter proxy browser startup route returned ${response.status()}`,
+      );
+    }
+    await page.locator("#root").waitFor({ state: "visible" });
+  } finally {
+    await browser.close();
   }
 }
 

@@ -8,8 +8,10 @@
 
 import { expect, test, type Page, type Route } from "@playwright/test";
 import {
+  credentialIsolation,
   emptyProjection,
   event,
+  genericCapabilities,
   syntheticEvents,
   syntheticProjection,
 } from "../test/fixtures";
@@ -247,6 +249,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       persistence_description: "Credentials remain in this server process.",
     },
     credential_bindings: [] as Array<Record<string, unknown>>,
+    credential_isolation: credentialIsolation(),
     connections: [
       {
         connection_id: "heartwood",
@@ -345,19 +348,10 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     ],
   };
 
-  const capabilities: PlatformCapabilities = {
-    platform_id: "generic",
-    display_name: "Workstation or container",
-    interfaces: ["terminal", "web", "notebook"],
-    browser_route: "direct",
-    managed_runtimes: ["llama-cpp", "vllm"],
-    scheduler: "none",
+  const capabilities: PlatformCapabilities = genericCapabilities({
     persistent_storage: "Current project directory",
     credential_backends: ["process", "keyring"],
-    model_sources: ["heartwood", "openai", "anthropic", "custom"],
-    managed_model_connections: [],
-    validation_level: "ci",
-  };
+  });
   const isProjectInitialized = (): boolean => {
     projectInitialized ??= !new URL(page.url()).searchParams.has("new-project");
     return projectInitialized;
@@ -683,6 +677,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     json(route, {
       profile: modelSettings.profiles[0],
       credential_status: "configured",
+      credential_isolation: credentialIsolation(),
       action_confirmation_mode: "always-confirm",
       policy_decision: {
         decision: "allow",

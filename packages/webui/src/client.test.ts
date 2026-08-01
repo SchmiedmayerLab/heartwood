@@ -20,6 +20,13 @@ const projectionResponse = (
   projection: SessionProjection = syntheticProjection(),
 ) => ({ events, projection });
 
+const setGatewayBase = (value: string): void => {
+  const metadata = document.createElement("meta");
+  metadata.name = "heartwood-gateway-base";
+  metadata.content = value;
+  document.head.append(metadata);
+};
+
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
 
@@ -90,6 +97,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   FakeWebSocket.instances = [];
   FakeEventSource.instances = [];
+  document
+    .querySelectorAll('meta[name="heartwood-gateway-base"]')
+    .forEach((element) => element.remove());
   window.history.pushState({}, "", "/");
 });
 
@@ -820,8 +830,8 @@ describe("GatewayClient", () => {
     );
   });
 
-  it("infers the Jupyter proxy base path from the browser location", async () => {
-    window.history.pushState({}, "", "/user/synthetic/proxy/8767/");
+  it("uses the gateway-owned Jupyter proxy base path", async () => {
+    setGatewayBase("/user/synthetic/proxy/8767");
     const fetch = vi
       .fn()
       .mockResolvedValue(
@@ -840,12 +850,8 @@ describe("GatewayClient", () => {
     );
   });
 
-  it("preserves the complete Terra Leonardo proxy base path", async () => {
-    window.history.pushState(
-      {},
-      "",
-      "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/",
-    );
+  it("preserves the complete gateway-owned Terra proxy base path", async () => {
+    setGatewayBase("/proxy/terra-project/saturn-runtime/jupyter/proxy/8767");
     const fetch = vi
       .fn()
       .mockResolvedValue(

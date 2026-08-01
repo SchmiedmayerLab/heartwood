@@ -42,6 +42,8 @@ class TerraPlatformAdapter:
             display_name="Terra",
             interfaces=("terminal", "notebook"),
             browser_route="unavailable",
+            ingress_modes=("direct-loopback", "jupyter-proxy", "trusted-proxy"),
+            default_ingress_mode="jupyter-proxy",
             managed_runtimes=("llama-cpp", "vllm"),
             scheduler="provisioned",
             persistent_storage="A dedicated project under /home/jupyter",
@@ -54,6 +56,7 @@ class TerraPlatformAdapter:
                 "anthropic",
                 "custom",
             ),
+            platform_isolated_model_sources=(),
             managed_model_connections=("Stanford AI API Gateway",),
             validation_level="ci",
         )

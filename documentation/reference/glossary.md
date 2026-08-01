@@ -57,8 +57,14 @@ SPDX-License-Identifier: MIT
 **Heartwood-managed model**
 : A model whose files and inference runtime Heartwood manages on the compute environment where Heartwood is running, such as a workstation container, Terra runtime, or Carina allocation.
 
+**Ingress**
+: The validated network route through which a browser or API client reaches the Heartwood gateway, such as direct loopback, a Jupyter proxy, or an explicitly trusted platform proxy.
+
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.
+
+**Model credential boundary**
+: The technical separation, or documented lack of separation, between provider authentication used for model calls and the operating-system identity that runs agent tools.
 
 **OAuth**
 : A standard authorization protocol that lets a user grant account access without giving Heartwood the account password.

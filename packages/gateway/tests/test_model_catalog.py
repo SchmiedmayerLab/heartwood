@@ -21,6 +21,7 @@ from heartwood.gateway import (
     ModelCatalogError,
     ModelCatalogService,
     ModelConnection,
+    ModelProfile,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -31,7 +32,7 @@ from heartwood.gateway import (
     custom_model_connection,
     load_model_connections,
 )
-from heartwood.gateway._model_catalog import _model_compatibility
+from heartwood.gateway._model_catalog import _model_compatibility, active_model_connections
 from heartwood.schemas import PolicyProfile
 
 
@@ -118,6 +119,30 @@ def test_built_in_connections_are_non_secret_and_researcher_facing() -> None:
         assert serialized["group_label"]
         assert "token" not in serialized
         assert "api_key" not in serialized
+
+
+def test_connection_profile_match_covers_route_and_credential_contract() -> None:
+    connection = next(item for item in BUILT_IN_MODEL_CONNECTIONS if item.connection_id == "openai")
+    model = "openai/synthetic-model"
+    profile = ModelProfile(
+        profile_id=connection.connection_id,
+        model=model,
+        policy_endpoint=connection.request_endpoint(model),
+        credential_kind=connection.credential_kind,
+        api_key_env=connection.api_key_env,
+    )
+
+    assert connection.matches_profile(profile)
+    assert not connection.matches_profile(
+        replace(profile, policy_endpoint="https://example.org/v1/chat/completions")
+    )
+    assert not connection.matches_profile(
+        replace(
+            profile,
+            credential_kind="managed-identity",
+            api_key_env=None,
+        )
+    )
 
 
 def test_subscription_login_uses_shared_catalog_policy_and_profile(tmp_path: Path) -> None:
@@ -315,6 +340,37 @@ def test_connection_manifest_accepts_only_platform_sources(tmp_path: Path) -> No
 
     with pytest.raises(ModelCatalogError, match="must use source platform"):
         load_model_connections(path)
+
+
+def test_active_model_connections_share_filtering_and_validation() -> None:
+    research = ModelConnection(
+        connection_id="research-ai",
+        label="Research AI",
+        protocol="static",
+        model_prefix="openai/",
+        source="platform",
+        credential_kind="managed-identity",
+        policy_endpoint="https://models.example/v1/chat/completions",
+        catalog_endpoint=None,
+        static_models=("coding-model",),
+    )
+
+    active = active_model_connections(
+        BUILT_IN_MODEL_CONNECTIONS,
+        (research,),
+        allowed_connection_ids=("heartwood",),
+    )
+
+    assert [connection.connection_id for connection in active] == [
+        "heartwood",
+        "research-ai",
+    ]
+    with pytest.raises(ModelCatalogError, match="ids must be unique"):
+        active_model_connections(
+            (research,),
+            (research,),
+            allowed_connection_ids=(),
+        )
 
 
 def test_catalog_normalizes_exact_ids_sorts_status_and_caches() -> None:

@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 from heartwood.adapters._protocols import (
+    INGRESS_MODES,
     AdapterDetection,
     DatasetFingerprint,
     DataSourceAdapter,
+    IngressMode,
     PlatformAdapter,
     PlatformCapabilities,
     RegistryAdapter,
@@ -25,9 +27,11 @@ from heartwood.adapters.conformance import (
 )
 
 __all__ = [
+    "INGRESS_MODES",
     "AdapterDetection",
     "DataSourceAdapter",
     "DatasetFingerprint",
+    "IngressMode",
     "PlatformAdapter",
     "PlatformCapabilities",
     "RegistryAdapter",

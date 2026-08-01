@@ -58,6 +58,10 @@ export type ToolCallParser = "hermes" | "openai" | "qwen3_coder";
 export type CredentialKind =
   "environment" | "file" | "managed-identity" | "none";
 export type CredentialStatus = "available" | "configured" | "missing";
+export type CredentialIsolationBoundary =
+  "none" | "credential-free" | "application-scrubbed" | "platform-isolated";
+export type CredentialIsolationStatus =
+  "not-configured" | "not-required" | "review-required" | "qualified";
 export type CapabilityTier = "autonomous" | "supervised" | "experimental";
 export type ModelSource =
   | "anthropic"
@@ -369,12 +373,22 @@ export interface ModelSettingsResponse {
   active_profile: string | null;
   connections: ModelConnectionResponse[];
   credential_bindings: CredentialBindingStatusResponse[];
+  credential_isolation: CredentialIsolationResponse;
   credential_store: CredentialStoreAvailabilityResponse;
   model_source: string | null;
   presets: ModelPresetResponse[];
   profiles: ModelProfileResponse[];
   schema_version: "heartwood.model-settings.v1";
   source_options: ModelSourceOptionResponse[];
+}
+/**
+ * Model-authentication isolation relative to agent tools.
+ */
+export interface CredentialIsolationResponse {
+  boundary: CredentialIsolationBoundary;
+  status: CredentialIsolationStatus;
+  summary: string;
+  unattended_actions_allowed: boolean;
 }
 /**
  * Advanced non-secret provider defaults.
@@ -426,6 +440,7 @@ export interface ModelSourceOptionResponse {
  */
 export interface ModelValidationResponse {
   action_confirmation_mode: ActionConfirmationMode;
+  credential_isolation: CredentialIsolationResponse;
   credential_status: CredentialStatus;
   policy_decision: PolicyDecisionResponse;
   profile: ModelProfileResponse;
@@ -450,7 +465,9 @@ export interface PlatformCapabilitiesResponse {
   credential_backends: (
     "process" | "keyring" | "mounted-file" | "managed-identity"
   )[];
+  default_ingress_mode: "direct-loopback" | "jupyter-proxy" | "trusted-proxy";
   display_name: string;
+  ingress_modes: ("direct-loopback" | "jupyter-proxy" | "trusted-proxy")[];
   interfaces: InterfaceKind[];
   managed_model_connections: string[];
   managed_runtimes: ("llama-cpp" | "vllm")[];
@@ -464,6 +481,14 @@ export interface PlatformCapabilitiesResponse {
   )[];
   persistent_storage: string;
   platform_id: string;
+  platform_isolated_model_sources: (
+    | "anthropic"
+    | "custom"
+    | "heartwood"
+    | "openai"
+    | "openai-subscription"
+    | "stanford-ai-api-gateway"
+  )[];
   scheduler: "none" | "provisioned" | "slurm";
   validation_level: "ci" | "ci-and-live-synthetic";
 }

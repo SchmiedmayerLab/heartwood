@@ -24,6 +24,7 @@ from pathlib import Path
 
 import uvicorn
 
+from heartwood.adapters import INGRESS_MODES
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._interactive import (
     InteractionActivity,
@@ -45,6 +46,8 @@ from heartwood.gateway import (
     CredentialStoreError,
     DeploymentReadiness,
     GatewayAsgiApp,
+    IngressConfigurationError,
+    IngressPolicy,
     InterfaceKind,
     ModelArtifactError,
     ModelCatalogError,
@@ -63,6 +66,7 @@ from heartwood.gateway import (
     StartupPlan,
     action_mode_label,
     custom_model_connection_requires_token,
+    diagnostic_for,
     inspect_deployment,
     model_source_options,
 )
@@ -162,6 +166,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=8767, help="Browser interface port.")
+    parser.add_argument(
+        "--host-loopback-publication",
+        action="store_true",
+        help=(
+            "Assert that a wildcard container bind is published only on the host's "
+            "loopback interface."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     doctor = subparsers.add_parser("doctor", help="Inspect environment and setup readiness.")
     doctor.add_argument("--json", action="store_true", help="Print machine-readable diagnostics.")
@@ -397,7 +409,48 @@ def _build_parser() -> argparse.ArgumentParser:
     gateway_serve.add_argument("--host", default="127.0.0.1", help="Gateway bind host.")
     gateway_serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
     gateway_serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
-    gateway_serve.add_argument("--base-path", default="/", help="Base path behind a proxy.")
+    gateway_serve.add_argument(
+        "--ingress-mode",
+        choices=INGRESS_MODES,
+        help="Explicit network route to the gateway; defaults to the platform capability.",
+    )
+    gateway_serve.add_argument(
+        "--host-loopback-publication",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=(
+            "Assert that a wildcard container bind is published only on the host's "
+            "loopback interface."
+        ),
+    )
+    gateway_serve.add_argument(
+        "--public-origin",
+        help="Exact browser-visible origin for a proxy route.",
+    )
+    gateway_serve.add_argument(
+        "--base-path",
+        default="/",
+        help="Exact browser-visible gateway base path.",
+    )
+    gateway_serve.add_argument(
+        "--trusted-proxy-source",
+        action="append",
+        default=[],
+        help="Trusted proxy IP or CIDR; repeat for multiple sources.",
+    )
+    gateway_serve.add_argument(
+        "--trusted-identity-header",
+        help="Optional header carrying a trusted proxy identity.",
+    )
+    gateway_serve.add_argument(
+        "--trusted-identity",
+        help="Exact trusted proxy identity value.",
+    )
+    gateway_serve.add_argument(
+        "--proxy-strips-prefix",
+        action="store_true",
+        help="Declare that a trusted proxy removes the external base path.",
+    )
     return parser
 
 
@@ -441,6 +494,13 @@ def _main(argv: Sequence[str] | None = None) -> int:
             port=args.port,
             web_root=args.web_root,
             base_path=args.base_path,
+            ingress_mode=args.ingress_mode,
+            public_origin=args.public_origin,
+            trusted_proxy_sources=args.trusted_proxy_source,
+            trusted_identity_header=args.trusted_identity_header,
+            trusted_identity=args.trusted_identity,
+            proxy_strips_prefix=args.proxy_strips_prefix,
+            host_loopback_publication=args.host_loopback_publication,
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
@@ -474,6 +534,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 port=args.port,
                 web_root=_DEFAULT_WEB_ROOT,
                 base_path="/",
+                host_loopback_publication=args.host_loopback_publication,
             )
         if startup.phase == "project-review" and not _review_project(project):
             print("No project files were changed.")
@@ -517,6 +578,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 port=args.port,
                 web_root=_DEFAULT_WEB_ROOT,
                 base_path="/",
+                host_loopback_publication=args.host_loopback_publication,
             )
 
     gateway = configured_gateway or _run_with_progress(
@@ -651,6 +713,7 @@ def _launch_options(project: ProjectContext, args: argparse.Namespace) -> Launch
         web=args.interface == "web",
         web_host=args.host,
         web_port=args.port,
+        host_loopback_publication=args.host_loopback_publication,
         startup_timeout=getattr(args, "startup_timeout", 600),
         prompt=args.prompt,
         prompt_file=args.prompt_file,
@@ -1305,7 +1368,13 @@ def _handle_actions(
 
 
 def _format_model_settings(settings: ModelSettingsResponse) -> str:
-    lines = ["Heartwood models", "", "Connections:"]
+    lines = [
+        "Heartwood models",
+        "",
+        f"Credential isolation: {settings['credential_isolation']['summary']}",
+        "",
+        "Connections:",
+    ]
     for connection in settings["connections"]:
         lines.append(
             f"  {connection['connection_id']}  {connection['label']}  "
@@ -1357,6 +1426,7 @@ def _format_model_validation(validation: ModelValidationResponse) -> str:
             f"Profile: {profile['profile_id']}",
             f"Model: {profile['model']}",
             f"Credentials: {validation['credential_status']}",
+            f"Credential isolation: {validation['credential_isolation']['summary']}",
             f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
             f"Policy: {decision['decision']} ({decision['reason']})",
         )
@@ -1704,16 +1774,52 @@ def _handle_serve(
     port: int,
     web_root: Path,
     base_path: str,
+    ingress_mode: str | None = None,
+    public_origin: str | None = None,
+    trusted_proxy_sources: Sequence[str] = (),
+    trusted_identity_header: str | None = None,
+    trusted_identity: str | None = None,
+    proxy_strips_prefix: bool = False,
+    host_loopback_publication: bool = False,
 ) -> int:
     if not web_root.exists():
         msg = f"web UI assets not found: {web_root}"
         raise SystemExit(msg)
+    capabilities = select_platform_adapter(os.environ).capabilities()
+    selected_ingress_mode = ingress_mode or capabilities.default_ingress_mode
+    diagnostic = diagnostic_for("gateway-ingress")
+    if selected_ingress_mode not in capabilities.ingress_modes:
+        raise SystemExit(
+            f"{diagnostic.code}: {capabilities.display_name} does not allow "
+            f"{selected_ingress_mode} gateway ingress"
+        )
+    try:
+        ingress = IngressPolicy.create(
+            mode=selected_ingress_mode,
+            bind_host=host,
+            bind_port=port,
+            external_origin=public_origin,
+            external_base_path=base_path,
+            prefix_handling="strip" if proxy_strips_prefix else None,
+            trusted_proxy_sources=trusted_proxy_sources,
+            trusted_identity_header=trusted_identity_header,
+            trusted_identity=trusted_identity,
+            host_loopback_publication=host_loopback_publication,
+        )
+    except IngressConfigurationError as error:
+        raise SystemExit(f"{diagnostic.code}: {error}") from error
     app = GatewayAsgiApp(
         SessionGateway(project=project),
         static_dir=web_root,
-        static_base_path=base_path,
+        ingress=ingress,
     )
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        proxy_headers=False,
+    )
     return 0
 
 
