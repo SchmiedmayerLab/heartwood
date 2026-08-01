@@ -37,7 +37,10 @@ print("synthetic")
       screen.getByRole("heading", { level: 2, name: "Result" }),
     ).toBeVisible();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
-    expect(screen.getByRole("table")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(
+      screen.getByRole("region", { name: "Scrollable data table" }),
+    ).toHaveAttribute("tabindex", "0");
     expect(screen.getByText("Review this result.")).toBeVisible();
     expect(screen.getByText('print("synthetic")')).toBeVisible();
   });

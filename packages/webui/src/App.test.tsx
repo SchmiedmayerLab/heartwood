@@ -1998,6 +1998,27 @@ describe("App", () => {
         tone: "attention",
         recoverable: true,
       },
+      taskPlan: [
+        {
+          title: "Review the analysis",
+          status: "in-progress",
+          statusLabel: "In\u202eProgress",
+        },
+      ],
+      subagents: [
+        {
+          invocationId: "task-review",
+          taskId: "task-review",
+          agentName: "research-planner",
+          roleLabel: "Research Planner",
+          status: "running",
+          statusLabel: "Work\u2066ing",
+          taskSummary: "Review the analysis",
+          resultSummary: null,
+          parentSessionId: "session-test",
+          parentActionId: "task-action",
+        },
+      ],
       availableCommands: ["chat", "resume"],
       paused: true,
     });
@@ -2008,6 +2029,10 @@ describe("App", () => {
     expect(
       screen.getByText("Review\\u2066the task before resuming."),
     ).toBeVisible();
+    expect(screen.getByText("In\\u202eProgress")).toBeInTheDocument();
+    expect(
+      screen.getByText("Research Planner (Work\\u2066ing)"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Agent\u202ePaused")).not.toBeInTheDocument();
   });
 

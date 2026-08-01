@@ -552,16 +552,17 @@ export class GatewayClient implements HeartwoodClient {
       };
       socket.onopen = (): void => onState("connected");
       socket.onmessage = (message): void => {
+        let payload: SessionProjectionResponse;
         try {
-          onState("connected");
-          observer.onProjection(
-            parseProjectionPayload(String(message.data)).projection,
-          );
+          payload = parseProjectionPayload(String(message.data));
         } catch (caught) {
           onError(asError(caught));
           socket.close(1002, "invalid Heartwood projection");
           openFallback();
+          return;
         }
+        onState("connected");
+        observer.onProjection(payload.projection);
       };
       socket.onclose = (): void => openFallback();
       socket.onerror = (): void => {
@@ -618,17 +619,19 @@ export class GatewayClient implements HeartwoodClient {
       }
     };
     source.addEventListener("heartwood-session-events", (message): void => {
+      let payload: SessionProjectionResponse;
       try {
-        onState("connected");
-        observer.onProjection(
-          parseProjectionPayload((message as MessageEvent<string>).data)
-            .projection,
+        payload = parseProjectionPayload(
+          (message as MessageEvent<string>).data,
         );
       } catch (caught) {
         source.close();
         onState("degraded");
         onError(asError(caught));
+        return;
       }
+      onState("connected");
+      observer.onProjection(payload.projection);
     });
     return (): void => {
       source.close();

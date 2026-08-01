@@ -1432,6 +1432,7 @@ def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progre
 
     async def exercise() -> None:
         app = HeartwoodTerminalApp(IdleSession())
+        assert app._idle_status("ready") == "Ready · Action Review"
         async with app.run_test(size=(72, 20)):
             app._set_busy(
                 True,

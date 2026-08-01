@@ -1119,7 +1119,8 @@ class HeartwoodTerminalApp(App[None]):
         self._submit(directive)
 
     def _idle_status(self, state: str) -> str:
-        return f"{state} · {self._mode_label}"
+        display_state = "Ready" if state == "ready" else state
+        return f"{display_state} · {self._mode_label}"
 
 
 def run_terminal(

@@ -581,7 +581,7 @@ const RuntimeStatus = ({
             {projection.taskPlan.map((task, index) => (
               <li key={`${index}-${task.title}`}>
                 <span>{displaySafeText(task.title)}</span>
-                <small>{task.statusLabel}</small>
+                <small>{displaySafeText(task.statusLabel)}</small>
               </li>
             ))}
           </ol>
@@ -633,7 +633,8 @@ const RuntimeStatus = ({
             {projection.subagents.map((subagent) => (
               <li key={subagent.invocationId}>
                 <span>
-                  {displaySafeText(subagent.roleLabel)} ({subagent.statusLabel})
+                  {displaySafeText(subagent.roleLabel)} (
+                  {displaySafeText(subagent.statusLabel)})
                 </span>
                 {subagent.taskSummary ?
                   <small>Task: {displaySafeText(subagent.taskSummary)}</small>

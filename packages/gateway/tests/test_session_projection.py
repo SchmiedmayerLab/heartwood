@@ -780,8 +780,23 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
                 0,
                 EventKind.TOOL_CALL_PROPOSED,
                 {
-                    "tool_call_id": "task-call-1",
+                    "tool_call_id": "task-call-parent",
                     "action_id": "action-1",
+                    "tool_name": "task",
+                    "kind": "task",
+                    "risk": "low",
+                    "arguments": {
+                        "description": "Do not use this parent-action fallback",
+                        "subagent_type": "research-planner",
+                    },
+                },
+            ),
+            _event(
+                1,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "task-call-1",
+                    "action_id": "action-2",
                     "tool_name": "task",
                     "kind": "task",
                     "risk": "low",
@@ -792,7 +807,7 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
                 },
             ),
             _event(
-                1,
+                2,
                 EventKind.SUBAGENT_UPDATED,
                 {
                     "subagent": {
@@ -806,11 +821,11 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
                 },
             ),
             _event(
-                2,
+                3,
                 EventKind.TOOL_EXECUTION_RECORDED,
                 {
                     "tool_call_id": "task-call-1",
-                    "action_id": "action-1",
+                    "action_id": "action-2",
                     "tool_name": "task",
                     "exit_code": 0,
                     "summary": "Plan review completed",

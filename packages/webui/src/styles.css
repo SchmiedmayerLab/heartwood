@@ -634,7 +634,7 @@ summary:focus-visible {
 .markdown-content ol,
 .markdown-content blockquote,
 .markdown-content pre,
-.markdown-content table {
+.markdown-table-scroll {
   margin: 0.55em 0;
 }
 
@@ -676,11 +676,13 @@ summary:focus-visible {
   background: transparent;
 }
 
-.markdown-content table {
-  display: block;
+.markdown-table-scroll {
   max-width: 100%;
-  border-collapse: collapse;
   overflow-x: auto;
+}
+
+.markdown-table-scroll table {
+  border-collapse: collapse;
 }
 
 .markdown-content th,

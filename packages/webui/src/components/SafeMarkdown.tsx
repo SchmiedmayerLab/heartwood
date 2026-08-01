@@ -82,7 +82,16 @@ const markdownComponents: Components = {
     </span>
   ),
   pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
-  table: ({ children }) => <table tabIndex={0}>{children}</table>,
+  table: ({ children }) => (
+    <div
+      aria-label="Scrollable data table"
+      className="markdown-table-scroll"
+      role="region"
+      tabIndex={0}
+    >
+      <table>{children}</table>
+    </div>
+  ),
 };
 
 const normalizeHeadingHierarchy =

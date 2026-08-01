@@ -1169,11 +1169,13 @@ def _enrich_subagent(
     actions: tuple[ProjectionActionRecord, ...],
 ) -> ProjectionSubagent:
     action = next(
+        (item for item in actions if item.tool_call_id == subagent.invocation_id),
+        None,
+    ) or next(
         (
             item
             for item in actions
-            if item.tool_call_id == subagent.invocation_id
-            or item.action_id == subagent.parent_action_id
+            if subagent.parent_action_id and item.action_id == subagent.parent_action_id
         ),
         None,
     )

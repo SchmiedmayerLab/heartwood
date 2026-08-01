@@ -1286,6 +1286,29 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("does not misclassify a WebSocket projection consumer failure", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const consumerFailure = new Error("Synthetic projection consumer failure");
+    const onError = vi.fn();
+    const client = new GatewayClient();
+
+    const cleanup = client.streamSession("session-test", undefined, {
+      onError,
+      onProjection: () => {
+        throw consumerFailure;
+      },
+    });
+
+    expect(() =>
+      FakeWebSocket.instances[0]?.emit(syntheticProjection()),
+    ).toThrow(consumerFailure);
+    expect(onError).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances[0]?.close).not.toHaveBeenCalled();
+    expect(FakeEventSource.instances).toHaveLength(0);
+    cleanup();
+  });
+
   it("reports malformed streamed JSON with recovery guidance", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -1328,6 +1351,41 @@ describe("GatewayClient", () => {
 
       expect(onError).toHaveBeenCalledOnce();
       expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
+    } finally {
+      if (websocketDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
+      }
+    }
+  });
+
+  it("does not misclassify an SSE projection consumer failure", () => {
+    const websocketDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    Reflect.deleteProperty(globalThis, "WebSocket");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const consumerFailure = new Error("Synthetic projection consumer failure");
+    const onError = vi.fn();
+
+    try {
+      const cleanup = new GatewayClient().streamSession(
+        "session-test",
+        undefined,
+        {
+          onError,
+          onProjection: () => {
+            throw consumerFailure;
+          },
+        },
+      );
+
+      expect(() =>
+        FakeEventSource.instances[0]?.emit(syntheticProjection()),
+      ).toThrow(consumerFailure);
+      expect(onError).not.toHaveBeenCalled();
+      expect(FakeEventSource.instances[0]?.close).not.toHaveBeenCalled();
+      cleanup();
     } finally {
       if (websocketDescriptor !== undefined) {
         Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
