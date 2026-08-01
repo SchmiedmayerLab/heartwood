@@ -900,6 +900,11 @@ def test_projection_correlates_typed_action_review_execution_and_paths() -> None
                     "result_truncated": False,
                 },
             ),
+            _event(
+                4,
+                EventKind.AGENT_MESSAGE_EMITTED,
+                {"content": "The synthetic result is ready for review."},
+            ),
         ),
         session_id="session-1",
     )
@@ -925,6 +930,7 @@ def test_projection_correlates_typed_action_review_execution_and_paths() -> None
     assert ".heartwood" not in str(action.affected_paths)
     assert ".git" not in str(action.affected_paths)
     assert "duplicate" not in str(action.affected_paths)
+    assert [item.suggestion_id for item in projection.suggestions] == ["review-changes"]
 
 
 def test_projection_keeps_a_safe_path_for_read_only_file_actions() -> None:

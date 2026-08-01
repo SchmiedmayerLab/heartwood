@@ -1025,6 +1025,8 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
                 status_label="Complete",
                 parent_session_id="session-test",
                 parent_action_id="action-1",
+                task_summary="Review the synthetic analysis plan",
+                result_summary="Plan review completed",
             ),
         ),
     )
@@ -1043,6 +1045,8 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "[x] Inspect the synthetic cohort (Complete)" in rendered
     assert "[ ] Write the aggregate result (In Progress)" in rendered
     assert "Research Planner: Complete" in rendered
+    assert "Task: Review the synthetic analysis plan" in rendered
+    assert "Result: Plan review completed" in rendered
     assert "task-call-1" not in rendered
     assert lines[-2:] == (
         "Allow the complete set once: /allow",

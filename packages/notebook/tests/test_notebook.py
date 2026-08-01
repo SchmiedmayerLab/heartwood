@@ -579,6 +579,8 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
                 status_label="Working",
                 parent_session_id="notebook-complete-projection",
                 parent_action_id="action-1",
+                task_summary="Review the synthetic analysis plan",
+                result_summary="Plan review is in progress",
             ),
         ),
         streaming_text="Checking column types",
@@ -596,7 +598,11 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
     assert view_model.streaming_text == "Checking column types"
     assert sections["Conversation"][-1] == "Agent (working): Checking column types"
     assert sections["Tasks"] == ("In Progress: Validate the synthetic cohort",)
-    assert sections["Specialists"] == ("Research Planner: Working",)
+    assert sections["Specialists"] == (
+        "Research Planner: Working\n"
+        "Task: Review the synthetic analysis plan\n"
+        "Result: Plan review is in progress",
+    )
     assert sections["Runtime"][-1] == (
         "Usage: 128 input, 32 output tokens across 2 calls (synthetic-model)"
     )
