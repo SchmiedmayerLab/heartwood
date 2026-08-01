@@ -804,6 +804,7 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     workflow = _read(".github/workflows/gpu-container-image.yml")
     manual_workflow = _read(".github/workflows/gpu-container-pr.yml")
     immutable_tag_action = _read(".github/actions/create-immutable-image-tag/action.yml")
+    current_main_action = _read(".github/actions/check-current-main/action.yml")
     pull_request_workflow = _read(".github/workflows/gpu-container-pr-validation.yml")
     pull_request_validation = _read(".github/workflows/pull-request-validation.yml")
     qualification = _read(".github/workflows/gpu-qualification.yml")
@@ -924,10 +925,50 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     )
     assert "edge-gpu-nvidia" not in main_build
     assert "edge-terra-gpu-nvidia" not in main_build
-    assert "refusing to move GPU channel tags from a stale main workflow" in workflow
+    assert workflow.count("uses: ./.github/actions/check-current-main") == 1
+    assert "if: steps.main-revision.outputs.current == 'true'" in workflow
+    assert 'bash "${GITHUB_ACTION_PATH}/check.sh"' in current_main_action
     assert "promoted ${channel} digest does not match" in workflow
     assert "allow-ghsas: GHSA-w8v5-vhqr-4h9v, GHSA-rrmf-rvhw-rf47" in dependency_review
     assert "GHSA-8fr4-5q9j-m8gm" not in dependency_review
+
+
+def test_current_main_action_skips_superseded_workflows(tmp_path: Path) -> None:
+    script = _repo_root() / ".github/actions/check-current-main/check.sh"
+    expected_sha = "a" * 40
+
+    current_output = tmp_path / "current-output"
+    current = subprocess.run(
+        ["bash", str(script), expected_sha, expected_sha],
+        check=False,
+        capture_output=True,
+        env={**os.environ, "GITHUB_OUTPUT": str(current_output)},
+        text=True,
+    )
+    assert current.returncode == 0
+    assert current_output.read_text(encoding="utf-8") == "current=true\n"
+
+    stale_output = tmp_path / "stale-output"
+    stale = subprocess.run(
+        ["bash", str(script), expected_sha, "b" * 40],
+        check=False,
+        capture_output=True,
+        env={**os.environ, "GITHUB_OUTPUT": str(stale_output)},
+        text=True,
+    )
+    assert stale.returncode == 0
+    assert stale_output.read_text(encoding="utf-8") == "current=false\n"
+    assert "Superseded main workflow" in stale.stdout
+
+    invalid = subprocess.run(
+        ["bash", str(script), "invalid", expected_sha],
+        check=False,
+        capture_output=True,
+        env={**os.environ, "GITHUB_OUTPUT": str(tmp_path / "invalid-output")},
+        text=True,
+    )
+    assert invalid.returncode != 0
+    assert "Invalid expected main revision" in invalid.stderr
 
 
 def test_gpu_qualification_workflow_offers_every_candidate_configuration() -> None:
@@ -1266,6 +1307,7 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
 def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     publish = _read(".github/workflows/container-image.yml")
     immutable_tag_action = _read(".github/actions/create-immutable-image-tag/action.yml")
+    current_main_action = _read(".github/actions/check-current-main/action.yml")
     smoke = _read(".github/workflows/container-smoke.yml")
     capable_workflow = _read(".github/workflows/capable-model.yml")
     compose = _read("images/generic/compose.yaml")
@@ -1322,8 +1364,10 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
         'if raw="$(docker buildx imagetools inspect --raw "${CANDIDATE_TAG}" 2>/dev/null)"; then'
         in immutable_tag_action
     )
-    assert "refusing to move the generic channel tag from a stale main workflow" in publish
-    assert "refusing to move the Terra channel tag from a stale main workflow" in publish
+    assert publish.count("uses: ./.github/actions/check-current-main") == 2
+    assert publish.count("if: steps.main-revision.outputs.current == 'true'") == 2
+    assert "value: ${{ steps.check.outputs.current }}" in current_main_action
+    assert 'bash "${GITHUB_ACTION_PATH}/check.sh"' in current_main_action
     assert publish.index("Build and stage image by digest") < publish.index(
         "Run staged generic OpenHands smoke"
     )
