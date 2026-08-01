@@ -745,6 +745,34 @@ def test_asgi_injects_the_gateway_owned_jupyter_base_path(tmp_path: Path) -> Non
     )
 
 
+def test_asgi_static_uses_ascii_idna_origin_in_browser_policy(tmp_path: Path) -> None:
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<main>Heartwood</main>", encoding="utf-8")
+    app = GatewayAsgiApp(
+        _gateway(tmp_path / "project"),
+        static_dir=static_dir,
+        ingress=IngressPolicy.create(
+            mode="jupyter-proxy",
+            external_origin="https://m\u00fcnchen.example",
+            external_base_path="/proxy/8767",
+        ),
+    )
+
+    sent = asyncio.run(
+        _http_call(
+            app,
+            method="GET",
+            path="/",
+            origin="https://xn--mnchen-3ya.example",
+        )
+    )
+
+    assert sent[0]["status"] == 200
+    headers = dict(cast(list[tuple[bytes, bytes]], sent[0]["headers"]))
+    assert b"connect-src 'self' wss://xn--mnchen-3ya.example" in headers[b"content-security-policy"]
+
+
 def test_browser_base_path_injection_is_idempotent_and_binary_safe() -> None:
     existing = (
         b'<html><head><meta name="heartwood-gateway-base" content="/existing" /></head></html>'

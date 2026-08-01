@@ -117,6 +117,7 @@ def test_direct_loopback_normalizes_one_prefixed_route() -> None:
         ({"external_base_path": "/../gateway"}, "traversal"),
         ({"external_origin": "https://heartwood .example"}, "whitespace"),
         ({"external_origin": "https://heartwood.example:invalid"}, "invalid port"),
+        ({"external_origin": "https://\ud800.example"}, "not valid IDNA"),
         ({"trusted_proxy_sources": ("not-a-network",)}, "invalid trusted proxy"),
         ({"trusted_identity_header": "x-heartwood-proxy"}, "configured together"),
         (
@@ -191,6 +192,16 @@ def test_ingress_normalizes_localhost_and_an_exact_base_route() -> None:
     assert policy.validate_scope(_scope("/heartwood")).path == "/"
 
 
+def test_ingress_normalizes_unicode_origin_hostname_to_idna() -> None:
+    policy = IngressPolicy.create(
+        mode="jupyter-proxy",
+        external_origin="https://m\u00fcnchen.example",
+        external_base_path="/proxy/8767",
+    )
+
+    assert policy.external_origin == "https://xn--mnchen-3ya.example"
+
+
 def test_direct_loopback_validates_the_actual_request_source() -> None:
     policy = IngressPolicy.create()
 
@@ -235,6 +246,11 @@ def test_direct_loopback_rejects_host_and_origin_injection() -> None:
         policy.validate_scope(_scope(host="attacker.example"))
     with pytest.raises(IngressRequestError, match="request origin"):
         policy.validate_scope(_scope(origin="https://attacker.example"))
+
+
+def test_direct_loopback_rejects_non_idna_request_authority() -> None:
+    with pytest.raises(IngressRequestError, match="request authority is malformed"):
+        IngressPolicy.create().validate_scope(_scope(host="\x80"))
 
 
 def test_websocket_requires_the_exact_origin() -> None:

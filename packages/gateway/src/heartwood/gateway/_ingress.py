@@ -504,9 +504,14 @@ def _normalize_origin(value: str) -> str:
     except ValueError as error:
         raise IngressConfigurationError("gateway external origin has an invalid port") from error
     default_port = 80 if parsed.scheme == "http" else 443
-    authority = (
-        _authority(parsed.hostname, port) if port != default_port else _host(parsed.hostname)
-    )
+    try:
+        authority = (
+            _authority(parsed.hostname, port) if port != default_port else _host(parsed.hostname)
+        )
+    except UnicodeError as error:
+        raise IngressConfigurationError(
+            "gateway external origin hostname is not valid IDNA"
+        ) from error
     return f"{parsed.scheme.lower()}://{authority}"
 
 
@@ -705,7 +710,10 @@ def _normalize_authority(value: str) -> str:
         port = parsed.port
     except ValueError as error:
         raise IngressRequestError("request authority has an invalid port") from error
-    return _authority(parsed.hostname, port)
+    try:
+        return _authority(parsed.hostname, port)
+    except UnicodeError as error:
+        raise IngressRequestError("request authority is malformed") from error
 
 
 def _origin_authority(origin: SplitResult) -> str:
@@ -726,5 +734,5 @@ def _host(value: str) -> str:
     try:
         address = ipaddress.ip_address(normalized)
     except ValueError:
-        return normalized
+        return normalized.encode("idna").decode("ascii")
     return f"[{address}]" if address.version == 6 else str(address)
