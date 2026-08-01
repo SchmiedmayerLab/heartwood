@@ -13,6 +13,7 @@ import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Toolt
 import { LoaderCircle, Menu, Pencil, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import type { ProjectionResearcherStatus, SessionSummary } from "../types";
+import { displaySafeText } from "./SafeMarkdown";
 
 interface WorkspaceHeaderProps {
   actionModeLabel: string;
@@ -201,11 +202,17 @@ const StatusBadge = ({
     return <Badge variant="secondary">Setup needed</Badge>;
   }
   if (researcherStatus?.tone === "danger") {
-    return <Badge variant="destructiveLight">{researcherStatus.label}</Badge>;
+    return (
+      <Badge variant="destructiveLight">
+        {displaySafeText(researcherStatus.label)}
+      </Badge>
+    );
   }
   return (
     <Badge variant="secondary">
-      {researcherStatus?.label ?? "Loading session"}
+      {researcherStatus === null ?
+        "Loading session"
+      : displaySafeText(researcherStatus.label)}
     </Badge>
   );
 };

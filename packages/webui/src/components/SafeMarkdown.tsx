@@ -141,8 +141,11 @@ class MarkdownBoundary extends Component<
 }
 
 export const SafeMarkdown = ({ content }: SafeMarkdownProps) => {
-  const safeContent = displaySafeText(content);
-  const truncated = safeContent.length > MAX_RENDERED_CHARACTERS;
+  const rawContent = content.slice(0, MAX_RENDERED_CHARACTERS);
+  const safeContent = displaySafeText(rawContent);
+  const truncated =
+    content.length > MAX_RENDERED_CHARACTERS ||
+    safeContent.length > MAX_RENDERED_CHARACTERS;
   const rendered =
     truncated ? safeContent.slice(0, MAX_RENDERED_CHARACTERS) : safeContent;
   return (
@@ -179,21 +182,22 @@ const safeUrl = (value: string): string => {
 };
 
 export const displaySafeText = (value: string): string => {
-  let rendered = "";
+  const fragments: string[] = [];
   for (const character of value) {
     const codepoint = character.codePointAt(0) ?? 0;
     if (character === "\n" || character === "\t") {
-      rendered += character;
+      fragments.push(character);
     } else if (isDisplayControl(codepoint)) {
-      rendered +=
+      fragments.push(
         codepoint <= 0xff ? `\\x${hex(codepoint, 2)}`
         : codepoint <= 0xffff ? `\\u${hex(codepoint, 4)}`
-        : `\\U${hex(codepoint, 8)}`;
+        : `\\U${hex(codepoint, 8)}`,
+      );
     } else {
-      rendered += character;
+      fragments.push(character);
     }
   }
-  return rendered;
+  return fragments.join("");
 };
 
 const isDisplayControl = (codepoint: number): boolean =>

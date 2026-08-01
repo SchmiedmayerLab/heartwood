@@ -569,9 +569,9 @@ const RuntimeStatus = ({
             size={16}
           />
         : <ListChecks aria-hidden="true" size={16} />}
-        <strong>{projection.researcherStatus.label}</strong>
+        <strong>{displaySafeText(projection.researcherStatus.label)}</strong>
       </div>
-      <p>{projection.researcherStatus.detail}</p>
+      <p>{displaySafeText(projection.researcherStatus.detail)}</p>
       {projection.taskPlan.length > 0 ?
         <details>
           <summary>

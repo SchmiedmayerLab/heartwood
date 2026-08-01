@@ -1976,6 +1976,41 @@ describe("App", () => {
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("resume"));
   });
 
+  it("makes researcher status control characters visible in every surface", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    client.projections.set("session-test", {
+      ...emptyProjection(),
+      lifecycle: {
+        status: "paused",
+        canPause: false,
+        canResume: true,
+        canSteer: true,
+      },
+      researcherStatus: {
+        code: "paused",
+        label: "Agent\u202ePaused",
+        detail: "Review\u2066the task before resuming.",
+        tone: "attention",
+        recoverable: true,
+      },
+      availableCommands: ["chat", "resume"],
+      paused: true,
+    });
+
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(await screen.findAllByText("Agent\\u202ePaused")).toHaveLength(2);
+    expect(
+      screen.getByText("Review\\u2066the task before resuming."),
+    ).toBeVisible();
+    expect(screen.queryByText("Agent\u202ePaused")).not.toBeInTheDocument();
+  });
+
   it("renders the pending OpenHands action set and sends one batch decision", async () => {
     const client = new PendingClient();
     client.currentSettings = {
