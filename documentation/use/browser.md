@@ -88,6 +88,8 @@ Terminal command text is not treated as authoritative file evidence.
 
 Bind Heartwood to loopback unless a trusted authenticated proxy terminates access.
 The development server and generic container do not add user authentication by themselves.
+Platform operators must configure the typed ingress mode, exact origin, base path, and trusted source boundary rather than relying on forwarded headers implicitly.
+See [Security and Controlled Data](../operate/security.md#gateway-ingress).
 
 If the page loads but requests fail, keep the launching terminal open and run `heartwood doctor` in another terminal from the same project.
 See [Diagnostics and Troubleshooting](../reference/troubleshooting.md#browser-access).

@@ -60,6 +60,7 @@ import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionConfirmationMode,
   ActionSettings,
+  CredentialIsolation,
   CredentialKind,
   CredentialStatus,
   CustomLocalModelDownloadRequest,
@@ -347,6 +348,10 @@ const SettingsContent = (props: UtilitySheetProps) => {
   const evaluationModels = localModels.filter(
     (model) => model.catalog_source === "catalog" && !model.recommended,
   );
+  const isolationStatus =
+    settings === null ? null : (
+      credentialIsolationStatus(settings.credential_isolation)
+    );
   const applyPreset = (presetId: string) => {
     const preset = settings?.presets.find(
       (item) => item.preset_id === presetId,
@@ -439,6 +444,13 @@ const SettingsContent = (props: UtilitySheetProps) => {
                     <ShieldCheck size={16} />
                   </Button>
                 </Tooltip>
+              </div>
+              <div className="validation-status">
+                <Badge variant={isolationStatus?.variant ?? "outline"}>
+                  {isolationStatus?.label ?? "Not configured"}
+                </Badge>
+                <span>Model credentials</span>
+                <small>{settings.credential_isolation.summary}</small>
               </div>
               {validation ?
                 <div className="validation-status">
@@ -2057,6 +2069,24 @@ const credentialStatusLabel = (status: CredentialStatus): string =>
     configured: "Ready",
     missing: "Credential required",
   })[status];
+
+const credentialIsolationStatus = (
+  isolation: CredentialIsolation,
+): {
+  label: string;
+  variant: "outline" | "secondary" | "warningLight";
+} => {
+  if (isolation.status === "qualified") {
+    return { label: "Isolated", variant: "secondary" };
+  }
+  if (isolation.status === "not-required") {
+    return { label: "No credential", variant: "secondary" };
+  }
+  if (isolation.status === "review-required") {
+    return { label: "Review required", variant: "warningLight" };
+  }
+  return { label: "Not configured", variant: "outline" };
+};
 
 const modelAvailabilityStatus = (
   availability: ModelCatalog["models"][number]["availability"],

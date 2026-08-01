@@ -27,6 +27,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `SETUP` | Non-secret Heartwood configuration and policy agreement |
 | `MODEL` | Model selection, compatibility, and managed model files |
 | `CREDENTIAL` | Provider API key, subscription credential, or managed-identity availability |
+| `INGRESS` | Gateway binding, proxy trust, origins, forwarding metadata, and paths |
 | `AGENT` | OpenHands agent runtime availability |
 | `WORKSPACE` | Read-only project file and change inspection |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
@@ -89,6 +90,16 @@ Reopen setup and enter the provider API key, or ask the platform operator how it
 An operating-system keyring entry is project-scoped, so another project may correctly ask again.
 For **Sign in with ChatGPT**, repeat the one-time-code flow.
 If the account should no longer be used, run `heartwood models forget openai-subscription` before signing in with another account.
+
+### `HW-CREDENTIAL-002` — Model Credential Isolation Is Unavailable
+
+The selected model uses a credential, but the active platform provides application scrubbing rather than a separate model-only credential boundary.
+Select **Review Every Action**, or choose a credential-free model route.
+Low-Risk Automation becomes available for a secret-backed route only when the platform adapter reports live-qualified isolation.
+
+Application scrubbing still keeps the credential out of supported tool inputs, project state, browser and notebook output, session events, logs, and audit exports.
+It does not isolate same-identity process memory or every operating-system resource.
+See [Security and Controlled Data](../operate/security.md#model-credential-isolation).
 
 ### `HW-MODEL-002` — Heartwood-Managed Model Files Are Unavailable
 
@@ -221,6 +232,25 @@ Delete and recreate the Cloud Environment with a T4 while retaining the persiste
 
 Heartwood encountered a readiness check that has no more specific public diagnostic.
 Run `heartwood doctor`, inspect the failed check and its next action, and include the structured `heartwood doctor --json` output in a synthetic issue report if the condition persists.
+
+## Gateway Ingress
+
+### `HW-INGRESS-001` — Gateway Ingress Configuration Is Unsafe
+
+The requested bind, origin, prefix, or proxy trust values do not form one safe route.
+Use the default loopback gateway for direct access.
+For a Jupyter or trusted platform proxy, configure the exact browser-visible origin and base path, the expected prefix behavior, and the trusted proxy source boundary.
+
+Do not solve this diagnostic by widening the bind or using a wildcard origin.
+See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
+
+### `HW-INGRESS-002` — Gateway Request Does Not Match the Configured Route
+
+Use the exact URL supplied by the deployment.
+If the route is operator-managed, verify the upstream source address, external host and protocol, stripped or preserved prefix, HTTP and WebSocket origins, and complete forwarded-header set.
+
+The proxy must remove forwarding and identity headers supplied by the client before adding its own values.
+Do not disable host, origin, or path validation to make the request pass.
 
 ## Browser Access
 

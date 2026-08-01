@@ -72,6 +72,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Provide the credential through setup or the deployment secret mechanism.",
         "/models/connections/#credentials",
     ),
+    "credential-isolation": DiagnosticDefinition(
+        "HW-CREDENTIAL-002",
+        "Model credential isolation is unavailable",
+        "Use Review Every Action or select a credential-free or platform-isolated model route.",
+        "/operate/security/#model-credential-isolation",
+    ),
     "local-model-artifact": DiagnosticDefinition(
         "HW-MODEL-002",
         "Heartwood-managed model files are unavailable",
@@ -164,6 +170,18 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Terra GPU support is unavailable",
         "Use hosted inference or attach a supported GPU before selecting a GPU model.",
         "/platforms/terra/#choose-the-image-and-compute",
+    ),
+    "gateway-ingress": DiagnosticDefinition(
+        "HW-INGRESS-001",
+        "Gateway ingress configuration is unsafe",
+        "Use loopback or configure one exact trusted proxy route.",
+        "/operate/platform-integration/#gateway-ingress",
+    ),
+    "gateway-request": DiagnosticDefinition(
+        "HW-INGRESS-002",
+        "Gateway request does not match the configured route",
+        "Use the exact gateway URL supplied by this deployment.",
+        "/reference/troubleshooting/#hw-ingress-002-gateway-request-does-not-match-the-configured-route",
     ),
 }
 

@@ -6,7 +6,39 @@
  * SPDX-License-Identifier: MIT
  */
 
-import type { SessionEvent, SessionProjection } from "../types";
+import type {
+  CredentialIsolation,
+  PlatformCapabilities,
+  SessionEvent,
+  SessionProjection,
+} from "../types";
+
+export const credentialIsolation = (): CredentialIsolation => ({
+  status: "not-required",
+  boundary: "credential-free",
+  unattended_actions_allowed: true,
+  summary: "The selected model route does not place a credential in Heartwood.",
+});
+
+export const genericCapabilities = (
+  overrides: Partial<PlatformCapabilities> = {},
+): PlatformCapabilities => ({
+  platform_id: "generic",
+  display_name: "Workstation or container",
+  interfaces: ["terminal", "web", "notebook"],
+  browser_route: "direct",
+  ingress_modes: ["direct-loopback", "jupyter-proxy", "trusted-proxy"],
+  default_ingress_mode: "direct-loopback",
+  managed_runtimes: ["llama-cpp", "vllm"],
+  scheduler: "none",
+  persistent_storage: "The project directory",
+  credential_backends: ["process", "keyring", "mounted-file"],
+  model_sources: ["heartwood", "openai", "anthropic", "custom"],
+  platform_isolated_model_sources: [],
+  managed_model_connections: [],
+  validation_level: "ci",
+  ...overrides,
+});
 
 export const event = (
   sequence: number,

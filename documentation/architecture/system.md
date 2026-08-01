@@ -12,7 +12,8 @@ It is the only path from Heartwood interfaces to the OpenHands SDK backend.
 ```mermaid
 flowchart LR
     CLI["Terminal interface"] --> Gateway["Session gateway"]
-    Web["Browser interface"] --> Gateway
+    Web["Browser interface"] --> Ingress["Validated gateway ingress"]
+    Ingress --> Gateway
     Notebook["Notebook bridge"] --> Gateway
     Gateway --> Project["Project and .heartwood state"]
     Gateway --> Policy["Platform, model, and action policy"]
@@ -65,6 +66,16 @@ For non-Git projects, it projects only successful paths attributed to typed Open
 Terminal command text is never parsed into file evidence.
 The terminal, REST API, browser, and notebook bridge adapt this service without maintaining separate workspace roots or change stores.
 
+### Gateway Ingress
+
+`IngressPolicy` is the transport boundary for HTTP and WebSocket requests.
+It models direct loopback, a local Jupyter proxy, and an explicitly trusted proxy with one canonical external origin and base path.
+It rejects undeclared non-loopback exposure, untrusted forwarding metadata, origin and host mismatches, duplicate security headers, and ambiguous paths before the REST, streaming, or static-asset adapters see a route.
+
+The browser reads its base path from server-injected non-secret metadata.
+It does not derive platform proxy paths or reduce gateway events itself.
+The selected platform adapter advertises supported ingress modes, while deployment configuration supplies exact proxy values.
+
 ### OpenHands Adapter
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
@@ -82,9 +93,23 @@ The verified `research-planner` specialist is tool-free and can produce a bounde
 The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
 The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.
 
+### Model Credential Boundary
+
+The gateway classifies the active model route against the selected platform capability.
+A credential-free model requires no model secret.
+An application-scrubbed route excludes provider material from supported tool inputs and durable or interface state, but OpenHands model calls and tools still share an operating-system identity.
+A platform-isolated route requires a separately authorized model transport plus live synthetic qualification.
+
+The classification is part of the shared model-settings and readiness projections.
+The gateway disables Low-Risk Automation for a secret-backed application-scrubbed route and rejects stale persisted combinations before an agent starts.
+Terminal, browser, and notebook clients render that decision rather than implementing credential rules.
+
+OpenHands Agent Server and RemoteWorkspace are retained as upstream deployment options, but they place the model client and tools in the same remote agent environment.
+They are not treated as model-only isolation without an additional platform boundary.
+
 ### Platform Adapter
 
-The selected adapter supplies environment detection, capabilities, data-mount declarations, credential allowlists, and default policy.
+The selected adapter supplies environment detection, capabilities, ingress modes, model-credential boundary, data-mount declarations, credential allowlists, and default policy.
 Generic, Terra, and Carina behavior differs only through these boundaries and startup/runtime orchestration.
 
 ## Process Ownership

@@ -87,6 +87,7 @@ class LaunchOptions:
     web: bool
     web_host: str
     web_port: int
+    host_loopback_publication: bool
     startup_timeout: int
     prompt: str | None
     prompt_file: Path | None
@@ -551,6 +552,8 @@ def _reentry_command(options: LaunchOptions) -> tuple[str, ...]:
         command.append("--plain")
     if options.web:
         command.extend(("--interface", "web", "--host", options.web_host))
+    if options.host_loopback_publication:
+        command.append("--host-loopback-publication")
     if options.prompt_file is not None:
         command.extend(("--prompt-file", str(options.prompt_file)))
     command.extend(
@@ -742,6 +745,7 @@ def _interaction_command(
     options: LaunchOptions,
 ) -> tuple[list[str], str]:
     if options.web:
+        publication = ["--host-loopback-publication"] if options.host_loopback_publication else []
         return (
             [
                 sys.executable,
@@ -753,6 +757,7 @@ def _interaction_command(
                 options.web_host,
                 "--port",
                 str(options.web_port),
+                *publication,
             ],
             f"Open the web interface on {options.web_host}:{options.web_port}",
         )

@@ -126,6 +126,7 @@ export type CredentialStoreAvailability =
   Api.CredentialStoreAvailabilityResponse;
 export type CredentialBindingStatus = Api.CredentialBindingStatusResponse;
 export type CredentialSettings = Api.CredentialSettingsResponse;
+export type CredentialIsolation = Api.CredentialIsolationResponse;
 export type ModelPreset = Api.ModelPresetResponse;
 export type ModelSourceOption = Api.ModelSourceOptionResponse;
 export type ModelSettings = Api.ModelSettingsResponse;

@@ -24,6 +24,7 @@ __all__ = [
     "ApiRequest",
     "AuditExportResponse",
     "CredentialBindingStatusResponse",
+    "CredentialIsolationResponse",
     "CredentialSettingsResponse",
     "CredentialStoreAvailabilityResponse",
     "CustomLocalModelDownloadRequest",
@@ -81,6 +82,18 @@ __all__ = [
 
 type CredentialKind = Literal["environment", "file", "managed-identity", "none"]
 type CredentialStatus = Literal["available", "configured", "missing"]
+type CredentialIsolationStatus = Literal[
+    "not-configured",
+    "not-required",
+    "review-required",
+    "qualified",
+]
+type CredentialIsolationBoundary = Literal[
+    "none",
+    "credential-free",
+    "application-scrubbed",
+    "platform-isolated",
+]
 type InterfaceKind = Literal["terminal", "web", "notebook"]
 type ActionRisk = Literal["high", "low", "medium", "unknown"]
 type LocalModelQualification = Literal["unvalidated", "qualified"]
@@ -411,11 +424,23 @@ class PlatformCapabilitiesResponse(_ApiResponse):
     display_name: str
     interfaces: list[InterfaceKind]
     browser_route: Literal["direct", "jupyter-proxy", "unavailable"]
+    ingress_modes: list[Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]]
+    default_ingress_mode: Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]
     managed_runtimes: list[Literal["llama-cpp", "vllm"]]
     scheduler: Literal["none", "provisioned", "slurm"]
     persistent_storage: str
     credential_backends: list[Literal["process", "keyring", "mounted-file", "managed-identity"]]
     model_sources: list[
+        Literal[
+            "anthropic",
+            "custom",
+            "heartwood",
+            "openai",
+            "openai-subscription",
+            "stanford-ai-api-gateway",
+        ]
+    ]
+    platform_isolated_model_sources: list[
         Literal[
             "anthropic",
             "custom",
@@ -568,6 +593,15 @@ class CredentialSettingsResponse(_ApiResponse):
     bindings: list[CredentialBindingStatusResponse]
 
 
+class CredentialIsolationResponse(_ApiResponse):
+    """Model-authentication isolation relative to agent tools."""
+
+    status: CredentialIsolationStatus
+    boundary: CredentialIsolationBoundary
+    unattended_actions_allowed: bool
+    summary: str
+
+
 class ModelPresetResponse(_ApiResponse):
     """Advanced non-secret provider defaults."""
 
@@ -603,6 +637,7 @@ class ModelSettingsResponse(_ApiResponse):
     source_options: list[ModelSourceOptionResponse]
     credential_store: CredentialStoreAvailabilityResponse
     credential_bindings: list[CredentialBindingStatusResponse]
+    credential_isolation: CredentialIsolationResponse
 
 
 class PolicyDecisionResponse(_ApiResponse):
@@ -622,6 +657,7 @@ class ModelValidationResponse(_ApiResponse):
 
     profile: ModelProfileResponse
     credential_status: CredentialStatus
+    credential_isolation: CredentialIsolationResponse
     action_confirmation_mode: ActionConfirmationMode
     policy_decision: PolicyDecisionResponse
 

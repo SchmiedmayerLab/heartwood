@@ -18,6 +18,8 @@ OpenHands proposes tools, Heartwood applies the selected confirmation policy, an
 
 The detected platform policy determines which modes are available.
 **Review Every Action** is the default and the recommended mode while learning the system or working with sensitive projects.
+It is required when the selected model uses a credential that the platform does not isolate from the OpenHands tool runtime.
+Low-Risk Automation remains available for credential-free routes and live-qualified platform-isolated routes when platform policy permits it.
 The selected mode applies to future action sets in the project and is shared by the terminal, browser, and notebook bridge.
 
 In the full-screen terminal, enter `/permissions` or press `Ctrl-P` and choose **Action Review**.

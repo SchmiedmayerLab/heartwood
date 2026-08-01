@@ -78,7 +78,11 @@ fi
 
 docker exec "${container_name}" mkdir -p "${project_root}"
 docker exec --detach --workdir "${project_root}" "${container_name}" \
-  sh -c "exec heartwood gateway serve --host 0.0.0.0 --port ${gateway_port} > /tmp/heartwood-web.log 2>&1"
+  sh -c "exec heartwood gateway serve --host 127.0.0.1 --port ${gateway_port} \
+    --ingress-mode jupyter-proxy \
+    --public-origin http://127.0.0.1:${host_port} \
+    --base-path ${notebook_path}proxy/${gateway_port} \
+    > /tmp/heartwood-web.log 2>&1"
 
 for _ in $(seq 1 60); do
   if curl --fail --silent "${heartwood_url}" >/dev/null; then
@@ -87,14 +91,20 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-heartwood_html="$(curl --fail --silent --show-error "${heartwood_url}")"
+if ! heartwood_html="$(curl --fail --silent --show-error "${heartwood_url}")"; then
+  dump_logs
+  exit 1
+fi
 if ! grep -q '<div id="root"></div>' <<<"${heartwood_html}"; then
   echo "Heartwood web UI did not load through ${heartwood_url}" >&2
   dump_logs
   exit 1
 fi
 
-readiness="$(curl --fail --silent --show-error "${heartwood_url}project/readiness")"
+if ! readiness="$(curl --fail --silent --show-error "${heartwood_url}project/readiness")"; then
+  dump_logs
+  exit 1
+fi
 HEARTWOOD_EXPECTED_PROJECT="${project_root}" python3 -c '
 import json
 import os

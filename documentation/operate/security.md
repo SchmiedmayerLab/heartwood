@@ -43,6 +43,46 @@ Custom compatible-service tokens remain process-only.
 For **Sign in with ChatGPT**, OpenHands owns the user-level OAuth credential, refresh, and Codex transport; Heartwood stores only a non-secret subscription reference in project policy.
 Signing in does not make a ChatGPT account suitable for controlled data.
 
+#### Model Credential Isolation
+
+Heartwood reports one of three effective boundaries for the active model route:
+
+| Boundary | Guarantee | Action Policy |
+|---|---|---|
+| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | Platform policy may permit Low-Risk Automation |
+| Application-scrubbed | Heartwood excludes the credential from tool inputs, project state, terminal subprocess environments, interfaces, events, logs, and audits | Review Every Action is required |
+| Platform-isolated | A separately authorized model transport keeps the credential outside the operating-system identity that runs agent tools, with live synthetic qualification for that platform | Platform policy may permit Low-Risk Automation |
+
+Application scrubbing is not process isolation.
+OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
+The built-in workstation/container, Terra, and Carina adapters therefore do not claim platform-isolated model credentials.
+
+[OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview) and its [remote workspace](https://docs.openhands.dev/sdk/guides/agent-server/cloud-workspace) move the conversation, model client, and tools into a remote agent environment.
+That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.
+Heartwood uses the upstream OpenHands credential and model transports without treating a remote workspace as model-only credential isolation.
+
+Use **Review Every Action** for an API key, ChatGPT subscription, mounted secret, or managed identity unless the active platform explicitly reports a qualified platform-isolated boundary.
+Removing a saved provider credential revokes model access independently of the action policy.
+Changing the action policy never broadens model authorization.
+
+Platform isolation is distinct from institutional approval.
+A separate service identity or platform proxy can enforce a technical credential boundary, while data eligibility still depends on the provider agreement, institutional controls, and reviewed deployment.
+
+### Gateway Ingress
+
+Heartwood accepts browser and API traffic through one configured ingress mode:
+
+- **Direct loopback** binds to a loopback address by default and rejects forwarding headers.
+- **Jupyter proxy** binds to loopback, requires the exact external origin and stripped proxy prefix, accepts requests only from the local Jupyter proxy, and validates the bounded route metadata emitted by `jupyter-server-proxy`.
+- **Trusted proxy** accepts traffic only from configured source ranges, requires one complete forwarded client, host, protocol, and prefix set, and can require an exact non-secret proxy identity assertion.
+
+All modes validate the request host, browser origin, WebSocket origin, path, query encoding, and external base path before routing.
+Heartwood rejects duplicated security headers, forwarded metadata outside the declared Jupyter or trusted-proxy contract, encoded or traversing paths, wildcard origins, and contradictory prefixes.
+
+Heartwood does not authenticate end users or terminate public TLS.
+The platform proxy must authenticate users, authorize project access, remove untrusted forwarding and identity headers, set the validated values, and restrict network reachability to the configured gateway bind.
+A trusted identity assertion is an additional route marker, not a bearer secret or replacement for user authentication.
+
 ### Skills and Instructions
 
 A Skill can influence agent behavior and tool selection.
@@ -59,6 +99,7 @@ Store, retain, share, and delete audit artifacts under the same reviewed records
 
 - authenticate every user before they reach the execution environment;
 - isolate projects and users with platform permissions or containers;
+- keep the gateway on loopback or behind one configured authenticated proxy boundary;
 - deny network egress except reviewed model and package endpoints;
 - mount controlled inputs read-only when feasible;
 - keep provider secrets in a keyring, mounted secret, or managed identity;
