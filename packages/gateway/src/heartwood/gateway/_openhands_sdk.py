@@ -20,7 +20,7 @@ from contextlib import suppress
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Lock, RLock, Thread, current_thread
-from typing import Any, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
@@ -67,8 +67,10 @@ from openhands.sdk.subagent import (
 )
 from openhands.sdk.tool.schema import Observation
 from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
+from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
+from openhands.tools.terminal import TerminalAction
 
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
@@ -106,6 +108,7 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     create_openai_subscription_llm,
 )
+from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
 from heartwood.schemas import ActionConfirmationMode, JsonValue
 
 
@@ -135,6 +138,8 @@ _AGENT_MAX_ITERATIONS_PER_RUN = 100
 _AGENT_PROGRESS_POLL_SECONDS = 0.25
 _AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS = 10
 _AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30
+_MAX_TOOL_RESULT_CHARS = 16_000
+_MAX_TOOL_RESULT_LINES = 240
 _OPENHANDS_FINISH_TOOL_NAME = "finish"
 _SPECIALIST_REGISTRATION_LOCK = Lock()
 _REGISTERED_HEARTWOOD_SPECIALISTS: dict[str, AgentDefinition] = {}
@@ -1011,6 +1016,7 @@ class OpenHandsSdkBackend:
                 _tool_call(
                     event,
                     analyzed_risk=_analyzed_risk(self._security_analyzer, event),
+                    workspace=self.workspace,
                 )
                 for event in ConversationState.get_unmatched_actions(
                     _conversation_state(conversation).active_branch()
@@ -1023,14 +1029,23 @@ class OpenHandsSdkBackend:
         conversation: BaseConversation,
     ) -> BackendErrorCode | None:
         state = _conversation_state(conversation)
-        if (
-            state.execution_status != ConversationExecutionStatus.RUNNING
-            or self._execution_in_flight()
-        ):
+        if self._execution_in_flight():
             return None
-        if ConversationState.get_unmatched_actions(state.active_branch()):
+        unmatched_actions = ConversationState.get_unmatched_actions(state.active_branch())
+        with self._run_lock:
+            run_cancelled = self._run_cancelled.is_set()
+        intentional_pause = (
+            run_cancelled and state.execution_status == ConversationExecutionStatus.PAUSED
+        )
+        if (
+            unmatched_actions
+            and state.execution_status != ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+            and not intentional_pause
+        ):
             return BackendErrorCode.ACTION_OUTCOME_UNKNOWN
-        return BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+        if state.execution_status == ConversationExecutionStatus.RUNNING:
+            return BackendErrorCode.AGENT_OUTCOME_UNKNOWN
+        return None
 
     def _action_resolution_context(
         self,
@@ -1059,6 +1074,7 @@ class OpenHandsSdkBackend:
                         _tool_call(
                             pending,
                             analyzed_risk=_analyzed_risk(self._security_analyzer, pending),
+                            workspace=self.workspace,
                         )
                         for pending in pending_actions
                     )
@@ -1074,6 +1090,7 @@ class OpenHandsSdkBackend:
                     _tool_call(
                         action,
                         analyzed_risk=_analyzed_risk(self._security_analyzer, action),
+                        workspace=self.workspace,
                     ),
                 )
             )
@@ -1140,6 +1157,7 @@ class OpenHandsSdkBackend:
             tool_call = _tool_call(
                 event,
                 analyzed_risk=_analyzed_risk(self._security_analyzer, event),
+                workspace=self.workspace,
             )
             translated: list[BackendEvent] = [
                 BackendToolCallEvent(
@@ -1227,7 +1245,29 @@ class OpenHandsSdkBackend:
                 approved=False,
             )
         if isinstance(event, AgentErrorEvent):
+            action = next(
+                (
+                    candidate
+                    for candidate in actions_by_id.values()
+                    if candidate.tool_call_id == event.tool_call_id
+                ),
+                None,
+            )
+            tool_name = event.tool_name or "unknown-tool"
+            result, result_truncated = _bounded_tool_result(event.error)
             return (
+                BackendToolExecutionEvent(
+                    tool_execution=ToolExecution(
+                        tool_call_id=event.tool_call_id,
+                        action_id=None if action is None else action.id,
+                        tool_name=tool_name,
+                        exit_code=1,
+                        summary=f"{tool_name} failed",
+                        result=result,
+                        result_truncated=result_truncated,
+                    ),
+                    source_event_id=f"{source}:execution",
+                ),
                 BackendErrorEvent(
                     error_code=BackendErrorCode.ACTION_FAILED,
                     source_event_id=f"{source}:error",
@@ -1276,10 +1316,8 @@ class OpenHandsSdkBackend:
             }
         ):
             lifecycle = BackendLifecycle.RUNNING
-        interrupted_outcome = (
-            state.execution_status == ConversationExecutionStatus.RUNNING and not execution_active
-        )
-        if run_failed or interrupted_outcome:
+        outcome_error = self._interrupted_outcome_error(conversation)
+        if run_failed or outcome_error is not None:
             lifecycle = BackendLifecycle.ERROR
         events: list[BackendEvent] = [
             BackendLifecycleEvent(
@@ -1287,12 +1325,7 @@ class OpenHandsSdkBackend:
                 source_event_id=(f"openhands-state:{anchor}:{lifecycle.value}:lifecycle"),
             )
         ]
-        if interrupted_outcome:
-            outcome_error = (
-                BackendErrorCode.ACTION_OUTCOME_UNKNOWN
-                if unmatched_group is not None
-                else BackendErrorCode.AGENT_OUTCOME_UNKNOWN
-            )
+        if outcome_error is not None:
             events.append(
                 BackendErrorEvent(
                     error_code=outcome_error,
@@ -1326,6 +1359,7 @@ class OpenHandsSdkBackend:
                     tool_call=_tool_call(
                         action,
                         analyzed_risk=_analyzed_risk(self._security_analyzer, action),
+                        workspace=self.workspace,
                     ),
                     action_group_id=unmatched_group.group_id,
                     source_event_id=f"openhands:{action.id}:confirmation",
@@ -1358,16 +1392,22 @@ def _tool_call(
     event: ActionEvent,
     *,
     analyzed_risk: str | None = None,
+    workspace: Path | None = None,
 ) -> ProposedToolCall:
     tool_name = event.tool_name or "unknown-tool"
     risk_value = analyzed_risk or event.security_risk.value.lower()
     risk = risk_value if risk_value in {"low", "medium", "high"} else "unknown"
+    project_path = _project_path(event, workspace=workspace)
     return ProposedToolCall(
         tool_call_id=event.tool_call_id,
         tool_name=tool_name,
         risk=cast(Any, risk),
         summary=event.summary or f"run {tool_name}",
         arguments=_tool_arguments(event),
+        action_id=event.id,
+        kind=_tool_kind(event),
+        affected_paths=_affected_paths(event, project_path=project_path),
+        project_path=project_path,
     )
 
 
@@ -1384,6 +1424,48 @@ def _tool_arguments(event: ActionEvent) -> dict[str, JsonValue]:
     if event.action is not None:
         return _json_mapping(event.action.model_dump(mode="json"))
     return {}
+
+
+def _tool_kind(
+    event: ActionEvent,
+) -> Literal["terminal", "file-editor", "task", "other"]:
+    action = event.action
+    if isinstance(action, TerminalAction):
+        return "terminal"
+    if isinstance(action, FileEditorAction):
+        return "file-editor"
+    if isinstance(action, TaskAction):
+        return "task"
+    return "other"
+
+
+def _affected_paths(event: ActionEvent, *, project_path: str | None) -> tuple[str, ...]:
+    """Return only paths proven to be modified by a typed file-editor action."""
+    action = event.action
+    if not isinstance(action, FileEditorAction) or action.command == "view":
+        return ()
+    if project_path is None:
+        return ()
+    return (project_path,)
+
+
+def _project_path(event: ActionEvent, *, workspace: Path | None) -> str | None:
+    """Return a project-relative path referenced by a typed file-editor action."""
+    action = event.action
+    if workspace is None or not isinstance(action, FileEditorAction):
+        return None
+    root = workspace.expanduser().resolve()
+    path = Path(action.path).expanduser()
+    resolved = (path if path.is_absolute() else root / path).resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return None
+    try:
+        validated = project_relative_path(relative.as_posix(), allow_root=False)
+    except ProjectPathError:
+        return None
+    return validated.as_posix()
 
 
 def _json_mapping(value: object) -> dict[str, JsonValue]:
@@ -1423,6 +1505,7 @@ def _tool_observation(
     resolved_exit_code = exit_code if isinstance(exit_code, int) else (1 if is_error else 0)
     failed = is_error or resolved_exit_code != 0
     tool_name = event.tool_name or "unknown-tool"
+    result, result_truncated = _bounded_tool_result(observation.text)
     return BackendToolExecutionEvent(
         tool_execution=ToolExecution(
             tool_call_id=event.tool_call_id,
@@ -1430,9 +1513,30 @@ def _tool_observation(
             tool_name=tool_name,
             exit_code=resolved_exit_code,
             summary=f"{tool_name} {'failed' if failed else 'completed'}",
+            result=result,
+            result_truncated=result_truncated,
         ),
         source_event_id=source_event_id,
     )
+
+
+def _bounded_tool_result(value: str) -> tuple[str | None, bool]:
+    if not value:
+        return None, False
+    lines = value.splitlines(keepends=True)
+    if len(lines) <= _MAX_TOOL_RESULT_LINES and len(value) <= _MAX_TOOL_RESULT_CHARS:
+        return value, False
+
+    marker = "\n... Heartwood output truncated ...\n"
+    payload_characters = _MAX_TOOL_RESULT_CHARS - len(marker)
+    payload_lines = _MAX_TOOL_RESULT_LINES - len(marker.splitlines())
+    head_lines = payload_lines // 2
+    tail_lines = payload_lines - head_lines
+    head = "".join(lines[:head_lines])
+    tail = "".join(lines[-tail_lines:])
+    head_characters = payload_characters // 2
+    tail_characters = payload_characters - head_characters
+    return f"{head[:head_characters]}{marker}{tail[-tail_characters:]}", True
 
 
 def _confirmation_resolution_source(tool_call_id: str) -> str:

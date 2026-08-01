@@ -46,6 +46,11 @@ async function main() {
   if (!fs.existsSync(path.join(webRoot, "index.html"))) {
     throw new Error("web UI assets are missing; run npm run build first");
   }
+  fs.writeFileSync(
+    path.join(workspace, "analysis.py"),
+    "answer = 42\n",
+    "utf8",
+  );
 
   const gateway = startGateway();
   let proxy;
@@ -63,6 +68,8 @@ async function main() {
     await verifyBrowserRoute(externalBaseUrl);
     trace("verifying session routes");
     await verifySessionRoutes(externalBaseUrl);
+    trace("rendering the narrow proxy-prefixed interface");
+    await verifyRenderedInterface(externalBaseUrl);
   } finally {
     trace("cleaning up");
     if (proxy !== undefined) {
@@ -242,6 +249,7 @@ async function verifySessionRoutes(baseUrl) {
     throw new Error("Jupyter proxy session route did not create a session");
   }
   const sessionId = createdSession.session_id;
+  await verifyWorkspaceRoutes(baseUrl, sessionId);
   const commandResponse = await fetchJson(
     new URL(`sessions/${sessionId}/commands`, baseUrl).toString(),
     {
@@ -328,6 +336,89 @@ async function verifySessionRoutes(baseUrl) {
     throw new Error(
       "Jupyter proxy SSE route did not stream events with their projection",
     );
+  }
+}
+
+async function verifyRenderedInterface(baseUrl) {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 760 },
+    });
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    const setup = page.getByRole("heading", { name: "Set up Heartwood" });
+    await setup.waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+    await setup.waitFor({ state: "hidden" });
+    const filesTab = page.getByRole("tab", { name: "Files" });
+    await filesTab.waitFor({ state: "visible" });
+    const conversationTab = page.getByRole("tab", { name: "Conversation" });
+    await conversationTab.focus();
+    await conversationTab.press("ArrowRight");
+    const projectFiles = page.getByRole("region", { name: "Project files" });
+    await projectFiles.waitFor();
+    const file = projectFiles.getByRole("button", { name: "analysis.py" });
+    await file.focus();
+    await file.press("Enter");
+    await page
+      .getByRole("region", { name: "Read-only file: analysis.py" })
+      .waitFor();
+    const horizontalOverflow = await page
+      .locator("body")
+      .evaluate((body) => body.scrollWidth > body.clientWidth);
+    if (horizontalOverflow) {
+      throw new Error("Jupyter proxy interface overflowed its narrow viewport");
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+async function verifyWorkspaceRoutes(baseUrl, sessionId) {
+  const tree = await fetchJson(
+    new URL(`sessions/${sessionId}/workspace/tree`, baseUrl).toString(),
+  );
+  if (
+    !Array.isArray(tree.entries) ||
+    !tree.entries.some((entry) => entry.path === "analysis.py") ||
+    JSON.stringify(tree).includes(".heartwood")
+  ) {
+    throw new Error("Jupyter proxy did not deliver the bounded project tree");
+  }
+
+  const file = await fetchJson(
+    new URL(
+      `sessions/${sessionId}/workspace/file?path=analysis.py`,
+      baseUrl,
+    ).toString(),
+  );
+  if (file.status !== "available" || file.content !== "answer = 42\n") {
+    throw new Error("Jupyter proxy did not deliver the bounded project file");
+  }
+
+  const changes = await fetchJson(
+    new URL(`sessions/${sessionId}/workspace/changes`, baseUrl).toString(),
+  );
+  if (
+    changes.status !== "non-git" ||
+    changes.source !== "session-actions" ||
+    changes.changes?.length !== 0
+  ) {
+    throw new Error(
+      "Jupyter proxy did not preserve the non-Git workspace contract",
+    );
+  }
+
+  const traversalUrl = new URL(`sessions/${sessionId}/workspace/file`, baseUrl);
+  traversalUrl.searchParams.set("path", "../outside.txt");
+  const traversal = await fetch(traversalUrl, withConnectionClose());
+  const traversalBody = await traversal.json();
+  if (
+    traversal.status !== 422 ||
+    typeof traversalBody.error !== "string" ||
+    !traversalBody.error.startsWith("HW-WORKSPACE-001:")
+  ) {
+    throw new Error("Jupyter proxy did not reject workspace path traversal");
   }
 }
 

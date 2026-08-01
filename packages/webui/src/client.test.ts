@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient, createCommand } from "./client";
 import {
   emptyProjection,
+  syntheticAction,
   syntheticEvents,
   syntheticProjection,
 } from "./test/fixtures";
@@ -232,6 +233,97 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("uses bounded workspace routes with encoded session and project paths", async () => {
+    const limits = {
+      max_tree_entries: 2_000,
+      max_tree_depth: 8,
+      max_file_bytes: 524_288,
+      max_file_lines: 10_000,
+      max_change_entries: 500,
+      max_diff_bytes: 1_048_576,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schema_version: "heartwood.workspace-tree.v1",
+            path: ".",
+            status: "available",
+            entries: [],
+            truncated: false,
+            limits,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schema_version: "heartwood.workspace-file.v1",
+            path: "results/cohort summary.py",
+            status: "available",
+            content: "print('synthetic')\n",
+            size_bytes: 19,
+            bytes_read: 19,
+            line_count: 1,
+            truncated: false,
+            message: null,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schema_version: "heartwood.workspace-changes.v1",
+            status: "available",
+            source: "git",
+            changes: [],
+            truncated: false,
+            message: null,
+            limits,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            schema_version: "heartwood.workspace-diff.v1",
+            path: "results/cohort summary.py",
+            status: "available",
+            source: "git",
+            original: "",
+            modified: "print('synthetic')\n",
+            truncated: false,
+            message: null,
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.getWorkspaceTree("session test", ".", 4);
+    await client.getWorkspaceFile("session test", "results/cohort summary.py");
+    await client.getWorkspaceChanges("session test");
+    await client.getWorkspaceDiff("session test", "results/cohort summary.py");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/sessions/session%20test/workspace/tree?path=.&depth=4",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/sessions/session%20test/workspace/file?path=results%2Fcohort+summary.py",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/proxy/8767/sessions/session%20test/workspace/changes",
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/proxy/8767/sessions/session%20test/workspace/diff?path=results%2Fcohort+summary.py",
+    );
+  });
+
   it("rejects session payloads that omit the gateway projection", async () => {
     vi.stubGlobal(
       "fetch",
@@ -270,6 +362,39 @@ describe("GatewayClient", () => {
     ).rejects.toThrow(
       "Gateway response included an invalid session projection",
     );
+  });
+
+  it("accepts fractional OpenHands terminal timeouts from the typed projection", async () => {
+    const action = syntheticAction({
+      details: {
+        kind: "terminal",
+        command: "python analysis.py",
+        isInput: false,
+        reset: false,
+        timeout: 0.25,
+      },
+    });
+    const projection = syntheticProjection({
+      actions: [action],
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [action],
+        decision: null,
+        decisionScope: "all",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(projectionResponse([], projection))),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).resolves.toEqual({ events: [], projection });
   });
 
   it("reports malformed projection JSON with recovery guidance", async () => {
@@ -685,6 +810,7 @@ describe("GatewayClient", () => {
         "Shared by every Heartwood interface in this project and applied to future action sets.",
       presentation: {
         risk_labels: {},
+        state_labels: {},
         tool_labels: {},
         other_tool_label_template: "{tool_name} Action",
         unknown_risk_label: "Not Classified",

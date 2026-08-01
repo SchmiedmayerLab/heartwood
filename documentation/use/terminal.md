@@ -16,7 +16,7 @@ cd /path/to/project
 heartwood
 ```
 
-The full-screen interface provides arrow-key navigation, colored status, elapsed-time activity, an action-review panel, and a command palette.
+The full-screen interface provides arrow-key navigation, colored status, elapsed-time activity, grouped action review, and read-only project inspection.
 Heartwood automatically falls back to the plain interface when the terminal cannot support the full-screen application.
 
 Use a named session when you maintain more than one conversation in a project:
@@ -46,7 +46,24 @@ When OpenHands proposes an action set, the interface lists every member and make
 Use arrow keys and Enter in the full-screen interface.
 In the plain interface, use `/allow` or `/reject`; you do not need to copy an internal tool-call identifier.
 
-Press `Ctrl-P` to open the command palette for action review, status, replay, and audit export.
+After execution, **Agent actions** correlates each proposal with its decision, state, exit status, bounded output, and explicitly attributed project paths.
+An interrupted action whose result cannot be established is marked **outcome unknown** rather than treated as safe to repeat.
+
+## Inspect Files and Changes
+
+Use the three full-screen views without leaving the session:
+
+| Shortcut | View |
+|---|---|
+| `Ctrl-1` | Conversation and grouped action review |
+| `Ctrl-2` | Bounded project tree and read-only text files |
+| `Ctrl-3` | Changed files and read-only per-file diffs |
+
+The Files view excludes `.heartwood/` and `.git/`, does not follow symbolic links, and reports binary, unsupported, or truncated files explicitly.
+The Changes view uses the OpenHands Git workspace when the project is a Git repository.
+For a non-Git project, it shows only successful file changes that came from typed OpenHands file-editor actions in the selected session; it does not infer changes from terminal commands.
+
+Press `Ctrl-P` to open the command palette for these views, action review, status, replay, and audit export.
 
 ## Conversation Commands
 
@@ -59,6 +76,9 @@ Press `Ctrl-P` to open the command palette for action review, status, replay, an
 | `/reject` | Reject the complete pending action set |
 | `/pause` | Pause active OpenHands work |
 | `/resume` | Resume a paused session |
+| `/files [DIRECTORY]` | List the bounded project tree |
+| `/show FILE` | Show one bounded UTF-8 project file |
+| `/changes [FILE]` | List changed paths or show one read-only diff |
 | `/replay` | Render the persisted session events |
 | `/audit-export` | Write a scrubbed JSON Lines audit export |
 | `/exit` | Close the interface without deleting the session |
@@ -71,6 +91,7 @@ heartwood --plain
 
 The plain interface retains grouped action review, progress messages, replay, and audit export.
 It omits the full-screen layout and keyboard-driven selection controls.
+Use `/files`, `/show`, and `/changes` for the same gateway-owned workspace evidence.
 
 ## Stop and Return
 

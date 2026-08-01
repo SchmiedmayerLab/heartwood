@@ -48,6 +48,19 @@ class BackendErrorCode(StrEnum):
     UNKNOWN = "HW-AGENT-999"
 
 
+_FATAL_BACKEND_ERROR_CODES = frozenset(
+    {
+        BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+        BackendErrorCode.AGENT_OUTCOME_UNKNOWN.value,
+    }
+)
+
+
+def backend_error_is_fatal(code: object) -> bool:
+    """Return whether a backend error makes further session work unsafe."""
+    return code in _FATAL_BACKEND_ERROR_CODES
+
+
 def backend_error_message(code: BackendErrorCode) -> str:
     """Return the public message associated with a stable backend error."""
     return {
@@ -100,13 +113,15 @@ class BackendSubagentStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ToolExecution:
-    """Content-minimized summary of a tool observation."""
+    """Bounded private result of a tool observation."""
 
     tool_call_id: str
     action_id: str | None
     tool_name: str
     exit_code: int
     summary: str
+    result: str | None = None
+    result_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +133,10 @@ class ProposedToolCall:
     risk: Literal["low", "medium", "high", "unknown"]
     summary: str
     arguments: dict[str, JsonValue] = field(default_factory=dict)
+    action_id: str | None = None
+    kind: Literal["terminal", "file-editor", "task", "other"] = "other"
+    affected_paths: tuple[str, ...] = ()
+    project_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,6 +618,18 @@ class DeterministicAgentBackend:
             arguments=(
                 cast(dict[str, JsonValue], arguments) if isinstance(arguments, dict) else {}
             ),
+            action_id=(
+                str(raw["action_id"])
+                if isinstance(raw.get("action_id"), str) and raw["action_id"]
+                else None
+            ),
+            kind=_persisted_tool_kind(raw.get("kind")),
+            affected_paths=_persisted_affected_paths(raw.get("affected_paths")),
+            project_path=(
+                str(raw["project_path"])
+                if isinstance(raw.get("project_path"), str) and raw["project_path"]
+                else None
+            ),
         )
 
     def _persist_pending(self) -> None:
@@ -616,6 +647,10 @@ class DeterministicAgentBackend:
                 "risk": self._pending.risk,
                 "summary": self._pending.summary,
                 "arguments": self._pending.arguments,
+                "action_id": self._pending.action_id,
+                "kind": self._pending.kind,
+                "affected_paths": list(self._pending.affected_paths),
+                "project_path": self._pending.project_path,
             },
         )
 
@@ -727,3 +762,21 @@ class LocalWorkspaceAgentBackend(DeterministicAgentBackend):
 
 def _deterministic_confirmation_source(tool_call_id: str) -> str:
     return f"deterministic-tool-call:{tool_call_id}:confirmation-resolution"
+
+
+def _persisted_tool_kind(
+    value: object,
+) -> Literal["terminal", "file-editor", "task", "other"]:
+    if value == "terminal":
+        return "terminal"
+    if value == "file-editor":
+        return "file-editor"
+    if value == "task":
+        return "task"
+    return "other"
+
+
+def _persisted_affected_paths(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)

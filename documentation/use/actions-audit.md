@@ -49,6 +49,11 @@ Session events include user requests, model-route decisions, final assistant res
 The gateway turns that stream into one projection for terminal, browser, and notebook clients.
 Incremental response tokens are visible while the model works but are not persisted.
 
+Each proposed tool has one versioned action record.
+It correlates the OpenHands action and tool-call identifiers, grouped decision, typed terminal, file-editor, Task, or other arguments, execution state, bounded outcome, and explicitly supported affected paths.
+States distinguish proposed, awaiting review, approved, rejected, running, succeeded, failed, and outcome unknown.
+Heartwood does not infer authoritative file changes from shell command text.
+
 Use `/replay` in the terminal or the browser activity view to inspect it.
 Replay verifies the audit chain and the one-to-one hash binding between each audit record and the complete session event before returning persisted history.
 
@@ -57,6 +62,7 @@ Replay verifies the audit chain and the one-to-one hash binding between each aud
 Use `/audit-export` or the browser export control to create a JSON Lines file for review.
 The export is scrubbed and content-minimized.
 It records task counts and statuses instead of task titles or notes, usage totals instead of completion content, and stable error codes instead of provider details.
+Exact action arguments, commands, affected paths, file content, diffs, tool output, and failure text remain in private session state and are not copied into the audit export.
 Operational identifiers, decisions, classifications, counts, and timestamps may still be sensitive in context.
 
 An audit record supports review and reproducibility; it is not proof that a scientific result is correct or that a deployment meets a regulatory requirement.

@@ -65,6 +65,7 @@ from openhands.sdk.tool import ToolDefinition
 from openhands.sdk.tool.builtins.finish import FinishAction, FinishObservation, FinishTool
 from openhands.sdk.tool.schema import Action, Observation
 from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
+from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
 from openhands.tools.task_tracker.definition import TaskItem
@@ -621,6 +622,7 @@ def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
                 error="provider-specific detail",
             ),
             session_id="session-1",
+            actions_by_id={action.id: action},
         ),
         *backend._translate_event(PauseEvent(id="pause-1"), session_id="session-1"),
     )
@@ -646,6 +648,16 @@ def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
     errors = [event for event in translated if isinstance(event, BackendErrorEvent)]
     assert [event.error_code for event in errors] == ["HW-AGENT-002"]
     assert "provider-specific detail" not in repr(errors)
+    executions = [
+        event.tool_execution for event in translated if isinstance(event, BackendToolExecutionEvent)
+    ]
+    failed = executions[-1]
+    assert failed.tool_call_id == "call-1"
+    assert failed.action_id == action.id
+    assert failed.tool_name == "terminal"
+    assert failed.exit_code == 1
+    assert failed.result == "provider-specific detail"
+    assert failed.summary == "terminal failed"
     assert isinstance(translated[-1], BackendLifecycleEvent)
     assert translated[-1].lifecycle == BackendLifecycle.PAUSED
 
@@ -866,6 +878,95 @@ def test_public_conversation_state_projects_a_content_safe_error(
         and event.error_code == BackendErrorCode.CONVERSATION_STOPPED
         for event in events
     )
+    backend.close()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ConversationExecutionStatus.IDLE,
+        ConversationExecutionStatus.PAUSED,
+        ConversationExecutionStatus.FINISHED,
+        ConversationExecutionStatus.ERROR,
+        ConversationExecutionStatus.STUCK,
+        ConversationExecutionStatus.DELETING,
+    ],
+)
+def test_inactive_conversation_with_unmatched_actions_has_unknown_outcome(
+    tmp_path: Path,
+    status: ConversationExecutionStatus,
+) -> None:
+    conversation = _ControlledConversation()
+    conversation.state = _BranchState(conversation.id)
+    conversation.state.execution_status = status
+    conversation.state.events = (
+        _terminal_action_event("uncertain-action", "uncertain-call", "touch output.txt"),
+    )
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert any(
+        isinstance(event, BackendErrorEvent)
+        and event.error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
+        for event in events
+    )
+    backend.close()
+
+
+def test_cancelled_unmatched_action_is_safe_only_at_an_intentional_pause(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    conversation.state = _BranchState(conversation.id)
+    conversation.state.execution_status = ConversationExecutionStatus.PAUSED
+    conversation.state.events = (
+        _terminal_action_event("paused-action", "paused-call", "touch output.txt"),
+    )
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+    backend._run_cancelled.set()
+
+    paused_events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert not any(
+        isinstance(event, BackendErrorEvent)
+        and event.error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
+        for event in paused_events
+    )
+    assert backend._interrupted_outcome_error(cast(BaseConversation, conversation)) is None
+
+    conversation.state.execution_status = ConversationExecutionStatus.FINISHED
+    finished_events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+    blocked_turn = backend.submit_turn(session_id="session-1", prompt="Do not continue")
+
+    assert any(
+        isinstance(event, BackendErrorEvent)
+        and event.error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
+        for event in finished_events
+    )
+    assert isinstance(blocked_turn[0], BackendErrorEvent)
+    assert blocked_turn[0].error_code == BackendErrorCode.ACTION_OUTCOME_UNKNOWN
     backend.close()
 
 
@@ -2374,6 +2475,182 @@ def test_translation_reports_analyzed_risk_and_nonzero_exit() -> None:
     assert translated.tool_execution.action_id == "action-1"
     assert translated.tool_execution.exit_code == 127
     assert translated.tool_execution.summary == "terminal failed"
+
+
+def test_typed_action_evidence_uses_openhands_ids_and_only_structured_file_paths(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    file_arguments = {
+        "command": "create",
+        "path": str(workspace / "results" / "summary.py"),
+        "file_text": "answer = 42\n",
+    }
+    file_action = _terminal_action_event(
+        "action-file",
+        "call-file",
+        "placeholder",
+    ).model_copy(
+        update={
+            "tool_name": "file_editor",
+            "tool_call": MessageToolCall(
+                id="call-file",
+                name="file_editor",
+                arguments=json.dumps(file_arguments),
+                origin="completion",
+            ),
+            "action": FileEditorAction(
+                command="create",
+                path=str(workspace / "results" / "summary.py"),
+                file_text="answer = 42\n",
+            ),
+        }
+    )
+    view_action = file_action.model_copy(
+        update={
+            "id": "action-view",
+            "tool_call_id": "call-view",
+            "tool_call": file_action.tool_call.model_copy(update={"id": "call-view"}),
+            "action": FileEditorAction(
+                command="view",
+                path=str(workspace / "results" / "summary.py"),
+            ),
+        }
+    )
+    escaping_action = file_action.model_copy(
+        update={
+            "id": "action-escape",
+            "tool_call_id": "call-escape",
+            "tool_call": file_action.tool_call.model_copy(update={"id": "call-escape"}),
+            "action": FileEditorAction(
+                command="create",
+                path=str(tmp_path / "outside.py"),
+                file_text="outside = True\n",
+            ),
+        }
+    )
+
+    file_call = _tool_call(file_action, workspace=workspace)
+    view_call = _tool_call(view_action, workspace=workspace)
+    escaping_call = _tool_call(escaping_action, workspace=workspace)
+    terminal_call = _tool_call(
+        _terminal_action_event("action-terminal", "call-terminal", "touch not-evidence.txt"),
+        workspace=workspace,
+    )
+    task_call = _tool_call(_subagent_action_event(), workspace=workspace)
+
+    assert file_call.action_id == "action-file"
+    assert file_call.tool_call_id == "call-file"
+    assert file_call.kind == "file-editor"
+    assert file_call.affected_paths == ("results/summary.py",)
+    assert file_call.project_path == "results/summary.py"
+    assert view_call.affected_paths == ()
+    assert view_call.project_path == "results/summary.py"
+    assert escaping_call.affected_paths == ()
+    assert escaping_call.project_path is None
+    assert terminal_call.kind == "terminal"
+    assert terminal_call.affected_paths == ()
+    assert terminal_call.project_path is None
+    assert task_call.kind == "task"
+
+
+@pytest.mark.parametrize(
+    "private_path",
+    [
+        "results/.HeArTwOoD/private.txt",
+        "results/.GiT/config",
+    ],
+)
+def test_typed_action_evidence_excludes_case_variant_private_paths(
+    tmp_path: Path,
+    private_path: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    absolute_path = workspace / private_path
+    arguments = {
+        "command": "create",
+        "path": str(absolute_path),
+        "file_text": "private\n",
+    }
+    action = _terminal_action_event(
+        "action-private",
+        "call-private",
+        "placeholder",
+    ).model_copy(
+        update={
+            "tool_name": "file_editor",
+            "tool_call": MessageToolCall(
+                id="call-private",
+                name="file_editor",
+                arguments=json.dumps(arguments),
+                origin="completion",
+            ),
+            "action": FileEditorAction(
+                command="create",
+                path=str(absolute_path),
+                file_text="private\n",
+            ),
+        }
+    )
+
+    tool_call = _tool_call(action, workspace=workspace)
+
+    assert tool_call.project_path is None
+    assert tool_call.affected_paths == ()
+
+
+def test_tool_result_is_bounded_before_private_session_persistence() -> None:
+    output = "head-sentinel\n" + ("result\n" * 5_000) + "tail-sentinel\n"
+    observation = ObservationEvent(
+        id="observation-1",
+        tool_name="terminal",
+        tool_call_id="call-1",
+        action_id="action-1",
+        observation=TerminalObservation.from_text(
+            output,
+            command="python analysis.py",
+            exit_code=0,
+        ),
+    )
+
+    translated = _tool_observation(
+        observation,
+        source_event_id="openhands:observation-1",
+    )
+
+    assert isinstance(translated, BackendToolExecutionEvent)
+    assert translated.tool_execution.result is not None
+    assert len(translated.tool_execution.result) <= 16_000
+    assert len(translated.tool_execution.result.splitlines()) <= 240
+    assert translated.tool_execution.result.startswith("head-sentinel\n")
+    assert translated.tool_execution.result.endswith("tail-sentinel\n")
+    assert "Heartwood output truncated" in translated.tool_execution.result
+    assert translated.tool_execution.result_truncated is True
+
+
+def test_tool_result_preserves_bounded_text_exactly() -> None:
+    observation = ObservationEvent(
+        id="observation-1",
+        tool_name="terminal",
+        tool_call_id="call-1",
+        action_id="action-1",
+        observation=TerminalObservation.from_text(
+            "first\r\nsecond\n",
+            command="python analysis.py",
+            exit_code=0,
+        ),
+    )
+
+    translated = _tool_observation(
+        observation,
+        source_event_id="openhands:observation-1",
+    )
+
+    assert isinstance(translated, BackendToolExecutionEvent)
+    assert translated.tool_execution.result == "first\r\nsecond\n"
+    assert translated.tool_execution.result_truncated is False
 
 
 def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> None:

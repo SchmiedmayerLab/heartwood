@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -25,12 +25,18 @@ from heartwood.gateway import (
     ModelCatalogService,
     ModelProfile,
     ProjectContext,
-    ProjectionApprovalAction,
+    ProjectionActionOutcome,
+    ProjectionActionRecord,
+    ProjectionAffectedPath,
     ProjectionApprovalGroup,
+    ProjectionFileEditorActionDetails,
     ProjectionLifecycleState,
     ProjectionMessage,
+    ProjectionOtherActionDetails,
     ProjectionSubagent,
     ProjectionTask,
+    ProjectionTaskActionDetails,
+    ProjectionTerminalActionDetails,
     ProjectionUsage,
     ProviderModel,
     RestGateway,
@@ -45,8 +51,48 @@ from heartwood.notebook import (
     build_widget_spec,
     render_widgets,
 )
-from heartwood.notebook._widgets import WidgetSpec
-from heartwood.session import SessionCommand
+from heartwood.notebook._widgets import WidgetSpec, _section_html
+from heartwood.session import JsonValue, SessionCommand
+
+
+def _approval_action(
+    tool_call_id: str,
+    *,
+    tool_name: str,
+    summary: str,
+    risk: Literal["high", "low", "medium", "unknown"] = "unknown",
+    arguments: dict[str, JsonValue] | None = None,
+    group_id: str = "action-set-synthetic",
+) -> ProjectionActionRecord:
+    action_arguments: dict[str, JsonValue] = {} if arguments is None else arguments
+    details: (
+        ProjectionTerminalActionDetails
+        | ProjectionFileEditorActionDetails
+        | ProjectionOtherActionDetails
+    )
+    if tool_name == "terminal":
+        details = ProjectionTerminalActionDetails(
+            command=str(action_arguments.get("command", "")),
+        )
+    elif tool_name == "file_editor":
+        details = ProjectionFileEditorActionDetails(
+            operation="unknown",
+            path=(str(action_arguments["path"]) if "path" in action_arguments else None),
+        )
+    else:
+        details = ProjectionOtherActionDetails()
+    return ProjectionActionRecord(
+        tool_call_id=tool_call_id,
+        group_id=group_id,
+        tool_name=tool_name,
+        risk=risk,
+        summary=summary,
+        arguments=action_arguments,
+        details=details,
+        state="awaiting-review",
+        proposed_sequence=0,
+        updated_sequence=0,
+    )
 
 
 class _CountingGateway:
@@ -163,6 +209,19 @@ def test_notebook_session_uses_one_atomic_approval_group(tmp_path: Path) -> None
     assert denied.pending_approval is None
 
 
+def test_notebook_uses_the_shared_bounded_workspace_service(tmp_path: Path) -> None:
+    (tmp_path / "analysis.py").write_text("answer = 42\n", encoding="utf-8")
+    session = _deterministic_session(tmp_path, "notebook-workspace")
+
+    tree = session.files()
+    file = session.file("analysis.py")
+    changes = session.changes()
+
+    assert [entry["path"] for entry in tree["entries"]] == ["analysis.py"]
+    assert file["content"] == "answer = 42\n"
+    assert changes["source"] == "session-actions"
+
+
 def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     projection = SessionProjection(
         session_id="notebook-batch",
@@ -171,15 +230,15 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
         pending_approval=ProjectionApprovalGroup(
             group_id="action-set-synthetic",
             actions=(
-                ProjectionApprovalAction(
-                    target_id="tool-1",
+                _approval_action(
+                    "tool-1",
                     tool_name="terminal",
                     risk="medium",
                     summary="Run the synthetic cohort command",
                     arguments={"command": "python run.py --output cohort-summary.json"},
                 ),
-                ProjectionApprovalAction(
-                    target_id="tool-2",
+                _approval_action(
+                    "tool-2",
                     tool_name="file_editor",
                     risk="unknown",
                     summary="Write the aggregate result",
@@ -198,7 +257,7 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     )
 
     assert pending.group_id == "action-set-synthetic"
-    assert [action.target_id for action in pending.actions] == ["tool-1", "tool-2"]
+    assert [action.tool_call_id for action in pending.actions] == ["tool-1", "tool-2"]
     assert approval_items == (
         "Review action set action-set-synthetic (2 actions): pending",
         (
@@ -538,6 +597,102 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
     )
 
 
+def test_notebook_marks_bounded_action_output_as_truncated() -> None:
+    action = _approval_action(
+        "tool-1",
+        tool_name="terminal",
+        summary="Run focused tests",
+        arguments={"command": "pytest tests/test_analysis.py"},
+    ).model_copy(
+        update={
+            "decision": "approved",
+            "state": "failed",
+            "outcome": ProjectionActionOutcome(
+                exit_code=1,
+                summary="terminal failed",
+                result="synthetic failure\n",
+                result_truncated=True,
+            ),
+        }
+    )
+    projection = SessionProjection(
+        session_id="notebook-action-output",
+        event_count=1,
+        revision=0,
+        actions=(action,),
+    )
+
+    sections = {
+        section.title: section.items for section in build_widget_spec(build_view_model(projection))
+    }
+
+    assert sections["Agent Actions"] == (
+        "Failed: $ pytest tests/test_analysis.py · exit 1: terminal failed · output truncated\n"
+        "Action set: action-set-synthetic · decision: approved\n"
+        'Arguments:\n{\n  "command": "pytest tests/test_analysis.py"\n}\n'
+        "Output:\nsynthetic failure\n",
+    )
+
+
+def test_notebook_renders_every_typed_action_and_automatic_decision() -> None:
+    file_action = _approval_action(
+        "file-1",
+        tool_name="file_editor",
+        summary="Edit a file",
+    ).model_copy(
+        update={
+            "group_id": None,
+            "decision": "approved",
+            "state": "succeeded",
+            "affected_paths": (
+                ProjectionAffectedPath(
+                    path="results/summary.txt",
+                    effect="created",
+                ),
+            ),
+        }
+    )
+    specialist_action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Delegate the analysis",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(subagent_type="research-planner"),
+        }
+    )
+    fallback_task = specialist_action.model_copy(
+        update={
+            "tool_call_id": "task-2",
+            "summary": "Use the fallback task summary",
+            "details": ProjectionTaskActionDetails(),
+        }
+    )
+    other_action = _approval_action(
+        "other-1",
+        tool_name="synthetic_tool",
+        summary="Run a custom action",
+    )
+    projection = SessionProjection(
+        session_id="notebook-action-types",
+        event_count=4,
+        revision=3,
+        actions=(file_action, specialist_action, fallback_task, other_action),
+    )
+
+    sections = {
+        section.title: section.items for section in build_widget_spec(build_view_model(projection))
+    }
+    rendered = "\n".join(sections["Agent Actions"])
+
+    assert "Succeeded: unknown path unavailable" in rendered
+    assert "Decision: approved (automatic policy)" in rendered
+    assert "Paths: created results/summary.txt (file-editor-action)" in rendered
+    assert "research-planner" in rendered
+    assert "Use the fallback task summary" in rendered
+    assert "Run a custom action" in rendered
+
+
 def test_notebook_initialization_does_not_advertise_a_terra_web_route(
     tmp_path: Path,
 ) -> None:
@@ -590,10 +745,11 @@ def test_notebook_approval_command_targets_the_projected_action_group(
         pending_approval=ProjectionApprovalGroup(
             group_id="action-set-123",
             actions=(
-                ProjectionApprovalAction(
-                    target_id="tool-123",
+                _approval_action(
+                    "tool-123",
                     tool_name="file_editor",
                     summary="Write the requested file",
+                    group_id="action-set-123",
                 ),
             ),
         ),
@@ -659,11 +815,12 @@ def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
         "Conversation",
         "Activity",
         "Action Review",
+        "Agent Actions",
         "Tasks",
         "Runtime",
         "Specialists",
     ]
-    assert sections[3].items == ()
+    assert sections[4].items == ()
     assert isinstance(rendered, object)
 
 
@@ -680,6 +837,31 @@ def test_widget_rendering_falls_back_without_ipywidgets(
 
     assert isinstance(rendered, tuple)
     assert all(isinstance(item, WidgetSpec) for item in rendered)
+
+
+def test_widget_html_preserves_exact_action_whitespace() -> None:
+    rendered = _section_html(
+        "Action Review",
+        ("$ printf 'first  value'\n  second line",),
+    )
+
+    assert "white-space: pre-wrap" in rendered
+    assert "$ printf &#x27;first  value&#x27;\n  second line" in rendered
+
+
+def test_widget_html_renders_action_control_characters_visibly() -> None:
+    rendered = _section_html(
+        "Action\x1b Review",
+        ("$ printf unsafe\x07\u202e\noutput\x00",),
+    )
+
+    assert "\x1b" not in rendered
+    assert "\x07" not in rendered
+    assert "\u202e" not in rendered
+    assert "\x00" not in rendered
+    assert r"Action\x1b Review" in rendered
+    assert r"$ printf unsafe\x07\u202e" in rendered
+    assert r"output\x00" in rendered
 
 
 def _deterministic_session(workspace: Path, session_id: str) -> NotebookSession:

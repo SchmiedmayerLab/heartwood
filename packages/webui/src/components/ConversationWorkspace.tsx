@@ -13,8 +13,11 @@ import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Toolt
 import {
   Ban,
   Check,
+  CircleCheck,
   CirclePause,
   CirclePlay,
+  CircleX,
+  Clock3,
   ListChecks,
   LoaderCircle,
   MessageSquareText,
@@ -27,12 +30,14 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   actionCountLabel,
   actionRiskPresentation,
+  actionStateLabel,
   actionToolLabel,
 } from "../actionPresentation";
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
 import type {
   ActionPresentation,
   ConversationMessage,
+  ProjectionActionRecord,
   ProjectionApprovalGroup,
   SessionProjection,
 } from "../types";
@@ -84,6 +89,11 @@ export const ConversationWorkspace = ({
   const canPause = availableCommands.includes("pause");
   const canResume = availableCommands.includes("resume");
   const running = projection?.lifecycle.status === "running";
+  const completedActions =
+    projection?.actions.filter(
+      (action) =>
+        action.state !== "awaiting-review" && action.state !== "proposed",
+    ) ?? [];
 
   return (
     <section className="conversation-workspace" aria-label="Agent conversation">
@@ -111,6 +121,10 @@ export const ConversationWorkspace = ({
             <ConversationItem key={message.id} message={message} />
           ))
         }
+        <ActionHistory
+          actions={completedActions}
+          actionPresentation={actionPresentation}
+        />
         {projection?.streamingText ?
           <StreamingMessage content={projection.streamingText} />
         : null}
@@ -316,6 +330,120 @@ const StreamingMessage = ({ content }: { content: string }) => (
   </article>
 );
 
+const ActionHistory = ({
+  actions,
+  actionPresentation,
+}: {
+  actions: ProjectionActionRecord[];
+  actionPresentation: ActionPresentation | null;
+}) => {
+  if (actions.length === 0) return null;
+  return (
+    <section aria-label="Agent actions" className="action-history">
+      <h2>Agent actions</h2>
+      <ol>
+        {actions.map((action) => {
+          const risk = actionRiskPresentation(action.risk, actionPresentation);
+          const tool = actionToolLabel(action.toolName, actionPresentation);
+          return (
+            <li key={action.toolCallId}>
+              <ActionStateIcon state={action.state} />
+              <div>
+                <div className="action-history-heading">
+                  <strong>{actionHeading(action)}</strong>
+                  <Badge variant="secondary">
+                    {actionStateLabel(action.state, actionPresentation)}
+                  </Badge>
+                </div>
+                <div className="approval-action-meta">
+                  <span>{tool}</span>
+                  <Badge className={risk.className} variant="outline">
+                    {risk.label}
+                  </Badge>
+                  {action.outcome !== null ?
+                    <span>
+                      Exit {action.outcome.exitCode} · {action.outcome.summary}
+                    </span>
+                  : null}
+                  {action.groupId !== null ?
+                    <span>
+                      Action set {action.groupId} ·{" "}
+                      {action.decision ?? "decision pending"}
+                    </span>
+                  : action.decision !== null ?
+                    <span>{action.decision} by automatic policy</span>
+                  : null}
+                </div>
+                {action.affectedPaths.length > 0 ?
+                  <p>
+                    {action.affectedPaths
+                      .map(
+                        (path) =>
+                          `${path.effect}: ${path.path} (${path.provenance})`,
+                      )
+                      .join(", ")}
+                  </p>
+                : null}
+                {Object.keys(action.arguments).length > 0 ?
+                  <details className="trace-details">
+                    <summary>Exact arguments</summary>
+                    <pre tabIndex={0}>
+                      {JSON.stringify(action.arguments, null, 2)}
+                    </pre>
+                  </details>
+                : null}
+                {action.outcome?.result ?
+                  <details className="trace-details">
+                    <summary>
+                      Action output
+                      {action.outcome.resultTruncated ? " (truncated)" : ""}
+                    </summary>
+                    <pre tabIndex={0}>{action.outcome.result}</pre>
+                  </details>
+                : null}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+};
+
+const ActionStateIcon = ({
+  state,
+}: {
+  state: ProjectionActionRecord["state"];
+}) =>
+  state === "succeeded" ?
+    <CircleCheck
+      aria-hidden="true"
+      className="action-state-success"
+      size={17}
+    />
+  : state === "failed" || state === "rejected" || state === "outcome-unknown" ?
+    <CircleX aria-hidden="true" className="action-state-error" size={17} />
+  : <Clock3 aria-hidden="true" className="action-state-pending" size={17} />;
+
+const actionHeading = (action: ProjectionActionRecord) => {
+  if (action.details.kind === "terminal") {
+    return `$ ${action.details.command}`;
+  }
+  if (action.details.kind === "file-editor") {
+    return `${action.details.operation.replace("_", " ")} ${
+      action.details.path ?? "path unavailable"
+    }`;
+  }
+  if (action.details.kind === "task") {
+    return (
+      action.details.description ??
+      action.details.subagentType ??
+      action.summary
+    );
+  }
+  return action.summary;
+};
+
 const RuntimeStatus = ({
   projection,
 }: {
@@ -485,12 +613,12 @@ const ApprovalRequest = ({
             );
             const tool = actionToolLabel(control.toolName, actionPresentation);
             return (
-              <li key={control.targetId}>
+              <li key={control.toolCallId}>
                 <span className="approval-action-index" aria-hidden="true">
                   {index + 1}
                 </span>
                 <div className="approval-action-content">
-                  <strong>{control.summary ?? tool}</strong>
+                  <strong>{control.summary || tool}</strong>
                   <div className="approval-action-meta">
                     <span>{tool}</span>
                     <Badge className={risk.className} variant="outline">

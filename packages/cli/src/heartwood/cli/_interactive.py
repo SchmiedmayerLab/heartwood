@@ -14,18 +14,36 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from heartwood.cli._workspace_presentation import (
+    format_workspace_changes,
+    format_workspace_diff,
+    format_workspace_file,
+    format_workspace_tree,
+)
 from heartwood.gateway import (
     ACTION_MODE_OPTIONS,
     ActionSettingsError,
     ModelSettingsError,
+    ProjectionActionRecord,
     ProjectionApprovalGroup,
     SessionGateway,
     SessionProjection,
+    WorkspaceInspectionError,
     action_mode_label,
     action_risk_label,
+    action_state_label,
     action_tool_label,
 )
-from heartwood.schemas import ActionSettingsResponse
+from heartwood.gateway import (
+    display_safe_text as terminal_safe_text,
+)
+from heartwood.schemas import (
+    ActionSettingsResponse,
+    WorkspaceChangesResponse,
+    WorkspaceDiffResponse,
+    WorkspaceFileResponse,
+    WorkspaceTreeResponse,
+)
 from heartwood.session import (
     CommandKind,
     JsonValue,
@@ -112,6 +130,21 @@ _COMMAND_ACTIVITIES = {
         waiting_label="Still checking the session",
         guidance="Heartwood is waiting for the project services to respond.",
     ),
+    "/files": InteractionActivity(
+        label="Loading project files",
+        waiting_label="Still loading project files",
+        guidance="Large projects are returned within Heartwood's configured limits.",
+    ),
+    "/show": InteractionActivity(
+        label="Loading the file",
+        waiting_label="Still loading the file",
+        guidance="Heartwood is applying the project read boundary.",
+    ),
+    "/changes": InteractionActivity(
+        label="Loading project changes",
+        waiting_label="Still loading project changes",
+        guidance="OpenHands may need additional time to inspect a large Git project.",
+    ),
     "/permissions": InteractionActivity(
         label="Updating action review",
         waiting_label="Still updating action review",
@@ -162,6 +195,27 @@ class InteractiveSession:
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared project action-confirmation settings."""
         return self.gateway.action_settings()
+
+    def workspace_tree(
+        self,
+        path: str = ".",
+        *,
+        depth: int | None = None,
+    ) -> WorkspaceTreeResponse:
+        """Return the shared bounded project tree."""
+        return self.gateway.workspace_tree(path=path, depth=depth)
+
+    def workspace_file(self, path: str) -> WorkspaceFileResponse:
+        """Return one shared bounded project file."""
+        return self.gateway.workspace_file(path=path)
+
+    def workspace_changes(self) -> WorkspaceChangesResponse:
+        """Return the shared changed-file list."""
+        return self.gateway.workspace_changes(session_id=self.session_id)
+
+    def workspace_diff(self, path: str) -> WorkspaceDiffResponse:
+        """Return one shared bounded project diff."""
+        return self.gateway.workspace_diff(session_id=self.session_id, path=path)
 
     def select_action_mode(self, value: str) -> ActionSettingsResponse:
         """Select an action-confirmation mode by its public command value."""
@@ -233,18 +287,43 @@ class InteractiveSession:
             try:
                 return InteractionResult(message=format_model_status(self.gateway))
             except ModelSettingsError as error:
-                return InteractionResult(message=str(error))
+                return InteractionResult(
+                    message=terminal_safe_text(str(error), preserve_newlines=True)
+                )
+        try:
+            if directive == "/files" and len(parts) in {1, 2}:
+                tree = self.workspace_tree(parts[1] if len(parts) == 2 else ".")
+                return InteractionResult(message="\n".join(format_workspace_tree(tree)))
+            if directive == "/show" and len(parts) == 2:
+                file = self.workspace_file(parts[1])
+                return InteractionResult(message="\n".join(format_workspace_file(file)))
+            if directive == "/changes" and len(parts) in {1, 2}:
+                if len(parts) == 2:
+                    return InteractionResult(
+                        message="\n".join(format_workspace_diff(self.workspace_diff(parts[1])))
+                    )
+                return InteractionResult(
+                    message="\n".join(format_workspace_changes(self.workspace_changes()))
+                )
+        except WorkspaceInspectionError as error:
+            return InteractionResult(
+                message=terminal_safe_text(str(error), preserve_newlines=True),
+                error=True,
+            )
         if directive == "/permissions" and len(parts) in {1, 2}:
             try:
                 settings = (
                     self.action_settings() if len(parts) == 1 else self.select_action_mode(parts[1])
                 )
             except ActionSettingsError as error:
-                return InteractionResult(message=str(error), error=True)
+                return InteractionResult(
+                    message=terminal_safe_text(str(error), preserve_newlines=True),
+                    error=True,
+                )
             return InteractionResult(message=format_action_settings(settings))
         if directive == "/help" and len(parts) == 1:
             return InteractionResult(message=command_help())
-        return InteractionResult(message=f"Unknown command: {directive}")
+        return InteractionResult(message=f"Unknown command: {terminal_safe_text(directive)}")
 
     def _decision_target(self, requested_id: str | None) -> str | None:
         approval = self.pending_approval()
@@ -272,7 +351,7 @@ def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
         "/allow  /reject  /permissions  /pause  /resume  /status  "
-        "/replay  /audit-export  /help  /exit"
+        "/files  /show  /changes  /replay  /audit-export  /help  /exit"
     )
 
 
@@ -288,7 +367,10 @@ def format_action_arguments(arguments: dict[str, JsonValue]) -> tuple[str, ...]:
     """Render exact action arguments consistently across terminal clients."""
     if not arguments:
         return ()
-    return tuple(json.dumps(arguments, indent=2, sort_keys=True).splitlines())
+    return tuple(
+        terminal_safe_text(line)
+        for line in json.dumps(arguments, indent=2, sort_keys=True).splitlines()
+    )
 
 
 def format_projection_lines(
@@ -309,16 +391,19 @@ def format_projection_lines(
         )
     )
     if projection.streaming_text:
-        lines.append(f"[...] Agent: {projection.streaming_text}")
+        lines.append(
+            f"[...] Agent: {terminal_safe_text(projection.streaming_text, preserve_newlines=True)}"
+        )
     lines.extend(format_runtime_lines(projection))
     approval = projection.pending_approval
     if approval is not None and include_pending_review:
         label = "action" if len(approval.actions) == 1 else "actions"
         lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
         for index, action in enumerate(approval.actions, 1):
-            tool_label = action_tool_label(action.tool_name)
-            risk_label = action_risk_label(action.risk or "unknown")
-            lines.append(f"  {index}. {action.summary or tool_label} [{tool_label} · {risk_label}]")
+            tool_label = terminal_safe_text(action_tool_label(action.tool_name))
+            risk_label = action_risk_label(action.risk)
+            summary = terminal_safe_text(action.summary) or tool_label
+            lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
             if argument_lines := format_action_arguments(action.arguments):
                 lines.append("     Arguments:")
                 lines.extend(f"       {line}" for line in argument_lines)
@@ -342,21 +427,30 @@ def format_conversation_lines(
         if after_sequence is not None and message.sequence <= after_sequence:
             continue
         prefix = f"[{message.sequence:03d}]"
-        lines.append(f"{prefix} {message.label}: {message.content}")
+        lines.append(
+            f"{prefix} {terminal_safe_text(message.label)}: "
+            f"{terminal_safe_text(message.content, preserve_newlines=True)}"
+        )
         if message.detail:
-            lines.append(f"  {message.detail}")
+            lines.append(f"  {terminal_safe_text(message.detail, preserve_newlines=True)}")
         if message.technical_detail:
-            lines.extend(f"    {line}" for line in message.technical_detail.splitlines())
+            lines.extend(
+                f"    {terminal_safe_text(line)}" for line in message.technical_detail.splitlines()
+            )
     return tuple(lines)
 
 
 def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
     """Render current task, usage, and specialist state from the projection."""
     lines: list[str] = []
+    if projection.actions:
+        lines.append("Agent actions:")
+        for action in projection.actions:
+            lines.extend(format_action_record_lines(action))
     if projection.task_plan:
         lines.append("Task plan:")
         lines.extend(
-            f"  [{'x' if task.status == 'done' else '·'}] {task.title}"
+            f"  [{'x' if task.status == 'done' else '·'}] {terminal_safe_text(task.title)}"
             for task in projection.task_plan
         )
     if projection.usage is not None:
@@ -364,19 +458,68 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
         total_tokens = usage.prompt_tokens + usage.completion_tokens
         lines.append(
             f"Model activity: {usage.call_count} calls · "
-            f"{total_tokens:,} tokens · {usage.model_name}"
+            f"{total_tokens:,} tokens · {terminal_safe_text(usage.model_name)}"
         )
         lines.extend(
-            f"  {item.usage_id}: {item.call_count} calls · "
+            f"  {terminal_safe_text(item.usage_id)}: {item.call_count} calls · "
             f"{item.prompt_tokens + item.completion_tokens:,} tokens"
             for item in projection.usage_by_purpose
         )
     if projection.subagents:
         lines.append("Specialists:")
         lines.extend(
-            f"  {item.agent_name}: {item.status} · invocation {item.invocation_id}"
-            f"{f' · task {item.task_id}' if item.task_id is not None else ''}"
+            f"  {terminal_safe_text(item.agent_name)}: {item.status} · invocation "
+            f"{terminal_safe_text(item.invocation_id)}"
+            f"{f' · task {terminal_safe_text(item.task_id)}' if item.task_id is not None else ''}"
             for item in projection.subagents
+        )
+    return tuple(lines)
+
+
+def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
+    """Render one correlated action record without reconstructing its state."""
+    state = action_state_label(action.state)
+    details = action.details
+    if details.kind == "terminal":
+        heading = f"  [{state}] $ {terminal_safe_text(details.command)}"
+    elif details.kind == "file-editor":
+        path = terminal_safe_text(details.path or "path unavailable")
+        heading = f"  [{state}] {details.operation} {path}"
+    elif details.kind == "task":
+        specialist = details.subagent_type or details.description or action.tool_name
+        heading = f"  [{state}] specialist {terminal_safe_text(specialist)}"
+    else:
+        heading = f"  [{state}] {terminal_safe_text(action.summary)}"
+    lines = [heading]
+    if action.group_id is not None:
+        decision = action.decision or "pending"
+        lines.append(f"    action set {terminal_safe_text(action.group_id)} · decision {decision}")
+    elif action.decision is not None:
+        lines.append(f"    decision {action.decision} (automatic policy)")
+    if action.arguments:
+        lines.append(
+            "    arguments: "
+            + terminal_safe_text(
+                json.dumps(action.arguments, sort_keys=True, separators=(",", ":"))
+            )
+        )
+    if action.outcome is not None:
+        lines.append(
+            f"    exit {action.outcome.exit_code} · {terminal_safe_text(action.outcome.summary)}"
+        )
+        if action.outcome.result:
+            lines.extend(
+                f"      {terminal_safe_text(line)}" for line in action.outcome.result.splitlines()
+            )
+        if action.outcome.result_truncated:
+            lines.append("      [output truncated]")
+    if action.affected_paths:
+        lines.append(
+            "    paths: "
+            + ", ".join(
+                f"{item.effect} {terminal_safe_text(item.path)} ({item.provenance})"
+                for item in action.affected_paths
+            )
         )
     return tuple(lines)
 
@@ -388,30 +531,43 @@ def format_model_status(gateway: SessionGateway) -> str:
     decision = validation["policy_decision"]
     return "\n".join(
         (
-            f"Model: {profile['model']}",
+            f"Model: {terminal_safe_text(profile['model'])}",
             f"Credentials: {validation['credential_status']}",
             f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
-            f"Policy: {decision['decision']} ({decision['reason']})",
+            f"Policy: {decision['decision']} ({terminal_safe_text(decision['reason'])})",
         )
     )
 
 
 def format_action_settings(settings: ActionSettingsResponse) -> str:
     """Format gateway-owned action-mode metadata for terminal interfaces."""
-    lines = ["Action review", "", settings["scope_description"], ""]
+    lines = [
+        "Action review",
+        "",
+        terminal_safe_text(settings["scope_description"], preserve_newlines=True),
+        "",
+    ]
     if not settings["change_allowed"] and settings["change_blocked_reason"]:
-        lines.extend((settings["change_blocked_reason"], ""))
+        lines.extend(
+            (
+                terminal_safe_text(
+                    settings["change_blocked_reason"],
+                    preserve_newlines=True,
+                ),
+                "",
+            )
+        )
     selected = settings["confirmation_mode"]
     for item in settings["modes"]:
         marker = "*" if item["mode"] == selected else " "
         recommended = " (recommended)" if item["recommended"] else ""
         allowed = item["allowed"]
         availability = "" if allowed else " (unavailable)"
-        lines.append(f"{marker} {item['label']}{recommended}{availability}")
-        lines.append(f"  {item['description']}")
+        lines.append(f"{marker} {terminal_safe_text(item['label'])}{recommended}{availability}")
+        lines.append(f"  {terminal_safe_text(item['description'], preserve_newlines=True)}")
         if not allowed and (reason := item["unavailable_reason"]):
-            lines.append(f"  {reason}")
+            lines.append(f"  {terminal_safe_text(reason, preserve_newlines=True)}")
         else:
-            lines.append(f"  Select: /permissions {item['command_value']}")
+            lines.append(f"  Select: /permissions {terminal_safe_text(item['command_value'])}")
         lines.append("")
     return "\n".join(lines).rstrip()

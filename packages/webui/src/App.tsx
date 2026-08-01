@@ -13,12 +13,19 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@stanfordspezi/spezi-web-design-system/components/Sheet";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@stanfordspezi/spezi-web-design-system/components/Tabs";
 import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
-import { X } from "lucide-react";
+import { FileCode2, GitCompareArrows, MessagesSquare, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectedActionMode } from "./actionPresentation";
 import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
+import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import {
   SessionRail,
   SessionRailContent,
@@ -69,6 +76,8 @@ interface ProjectionSelection {
   retiredEpoch: string | null;
 }
 
+type WorkspaceView = "changes" | "conversation" | "files";
+
 const emptyProfile = (): ModelProfileDraft => ({
   profile_id: "custom-profile",
   model: "openai/",
@@ -104,6 +113,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [retryCommand, setRetryCommand] = useState<SessionCommand | null>(null);
   const [panel, setPanel] = useState<UtilityPanel>(null);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [workspaceView, setWorkspaceView] =
+    useState<WorkspaceView>("conversation");
+  const [visitedWorkspaceViews, setVisitedWorkspaceViews] = useState<
+    ReadonlySet<WorkspaceView>
+  >(() => new Set(["conversation"]));
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(
     null,
   );
@@ -657,6 +671,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     updateSessionId(nextSessionId);
     setMobileSessionsOpen(false);
     setPanel(null);
+    setWorkspaceView("conversation");
   };
 
   const openPanel = (nextPanel: Exclude<UtilityPanel, null>) => {
@@ -842,30 +857,98 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             </div>
           : null}
 
-          <ConversationWorkspace
-            actionModeLabel={activeActionMode?.label ?? null}
-            actionPresentation={actionSettings?.presentation ?? null}
-            conversationEndRef={conversationEndRef}
-            modelConfigured={modelReady}
-            modelMessage={modelStatus.message}
-            projection={projection}
-            prompt={prompt}
-            requestActivity={requestActivity}
-            requestStatus={requestStatus}
-            onDecision={(decision, approval) =>
-              void decideAction(decision, approval)
-            }
-            onOpenSettings={() => openPanel("settings")}
-            onPauseToggle={() => {
-              if (projection?.lifecycle.canResume) {
-                void send("resume");
-              } else if (projection?.lifecycle.canPause) {
-                void send("pause");
-              }
+          <Tabs
+            className="workbench-content"
+            value={workspaceView}
+            onValueChange={(value) => {
+              const nextView = value as WorkspaceView;
+              setWorkspaceView(nextView);
+              setVisitedWorkspaceViews(
+                (current) => new Set([...current, nextView]),
+              );
             }}
-            onPrompt={setPrompt}
-            onSubmit={submitPrompt}
-          />
+          >
+            <TabsList aria-label="Project view" className="workspace-tabs">
+              <TabsTrigger value="conversation">
+                <MessagesSquare aria-hidden="true" size={15} />
+                Conversation
+              </TabsTrigger>
+              <TabsTrigger value="files">
+                <FileCode2 aria-hidden="true" size={15} />
+                Files
+              </TabsTrigger>
+              <TabsTrigger value="changes">
+                <GitCompareArrows aria-hidden="true" size={15} />
+                Changes
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent className="workspace-tab-panel" value="conversation">
+              <ConversationWorkspace
+                actionModeLabel={activeActionMode?.label ?? null}
+                actionPresentation={actionSettings?.presentation ?? null}
+                conversationEndRef={conversationEndRef}
+                modelConfigured={modelReady}
+                modelMessage={modelStatus.message}
+                projection={projection}
+                prompt={prompt}
+                requestActivity={requestActivity}
+                requestStatus={requestStatus}
+                onDecision={(decision, approval) =>
+                  void decideAction(decision, approval)
+                }
+                onOpenSettings={() => openPanel("settings")}
+                onPauseToggle={() => {
+                  if (projection?.lifecycle.canResume) {
+                    void send("resume");
+                  } else if (projection?.lifecycle.canPause) {
+                    void send("pause");
+                  }
+                }}
+                onPrompt={setPrompt}
+                onSubmit={submitPrompt}
+              />
+            </TabsContent>
+            <TabsContent
+              className="workspace-tab-panel"
+              forceMount
+              value="files"
+            >
+              {!visitedWorkspaceViews.has("files") ?
+                null
+              : sessionId === null ?
+                <div className="workspace-state" role="status">
+                  Select a session to inspect project files.
+                </div>
+              : <ProjectWorkspace
+                  client={resolvedClient}
+                  key={`${sessionId}-files`}
+                  mode="files"
+                  revision={projection?.workspaceRevision ?? -1}
+                  sessionId={sessionId}
+                />
+              }
+            </TabsContent>
+            <TabsContent
+              className="workspace-tab-panel"
+              forceMount
+              value="changes"
+            >
+              {!visitedWorkspaceViews.has("changes") ?
+                null
+              : sessionId === null ?
+                <div className="workspace-state" role="status">
+                  Select a session to inspect project changes.
+                </div>
+              : <ProjectWorkspace
+                  client={resolvedClient}
+                  key={`${sessionId}-changes`}
+                  mode="changes"
+                  revision={projection?.workspaceRevision ?? -1}
+                  sessionId={sessionId}
+                />
+              }
+            </TabsContent>
+          </Tabs>
         </section>
 
         <Sheet open={mobileSessionsOpen} onOpenChange={setMobileSessionsOpen}>

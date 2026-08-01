@@ -62,7 +62,13 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         _event(
             1,
             "tool_call.proposed",
-            {"tool_call_id": "tool-1", "tool_name": "terminal"},
+            {
+                "tool_call_id": "tool-1",
+                "action_id": "action-1",
+                "tool_name": "terminal",
+                "kind": "terminal",
+                "arguments": {"command": "python synthetic_analysis.py"},
+            },
         ),
         _event(
             2,
@@ -88,6 +94,8 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
             4,
             "tool.execution.recorded",
             {
+                "tool_call_id": "tool-1",
+                "action_id": "action-1",
                 "tool_name": "terminal",
                 "exit_code": 0,
                 "summary": "terminal completed",
@@ -109,7 +117,13 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         _event(
             7,
             "tool_call.proposed",
-            {"tool_call_id": "tool-2", "tool_name": "terminal"},
+            {
+                "tool_call_id": "tool-2",
+                "action_id": "action-2",
+                "tool_name": "terminal",
+                "kind": "terminal",
+                "arguments": {"command": "python rejected_analysis.py"},
+            },
         ),
         _event(
             8,
@@ -291,7 +305,7 @@ def test_coding_agent_qualification_rejects_incomplete_replay(tmp_path: Path) ->
     ("current_marker", "legacy_marker", "missing_label"),
     [
         ("Action set rejected", "Action set denied", "rejected action set"),
-        ("Tool: Ran Terminal Command", "Tool terminal exit=0", "terminal tool"),
+        ("[Succeeded] $", "Tool terminal exit=0", "terminal action"),
     ],
 )
 def test_coding_agent_qualification_requires_current_shared_projection(

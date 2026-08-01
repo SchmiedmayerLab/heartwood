@@ -48,7 +48,11 @@ export type ApiResponse =
   | SkillSettingsResponse
   | SkillSummaryResponse
   | StartupPlanResponse
-  | SubscriptionDeviceLoginResponse;
+  | SubscriptionDeviceLoginResponse
+  | WorkspaceChangesResponse
+  | WorkspaceDiffResponse
+  | WorkspaceFileResponse
+  | WorkspaceTreeResponse;
 export type ActionConfirmationMode = "always-confirm" | "confirm-risky";
 export type ActionRisk = "high" | "low" | "medium" | "unknown";
 export type LocalModelQualification = "unvalidated" | "qualified";
@@ -104,6 +108,9 @@ export interface ActionModeOptionResponse {
 export interface ActionPresentationResponse {
   other_tool_label_template: string;
   risk_labels: {
+    [k: string]: string;
+  };
+  state_labels: {
     [k: string]: string;
   };
   tool_labels: {
@@ -588,6 +595,92 @@ export interface SubscriptionDeviceLoginResponse {
   status: "pending" | "complete";
   user_code: string;
   verification_url: string;
+}
+/**
+ * Bounded changed-file list for one project and session.
+ */
+export interface WorkspaceChangesResponse {
+  changes: WorkspaceChangeResponse[];
+  limits: WorkspaceLimitsResponse;
+  message: string | null;
+  schema_version: "heartwood.workspace-changes.v1";
+  source: "git" | "session-actions" | "unavailable";
+  status: "available" | "non-git" | "truncated" | "unavailable" | "unsupported";
+  truncated: boolean;
+}
+/**
+ * One changed project path from Git or structured session evidence.
+ */
+export interface WorkspaceChangeResponse {
+  action_ids: string[];
+  path: string;
+  source: "git" | "session-action";
+  status: "added" | "deleted" | "modified";
+}
+/**
+ * Applied workspace-inspection limits.
+ */
+export interface WorkspaceLimitsResponse {
+  max_change_entries: number;
+  max_diff_bytes: number;
+  max_file_bytes: number;
+  max_file_lines: number;
+  max_tree_depth: number;
+  max_tree_entries: number;
+}
+/**
+ * Bounded read-only original and modified file contents.
+ */
+export interface WorkspaceDiffResponse {
+  message: string | null;
+  modified: string | null;
+  original: string | null;
+  path: string;
+  schema_version: "heartwood.workspace-diff.v1";
+  source: "git" | "session-action" | "unavailable";
+  status:
+    | "available"
+    | "binary"
+    | "truncated"
+    | "unavailable"
+    | "non-git"
+    | "unsupported";
+  truncated: boolean;
+}
+/**
+ * Bounded read-only project file.
+ */
+export interface WorkspaceFileResponse {
+  bytes_read: number;
+  content: string | null;
+  line_count: number;
+  message: string | null;
+  path: string;
+  schema_version: "heartwood.workspace-file.v1";
+  size_bytes: number | null;
+  status: "available" | "binary" | "truncated" | "unavailable" | "unsupported";
+  truncated: boolean;
+}
+/**
+ * Bounded project tree with private state removed.
+ */
+export interface WorkspaceTreeResponse {
+  entries: WorkspaceTreeEntryResponse[];
+  limits: WorkspaceLimitsResponse;
+  path: string;
+  schema_version: "heartwood.workspace-tree.v1";
+  status: "available" | "truncated";
+  truncated: boolean;
+}
+/**
+ * One safe project entry in a bounded workspace tree.
+ */
+export interface WorkspaceTreeEntryResponse {
+  depth: number;
+  kind: "directory" | "file" | "unsupported";
+  name: string;
+  path: string;
+  size_bytes: number | null;
 }
 /**
  * Select the shared action-confirmation policy.

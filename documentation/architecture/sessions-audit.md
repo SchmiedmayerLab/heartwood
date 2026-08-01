@@ -77,6 +77,11 @@ Heartwood displays every member as one action set and applies one decision to th
 The gateway commits that complete-set decision before OpenHands can continue into model or tool execution.
 The pending set is reconstructed from unmatched OpenHands actions after restart rather than from a separate Heartwood cache.
 
+Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
+The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.
+Terminal, file-editor, Task, and other actions use typed variants, while the exact OpenHands arguments remain available for review.
+Unknown outcomes fail closed and are never converted into a successful result by an interface.
+
 ## Audit Integrity
 
 Audit records are chained so replay and export can detect modification, reordering, or missing records within the available chain.
@@ -85,7 +90,8 @@ The recovery journal repairs a verified interrupted two-file append before repla
 The chain alone cannot prove that an intact suffix was not deleted; deployments that require truncation detection must checkpoint the terminal hash or event count in independently retained storage.
 The export path is itself recorded as an event.
 
-The log minimizes content but cannot make every prompt, path, tool summary, or outcome non-sensitive.
+Exact action arguments, commands, affected paths, file content, patches, tool output, and failure text stay out of the content-minimized audit payload.
+The log still cannot make every operational identifier, decision, classification, count, or timestamp non-sensitive.
 Deployments must define retention, access, export, and deletion policy.
 
 ## Long Conversations

@@ -17,6 +17,8 @@ from heartwood.gateway import (
     ProjectContext,
     SessionGateway,
     action_settings_from_mapping,
+    action_state_label,
+    display_safe_text,
 )
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand
@@ -47,6 +49,14 @@ from heartwood.session import CommandKind, EventKind, SessionCommand
 def test_action_settings_reject_malformed_values(value: object, message: str) -> None:
     with pytest.raises(ActionSettingsError, match=message):
         action_settings_from_mapping(value)
+
+
+def test_shared_action_presentation_handles_unknown_states_and_control_text() -> None:
+    assert action_state_label("future-state") == "Future State"
+    assert action_state_label("future-\u202estate") == r"Future \u202eState"
+    assert display_safe_text("safe\nline", preserve_newlines=True) == "safe\nline"
+    assert display_safe_text("unsafe\x1b\u202e") == r"unsafe\x1b\u202e"
+    assert display_safe_text("\U000e0001") == r"\U000e0001"
 
 
 def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
@@ -89,6 +99,16 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
             "low": "Low Risk",
             "medium": "Medium Risk",
             "unknown": "Not Classified",
+        },
+        "state_labels": {
+            "approved": "Approved",
+            "awaiting-review": "Awaiting Review",
+            "failed": "Failed",
+            "outcome-unknown": "Outcome Unknown",
+            "proposed": "Proposed",
+            "rejected": "Rejected",
+            "running": "Running",
+            "succeeded": "Succeeded",
         },
         "tool_labels": {
             "file_editor": "File Change",

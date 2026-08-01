@@ -84,6 +84,18 @@ The selected non-secret model profile remains in the project until another conne
 The aliases `approve` and `deny` remain command-line synonyms for automation.
 Interactive users should use the visible controls or `/allow` and `/reject` without internal identifiers.
 
+## Project Inspection
+
+| Command | Purpose |
+|---|---|
+| `heartwood files list [DIRECTORY] [--depth N]` | List a bounded project tree |
+| `heartwood files show FILE` | Print one bounded UTF-8 text file |
+| `heartwood changes` | List Git changes or successful typed file actions for the selected non-Git session |
+| `heartwood changes FILE` | Print one bounded read-only diff or non-Git current-file view |
+
+These commands use the same gateway service as the full-screen terminal, browser, and notebook bridge.
+They exclude private project state and return a nonzero status for unavailable, binary, or unsupported content.
+
 ## Operator Commands
 
 | Command | Purpose |

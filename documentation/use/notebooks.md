@@ -78,7 +78,7 @@ Inspect every member before resolving the group:
 ```python
 pending = view.pending_approval
 assert pending is not None
-[(action.tool_name, action.summary, action.arguments) for action in pending.actions]
+[(action.tool_name, action.state, action.details, action.arguments) for action in pending.actions]
 ```
 
 Allow or reject the complete set with its group identifier:
@@ -90,9 +90,26 @@ view = session.approve(group_id=pending.group_id)
 
 The decision applies to every action displayed in that OpenHands action set.
 
+All correlated action records remain available through `view.actions`.
+Each record includes its OpenHands identifiers, grouped decision, typed details, state, bounded outcome, and explicit affected-path evidence.
+
 Task progress is available through `view.task_plan`.
 Combined model usage is available through `view.usage`, and agent and condenser usage are separated in `view.usage_by_purpose`.
 Sequential specialist work and parent lineage are available through `view.subagents`.
+
+## Inspect Files and Changes
+
+The notebook bridge exposes the same bounded read-only service as the terminal and browser without building a separate notebook file browser:
+
+```python
+tree = session.files()
+source = session.file("analysis/cohort.py")
+changes = session.changes()
+diff = session.diff("analysis/cohort.py")
+```
+
+The returned typed mappings label binary, truncated, unavailable, non-Git, and unsupported states.
+They exclude `.heartwood/` and `.git/`, reject unsafe paths, and apply the same count, depth, line, and byte limits as the other interfaces.
 
 ## Export the Audit Record
 

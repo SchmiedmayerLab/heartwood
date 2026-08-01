@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # Use the Browser
 
-The browser interface presents conversations, action review, model setup, Skills, activity, and audit export without introducing a separate backend or project state.
+The browser interface presents conversations, action review, read-only project files and changes, model setup, Skills, activity, and audit export without introducing a separate backend or project state.
 It is available on workstations and in the generic container.
 Terra and Stanford Carina do not expose a supported Heartwood browser route; use their terminal or notebook interfaces instead.
 
@@ -48,6 +48,8 @@ The first browser conversation is the same **Main session** used by the terminal
 - Use **New analysis** to create another persistent session.
 - Enter requests in the composer after model readiness is confirmed.
 - Send additional guidance or pause while OpenHands is working.
+- Use **Files** to inspect the bounded project tree with read-only syntax highlighting.
+- Use **Changes** to inspect Git changes or session-attributed non-Git changes with read-only per-file diffs.
 - Inspect task progress, model-call totals, and sequential specialist status below the conversation.
 - Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
@@ -61,6 +63,26 @@ The first browser conversation is the same **Main session** used by the terminal
 
 The review panel lists all proposed members together with tool names, risk labels, summaries, and relevant arguments.
 One decision resolves the complete OpenHands action set: allowing runs every listed action once, while rejecting runs none of them.
+Completed action records show the correlated state, exit status, bounded result, and affected paths when OpenHands supplied reliable typed evidence.
+
+## Inspect the Project
+
+The **Files** and **Changes** views are read-only.
+They never provide a second editing path around action review.
+Tree, file, changed-path, and diff responses have fixed depth, count, line, and byte limits; the interface labels truncated or unavailable content instead of silently omitting the condition.
+
+![Heartwood Files view showing the bounded project tree and a syntax-highlighted result](../assets/screenshots/browser-files.png)
+
+Select a file to inspect its contents without leaving the session.
+
+![Heartwood Changes view showing a Git-backed per-file diff](../assets/screenshots/browser-changes.png)
+
+Select a changed path to compare its current contents with the Git baseline.
+When the project does not use Git, Heartwood instead shows changes that OpenHands reported through typed file-editor actions in the selected session.
+
+Heartwood excludes `.heartwood/` and `.git/` at every depth and refuses path traversal, symbolic links, special files, and non-UTF-8 text.
+In a non-Git project, **Changes** includes only successful typed file-editor actions from the selected session.
+Terminal command text is not treated as authoritative file evidence.
 
 ## Keep the Interface Reachable
 

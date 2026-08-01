@@ -101,6 +101,35 @@ export const syntheticEvents = (): SessionEvent[] => [
   }),
 ];
 
+export const syntheticAction = (
+  overrides: Partial<SessionProjection["actions"][number]> = {},
+): SessionProjection["actions"][number] => ({
+  schema_version: "heartwood.action-record.v1",
+  toolCallId: "session-test-toolcall-0",
+  actionId: "session-test-action-0",
+  groupId: "action-set-session-test",
+  toolName: "terminal",
+  risk: "low",
+  summary: "build the aggregate synthetic target-condition cohort",
+  arguments: {
+    command: "python run.py --output /project/cohort-summary.json",
+  },
+  details: {
+    kind: "terminal",
+    command: "python run.py --output /project/cohort-summary.json",
+    isInput: false,
+    reset: false,
+    timeout: null,
+  },
+  affectedPaths: [],
+  state: "awaiting-review",
+  decision: null,
+  outcome: null,
+  proposedSequence: 4,
+  updatedSequence: 5,
+  ...overrides,
+});
+
 export const emptyProjection = (
   sessionId = "session-test",
 ): SessionProjection => ({
@@ -108,10 +137,12 @@ export const emptyProjection = (
   sessionId,
   eventCount: 0,
   revision: -1,
+  workspaceRevision: -1,
   streamEpoch: "synthetic-epoch",
   streamRevision: 0,
   activity: [],
   conversation: [],
+  actions: [],
   pendingApproval: null,
   context: {
     modelEndpoint: null,
@@ -166,36 +197,14 @@ export const syntheticProjection = (
       detail: null,
       technicalDetail: null,
     },
-    {
-      id: "session-test-event-000004-trace",
-      sequence: 4,
-      role: "trace",
-      label: "Trace",
-      content: "Proposed terminal command",
-      detail: "build the aggregate synthetic target-condition cohort",
-      technicalDetail: JSON.stringify(
-        { command: "python run.py --output /project/cohort-summary.json" },
-        null,
-        2,
-      ),
-    },
   ],
   pendingApproval: {
     groupId: "action-set-session-test",
-    actions: [
-      {
-        targetId: "session-test-toolcall-0",
-        toolName: "terminal",
-        risk: "low",
-        summary: "build the aggregate synthetic target-condition cohort",
-        arguments: {
-          command: "python run.py --output /project/cohort-summary.json",
-        },
-      },
-    ],
+    actions: [syntheticAction()],
     decision: null,
     decisionScope: "all",
   },
+  actions: [syntheticAction()],
   context: {
     modelEndpoint: "http://127.0.0.1:8765/v1/chat/completions",
     modelDecision: "allow",

@@ -7,19 +7,22 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal, cast
 from unittest.mock import patch
 
 import pytest
 from textual.containers import Vertical
 from textual.pilot import Pilot
-from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets import Input, OptionList, RichLog, Static, TabbedContent, Tree
 
 from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
+    format_action_record_lines,
     format_projection_lines,
     interaction_activity,
 )
@@ -34,12 +37,18 @@ from heartwood.cli._tui import (
 from heartwood.gateway import (
     ActionSettingsError,
     ProjectContext,
-    ProjectionApprovalAction,
+    ProjectionActionOutcome,
+    ProjectionActionRecord,
+    ProjectionAffectedPath,
     ProjectionApprovalGroup,
+    ProjectionFileEditorActionDetails,
     ProjectionLifecycleState,
     ProjectionMessage,
+    ProjectionOtherActionDetails,
     ProjectionSubagent,
     ProjectionTask,
+    ProjectionTaskActionDetails,
+    ProjectionTerminalActionDetails,
     ProjectionUsage,
     RestGateway,
     RestRequest,
@@ -50,8 +59,12 @@ from heartwood.gateway import (
     action_risk_label,
     action_tool_label,
 )
-from heartwood.schemas import ActionModeOptionResponse, ActionSettingsResponse
-from heartwood.session import EventKind
+from heartwood.schemas import (
+    ActionModeOptionResponse,
+    ActionSettingsResponse,
+    WorkspaceTreeResponse,
+)
+from heartwood.session import EventKind, JsonValue
 
 
 async def _wait_for_tui(
@@ -80,6 +93,16 @@ def _test_action_settings() -> ActionSettingsResponse:
                 "medium": "Medium Risk",
                 "high": "High Risk",
             },
+            "state_labels": {
+                "approved": "Approved",
+                "awaiting-review": "Awaiting Review",
+                "failed": "Failed",
+                "outcome-unknown": "Outcome Unknown",
+                "proposed": "Proposed",
+                "rejected": "Rejected",
+                "running": "Running",
+                "succeeded": "Succeeded",
+            },
             "tool_labels": {
                 "file_editor": "File Change",
                 "terminal": "Terminal Command",
@@ -104,6 +127,246 @@ def _test_action_settings() -> ActionSettingsResponse:
             }
         ],
     }
+
+
+def _approval_action(
+    tool_call_id: str,
+    *,
+    tool_name: str,
+    risk: Literal["high", "low", "medium", "unknown"] = "unknown",
+    summary: str,
+    arguments: dict[str, JsonValue] | None = None,
+    group_id: str = "action-set-synthetic",
+    sequence: int = 0,
+) -> ProjectionActionRecord:
+    action_arguments: dict[str, JsonValue] = {} if arguments is None else arguments
+    details: (
+        ProjectionTerminalActionDetails
+        | ProjectionFileEditorActionDetails
+        | ProjectionOtherActionDetails
+    )
+    if tool_name == "terminal":
+        details = ProjectionTerminalActionDetails(
+            command=str(action_arguments.get("command", "")),
+        )
+    elif tool_name == "file_editor":
+        operation_value = str(action_arguments.get("command", "unknown"))
+        operation = (
+            cast(
+                Literal["view", "create", "str_replace", "insert", "undo_edit"],
+                operation_value,
+            )
+            if operation_value
+            in {
+                "view",
+                "create",
+                "str_replace",
+                "insert",
+                "undo_edit",
+            }
+            else "unknown"
+        )
+        details = ProjectionFileEditorActionDetails(
+            operation=operation,
+            path=(str(action_arguments["path"]) if "path" in action_arguments else None),
+        )
+    else:
+        details = ProjectionOtherActionDetails()
+    return ProjectionActionRecord(
+        tool_call_id=tool_call_id,
+        group_id=group_id,
+        tool_name=tool_name,
+        risk=risk,
+        summary=summary,
+        arguments=action_arguments,
+        details=details,
+        state="awaiting-review",
+        proposed_sequence=sequence,
+        updated_sequence=sequence,
+    )
+
+
+def test_plain_terminal_marks_bounded_action_output_as_truncated() -> None:
+    action = _approval_action(
+        "tool-1",
+        tool_name="terminal",
+        summary="Run focused tests",
+        arguments={"command": "pytest tests/test_analysis.py"},
+    ).model_copy(
+        update={
+            "affected_paths": (
+                ProjectionAffectedPath(
+                    path="results/report.txt",
+                    effect="modified",
+                ),
+            ),
+            "decision": "approved",
+            "state": "failed",
+            "outcome": ProjectionActionOutcome(
+                exit_code=1,
+                summary="terminal failed",
+                result="synthetic failure\n",
+                result_truncated=True,
+            ),
+        }
+    )
+
+    rendered = "\n".join(format_action_record_lines(action))
+
+    assert "$ pytest tests/test_analysis.py" in rendered
+    assert "action set action-set-synthetic · decision approved" in rendered
+    assert '"command":"pytest tests/test_analysis.py"' in rendered
+    assert "modified results/report.txt (file-editor-action)" in rendered
+    assert "synthetic failure" in rendered
+    assert "[output truncated]" in rendered
+
+
+def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> None:
+    file_action = _approval_action(
+        "file-1",
+        tool_name="file_editor",
+        summary="Edit a file",
+    ).model_copy(
+        update={
+            "group_id": None,
+            "decision": "approved",
+            "state": "succeeded",
+            "affected_paths": (
+                ProjectionAffectedPath(
+                    path="results/summary.txt",
+                    effect="created",
+                ),
+            ),
+        }
+    )
+    specialist_action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Delegate the analysis",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(subagent_type="research-planner"),
+        }
+    )
+    other_action = _approval_action(
+        "other-1",
+        tool_name="synthetic_tool",
+        summary="Run a custom action",
+    )
+
+    rendered = "\n".join(
+        line
+        for action in (file_action, specialist_action, other_action)
+        for line in format_action_record_lines(action)
+    )
+
+    assert "[Succeeded] unknown path unavailable" in rendered
+    assert "decision approved (automatic policy)" in rendered
+    assert "created results/summary.txt (file-editor-action)" in rendered
+    assert "specialist research-planner" in rendered
+    assert "Run a custom action" in rendered
+
+
+def test_terminal_projection_renders_control_sequences_visibly() -> None:
+    action = _approval_action(
+        "tool-control",
+        tool_name="terminal",
+        summary="Run\x1b]0;spoofed\x07 command",
+        arguments={"command": "printf '\\033]0;spoofed\\007'"},
+    ).model_copy(
+        update={
+            "state": "failed",
+            "decision": "approved",
+            "outcome": ProjectionActionOutcome(
+                exit_code=1,
+                summary="failed\x9b31m",
+                result="before\x1b]0;spoofed\x07after\u202e",
+            ),
+        }
+    )
+    projection = SessionProjection(
+        session_id="terminal-controls",
+        event_count=1,
+        revision=0,
+        conversation=(
+            ProjectionMessage(
+                id="message-control",
+                sequence=0,
+                role="agent",
+                label="Agent\x1b[31m",
+                content="message\x1b]0;spoofed\x07\u202e",
+            ),
+        ),
+        actions=(action,),
+        streaming_text="stream\x1b[2J",
+    )
+
+    rendered = "\n".join(format_projection_lines(projection))
+
+    assert "\x1b" not in rendered
+    assert "\x07" not in rendered
+    assert "\x9b" not in rendered
+    assert "\u202e" not in rendered
+    assert "\\x1b" in rendered
+    assert "\\x07" in rendered
+    assert "\\x9b" in rendered
+    assert "\\u202e" in rendered
+
+
+def test_invalid_workspace_command_does_not_end_the_interactive_session(
+    tmp_path: Path,
+) -> None:
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    session_id = gateway.default_session()["session_id"]
+    session = InteractiveSession(gateway, session_id=session_id)
+
+    rejected = session.submit("/show ../outside.txt")
+    continued = session.submit("/help")
+
+    assert rejected.error is True
+    assert rejected.message is not None
+    assert rejected.message.startswith("HW-WORKSPACE-001:")
+    assert continued.error is False
+    assert continued.message is not None
+    assert "/files" in continued.message
+
+
+def test_interactive_workspace_commands_share_the_gateway_inspector(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "analysis.py").write_text("answer = 42\n", encoding="utf-8")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    session = InteractiveSession(
+        gateway,
+        session_id=gateway.default_session()["session_id"],
+    )
+
+    files = session.submit("/files")
+    nested_files = session.submit("/files .")
+    shown = session.submit("/show analysis.py")
+    changes = session.submit("/changes")
+    diff = session.submit("/changes analysis.py")
+    unknown = session.submit("/future-command")
+
+    assert files.message is not None
+    assert "analysis.py" in files.message
+    assert nested_files.message is not None
+    assert "analysis.py" in nested_files.message
+    assert shown.message is not None
+    assert "answer = 42" in shown.message
+    assert changes.message is not None
+    assert "Project changes" in changes.message
+    assert diff.message is not None
+    assert "analysis.py" in diff.message
+    assert unknown.message == "Unknown command: /future-command"
 
 
 def test_interactive_session_stable_wait_has_a_deterministic_deadline() -> None:
@@ -281,6 +544,162 @@ def test_textual_terminal_submits_without_blocking_and_replays_session(
             await pilot.pause()
             assert app.query_one("#composer", Input).disabled is False
             assert str(conversation.lines).count("You: inspect the synthetic workspace") == 1
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gateway.stop()
+
+
+def test_textual_terminal_inspects_files_and_changes_without_a_local_reducer(
+    tmp_path: Path,
+) -> None:
+    analysis = tmp_path / "analysis.py"
+    analysis.write_text("answer = 41\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "analysis.py"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Heartwood Test",
+            "-c",
+            "user.email=heartwood@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "Add synthetic analysis",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    analysis.write_text("answer = 42\n", encoding="utf-8")
+    markup_name = "[not-a-style].txt"
+    (tmp_path / markup_name).write_text("literal filename\n", encoding="utf-8")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    gateway.start()
+
+    async def exercise() -> None:
+        app = HeartwoodTerminalApp(InteractiveSession(gateway, session_id="workspace-tui"))
+        async with app.run_test(size=(80, 24)) as pilot:
+            tree = app.query_one("#file-tree", Tree)
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    {node.data for node in tree.root.children if node.data is not None}
+                    >= {"analysis.py", markup_name}
+                ),
+                description="the bounded project tree",
+            )
+            markup_node = next(node for node in tree.root.children if node.data == markup_name)
+            assert str(markup_node.label) == markup_name
+
+            app.action_show_files()
+            assert app.query_one("#workspace-tabs", TabbedContent).active == "files-pane"
+            file_node = next(node for node in tree.root.children if node.data == "analysis.py")
+            tree.select_node(file_node)
+            tree.action_select_cursor()
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    "answer = 42"
+                    in "".join(line.text for line in app.query_one("#file-preview", RichLog).lines)
+                ),
+                description="the selected file preview",
+            )
+
+            app.action_show_changes()
+            assert app.query_one("#workspace-tabs", TabbedContent).active == "changes-pane"
+            changes = app.query_one("#change-list", OptionList)
+            await _wait_for_tui(
+                pilot,
+                lambda: any(path == "analysis.py" for path in app._change_paths.values()),
+                description="the changed-file list",
+            )
+            changes.highlighted = next(
+                index
+                for index, path in enumerate(app._change_paths.values())
+                if path == "analysis.py"
+            )
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    "answer = 42"
+                    in "".join(
+                        line.text for line in app.query_one("#change-preview", RichLog).lines
+                    )
+                ),
+                description="the selected change preview",
+            )
+
+            analysis.write_text("answer = 43\n", encoding="utf-8")
+            app._request_workspace_overview()
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    "answer = 43"
+                    in "".join(line.text for line in app.query_one("#file-preview", RichLog).lines)
+                    and "answer = 43"
+                    in "".join(
+                        line.text for line in app.query_one("#change-preview", RichLog).lines
+                    )
+                ),
+                description="the preserved file and change selections after refresh",
+            )
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gateway.stop()
+
+
+def test_textual_terminal_discards_a_stale_workspace_overview(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "current.txt").write_text("current\n", encoding="utf-8")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+    gateway.start()
+
+    async def exercise() -> None:
+        session = InteractiveSession(gateway, session_id="workspace-generation")
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await asyncio.wait_for(app.workers.wait_for_complete(), timeout=10.0)
+            current = session.workspace_tree()
+            changes = session.workspace_changes()
+            stale = cast(
+                WorkspaceTreeResponse,
+                {
+                    **current,
+                    "entries": [
+                        {
+                            "path": "stale.txt",
+                            "name": "stale.txt",
+                            "kind": "file",
+                            "depth": 1,
+                            "size_bytes": 6,
+                        }
+                    ],
+                },
+            )
+            app._workspace_overview_generation = 100
+
+            app._finish_workspace_overview(stale, changes, None, 99)
+            tree = app.query_one("#file-tree", Tree)
+            assert all(node.data != "stale.txt" for node in tree.root.children)
+
+            app._finish_workspace_overview(current, changes, None, 100)
+            await pilot.pause()
+            assert any(node.data == "current.txt" for node in tree.root.children)
 
     try:
         asyncio.run(exercise())
@@ -547,15 +966,15 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
         pending_approval=ProjectionApprovalGroup(
             group_id="action-set-synthetic",
             actions=(
-                ProjectionApprovalAction(
-                    target_id="tool-1",
+                _approval_action(
+                    "tool-1",
                     tool_name="terminal",
                     risk="medium",
                     summary="Run the synthetic cohort command",
                     arguments={"command": "python run.py --output cohort-summary.json"},
                 ),
-                ProjectionApprovalAction(
-                    target_id="tool-2",
+                _approval_action(
+                    "tool-2",
                     tool_name="file_editor",
                     risk="unknown",
                     summary="Write the aggregate result",
@@ -782,17 +1201,19 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
                 pending_approval=ProjectionApprovalGroup(
                     group_id="action-set-batch",
                     actions=(
-                        ProjectionApprovalAction(
-                            target_id="tool-1",
+                        _approval_action(
+                            "tool-1",
                             tool_name="terminal",
                             risk="medium",
                             summary="Run cohort",
+                            group_id="action-set-batch",
                         ),
-                        ProjectionApprovalAction(
-                            target_id="tool-2",
+                        _approval_action(
+                            "tool-2",
                             tool_name="file_editor",
                             risk="unknown",
                             summary="Write result",
+                            group_id="action-set-batch",
                         ),
                     ),
                 ),
@@ -843,6 +1264,59 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
     asyncio.run(exercise())
 
 
+def test_textual_terminal_restores_action_review_after_busy_projection_race() -> None:
+    class PendingSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = "pending-race"
+            self.projection = SessionProjection(
+                session_id=self.session_id,
+                event_count=0,
+                revision=-1,
+            )
+
+        def replay(self) -> SessionProjection:
+            return self.projection
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
+    async def exercise() -> None:
+        session = PendingSession()
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(64, 22)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: app.query_one("#composer", Input).has_focus,
+                description="the initial composer focus",
+            )
+            app._set_busy(True, activity=interaction_activity("inspect the project"))
+            session.projection = SessionProjection(
+                session_id=session.session_id,
+                event_count=1,
+                revision=0,
+                pending_approval=ProjectionApprovalGroup(
+                    group_id="action-set-race",
+                    actions=(
+                        _approval_action(
+                            "tool-race",
+                            tool_name="file_editor",
+                            summary="Write the synthetic result",
+                            group_id="action-set-race",
+                        ),
+                    ),
+                ),
+            )
+            app._apply_projection(session.projection)
+            app._set_busy(False)
+            await pilot.pause()
+
+            assert app.query_one("#approval", Vertical).display
+            assert app.query_one("#composer", Input).disabled
+            assert app.query_one("#approval-options", OptionList).has_focus
+
+    asyncio.run(exercise())
+
+
 def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
     class LongBatchSession(InteractiveSession):
         def __init__(self) -> None:
@@ -854,8 +1328,8 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
                 pending_approval=ProjectionApprovalGroup(
                     group_id="action-set-long",
                     actions=tuple(
-                        ProjectionApprovalAction(
-                            target_id=f"tool-{index}",
+                        _approval_action(
+                            f"tool-{index}",
                             tool_name="terminal",
                             risk="medium",
                             summary=f"Review step {index}",
@@ -864,6 +1338,8 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
                                     f"python analyze.py --step {index} --output result-{index}.json"
                                 )
                             },
+                            group_id="action-set-long",
+                            sequence=index,
                         )
                         for index in range(1, 9)
                     ),
