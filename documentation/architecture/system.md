@@ -46,13 +46,14 @@ Incremental token text is transient and is never appended to the session or audi
 ### Interface Projections
 
 The gateway reduces durable events and current transient text into one session projection.
-That projection contains the conversation, versioned correlated action records, lifecycle, complete pending action set, task plan, total and per-purpose model usage, specialist lineage, activity, and available commands.
+That projection contains the conversation, versioned correlated action records, lifecycle, complete pending action set, task plan, total and per-purpose model usage, specialist lineage, activity, available commands, researcher-facing status, and a bounded set of contextual next-step suggestions.
 The gateway enforces those available commands before dispatch, so terminal, browser, and notebook clients share the same lifecycle rules.
 REST and streaming transports return events and that projection from one serialized snapshot; a transient revision orders token-only updates between durable events.
 The terminal, browser, and notebook bridge render the projection without maintaining their own event reducers.
 
-The gateway also owns researcher-facing setup choices, model-connection categories, readiness diagnostics, and action settings.
+The gateway also owns researcher-facing setup choices, model-connection categories, readiness diagnostics, lifecycle and task labels, usage-purpose labels, specialist summaries, contextual suggestions, and action settings.
 Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
+Technical identifiers remain in the typed projection for diagnosis and correlation, while presentation adapters keep them out of the primary workflow.
 
 ### Workspace Inspection
 

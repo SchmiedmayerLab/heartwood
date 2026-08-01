@@ -45,6 +45,10 @@ Hosted and Stanford AI API Gateway connections do not require this restart.
 
 The first browser conversation is the same **Main session** used by the terminal and notebook defaults. Choose a named session explicitly when you want a separate conversation.
 
+Heartwood offers at most two suggested next steps based on the current session state.
+Selecting one places its full request in the composer so you can review or edit it before sending.
+These suggestions come from the gateway and are the same ones shown by the terminal and notebook bridge; they do not infer scientific conclusions from project data.
+
 - Use **New analysis** to create another persistent session.
 - Enter requests in the composer after model readiness is confirmed.
 - Send additional guidance or pause while OpenHands is working.
@@ -57,6 +61,12 @@ The first browser conversation is the same **Main session** used by the terminal
 - Open **Settings** to change the selected model or action-review mode.
 - Export the audit record from the session controls.
 
+The session header and conversation use the same gateway-owned states as the other interfaces, including ready, working, waiting for review, paused, complete, rejected, and recovery-required conditions.
+Task and specialist labels are shown in researcher-facing language; OpenHands identifiers remain available under **Technical details** when they are needed for diagnosis.
+
+Agent responses support headings, lists, tables, quotations, links, inline code, and code blocks.
+Heartwood treats every response as untrusted content: raw HTML and unsafe links are removed, remote images are not loaded, invisible control characters are made visible, and very large responses are truncated for display.
+
 ## Review an Action Set
 
 ![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review.png)
@@ -64,6 +74,7 @@ The first browser conversation is the same **Main session** used by the terminal
 The review panel lists all proposed members together with tool names, risk labels, summaries, and relevant arguments.
 One decision resolves the complete OpenHands action set: allowing runs every listed action once, while rejecting runs none of them.
 Completed action records show the correlated state, exit status, bounded result, and affected paths when OpenHands supplied reliable typed evidence.
+Keyboard focus moves to a newly proposed action set and returns to the task composer after the decision is resolved.
 
 ## Inspect the Project
 
@@ -92,4 +103,6 @@ Platform operators must configure the typed ingress mode, exact origin, base pat
 See [Security and Controlled Data](../operate/security.md#gateway-ingress).
 
 If the page loads but requests fail, keep the launching terminal open and run `heartwood doctor` in another terminal from the same project.
+If live updates are interrupted, the page first reconnects through the supported fallback transport without changing the command state.
+If both live transports stop, the saved conversation remains visible and the page provides **Reconnect**.
 See [Diagnostics and Troubleshooting](../reference/troubleshooting.md#browser-access).

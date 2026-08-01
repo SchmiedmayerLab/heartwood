@@ -199,16 +199,37 @@ const lifecycleSchema = z
   })
   .strict();
 
+const researcherStatusSchema = z
+  .object({
+    code: z.enum([
+      "ready",
+      "working",
+      "waiting-for-review",
+      "paused",
+      "complete",
+      "denied",
+      "recoverable-failure",
+      "terminal-failure",
+    ]),
+    label: z.string(),
+    detail: z.string(),
+    tone: z.enum(["neutral", "progress", "attention", "success", "danger"]),
+    recoverable: z.boolean(),
+  })
+  .strict();
+
 const taskSchema = z
   .object({
     title: z.string(),
     status: z.enum(["todo", "in-progress", "done"]),
+    statusLabel: z.string(),
   })
   .strict();
 
 const usageSchema = z
   .object({
     usageId: z.string(),
+    purposeLabel: z.string(),
     modelName: z.string(),
     callCount: z.number().int().nonnegative(),
     promptTokens: z.number().int().nonnegative(),
@@ -226,9 +247,30 @@ const subagentSchema = z
     invocationId: z.string(),
     taskId: z.string().nullable(),
     agentName: z.string(),
+    roleLabel: z.string(),
     status: z.enum(["proposed", "running", "completed", "error"]),
+    statusLabel: z.string(),
+    taskSummary: z.string().nullable(),
+    resultSummary: z.string().nullable(),
     parentSessionId: z.string(),
     parentActionId: z.string(),
+  })
+  .strict();
+
+const suggestionSchema = z
+  .object({
+    suggestionId: z.enum([
+      "inspect-project",
+      "plan-project",
+      "continue-plan",
+      "review-changes",
+      "verify-work",
+      "recover-task",
+      "identify-next-step",
+    ]),
+    label: z.string(),
+    prompt: z.string(),
+    kind: z.enum(["task", "follow-up", "recovery"]),
   })
   .strict();
 
@@ -257,11 +299,13 @@ export const sessionProjectionSchema: z.ZodType<SessionProjection> = z
     pendingApproval: approvalGroupSchema.nullable(),
     context: modelContextSchema,
     lifecycle: lifecycleSchema,
+    researcherStatus: researcherStatusSchema,
     lastCommandOutcome: commandOutcomeSchema.nullable(),
     taskPlan: z.array(taskSchema),
     usage: usageSchema.nullable(),
     usageByPurpose: z.array(usageSchema),
     subagents: z.array(subagentSchema),
+    suggestions: z.array(suggestionSchema),
     streamingText: z.string(),
     availableCommands: z.array(
       z.enum(["approve", "chat", "deny", "pause", "resume"]),

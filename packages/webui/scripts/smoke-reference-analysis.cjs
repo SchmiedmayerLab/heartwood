@@ -380,6 +380,12 @@ async function runApprovedTask(page, task, taskSpec) {
     approval.getByText(taskSpec.summary, { exact: true }),
   ).toBeVisible();
   if (taskSpec.captureApproval === true) {
+    await assertFullyVisible(page, approval, "complete action review");
+    await assertFullyVisible(
+      page,
+      approval.getByRole("button", { name: /^Allow \d+ actions? once$/u }),
+      "action review decision controls",
+    );
     await captureDesktopScreenshot(
       page,
       "browser-action-review.png",
@@ -392,6 +398,86 @@ async function runApprovedTask(page, task, taskSpec) {
   await expect(
     page.getByText(taskSpec.finalMessage, { exact: true }),
   ).toBeVisible({ timeout: 60_000 });
+}
+
+async function assertFullyVisible(page, locator, stateName) {
+  const visibility = await locator.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    let visibleTop = bounds.top;
+    let visibleRight = bounds.right;
+    let visibleBottom = bounds.bottom;
+    let visibleLeft = bounds.left;
+    const ancestors = [];
+    const clippingAncestors = [];
+    for (
+      let parent = element.parentElement;
+      parent !== null;
+      parent = parent.parentElement
+    ) {
+      const style = globalThis.getComputedStyle(parent);
+      const parentBounds = parent.getBoundingClientRect();
+      ancestors.push({
+        className: parent.className,
+        bounds: {
+          bottom: parentBounds.bottom,
+          top: parentBounds.top,
+        },
+        display: style.display,
+        flex: style.flex,
+        height: style.height,
+      });
+      if (
+        !/(auto|clip|hidden|scroll)/u.test(
+          `${style.overflowX} ${style.overflowY}`,
+        )
+      ) {
+        continue;
+      }
+      visibleTop = Math.max(visibleTop, parentBounds.top);
+      visibleRight = Math.min(visibleRight, parentBounds.right);
+      visibleBottom = Math.min(visibleBottom, parentBounds.bottom);
+      visibleLeft = Math.max(visibleLeft, parentBounds.left);
+      clippingAncestors.push({
+        className: parent.className,
+        bounds: {
+          bottom: parentBounds.bottom,
+          left: parentBounds.left,
+          right: parentBounds.right,
+          top: parentBounds.top,
+        },
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+      });
+    }
+    return {
+      bounds: {
+        bottom: bounds.bottom,
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+      },
+      ancestors,
+      clippingAncestors,
+      fullyVisible:
+        visibleTop <= bounds.top &&
+        visibleRight >= bounds.right &&
+        visibleBottom >= bounds.bottom &&
+        visibleLeft <= bounds.left,
+    };
+  });
+  const viewport = page.viewportSize();
+  if (
+    viewport === null ||
+    !visibility.fullyVisible ||
+    visibility.bounds.left < 0 ||
+    visibility.bounds.top < 0 ||
+    visibility.bounds.right > viewport.width ||
+    visibility.bounds.bottom > viewport.height
+  ) {
+    throw new Error(
+      `${stateName} is clipped in the reference viewport: ${JSON.stringify({ visibility, viewport })}`,
+    );
+  }
 }
 
 async function captureReferenceScreenshots(page) {
@@ -449,6 +535,12 @@ async function captureDesktopScreenshot(page, filename, stateName) {
   fs.mkdirSync(screenshotDirectory, { recursive: true });
   const screenshotPath = path.join(screenshotDirectory, filename);
   await assertNoHorizontalOverflow(page, stateName);
+  await page.evaluate(() => {
+    const activeElement = globalThis.document.activeElement;
+    if (activeElement && "blur" in activeElement) {
+      activeElement.blur();
+    }
+  });
   await page.screenshot({ animations: "disabled", path: screenshotPath });
   if (fs.statSync(screenshotPath).size < 1_000) {
     throw new Error(

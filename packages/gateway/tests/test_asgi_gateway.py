@@ -74,6 +74,66 @@ def test_asgi_http_routes_rest_command(tmp_path: Path) -> None:
     assert body["projection"]["lifecycle"]["status"] == "idle"
 
 
+def test_asgi_http_rejects_an_oversized_request_before_routing(tmp_path: Path) -> None:
+    sent = asyncio.run(
+        _http_call(
+            GatewayAsgiApp(_gateway(tmp_path)),
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=b"x" * 1_048_577,
+        )
+    )
+
+    assert sent[0]["status"] == 413
+    assert json.loads(cast(bytes, sent[1]["body"])) == {
+        "error": "gateway request body exceeds 1 MiB"
+    }
+
+
+def test_asgi_http_bounds_the_total_body_across_receive_chunks(tmp_path: Path) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        messages = iter(
+            (
+                {"type": "http.request", "body": b"x" * 700_000, "more_body": True},
+                {"type": "http.request", "body": b"x" * 400_000, "more_body": False},
+            )
+        )
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return next(messages)
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await GatewayAsgiApp(_gateway(tmp_path))(
+            _http_scope("POST", "/sessions/session-1/commands"),
+            receive,
+            send,
+        )
+        return sent
+
+    sent = asyncio.run(scenario())
+
+    assert sent[0]["status"] == 413
+
+
+def test_asgi_http_rejects_a_non_utf8_request_body(tmp_path: Path) -> None:
+    sent = asyncio.run(
+        _http_call(
+            GatewayAsgiApp(_gateway(tmp_path)),
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=b"\xff",
+        )
+    )
+
+    assert sent[0]["status"] == 400
+    assert json.loads(cast(bytes, sent[1]["body"])) == {
+        "error": "gateway request body must be UTF-8"
+    }
+
+
 def test_asgi_http_keeps_the_event_loop_responsive_during_blocking_gateway_work(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -502,6 +562,8 @@ def test_asgi_sse_replays_events_after_sequence(tmp_path: Path) -> None:
     assert sent[0]["status"] == 200
     headers = cast(list[tuple[bytes, bytes]], sent[0]["headers"])
     assert (b"content-type", b"text/event-stream") in headers
+    assert (b"x-content-type-options", b"nosniff") in headers
+    assert (b"referrer-policy", b"no-referrer") in headers
     body = cast(bytes, sent[1]["body"]).decode("utf-8")
     assert body.startswith("event: heartwood-session-events\n")
     data = json.loads(body.split("data: ", maxsplit=1)[1])
@@ -597,6 +659,33 @@ def test_asgi_static_serves_web_assets_under_proxy_prefix(tmp_path: Path) -> Non
 
     assert sent[0]["status"] == 200
     assert cast(bytes, sent[1]["body"]).decode("utf-8") == "console.log('heartwood')"
+    headers = dict(cast(list[tuple[bytes, bytes]], sent[0]["headers"]))
+    assert headers[b"x-content-type-options"] == b"nosniff"
+    assert headers[b"x-frame-options"] == b"SAMEORIGIN"
+    assert headers[b"referrer-policy"] == b"no-referrer"
+    assert headers[b"permissions-policy"] == b"camera=(), geolocation=(), microphone=()"
+    assert b"connect-src 'self' ws://127.0.0.1:8767" in headers[b"content-security-policy"]
+
+
+def test_asgi_unknown_project_api_route_never_falls_through_to_static_html(
+    tmp_path: Path,
+) -> None:
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<main>browser application</main>", encoding="utf-8")
+
+    sent = asyncio.run(
+        _http_call(
+            GatewayAsgiApp(_gateway(tmp_path / "sessions"), static_dir=static_dir),
+            method="GET",
+            path="/project/unknown",
+        )
+    )
+
+    assert sent[0]["status"] == 404
+    headers = dict(cast(list[tuple[bytes, bytes]], sent[0]["headers"]))
+    assert headers[b"content-type"] == b"application/json"
+    assert json.loads(cast(bytes, sent[1]["body"])) == {"error": "unknown gateway route"}
 
 
 def test_asgi_base_path_cannot_be_bypassed_by_a_direct_api_route(tmp_path: Path) -> None:
@@ -647,9 +736,13 @@ def test_asgi_injects_the_gateway_owned_jupyter_base_path(tmp_path: Path) -> Non
 
     sent = asyncio.run(scenario())
     body = cast(bytes, sent[1]["body"]).decode("utf-8")
+    headers = dict(cast(list[tuple[bytes, bytes]], sent[0]["headers"]))
 
     assert sent[0]["status"] == 200
     assert f'<meta name="heartwood-gateway-base" content="{external_base}" />' in body
+    assert (
+        b"connect-src 'self' wss://notebooks.firecloud.org" in headers[b"content-security-policy"]
+    )
 
 
 def test_browser_base_path_injection_is_idempotent_and_binary_safe() -> None:

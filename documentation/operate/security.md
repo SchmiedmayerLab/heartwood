@@ -24,6 +24,10 @@ Do not run Heartwood as a privileged container or from a broad shared root.
 Prompts, selected project content, tool results, and summaries may be sent to the active model route.
 The platform policy can deny unlisted endpoints, but infrastructure egress controls and provider agreements remain authoritative.
 
+The browser treats agent responses as untrusted GitHub-Flavored Markdown.
+It removes raw HTML and unsafe link protocols, does not fetch model-provided images, makes invisible control characters explicit, normalizes response headings beneath the page heading, bounds displayed content, and escapes plain technical fields.
+External links require an explicit user action and omit referrer information.
+
 Confirm data eligibility for the exact endpoint, account, model, and deployment before use.
 
 ### Runtime Caches
@@ -78,6 +82,9 @@ Heartwood accepts browser and API traffic through one configured ingress mode:
 
 All modes validate the request host, browser origin, WebSocket origin, path, query encoding, and external base path before routing.
 Heartwood rejects duplicated security headers, forwarded metadata outside the declared Jupyter or trusted-proxy contract, encoded or traversing paths, wildcard origins, and contradictory prefixes.
+HTTP request bodies are bounded to 1 MiB and must be UTF-8.
+Static browser responses set a restrictive content security policy, same-origin frame policy, no-referrer policy, MIME-sniffing protection, and a permissions policy that disables camera, geolocation, and microphone access.
+The content security policy permits live updates only through the validated browser origin and its corresponding WebSocket origin.
 
 Heartwood does not authenticate end users or terminate public TLS.
 The platform proxy must authenticate users, authorize project access, remove untrusted forwarding and identity headers, set the validated values, and restrict network reachability to the configured gateway bind.

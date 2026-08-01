@@ -526,10 +526,12 @@ class HeartwoodTerminalApp(App[None]):
             if timer is not None and not runtime_running:
                 timer.pause()
             state = (
-                "error"
+                "Task Needs Attention"
                 if failed
                 else (
-                    self._projection.lifecycle.status if self._projection is not None else "ready"
+                    self._projection.researcher_status.label
+                    if self._projection is not None
+                    else "Ready"
                 )
             )
             if failed:
@@ -573,11 +575,11 @@ class HeartwoodTerminalApp(App[None]):
             self._refresh_working_status()
         elif projection.lifecycle.status == "error":
             status.add_class("error")
-            status.update(f"Session {self.session.session_id} · error")
+            status.update(self._idle_status(projection.researcher_status.label))
         elif projection.pending_approval is None:
             if self._activity_timer is not None:
                 self._activity_timer.pause()
-            status.update(f"Session {self.session.session_id} · {projection.lifecycle.status}")
+            status.update(self._idle_status(projection.researcher_status.label))
 
     def _sync_approval(self, projection: SessionProjection) -> None:
         approval = projection.pending_approval
@@ -1117,7 +1119,7 @@ class HeartwoodTerminalApp(App[None]):
         self._submit(directive)
 
     def _idle_status(self, state: str) -> str:
-        return f"Session {self.session.session_id} · {state.title()} · {self._mode_label}"
+        return f"{state} · {self._mode_label}"
 
 
 def run_terminal(

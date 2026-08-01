@@ -16,6 +16,7 @@ from types import ModuleType
 from typing import Protocol, cast
 
 from heartwood.gateway import (
+    ProjectionSubagent,
     action_risk_label,
     action_state_label,
     action_tool_label,
@@ -60,7 +61,13 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
         ),
         WidgetSpec(
             "Tasks",
-            tuple(f"{task.status}: {task.title}" for task in view_model.task_plan),
+            tuple(f"{task.status_label}: {task.title}" for task in view_model.task_plan),
+        ),
+        WidgetSpec(
+            "Suggested Next Steps",
+            tuple(
+                f"{suggestion.label}: {suggestion.prompt}" for suggestion in view_model.suggestions
+            ),
         ),
         WidgetSpec(
             "Runtime",
@@ -68,10 +75,7 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
         ),
         WidgetSpec(
             "Specialists",
-            tuple(
-                f"{agent.agent_name}: {agent.status} ({agent.invocation_id})"
-                for agent in view_model.subagents
-            ),
+            tuple(_specialist_item(agent) for agent in view_model.subagents),
         ),
     )
 
@@ -91,7 +95,7 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     if group is None:
         return ()
     action_label = "action" if len(group.actions) == 1 else "actions"
-    items = [(f"Review action set {group.group_id} ({len(group.actions)} {action_label}): pending")]
+    items = [(f"Review {len(group.actions)} {action_label} as one complete set: pending")]
     items.extend(
         f"{index}. {action.summary or action.tool_name}"
         f"\n{action_tool_label(action.tool_name)} · "
@@ -130,9 +134,7 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         )
         lines = [f"{action_state_label(action.state)}: {label}{outcome}{truncated}"]
         if action.group_id is not None:
-            lines.append(
-                f"Action set: {action.group_id} · decision: {action.decision or 'pending'}"
-            )
+            lines.append(f"Complete action set decision: {action.decision or 'pending'}")
         elif action.decision is not None:
             lines.append(f"Decision: {action.decision} (automatic policy)")
         if action.arguments:
@@ -152,11 +154,7 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
 
 
 def _runtime_items(view_model: NotebookViewModel) -> tuple[str, ...]:
-    items = [f"Lifecycle: {view_model.lifecycle.status}"]
-    if view_model.context.model_endpoint:
-        items.append(f"Model route: {view_model.context.model_endpoint}")
-    if view_model.context.model_decision:
-        items.append(f"Route decision: {view_model.context.model_decision}")
+    items = [f"Status: {view_model.researcher_status.label}"]
     if view_model.usage is not None:
         usage = view_model.usage
         items.append(
@@ -165,11 +163,20 @@ def _runtime_items(view_model: NotebookViewModel) -> tuple[str, ...]:
             f"{usage.call_count} calls ({usage.model_name})"
         )
     items.extend(
-        f"{usage.usage_id}: {usage.call_count} calls, "
+        f"{usage.purpose_label}: {usage.call_count} calls, "
         f"{usage.prompt_tokens + usage.completion_tokens} tokens"
         for usage in view_model.usage_by_purpose
     )
     return tuple(items)
+
+
+def _specialist_item(agent: ProjectionSubagent) -> str:
+    details = [f"{agent.role_label}: {agent.status_label}"]
+    if agent.task_summary is not None:
+        details.append(f"Task: {agent.task_summary}")
+    if agent.result_summary is not None:
+        details.append(f"Result: {agent.result_summary}")
+    return "\n".join(details)
 
 
 def render_widgets(view_model: NotebookViewModel) -> object:

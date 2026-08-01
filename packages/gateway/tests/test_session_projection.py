@@ -88,15 +88,24 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
     assert projection.task_plan[0].model_dump() == {
         "title": "Inspect the cohort",
         "status": "in-progress",
+        "status_label": "In Progress",
     }
     assert projection.usage is not None
     assert projection.usage.call_count == 3
+    assert projection.usage.purpose_label == "Total Model Activity"
     assert [usage.usage_id for usage in projection.usage_by_purpose] == [
         "agent",
         "condenser",
     ]
     assert projection.subagents[0].status == "completed"
+    assert projection.subagents[0].role_label == "Research Planner"
+    assert projection.subagents[0].status_label == "Complete"
     assert projection.subagents[0].parent_session_id == "session-1"
+    assert projection.researcher_status.code == "complete"
+    assert [item.suggestion_id for item in projection.suggestions] == [
+        "continue-plan",
+        "verify-work",
+    ]
     assert "private SDK note" not in str(projection.safe_dict())
 
 
@@ -182,6 +191,38 @@ def test_atomic_approval_record_survives_every_group_resolution_boundary() -> No
         assert {action.state for action in projection.actions} == {"approved"}
         assert {action.decision for action in projection.actions} == {"approved"}
         assert len([item for item in projection.conversation if item.label == "Approval"]) == 1
+
+
+def test_rejected_action_set_owns_the_researcher_status() -> None:
+    projection = project_session(
+        (
+            _confirmation_event(0, "group-1", "call-1", "terminal"),
+            _event(
+                1,
+                EventKind.APPROVAL_RECORDED,
+                {
+                    "group_id": "group-1",
+                    "decision": "denied",
+                    "tool_call_ids": ["call-1"],
+                },
+            ),
+            _event(
+                2,
+                EventKind.CONFIRMATION_RESOLVED,
+                {
+                    "group_id": "group-1",
+                    "tool_call_id": "call-1",
+                    "decision": "denied",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    assert projection.lifecycle.status == SessionLifecycle.IDLE
+    assert projection.researcher_status.code == "denied"
+    assert projection.researcher_status.label == "Action Set Rejected"
+    assert projection.available_commands == ("chat",)
 
 
 @pytest.mark.parametrize("decision", ["unexpected", "", None])
@@ -684,6 +725,106 @@ def test_projection_owns_nonfatal_command_outcomes() -> None:
     assert projection.last_command_outcome.status == "rejected"
     assert projection.last_command_outcome.command_id == "resume-1"
     assert projection.last_command_outcome.error_code == "HW-AGENT-005"
+    assert projection.researcher_status.code == "denied"
+    assert projection.researcher_status.tone == "attention"
+
+
+def test_projection_owns_bounded_contextual_suggestions() -> None:
+    empty = project_session((), session_id="session-1")
+    assert [item.suggestion_id for item in empty.suggestions] == [
+        "inspect-project",
+        "plan-project",
+    ]
+
+    running = project_session(
+        (_event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),),
+        session_id="session-1",
+    )
+    assert running.suggestions == ()
+
+    recoverable = project_session(
+        (
+            _event(
+                0,
+                EventKind.ERROR_RECORDED,
+                {
+                    "code": "HW-AGENT-003",
+                    "reason": "The agent conversation stopped",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+    assert [item.suggestion_id for item in recoverable.suggestions] == ["recover-task"]
+
+    terminal = project_session(
+        (
+            _event(
+                0,
+                EventKind.ERROR_RECORDED,
+                {
+                    "code": "HW-AGENT-007",
+                    "reason": "The agent outcome is unknown",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+    assert terminal.suggestions == ()
+
+
+def test_projection_enriches_specialist_presentation_without_client_reducers() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "task-call-1",
+                    "action_id": "action-1",
+                    "tool_name": "task",
+                    "kind": "task",
+                    "risk": "low",
+                    "arguments": {
+                        "description": "Review the synthetic analysis plan",
+                        "subagent_type": "research-planner",
+                    },
+                },
+            ),
+            _event(
+                1,
+                EventKind.SUBAGENT_UPDATED,
+                {
+                    "subagent": {
+                        "invocation_id": "task-call-1",
+                        "task_id": "task-1",
+                        "agent_name": "research-planner",
+                        "status": "completed",
+                        "parent_session_id": "session-1",
+                        "parent_action_id": "action-1",
+                    }
+                },
+            ),
+            _event(
+                2,
+                EventKind.TOOL_EXECUTION_RECORDED,
+                {
+                    "tool_call_id": "task-call-1",
+                    "action_id": "action-1",
+                    "tool_name": "task",
+                    "exit_code": 0,
+                    "summary": "Plan review completed",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    specialist = projection.subagents[0]
+    assert specialist.role_label == "Research Planner"
+    assert specialist.status_label == "Complete"
+    assert specialist.task_summary == "Review the synthetic analysis plan"
+    assert specialist.result_summary == "Plan review completed"
 
 
 def test_projection_preserves_tool_outcome_in_shared_activity() -> None:

@@ -31,6 +31,8 @@ Type the request at the prompt and press Enter.
 While the model is working, Heartwood displays an animated status and elapsed time without inventing progress that the model service does not expose.
 The full-screen interface can accept guidance for the active task and exposes pause as soon as OpenHands is running.
 Task Tracker progress, model activity, and sequential specialist status appear when OpenHands supplies them.
+When the session reaches an interactive boundary, Heartwood may show a small set of gateway-owned next-step suggestions that can be reviewed before use.
+Status, task, usage, specialist, and suggestion labels come from the same projection used by the browser and notebook bridge.
 
 For one non-interactive request:
 

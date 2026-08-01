@@ -69,6 +69,7 @@ export const CodeViewer = ({ content, path }: CodeViewerProps) => {
           ],
           parent: parent.current,
         });
+        makeScrollerAccessible(view, `Scrollable file contents: ${path}`);
       });
     return () => {
       active = false;
@@ -119,6 +120,14 @@ export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
           orientation: "a-b",
           parent: parent.current,
         });
+        makeScrollerAccessible(
+          view.a,
+          `Scrollable original file contents: ${path}`,
+        );
+        makeScrollerAccessible(
+          view.b,
+          `Scrollable modified file contents: ${path}`,
+        );
       });
     return () => {
       active = false;
@@ -134,6 +143,11 @@ export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
       role="region"
     />
   );
+};
+
+const makeScrollerAccessible = (view: EditorView, label: string): void => {
+  view.scrollDOM.tabIndex = 0;
+  view.scrollDOM.setAttribute("aria-label", label);
 };
 
 const loadLanguage = async (path: string) => {

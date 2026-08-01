@@ -16,7 +16,11 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { HeartwoodClient, SessionProjectionResponse } from "./client";
+import type {
+  HeartwoodClient,
+  SessionProjectionResponse,
+  SessionStreamObserver,
+} from "./client";
 import {
   credentialIsolation,
   emptyProjection,
@@ -282,10 +286,12 @@ class FakeClient implements HeartwoodClient {
   installedSkill: string | null = null;
   currentSessions: SessionSummary[] = [sessionSummary("session-test")];
   projections = new Map<string, SessionProjection>();
+  streamObserver: SessionStreamObserver | null = null;
   streamListener: ((projection: SessionProjection) => void) | null = null;
   retiredStreamListener: ((projection: SessionProjection) => void) | null =
     null;
   commandFailure: { code: string; message: string } | null = null;
+  replayFailures = 0;
   subscriptionPolls = 0;
 
   getProjectReadiness(): Promise<ProjectReadiness> {
@@ -487,6 +493,40 @@ class FakeClient implements HeartwoodClient {
             canSteer: true,
           }
         : current.lifecycle,
+      researcherStatus:
+        commandFailure !== null ?
+          {
+            code: "denied",
+            label: "Request Not Applied",
+            detail: commandFailure.message,
+            tone: "attention",
+            recoverable: true,
+          }
+        : command.kind === "pause" ?
+          {
+            code: "paused",
+            label: "Agent Paused",
+            detail: "Resume the session when you are ready to continue.",
+            tone: "attention",
+            recoverable: true,
+          }
+        : command.kind === "resume" ?
+          {
+            code: "working",
+            label: "Heartwood Is Working",
+            detail: "You can send guidance or pause while the task is active.",
+            tone: "progress",
+            recoverable: true,
+          }
+        : command.kind === "approve" || command.kind === "deny" ?
+          {
+            code: "ready",
+            label: "Ready",
+            detail: "Heartwood is ready for the next task.",
+            tone: "neutral",
+            recoverable: true,
+          }
+        : current.researcherStatus,
       availableCommands:
         command.kind === "pause" ? ["chat", "resume"]
         : command.kind === "resume" ? ["chat", "pause"]
@@ -499,6 +539,10 @@ class FakeClient implements HeartwoodClient {
 
   replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
     this.replayCalls += 1;
+    if (this.replayFailures > 0) {
+      this.replayFailures -= 1;
+      return Promise.reject(new Error("Synthetic replay failure"));
+    }
     return Promise.resolve({
       events: [],
       projection: this.projectionFor(sessionId),
@@ -508,13 +552,16 @@ class FakeClient implements HeartwoodClient {
   streamSession(
     _sessionId: string,
     _afterSequence: number | undefined,
-    onProjection: (projection: SessionProjection) => void,
+    observer: SessionStreamObserver,
   ): () => void {
-    this.streamListener = onProjection;
+    this.streamObserver = observer;
+    observer.onState?.("connected");
+    this.streamListener = observer.onProjection;
     return () => {
-      if (this.streamListener === onProjection) {
-        this.retiredStreamListener = onProjection;
+      if (this.streamListener === observer.onProjection) {
+        this.retiredStreamListener = observer.onProjection;
         this.streamListener = null;
+        this.streamObserver = null;
       }
     };
   }
@@ -522,6 +569,16 @@ class FakeClient implements HeartwoodClient {
   emitStream(projection: SessionProjection): void {
     this.projections.set(projection.sessionId, projection);
     this.streamListener?.(projection);
+  }
+
+  emitStreamState(
+    state: Parameters<NonNullable<SessionStreamObserver["onState"]>>[0],
+  ): void {
+    this.streamObserver?.onState?.(state);
+  }
+
+  emitStreamError(message: string): void {
+    this.streamObserver?.onError?.(new Error(message));
   }
 
   emitRetiredStream(projection: SessionProjection): void {
@@ -1251,9 +1308,7 @@ describe("App", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      within(history).getByText(
-        "Action set action-set-session-test · approved",
-      ),
+      within(history).getByText("Complete action set · approved"),
     ).toBeInTheDocument();
     expect(within(history).getByText("Exact arguments")).toBeInTheDocument();
     expect(
@@ -1475,6 +1530,26 @@ describe("App", () => {
     ).toHaveLength(1);
   });
 
+  it("uses only gateway-owned task suggestions", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const suggestion = await screen.findByRole("button", {
+      name: "Inspect the Project",
+    });
+    fireEvent.click(suggestion);
+
+    expect(screen.getByLabelText("Task")).toHaveValue(
+      "Inspect this project and summarize its structure, relevant files, and likely entry points without changing files.",
+    );
+    expect(screen.queryByText("Summarize the available files")).toBeNull();
+  });
+
   it("keeps a delayed task visibly active without inventing workflow steps", async () => {
     const client = new DeferredCommandClient();
     client.currentSettings = {
@@ -1594,6 +1669,63 @@ describe("App", () => {
     await waitFor(() => expect(client.listCalls).toBe(initialListCalls + 1));
   });
 
+  it("keeps recoverable live-update failures separate from command state", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
+
+    act(() => client.emitStreamState("reconnecting"));
+    expect(screen.getByText("Reconnecting")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Live updates were interrupted. Heartwood is reconnecting.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Task")).toBeEnabled();
+    screen.getByLabelText("Task").focus();
+    expect(screen.getByLabelText("Task")).toHaveFocus();
+
+    act(() => {
+      client.emitStreamError("Synthetic stream failure");
+      client.emitStreamState("degraded");
+    });
+    expect(screen.getByText("Live Updates Unavailable")).toBeVisible();
+    expect(screen.getByText("Synthetic stream failure")).toBeVisible();
+    expect(screen.getByLabelText("Task")).toHaveFocus();
+    const replayCalls = client.replayCalls;
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() =>
+      expect(client.replayCalls).toBeGreaterThan(replayCalls),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull(),
+    );
+  });
+
+  it("clears replay failure guidance after a successful reconnect", async () => {
+    const client = new FakeClient();
+    client.replayFailures = 1;
+    render(<App client={client} initialSessionId="session-test" />);
+
+    expect(await screen.findByText("Synthetic replay failure")).toBeVisible();
+    expect(screen.getByText("Live Updates Unavailable")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => expect(client.replayCalls).toBe(2));
+    await waitFor(() =>
+      expect(screen.queryByText("Synthetic replay failure")).toBeNull(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("does not replace a newer token frame with an older equal-revision response", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
@@ -1691,15 +1823,28 @@ describe("App", () => {
           canResume: false,
           canSteer: true,
         },
+        researcherStatus: {
+          code: "working",
+          label: "Heartwood Is Working",
+          detail: "You can send guidance or pause while the task is active.",
+          tone: "progress",
+          recoverable: true,
+        },
         taskPlan: [
           {
             title: "Inspect the analysis",
             status: "in-progress",
+            statusLabel: "In Progress",
           },
-          { title: "Verify the result", status: "todo" },
+          {
+            title: "Verify the result",
+            status: "todo",
+            statusLabel: "Not Started",
+          },
         ],
         usage: {
           usageId: "total",
+          purposeLabel: "Total Model Activity",
           modelName: "openai/synthetic-coder",
           callCount: 2,
           promptTokens: 1200,
@@ -1713,6 +1858,7 @@ describe("App", () => {
         usageByPurpose: [
           {
             usageId: "agent",
+            purposeLabel: "Primary Agent",
             modelName: "openai/synthetic-coder",
             callCount: 2,
             promptTokens: 1200,
@@ -1729,7 +1875,11 @@ describe("App", () => {
             invocationId: "task-research-plan",
             taskId: "task-research-plan",
             agentName: "research-planner",
+            roleLabel: "Research Planner",
             status: "running",
+            statusLabel: "Working",
+            taskSummary: "Plan the synthetic analysis",
+            resultSummary: null,
             parentSessionId: "session-test",
             parentActionId: "task-action-1",
           },
@@ -1743,15 +1893,14 @@ describe("App", () => {
       screen.getByLabelText("Agent response in progress"),
     ).toHaveTextContent("Reviewing the analysis structure");
     const status = screen.getByRole("status", { name: "Agent status" });
-    expect(status).toHaveTextContent("Heartwood is working");
+    expect(status).toHaveTextContent("Heartwood Is Working");
     expect(status).toHaveTextContent("Plan: 0 of 2 complete");
     expect(status).toHaveTextContent("1,500 tokens · openai/synthetic-coder");
     expect(status).toHaveTextContent("2 calls");
-    expect(status).toHaveTextContent("agent");
-    expect(status).toHaveTextContent("research-planner (running)");
-    expect(status).toHaveTextContent(
-      "Parent session session-test · action task-action-1",
-    );
+    expect(status).toHaveTextContent("Primary Agent");
+    expect(status).toHaveTextContent("Research Planner (Working)");
+    expect(status).toHaveTextContent("Task: Plan the synthetic analysis");
+    expect(status).not.toHaveTextContent("Parent session session-test");
     expect(screen.getByLabelText("Task")).toBeEnabled();
     expect(screen.getByLabelText("Send guidance")).toBeInTheDocument();
     expect(screen.getByLabelText("Pause agent")).toBeEnabled();
@@ -1775,7 +1924,11 @@ describe("App", () => {
             invocationId: "task-verification",
             taskId: "task-verification",
             agentName: "result-reviewer",
+            roleLabel: "Result Reviewer",
             status: "proposed",
+            statusLabel: "Proposed",
+            taskSummary: "Verify the result",
+            resultSummary: null,
             parentSessionId: "session-test",
             parentActionId: "task-action-2",
           },
@@ -1801,13 +1954,20 @@ describe("App", () => {
         canResume: true,
         canSteer: true,
       },
+      researcherStatus: {
+        code: "paused",
+        label: "Agent Paused",
+        detail: "Resume the session when you are ready to continue.",
+        tone: "attention",
+        recoverable: true,
+      },
       availableCommands: ["chat", "resume"],
       paused: true,
     });
     render(<App client={client} initialSessionId="session-test" />);
 
     const status = await screen.findByRole("status", { name: "Agent status" });
-    expect(status).toHaveTextContent("Agent paused");
+    expect(status).toHaveTextContent("Agent Paused");
     expect(status).not.toHaveTextContent("Plan:");
     const resume = screen.getByLabelText("Resume agent");
     expect(resume).toBeEnabled();
@@ -1818,6 +1978,11 @@ describe("App", () => {
 
   it("renders the pending OpenHands action set and sends one batch decision", async () => {
     const client = new PendingClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
     render(<App client={client} initialSessionId="session-test" />);
 
     const allow = await screen.findByLabelText("Allow 1 action once");
@@ -1831,6 +1996,7 @@ describe("App", () => {
     fireEvent.click(allow);
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));
+    await waitFor(() => expect(screen.getByLabelText("Task")).toHaveFocus());
     expect(client.commands.at(-1)?.payload).toEqual({
       target_id: "action-set-session-test",
       target_type: "action-set",
@@ -2998,9 +3164,12 @@ describe("App error handling", () => {
     await screen.findByRole("heading", { name: "Synthetic analysis" });
     fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
 
-    expect(
-      await screen.findByText("HW-AGENT-005: The operation is unavailable."),
-    ).toBeVisible();
+    const status = await screen.findByRole("status", { name: "Agent status" });
+    expect(status).toHaveTextContent("Request Not Applied");
+    expect(status).toHaveTextContent(
+      "HW-AGENT-005: The operation is unavailable.",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(client.auditExportCalls).toBe(0);
   });
 

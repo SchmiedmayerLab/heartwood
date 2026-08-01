@@ -79,7 +79,8 @@ export const syntheticEvents = (): SessionEvent[] => [
     },
   }),
   event(3, "agent_message.emitted", {
-    content: "I will run the repository-verified cohort Skill.",
+    content:
+      "## Plan\n\nI will run the repository-verified cohort Skill.\n\n- Validate the synthetic inputs\n- Create the cohort summary",
   }),
   event(4, "tool_call.proposed", {
     risk: "low",
@@ -155,11 +156,34 @@ export const emptyProjection = (
     canResume: false,
     canSteer: true,
   },
+  researcherStatus: {
+    code: "ready",
+    label: "Ready",
+    detail: "Heartwood is ready for the next task.",
+    tone: "neutral",
+    recoverable: true,
+  },
   lastCommandOutcome: null,
   taskPlan: [],
   usage: null,
   usageByPurpose: [],
   subagents: [],
+  suggestions: [
+    {
+      suggestionId: "inspect-project",
+      label: "Inspect the Project",
+      prompt:
+        "Inspect this project and summarize its structure, relevant files, and likely entry points without changing files.",
+      kind: "task",
+    },
+    {
+      suggestionId: "plan-project",
+      label: "Plan the Work",
+      prompt:
+        "Review this project and propose a concise, verifiable plan before making changes.",
+      kind: "task",
+    },
+  ],
   streamingText: "",
   availableCommands: ["chat"],
   paused: false,
@@ -193,7 +217,8 @@ export const syntheticProjection = (
       sequence: 3,
       role: "agent",
       label: "Agent",
-      content: "I will run the repository-verified cohort Skill.",
+      content:
+        "## Plan\n\nI will run the repository-verified cohort Skill.\n\n- Validate the synthetic inputs\n- Create the cohort summary",
       detail: null,
       technicalDetail: null,
     },
@@ -216,6 +241,14 @@ export const syntheticProjection = (
     canResume: false,
     canSteer: false,
   },
+  researcherStatus: {
+    code: "waiting-for-review",
+    label: "Waiting for Action Review",
+    detail: "Review the complete proposed action set to continue.",
+    tone: "attention",
+    recoverable: true,
+  },
+  suggestions: [],
   availableCommands: ["approve", "deny"],
   ...overrides,
 });
