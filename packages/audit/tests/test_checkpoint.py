@@ -257,6 +257,8 @@ def test_checkpoint_rejects_invalid_input_identity_and_key_material(tmp_path: Pa
     invalid_key = tmp_path / "invalid.pem"
     invalid_key.write_text("not a private key\n", encoding="utf-8")
     invalid_key.chmod(0o600)
+    with pytest.raises(AuditCheckpointError, match="trusted audit public key"):
+        verify_audit_checkpoint(bundle=bundle, public_key=invalid_key)
     with pytest.raises(AuditCheckpointError, match="valid unencrypted PEM"):
         create_audit_checkpoint(
             audit_content=audit_content,
