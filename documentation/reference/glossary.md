@@ -15,6 +15,9 @@ SPDX-License-Identifier: MIT
 **Application programming interface (API)**
 : A structured way for software components to communicate.
 
+**Audit checkpoint**
+: A canonical audit export signed by a deployment and bound to its session, origin, creation time, and retention declaration.
+
 **Audit export**
 : A scrubbed JSON Lines representation of the tamper-evident session audit chain.
 
@@ -45,6 +48,9 @@ SPDX-License-Identifier: MIT
 **Device-code sign-in**
 : An OAuth flow in which one interface displays a short-lived code that the user enters on a separate provider sign-in page.
 
+**Ed25519**
+: A public-key signature algorithm Heartwood uses to authenticate deployment-owned audit checkpoints.
+
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
 
@@ -59,6 +65,9 @@ SPDX-License-Identifier: MIT
 
 **Ingress**
 : The validated network route through which a browser or API client reaches the Heartwood gateway, such as direct loopback, a Jupyter proxy, or an explicitly trusted platform proxy.
+
+**JSON Lines**
+: A text format that stores one JSON value on each line so records can be appended and processed incrementally.
 
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.

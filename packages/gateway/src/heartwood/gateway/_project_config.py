@@ -8,9 +8,7 @@
 
 from __future__ import annotations
 
-import os
 import re
-import tempfile
 import tomllib
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -19,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from filelock import FileLock
 from pydantic import ValidationError
 
 from heartwood.gateway._action_settings import (
@@ -49,9 +46,20 @@ from heartwood.gateway._model_settings import (
     model_settings_from_mapping,
 )
 from heartwood.gateway._project import ProjectContext
+from heartwood.persistence import (
+    PERSISTENCE_MIGRATIONS,
+    PROJECT_CONFIG_KIND,
+    PROJECT_CONFIG_VERSION,
+    DurableFileError,
+    MigrationError,
+    native_file_lock,
+    read_private_text,
+    unlink_durable,
+    write_private_text_atomic,
+)
 from heartwood.schemas import PolicyProfile
 
-_CONFIG_SCHEMA_VERSION = "heartwood.project-config.v1"
+_CONFIG_SCHEMA_VERSION = PROJECT_CONFIG_VERSION
 _SAFE_SOURCE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _TOP_LEVEL_FIELDS = {
     "action",
@@ -352,9 +360,8 @@ class ProjectConfigStore:
         if self.project.config_path.is_symlink() or not self.project.config_path.is_file():
             raise ProjectConfigError(".heartwood/config.toml must be a regular file")
         try:
-            with self.project.config_path.open("rb") as file:
-                value = tomllib.load(file)
-        except (OSError, tomllib.TOMLDecodeError) as error:
+            value = tomllib.loads(read_private_text(self.project.config_path))
+        except (DurableFileError, OSError, tomllib.TOMLDecodeError) as error:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
         config.validate(self.project)
@@ -381,7 +388,7 @@ class ProjectConfigStore:
         """Restore a configuration snapshot after a larger transaction fails."""
         with self.locked():
             if config is None:
-                self.project.config_path.unlink(missing_ok=True)
+                unlink_durable(self.project.config_path, missing_ok=True)
             else:
                 self._save_unlocked(config)
 
@@ -389,11 +396,7 @@ class ProjectConfigStore:
     def locked(self) -> Iterator[None]:
         """Hold the reentrant cross-process project-configuration lock."""
         self.project.initialize()
-        with FileLock(
-            self.project.config_lock_path,
-            mode=0o600,
-            is_singleton=True,
-        ):
+        with native_file_lock(self.project.config_lock_path):
             yield
 
     def _save_unlocked(self, config: ProjectConfig) -> None:
@@ -404,17 +407,7 @@ class ProjectConfigStore:
             tomllib.loads(contents)
         except tomllib.TOMLDecodeError as error:  # pragma: no cover - writer invariant
             raise ProjectConfigError("generated project configuration is invalid TOML") from error
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=".config.toml.", dir=self.project.state_root
-        )
-        temporary_path = Path(temporary)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                file.write(contents)
-            temporary_path.chmod(0o600)
-            temporary_path.replace(self.project.config_path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+        write_private_text_atomic(self.project.config_path, contents)
 
     def select_local_model(
         self,
@@ -572,6 +565,10 @@ def project_config_from_mapping(value: object, *, project: ProjectContext) -> Pr
     """Validate one TOML-decoded project configuration."""
     if not isinstance(value, dict):
         raise ProjectConfigError("project configuration must be a table")
+    try:
+        value = PERSISTENCE_MIGRATIONS.migrate(PROJECT_CONFIG_KIND, value).payload
+    except MigrationError as error:
+        raise ProjectConfigError("unsupported project configuration schema") from error
     unknown = sorted(set(value) - _TOP_LEVEL_FIELDS)
     if unknown:
         raise ProjectConfigError(

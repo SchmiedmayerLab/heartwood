@@ -8,13 +8,23 @@
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-_STATE_SCHEMA_VERSION = "heartwood.project-state.v1"
+from heartwood.persistence import (
+    PERSISTENCE_MIGRATIONS,
+    PROJECT_STATE_FORMATS,
+    PROJECT_STATE_KIND,
+    PROJECT_STATE_VERSION,
+    MigrationError,
+    NativeLockUnavailableError,
+    native_file_lock,
+    read_private_json,
+    read_private_text,
+    write_private_json_atomic,
+    write_private_text_atomic,
+)
+
 _STATE_DIRECTORIES = ("sessions", "models", "skills", "audit", "runtime", "logs", "cache")
 
 
@@ -60,6 +70,11 @@ class ProjectContext:
         return self.state_root / "state.json"
 
     @property
+    def state_lock_path(self) -> Path:
+        """Return the project-state initialization and migration lock path."""
+        return self.state_root / ".state.lock"
+
+    @property
     def sessions_dir(self) -> Path:
         """Return the persisted session directory."""
         return self.state_root / "sessions"
@@ -96,30 +111,38 @@ class ProjectContext:
 
     def initialize(self) -> None:
         """Create and validate the private project-local state structure."""
-        self._validate_existing_state()
-        self.state_root.mkdir(mode=0o700, exist_ok=True)
-        self.state_root.chmod(0o700)
-        for name in _STATE_DIRECTORIES:
-            directory = self.state_root / name
-            if directory.is_symlink():
-                raise ProjectStateError(f"Heartwood state directory must not be a symlink: {name}")
-            directory.mkdir(mode=0o700, exist_ok=True)
-            directory.chmod(0o700)
-        ignore_path = self.state_root / ".gitignore"
-        if not ignore_path.exists():
-            _atomic_private_text(ignore_path, "*\n")
-        if not self.state_path.exists():
-            _atomic_private_json(
-                self.state_path,
-                {"schema_version": _STATE_SCHEMA_VERSION},
-            )
-        self._validate_existing_state()
-        ignore_path.chmod(0o600)
-        self.state_path.chmod(0o600)
-        if self.config_path.exists():
-            self.config_path.chmod(0o600)
-        if self.config_lock_path.exists():
-            self.config_lock_path.chmod(0o600)
+        self._validate_state_root()
+        try:
+            self.state_root.mkdir(mode=0o700, exist_ok=True)
+            self.state_root.chmod(0o700)
+            with native_file_lock(self.state_lock_path):
+                self._validate_existing_state()
+                for name in _STATE_DIRECTORIES:
+                    directory = self.state_root / name
+                    if directory.is_symlink():
+                        raise ProjectStateError(
+                            f"Heartwood state directory must not be a symlink: {name}"
+                        )
+                    directory.mkdir(mode=0o700, exist_ok=True)
+                    directory.chmod(0o700)
+                ignore_path = self.state_root / ".gitignore"
+                if not ignore_path.exists():
+                    write_private_text_atomic(ignore_path, "*\n")
+                if not self.state_path.exists():
+                    write_private_json_atomic(self.state_path, _current_state_payload())
+                else:
+                    self._migrate_state_marker()
+                self._validate_existing_state()
+                ignore_path.chmod(0o600)
+                self.state_path.chmod(0o600)
+                if self.config_path.exists():
+                    self.config_path.chmod(0o600)
+                if self.config_lock_path.exists():
+                    self.config_lock_path.chmod(0o600)
+        except (OSError, ValueError) as error:
+            if isinstance(error, (NativeLockUnavailableError, ProjectStateError)):
+                raise
+            raise ProjectStateError(f"unable to initialize .heartwood state: {error}") from error
 
     def state_exists(self) -> bool:
         """Return whether a valid initialized state structure exists."""
@@ -150,14 +173,13 @@ class ProjectContext:
         return (expanded if expanded.is_absolute() else self.root / expanded).resolve()
 
     def _validate_existing_state(self) -> None:
-        if self.state_root.is_symlink():
-            raise ProjectStateError(".heartwood must not be a symbolic link")
+        self._validate_state_root()
         if not self.state_root.exists():
             return
-        if not self.state_root.is_dir():
-            raise ProjectStateError(".heartwood must be a directory")
         if not self.state_path.exists():
-            entries = tuple(self.state_root.iterdir())
+            entries = tuple(
+                entry for entry in self.state_root.iterdir() if entry != self.state_lock_path
+            )
             models = self.models_dir
             fresh_model_mount = entries == (models,) and models.is_dir() and not models.is_symlink()
             if entries and not fresh_model_mount:
@@ -168,10 +190,14 @@ class ProjectContext:
         if self.state_path.is_symlink() or not self.state_path.is_file():
             raise ProjectStateError(".heartwood/state.json must be a regular file")
         try:
-            value = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
+            value = read_private_json(self.state_path)
+            migrated = PERSISTENCE_MIGRATIONS.migrate(
+                PROJECT_STATE_KIND,
+                value,
+            )
+        except (OSError, ValueError, MigrationError) as error:
             raise ProjectStateError(f"unable to read .heartwood/state.json: {error}") from error
-        if value != {"schema_version": _STATE_SCHEMA_VERSION}:
+        if migrated.payload != _current_state_payload():
             raise ProjectStateError("unsupported .heartwood state schema")
         for name in _STATE_DIRECTORIES:
             directory = self.state_root / name
@@ -185,8 +211,8 @@ class ProjectContext:
                 "incompatible .heartwood layout: the internal Git ignore rule is missing"
             )
         try:
-            ignore_rule = ignore_path.read_text(encoding="utf-8")
-        except OSError as error:
+            ignore_rule = read_private_text(ignore_path)
+        except (OSError, ValueError) as error:
             raise ProjectStateError(f"unable to read .heartwood/.gitignore: {error}") from error
         if ignore_rule != "*\n":
             raise ProjectStateError(
@@ -201,19 +227,34 @@ class ProjectContext:
         ):
             raise ProjectStateError(".heartwood/.config.lock must be a regular file")
 
+        if self.state_lock_path.is_symlink() or (
+            self.state_lock_path.exists() and not self.state_lock_path.is_file()
+        ):
+            raise ProjectStateError(".heartwood/.state.lock must be a regular file")
 
-def _atomic_private_json(path: Path, value: object) -> None:
-    _atomic_private_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
+    def _validate_state_root(self) -> None:
+        if self.state_root.is_symlink():
+            raise ProjectStateError(".heartwood must not be a symbolic link")
+        if not self.state_root.exists():
+            return
+        if not self.state_root.is_dir():
+            raise ProjectStateError(".heartwood must be a directory")
+
+    def _migrate_state_marker(self) -> None:
+        try:
+            current = read_private_json(self.state_path)
+            result = PERSISTENCE_MIGRATIONS.migrate(
+                PROJECT_STATE_KIND,
+                current,
+            )
+        except (OSError, ValueError, MigrationError) as error:
+            raise ProjectStateError(f"unable to migrate .heartwood/state.json: {error}") from error
+        if result.applied_versions:
+            write_private_json_atomic(self.state_path, result.payload)
 
 
-def _atomic_private_text(path: Path, value: str) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-            file.write(value)
-        temporary_path.chmod(0o600)
-        temporary_path.replace(path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+def _current_state_payload() -> dict[str, object]:
+    return {
+        "schema_version": PROJECT_STATE_VERSION,
+        "formats": dict(PROJECT_STATE_FORMATS),
+    }

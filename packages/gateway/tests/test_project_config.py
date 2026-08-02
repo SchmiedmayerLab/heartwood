@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -79,6 +80,23 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
     assert store.load() == default
     assert not project.state_root.exists()
     assert not store.configured
+
+
+def test_checked_in_project_config_compatibility_fixture_loads(tmp_path: Path) -> None:
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "packages"
+        / "persistence"
+        / "tests"
+        / "fixtures"
+        / "project-config-v1.json"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    config = project_config_from_mapping(payload, project=ProjectContext(tmp_path))
+
+    assert config.schema_version == "heartwood.project-config.v1"
+    assert config.platform_id == "generic"
 
 
 def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path) -> None:

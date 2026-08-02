@@ -10,6 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from heartwood.audit import (
+    AuditCheckpointError,
+    AuditCheckpointVerification,
+    AuditIntegrityError,
+    AuditVerification,
+)
 from heartwood.core_adapter import (
     CommandConflictError,
     SessionOwnershipError,
@@ -192,6 +198,7 @@ from heartwood.gateway._workspace import (
     WorkspaceInspector,
     WorkspaceLimits,
 )
+from heartwood.persistence import NativeLockUnavailableError
 
 if TYPE_CHECKING:
     from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, OpenHandsSdkError
@@ -206,6 +213,10 @@ __all__ = [
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",
+    "AuditCheckpointError",
+    "AuditCheckpointVerification",
+    "AuditIntegrityError",
+    "AuditVerification",
     "CommandConflictError",
     "CredentialBindingStatus",
     "CredentialIsolation",
@@ -253,6 +264,7 @@ __all__ = [
     "ModelSnapshotError",
     "ModelSourceOption",
     "ModelTier",
+    "NativeLockUnavailableError",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
     "ProjectConfig",

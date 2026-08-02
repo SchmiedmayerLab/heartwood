@@ -23,6 +23,7 @@ members = [
     "heartwood-gateway",
     "heartwood-model-policy",
     "heartwood-notebook",
+    "heartwood-persistence",
     "heartwood-schemas",
     "heartwood-session",
     "heartwood-skills",
@@ -1553,11 +1554,17 @@ name = "heartwood-audit"
 version = "0.2.0"
 source = { editable = "packages/audit" }
 dependencies = [
+    { name = "cryptography" },
+    { name = "heartwood-persistence" },
     { name = "heartwood-schemas" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "heartwood-schemas", editable = "packages/schemas" }]
+requires-dist = [
+    { name = "cryptography", specifier = "==49.0.0" },
+    { name = "heartwood-persistence", editable = "packages/persistence" },
+    { name = "heartwood-schemas", editable = "packages/schemas" },
+]
 
 [[package]]
 name = "heartwood-cli"
@@ -1608,6 +1615,7 @@ dependencies = [
     { name = "heartwood-adapters" },
     { name = "heartwood-audit" },
     { name = "heartwood-model-policy" },
+    { name = "heartwood-persistence" },
     { name = "heartwood-schemas" },
     { name = "heartwood-session" },
 ]
@@ -1618,6 +1626,7 @@ requires-dist = [
     { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-audit", editable = "packages/audit" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },
+    { name = "heartwood-persistence", editable = "packages/persistence" },
     { name = "heartwood-schemas", editable = "packages/schemas" },
     { name = "heartwood-session", editable = "packages/session" },
 ]
@@ -1646,8 +1655,10 @@ dependencies = [
     { name = "anthropic" },
     { name = "filelock" },
     { name = "heartwood-adapters" },
+    { name = "heartwood-audit" },
     { name = "heartwood-core-adapter" },
     { name = "heartwood-model-policy" },
+    { name = "heartwood-persistence" },
     { name = "heartwood-schemas" },
     { name = "heartwood-session" },
     { name = "heartwood-skills" },
@@ -1666,8 +1677,10 @@ requires-dist = [
     { name = "anthropic", specifier = "==0.120.2" },
     { name = "filelock", specifier = "==3.32.0" },
     { name = "heartwood-adapters", editable = "packages/adapters" },
+    { name = "heartwood-audit", editable = "packages/audit" },
     { name = "heartwood-core-adapter", editable = "packages/core-adapter" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },
+    { name = "heartwood-persistence", editable = "packages/persistence" },
     { name = "heartwood-schemas", editable = "packages/schemas" },
     { name = "heartwood-session", editable = "packages/session" },
     { name = "heartwood-skills", editable = "packages/skills" },
@@ -1719,6 +1732,17 @@ requires-dist = [
 provides-extras = ["widgets"]
 
 [[package]]
+name = "heartwood-persistence"
+version = "0.2.0"
+source = { editable = "packages/persistence" }
+dependencies = [
+    { name = "filelock" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "filelock", specifier = "==3.32.0" }]
+
+[[package]]
 name = "heartwood-schemas"
 version = "0.2.0"
 source = { editable = "packages/schemas" }
@@ -1745,12 +1769,14 @@ name = "heartwood-skills"
 version = "0.2.0"
 source = { editable = "packages/skills" }
 dependencies = [
+    { name = "heartwood-persistence" },
     { name = "heartwood-schemas" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "heartwood-persistence", editable = "packages/persistence" },
     { name = "heartwood-schemas", editable = "packages/schemas" },
     { name = "pydantic" },
 ]

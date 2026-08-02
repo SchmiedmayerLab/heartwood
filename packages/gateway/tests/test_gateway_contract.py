@@ -1219,9 +1219,7 @@ def test_rest_reports_unsupported_session_storage_without_server_error(
     )
 
     assert response.status_code == 409
-    assert response.body == {
-        "error": "session storage does not support required process locks: session-1"
-    }
+    assert response.body == {"error": "project storage does not support required process locks"}
 
 
 def test_rest_command_retry_is_not_published_twice(tmp_path: Path) -> None:

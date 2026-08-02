@@ -25,6 +25,9 @@ Normal users do not set a Heartwood home, workspace, state root, model root, or 
 
 Heartwood creates the state root and children with private filesystem permissions and rejects symbolic-link substitutions.
 The internal `.gitignore` excludes every state file from the surrounding Git repository.
+The state marker records the current versions of each independently persisted Heartwood envelope.
+Heartwood applies only registered deterministic forward migrations, under a process-shared native lock, and atomically replaces migrated metadata.
+Unknown versions and malformed records fail closed rather than being rewritten heuristically.
 
 ## Configuration Ownership
 
@@ -65,3 +68,11 @@ Configuration updates are serialized across concurrent Heartwood processes.
 Each active session also has an enforced writer lease.
 Stop the process that owns a session before continuing it from another interface, or use separate session identifiers for simultaneous work.
 Do not delete internal lock, command-receipt, or recovery-journal files.
+
+## Audit Artifacts
+
+Session audit logs and generated exports remain private project state.
+An authoritative checkpoint, its signing key, and the independently trusted public key must resolve outside the project.
+Use deployment records storage for checkpoint retention; `.heartwood/` is not an authoritative archive.
+
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for signing, verification, and key-management responsibilities.

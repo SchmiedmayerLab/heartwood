@@ -13,6 +13,7 @@ import shutil
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from threading import RLock
@@ -20,6 +21,12 @@ from typing import Any, Concatenate, Literal, Protocol, cast
 from uuid import uuid4
 
 from heartwood.adapters.platform import select_platform_adapter
+from heartwood.audit import (
+    AuditCheckpointVerification,
+    AuditVerification,
+    create_audit_checkpoint,
+    verify_audit_checkpoint,
+)
 from heartwood.core_adapter import (
     AgentBackend,
     BackendErrorCode,
@@ -105,7 +112,7 @@ from heartwood.gateway._model_snapshots import (
     download_model_snapshot,
     load_model_snapshot_catalog,
 )
-from heartwood.gateway._project import ProjectContext
+from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
     LocalModelSelection,
     ProjectActionSettingsStore,
@@ -143,6 +150,7 @@ from heartwood.gateway._subscriptions import (
 )
 from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.model_policy import ModelPolicyEngine
+from heartwood.persistence import DurableFileError, write_private_text_atomic
 from heartwood.schemas import (
     ActionSettingsResponse,
     AuditExportResponse,
@@ -631,7 +639,7 @@ class SessionGateway:
         store = FileSessionStore(self.sessions_root, session_id)
         try:
             content = store.read_audit_export()
-        except OSError as error:
+        except (DurableFileError, OSError) as error:
             msg = f"audit export is not available for session: {session_id}"
             raise SessionCatalogError(msg) from error
         return api_response(
@@ -641,6 +649,94 @@ class SessionGateway:
                 "content": content,
             },
         )
+
+    def verify_audit(self, session_id: str) -> AuditVerification:
+        """Fully verify the paired session and audit history."""
+        self.session_catalog.get(session_id)
+        _content, verification = FileSessionStore(
+            self.sessions_root,
+            session_id,
+        ).verified_audit_export()
+        return verification
+
+    def copy_audit_export(self, session_id: str, output: Path) -> Path:
+        """Write a generated export to a caller-selected non-state path safely."""
+        resolved = self._resolve_audit_path(output, label="copy destination")
+        if resolved == self.project.state_root or self.project.state_root in resolved.parents:
+            raise ProjectStateError("audit copies cannot overwrite private Heartwood state")
+        content = self.audit_export(session_id)["content"]
+        try:
+            write_private_text_atomic(resolved, content, secure_parent=False)
+        except (DurableFileError, OSError) as error:
+            raise ProjectStateError("unable to write the audit copy safely") from error
+        return resolved
+
+    def create_audit_checkpoint(
+        self,
+        *,
+        session_id: str,
+        output: Path,
+        deployment_id: str,
+        retention_policy_id: str,
+        retain_until: str,
+        signing_key: Path,
+    ) -> AuditCheckpointVerification:
+        """Generate and sign an authoritative export outside the agent project."""
+        resolved_output = self._deployment_owned_path(output, label="checkpoint output")
+        resolved_key = self._deployment_owned_path(signing_key, label="signing key")
+        if resolved_output.exists() or resolved_output.is_symlink():
+            raise ProjectStateError("audit checkpoint output already exists")
+        self.handle(
+            SessionCommand(
+                command_id=f"audit-checkpoint-{uuid4().hex}",
+                session_id=session_id,
+                kind=CommandKind.AUDIT_EXPORT,
+                actor_id="deployment-operator",
+                created_at=(
+                    datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                ),
+                payload={},
+            )
+        )
+        content = self.audit_export(session_id)["content"]
+        return create_audit_checkpoint(
+            audit_content=content,
+            session_id=session_id,
+            output=resolved_output,
+            deployment_id=deployment_id,
+            retention_policy_id=retention_policy_id,
+            retain_until=retain_until,
+            signing_key=resolved_key,
+        )
+
+    def verify_audit_checkpoint(
+        self,
+        *,
+        bundle: Path,
+        public_key: Path,
+    ) -> AuditCheckpointVerification:
+        """Verify an authoritative export with a deployment-owned public key."""
+        resolved_bundle = self._deployment_owned_path(bundle, label="checkpoint bundle")
+        resolved_key = self._deployment_owned_path(public_key, label="trusted public key")
+        return verify_audit_checkpoint(bundle=resolved_bundle, public_key=resolved_key)
+
+    def _deployment_owned_path(self, path: Path, *, label: str) -> Path:
+        resolved = self._resolve_audit_path(path, label=label)
+        if resolved == self.project.root or self.project.root in resolved.parents:
+            raise ProjectStateError(f"audit {label} must be outside the Heartwood project")
+        return resolved
+
+    @staticmethod
+    def _resolve_audit_path(path: Path, *, label: str) -> Path:
+        expanded = path.expanduser()
+        absolute = expanded if expanded.is_absolute() else Path.cwd() / expanded
+        if absolute.is_symlink():
+            raise ProjectStateError(f"audit {label} must not be a symbolic link")
+        try:
+            resolved = absolute.resolve()
+        except (OSError, RuntimeError) as error:
+            raise ProjectStateError(f"audit {label} is unavailable") from error
+        return resolved
 
     def workspace_tree(
         self,

@@ -22,6 +22,9 @@ from heartwood.skills import (
 )
 
 _SKILLS_ROOT = Path("skills/verified")
+_COMPATIBILITY_FIXTURES = (
+    Path(__file__).resolve().parents[3] / "packages" / "persistence" / "tests" / "fixtures"
+)
 
 
 def _write_skill(
@@ -89,6 +92,29 @@ def test_verified_prototype_skills_pass_local_gate() -> None:
         "heartwood.synthetic.baseline-model",
         "heartwood.synthetic.omop-cohort-summary",
     }
+
+
+def test_checked_in_skill_metadata_compatibility_fixture_loads(tmp_path: Path) -> None:
+    skill_root = _write_skill(tmp_path)
+    metadata_path = skill_root / "metadata.json"
+    metadata_path.write_text(
+        (_COMPATIBILITY_FIXTURES / "skill-metadata-v1.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    manifest_path = skill_root / "SKILL.md"
+    manifest = manifest_path.read_text(encoding="utf-8")
+    for previous, replacement in (
+        ("omop-cdm", "synthetic-tabular"),
+        ("sigstore:synthetic-fixture", "sigstore:synthetic-bundle"),
+        ("0.1.0", "0.2.0"),
+    ):
+        manifest = manifest.replace(previous, replacement)
+    manifest_path.write_text(manifest, encoding="utf-8")
+
+    loaded = load_skill_manifest(skill_root)
+
+    assert loaded.metadata.dataset_types == ("synthetic-tabular",)
+    assert loaded.metadata.version == "0.2.0"
 
 
 def test_verifier_builds_skill_approval_record() -> None:
@@ -170,6 +196,25 @@ def test_verifier_returns_failed_result_for_invalid_metadata(tmp_path: Path) -> 
     result = LocalSkillVerifier(invalid_frontmatter_root).verify(skill_root)
     assert result.verified is False
     assert result.reason == "SKILL.md metadata is invalid"
+
+
+def test_verifier_rejects_unsupported_or_linked_metadata(tmp_path: Path) -> None:
+    unsupported_root = _write_skill(tmp_path / "unsupported")
+    metadata_path = unsupported_root / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["schema_version"] = "heartwood.skill-metadata.v0"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(SkillVerificationError, match=r"metadata\.json is invalid"):
+        load_skill_manifest(unsupported_root)
+
+    linked_root = _write_skill(tmp_path / "linked")
+    linked_metadata = linked_root / "metadata.json"
+    outside = tmp_path / "outside-metadata.json"
+    outside.write_bytes(linked_metadata.read_bytes())
+    linked_metadata.unlink()
+    linked_metadata.symlink_to(outside)
+    with pytest.raises(SkillVerificationError, match=r"metadata\.json is invalid JSON"):
+        load_skill_manifest(linked_root)
 
 
 def test_verifier_rejects_missing_manifest_files(tmp_path: Path) -> None:

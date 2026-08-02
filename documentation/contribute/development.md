@@ -36,6 +36,7 @@ Add a parameter, platform adapter, or validation target for a real platform diff
 | Typed schemas and session commands/events | `packages/schemas`, `packages/session` |
 | Platform and data adapters | `packages/adapters` |
 | Policy and audit | `packages/model-policy`, `packages/audit` |
+| Durable files and persisted-schema migrations | `packages/persistence` |
 | OpenHands and core session orchestration | `packages/core-adapter`, `packages/gateway` |
 | Terminal interface and runtime launch | `packages/cli` |
 | Notebook bridge | `packages/notebook` |
@@ -111,6 +112,8 @@ When changing project state, startup, models, actions, sessions, Skills, or audi
 7. remove the superseded pre-1.0 path instead of maintaining an undocumented compatibility layer.
 
 Tests for a shared contract should compare the gateway, REST, terminal, browser, and notebook projections that expose it.
+Persisted-format changes require checked-in compatibility fixtures that pass both the shared migration registry and the owning domain loader.
+Durability changes require interruption tests at every write boundary, process-level concurrency tests, and explicit recovery and corruption cases.
 Artifact tests should verify that all variants resolve through the canonical assembly path as well as testing each supported runtime environment.
 
 Keep planned work and acceptance criteria in GitHub Issues rather than public documentation.

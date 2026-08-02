@@ -48,6 +48,8 @@ from heartwood.gateway import (
     DEFAULT_SESSION_ID,
     MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
+    AuditCheckpointError,
+    AuditIntegrityError,
     CommandConflictError,
     CredentialStoreError,
     DeploymentReadiness,
@@ -61,6 +63,7 @@ from heartwood.gateway import (
     ModelRepositoryError,
     ModelSettingsError,
     ModelSnapshotError,
+    NativeLockUnavailableError,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -422,6 +425,26 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_subparsers = audit.add_subparsers(dest="audit_command", metavar="<audit-command>")
     audit_export = audit_subparsers.add_parser("export", help="Export scrubbed audit JSONL.")
     audit_export.add_argument("--output", type=Path, help="Optional copy destination.")
+    audit_subparsers.add_parser("verify", help="Fully verify the current session audit history.")
+    audit_checkpoint = audit_subparsers.add_parser(
+        "checkpoint",
+        help="Create a signed authoritative audit bundle outside the project.",
+    )
+    audit_checkpoint.add_argument("--output", type=Path, required=True)
+    audit_checkpoint.add_argument("--deployment-id", required=True)
+    audit_checkpoint.add_argument("--retention-policy", required=True)
+    audit_checkpoint.add_argument(
+        "--retain-until",
+        required=True,
+        help="Retention end date in YYYY-MM-DD format.",
+    )
+    audit_checkpoint.add_argument("--signing-key", type=Path, required=True)
+    audit_checkpoint_verify = audit_subparsers.add_parser(
+        "verify-checkpoint",
+        help="Verify a signed audit bundle with a trusted public key.",
+    )
+    audit_checkpoint_verify.add_argument("bundle", type=Path)
+    audit_checkpoint_verify.add_argument("--public-key", type=Path, required=True)
 
     gateway = subparsers.add_parser("gateway", help="Advanced gateway operations.")
     gateway_subparsers = gateway.add_subparsers(dest="gateway_command", metavar="<gateway-command>")
@@ -480,11 +503,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run ``heartwood`` and return a process exit code."""
     try:
         return _main(argv)
-    except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
+    except (
+        CommandConflictError,
+        NativeLockUnavailableError,
+        SessionOwnershipError,
+        SessionRecoveryError,
+    ) as error:
         print(f"Session unavailable: {error}", file=sys.stderr)
         return 75
     except WorkspaceInspectionError as error:
         print(f"Project files unavailable: {error}", file=sys.stderr)
+        return 64
+    except (AuditCheckpointError, AuditIntegrityError) as error:
+        print(f"Audit operation failed: {error}", file=sys.stderr)
+        return 65
+    except ProjectStateError as error:
+        print(f"Project unavailable: {error}", file=sys.stderr)
         return 64
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
@@ -659,6 +693,24 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return _handle_replay(gateway, session_id=args.session_id)
         if args.command == "audit" and args.audit_command == "export":
             return _handle_audit_export(gateway, session_id=args.session_id, output=args.output)
+        if args.command == "audit" and args.audit_command == "verify":
+            return _handle_audit_verify(gateway, session_id=args.session_id)
+        if args.command == "audit" and args.audit_command == "checkpoint":
+            return _handle_audit_checkpoint(
+                gateway,
+                session_id=args.session_id,
+                output=args.output,
+                deployment_id=args.deployment_id,
+                retention_policy_id=args.retention_policy,
+                retain_until=args.retain_until,
+                signing_key=args.signing_key,
+            )
+        if args.command == "audit" and args.audit_command == "verify-checkpoint":
+            return _handle_audit_checkpoint_verification(
+                gateway,
+                bundle=args.bundle,
+                public_key=args.public_key,
+            )
         parser.print_help()
         return 0
     finally:
@@ -1824,9 +1876,79 @@ def _handle_audit_export(
     events = gateway.handle(_command(session_id=session_id, kind=CommandKind.AUDIT_EXPORT)).events
     export_path = Path(str(events[-1].payload["path"]))
     if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(export_path, output)
+        output = gateway.copy_audit_export(session_id, output)
     print(f"Audit export: {output or export_path}")
+    return 0
+
+
+def _handle_audit_verify(gateway: SessionGateway, *, session_id: str) -> int:
+    verification = gateway.verify_audit(session_id)
+    print(
+        "\n".join(
+            (
+                "Audit history verified",
+                f"Events: {verification.event_count}",
+                f"Terminal hash: {verification.terminal_event_hash or 'none'}",
+                f"Export digest: {verification.content_sha256}",
+            )
+        )
+    )
+    return 0
+
+
+def _handle_audit_checkpoint(
+    gateway: SessionGateway,
+    *,
+    session_id: str,
+    output: Path,
+    deployment_id: str,
+    retention_policy_id: str,
+    retain_until: str,
+    signing_key: Path,
+) -> int:
+    verification = gateway.create_audit_checkpoint(
+        session_id=session_id,
+        output=output,
+        deployment_id=deployment_id,
+        retention_policy_id=retention_policy_id,
+        retain_until=retain_until,
+        signing_key=signing_key,
+    )
+    statement = verification.checkpoint.statement
+    print(
+        "\n".join(
+            (
+                f"Audit checkpoint: {output.expanduser().resolve()}",
+                f"Events: {statement.audit_event_count}",
+                f"Signing key: {verification.checkpoint.signing_key_id}",
+                f"Retention: {statement.retention.policy_id} through "
+                f"{statement.retention.retain_until}",
+            )
+        )
+    )
+    return 0
+
+
+def _handle_audit_checkpoint_verification(
+    gateway: SessionGateway,
+    *,
+    bundle: Path,
+    public_key: Path,
+) -> int:
+    verification = gateway.verify_audit_checkpoint(bundle=bundle, public_key=public_key)
+    statement = verification.checkpoint.statement
+    print(
+        "\n".join(
+            (
+                "Audit checkpoint verified",
+                f"Deployment: {statement.deployment_id}",
+                f"Session: {statement.session_id}",
+                f"Events: {statement.audit_event_count}",
+                f"Retention: {statement.retention.policy_id} through "
+                f"{statement.retention.retain_until}",
+            )
+        )
+    )
     return 0
 
 

@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
@@ -1752,6 +1754,98 @@ def test_audit_export_uses_project_sessions(
     assert "Audit export" in capsys.readouterr().out
 
 
+def test_audit_verify_checkpoint_and_verification_are_operator_workflows(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    deployment = tmp_path / "deployment"
+    private_key, public_key = _audit_key_pair(deployment)
+    bundle = deployment / "review-checkpoint"
+    _install_deterministic_gateway(monkeypatch)
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "--session-id",
+                "review",
+                "audit",
+                "checkpoint",
+                "--output",
+                str(bundle),
+                "--deployment-id",
+                "generic-research",
+                "--retention-policy",
+                "research-audit-7y",
+                "--retain-until",
+                "2033-08-02",
+                "--signing-key",
+                str(private_key),
+            ],
+        )
+        == 0
+    )
+    assert _run(project, monkeypatch, ["--session-id", "review", "audit", "verify"]) == 0
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "audit",
+                "verify-checkpoint",
+                str(bundle),
+                "--public-key",
+                str(public_key),
+            ],
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "Audit checkpoint:" in output
+    assert "Audit history verified" in output
+    assert "Audit checkpoint verified" in output
+    assert "generic-research" in output
+    assert "research-audit-7y through 2033-08-02" in output
+
+
+def test_audit_checkpoint_reports_project_boundary_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    private_key, _public_key = _audit_key_pair(tmp_path / "deployment")
+    _install_deterministic_gateway(monkeypatch)
+
+    result = _run(
+        project,
+        monkeypatch,
+        [
+            "audit",
+            "checkpoint",
+            "--output",
+            str(project / "checkpoint"),
+            "--deployment-id",
+            "generic-research",
+            "--retention-policy",
+            "research-audit-7y",
+            "--retain-until",
+            "2033-08-02",
+            "--signing-key",
+            str(private_key),
+        ],
+    )
+
+    assert result == 64
+    captured = capsys.readouterr()
+    assert "must be outside the Heartwood project" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_cli_reports_active_browser_session_without_traceback(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1815,10 +1909,7 @@ def test_cli_reports_unsupported_session_storage_without_traceback(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert (
-        "Session unavailable: session storage does not support required process locks: review"
-        in captured.err
-    )
+    assert "Session unavailable: storage does not support the required native lock" in captured.err
 
 
 def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2002,6 +2093,28 @@ def test_cli_helpers_fail_closed_on_malformed_inputs(
     assert _supports_full_screen_terminal()
     monkeypatch.setenv("TERM", "dumb")
     assert not _supports_full_screen_terminal()
+
+
+def _audit_key_pair(root: Path) -> tuple[Path, Path]:
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = Ed25519PrivateKey.generate()
+    private_path = root / "private.pem"
+    public_path = root / "public.pem"
+    private_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    private_path.chmod(0o600)
+    public_path.write_bytes(
+        key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    return private_path, public_path
 
 
 def _community_skill(tmp_path: Path) -> Path:

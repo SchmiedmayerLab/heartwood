@@ -21,7 +21,7 @@ A Heartwood deployment combines a versioned application artifact with platform s
 | Models | Provider catalogs, Heartwood-managed inference planning, route-policy evaluation | Approved endpoints, agreements, accounts, quotas, and data eligibility |
 | Compute | llama.cpp/vLLM launch contracts and Slurm/provisioned adapters | CPU/GPU capacity, drivers, scheduler, isolation, and cost controls |
 | Network | Deny-by-default model-route policy and strict declared ingress validation | Enforced egress, ingress authentication and authorization, proxy header sanitation, TLS, DNS, and segmentation |
-| Evidence | Session events, tamper-evident audit chain, scrubbed export, CI artifacts | Central monitoring, incident response, records policy, and compliance evidence |
+| Evidence | Session events, tamper-evident audit chain, scrubbed export, signed checkpoint format, CI artifacts | Signing-key trust, authoritative storage, retention enforcement, central monitoring, incident response, and compliance evidence |
 
 Heartwood policy is defense in depth and does not replace network enforcement.
 The browser service must remain on loopback or behind an authenticated platform proxy configured through the trusted ingress contract.
@@ -68,6 +68,7 @@ Before real data, use a synthetic project to verify:
 9. no secret values in configuration, events, logs, or exports; and
 10. ingress host, origin, forwarding, prefix, and source rejection behavior;
 11. the declared model-credential boundary and action-policy restriction; and
-12. enforced network behavior, including a no-network Heartwood-managed inference test when offline operation is claimed.
+12. enforced network behavior, including a no-network Heartwood-managed inference test when offline operation is claimed; and
+13. signed checkpoint creation, external retention, independent verification, and synthetic restore.
 
 Record live validation evidence outside public user documentation and never include protected data in a fixture or transcript.

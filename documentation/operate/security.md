@@ -103,6 +103,10 @@ Review Skill source and declared tools, install only through an approved path, a
 
 The audit log is hash-chained and export is scrubbed, but operational metadata can still be sensitive.
 Store, retain, share, and delete audit artifacts under the same reviewed records policy as the surrounding project.
+Normal project exports remain replaceable by the project owner.
+Where authoritative evidence is required, create a signed checkpoint outside the project and verify it against a public key obtained through a separate trusted channel.
+The signature authenticates the checkpoint statement and audit content; it does not enforce retention, establish institutional approval, or prove that an intact chain was checkpointed before an earlier suffix was removed.
+See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
 ## Recommended Controls
 

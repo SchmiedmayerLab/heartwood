@@ -12,4 +12,7 @@ SPDX-License-Identifier: MIT
 
 Hash-chained audit logging for Heartwood sessions.
 
-The package persists versioned `AuditEvent` records as newline-delimited JSON, computes deterministic event hashes, and verifies existing logs before resume or export. It stores only structured event metadata; callers decide which payload fields are safe to record.
+The package persists versioned `AuditEvent` records as recoverable JSON Lines, computes deterministic event hashes, scrubs sensitive payload fields, and fully verifies logs before replay or export.
+It also creates and verifies canonical Ed25519-signed checkpoints for deployment-owned retention outside an agent project.
+
+Domain callers remain responsible for emitting only the minimum operational metadata needed for review.

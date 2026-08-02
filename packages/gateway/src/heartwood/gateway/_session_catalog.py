@@ -8,15 +8,10 @@
 
 from __future__ import annotations
 
-import json
-import os
 import secrets
-import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO
 
 from heartwood.audit import AuditIntegrityError
 from heartwood.core_adapter import (
@@ -25,9 +20,20 @@ from heartwood.core_adapter import (
     SessionRecoveryError,
     SessionStoreBoundaryError,
 )
+from heartwood.persistence import (
+    PERSISTENCE_MIGRATIONS,
+    SESSION_METADATA_KIND,
+    SESSION_METADATA_VERSION,
+    DurableFileError,
+    MigrationError,
+    NativeLockUnavailableError,
+    native_file_lock,
+    read_private_json,
+    write_private_json_atomic,
+)
 from heartwood.session import EventKind, SessionEvent
 
-_SCHEMA_VERSION = "heartwood.session-metadata.v1"
+_SCHEMA_VERSION = SESSION_METADATA_VERSION
 _MAX_TITLE_LENGTH = 120
 DEFAULT_SESSION_ID = "session-main"
 
@@ -98,16 +104,17 @@ class SessionCatalog:
         store.session_dir.chmod(0o700)
         events, recovery_required = _catalog_events(store)
         metadata_path = store.session_dir / "metadata.json"
-        if metadata_path.exists():
-            metadata = _read_metadata(metadata_path)
-        else:
-            now = _utc_timestamp()
-            metadata = _SessionMetadata(
-                title=_validate_title(title or session_id),
-                created_at=events[0].occurred_at if events else now,
-                updated_at=events[-1].occurred_at if events else now,
-            )
-            _write_metadata(metadata_path, metadata)
+        with native_file_lock(store.session_dir / ".metadata.lock"):
+            if metadata_path.exists():
+                metadata = _read_metadata(metadata_path)
+            else:
+                now = _utc_timestamp()
+                metadata = _SessionMetadata(
+                    title=_validate_title(title or session_id),
+                    created_at=events[0].occurred_at if events else now,
+                    updated_at=events[-1].occurred_at if events else now,
+                )
+                _write_metadata(metadata_path, metadata)
         return _summary(
             store,
             metadata,
@@ -133,6 +140,8 @@ class SessionCatalog:
                 continue
             try:
                 summaries.append(self.ensure(candidate.name))
+            except NativeLockUnavailableError:
+                summaries.append(_unavailable_summary(candidate))
             except (SessionCatalogError, SessionStoreBoundaryError):
                 continue
         return tuple(
@@ -150,13 +159,15 @@ class SessionCatalog:
             msg = f"unknown session: {session_id}"
             raise SessionNotFoundError(msg)
         self.ensure(session_id)
-        current = _read_metadata(store.session_dir / "metadata.json")
-        metadata = _SessionMetadata(
-            title=_validate_title(title),
-            created_at=current.created_at,
-            updated_at=_utc_timestamp(),
-        )
-        _write_metadata(store.session_dir / "metadata.json", metadata)
+        metadata_path = store.session_dir / "metadata.json"
+        with native_file_lock(store.session_dir / ".metadata.lock"):
+            current = _read_metadata(metadata_path)
+            metadata = _SessionMetadata(
+                title=_validate_title(title),
+                created_at=current.created_at,
+                updated_at=_utc_timestamp(),
+            )
+            _write_metadata(metadata_path, metadata)
         events, recovery_required = _catalog_events(store)
         return _summary(
             store,
@@ -182,6 +193,31 @@ def _summary(
         created_at=created_at,
         updated_at=updated_at,
         event_count=len(events),
+    )
+
+
+def _unavailable_summary(session_dir: Path) -> SessionSummary:
+    metadata_path = session_dir / "metadata.json"
+    if metadata_path.exists():
+        metadata = _read_metadata(metadata_path)
+    else:
+        timestamp = (
+            datetime.fromtimestamp(session_dir.stat().st_mtime, UTC)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+        metadata = _SessionMetadata(
+            title=session_dir.name,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+    return SessionSummary(
+        session_id=session_dir.name,
+        title=metadata.title,
+        status="recovery-required",
+        created_at=metadata.created_at,
+        updated_at=metadata.updated_at,
+        event_count=0,
     )
 
 
@@ -261,12 +297,14 @@ def _validate_title(value: str) -> str:
 
 def _read_metadata(path: Path) -> _SessionMetadata:
     try:
-        with _open_private_read(path) as file:
-            payload = json.load(file)
-    except (OSError, json.JSONDecodeError) as error:
+        payload = PERSISTENCE_MIGRATIONS.migrate(
+            SESSION_METADATA_KIND,
+            read_private_json(path),
+        ).payload
+    except (DurableFileError, MigrationError, OSError) as error:
         msg = f"unable to load session metadata {path}: {error}"
         raise SessionCatalogError(msg) from error
-    if not isinstance(payload, dict) or payload.get("schema_version") != _SCHEMA_VERSION:
+    if payload.get("schema_version") != _SCHEMA_VERSION:
         msg = f"unsupported session metadata in {path}"
         raise SessionCatalogError(msg)
     title = payload.get("title")
@@ -289,31 +327,7 @@ def _write_metadata(path: Path, metadata: _SessionMetadata) -> None:
         "created_at": metadata.created_at,
         "updated_at": metadata.updated_at,
     }
-    descriptor, temporary_name = tempfile.mkstemp(prefix=".metadata-", dir=path.parent)
-    temporary_path = Path(temporary_name)
-    try:
-        file = os.fdopen(descriptor, "w", encoding="utf-8")
-        descriptor = -1
-        with file:
-            os.fchmod(file.fileno(), 0o600)
-            json.dump(payload, file, separators=(",", ":"))
-            file.write("\n")
-            file.flush()
-            os.fsync(file.fileno())
-        temporary_path.replace(path)
-        path.chmod(0o600)
-    except Exception:
-        if descriptor >= 0:
-            with suppress(OSError):
-                os.close(descriptor)
-        temporary_path.unlink(missing_ok=True)
-        raise
-
-
-def _open_private_read(path: Path) -> TextIO:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    return os.fdopen(descriptor, encoding="utf-8")
+    write_private_json_atomic(path, payload)
 
 
 def _utc_now() -> datetime:

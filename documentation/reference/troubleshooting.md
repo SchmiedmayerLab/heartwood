@@ -304,6 +304,23 @@ If Heartwood reports that a command was interrupted after acceptance, replay the
 Then continue in a new session; the interrupted session remains read-only so an uncertain action cannot be repeated.
 Do not edit or remove files below the session's `.commands/` directory or its recovery journal.
 
+## Audit Verification and Checkpoints
+
+Run the full session check before transferring evidence:
+
+```bash
+heartwood --session-id session-main audit verify
+```
+
+If verification fails, stop mutating that session and preserve the complete project state for authorized review.
+Do not edit an audit line, remove a recovery journal, or recreate a missing hash.
+
+A checkpoint output and signing key must be outside the Heartwood project.
+Use an owner-only Ed25519 private key, a new output directory, a valid retention date on or after checkpoint creation, and storage that supports native process-shared locks.
+Verify a restored bundle with the independently retained public key before relying on it.
+
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete workflow and the limits of the signed retention declaration.
+
 ## Collect Safe Diagnostics
 
 Share the Heartwood version, `heartwood doctor --json`, platform, image tag or digest, failing `HW-*` code, and a minimal synthetic reproduction.

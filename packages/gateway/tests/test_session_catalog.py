@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import errno
 import json
-import os
 import stat
 import subprocess
 import sys
@@ -21,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import heartwood.core_adapter._state as session_state
+import heartwood.persistence._files as persistence_files
 from heartwood.audit import AuditLog
 from heartwood.core_adapter import FileSessionStore, SessionService
 from heartwood.gateway import (
@@ -82,6 +82,28 @@ def test_catalog_creates_lists_and_renames_private_session_metadata(tmp_path: Pa
     session_dir = tmp_path / "sessions" / created.session_id
     assert stat.S_IMODE(session_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE((session_dir / "metadata.json").stat().st_mode) == 0o600
+
+
+def test_checked_in_session_metadata_compatibility_fixture_loads(tmp_path: Path) -> None:
+    session_dir = tmp_path / "sessions" / "session-1"
+    session_dir.mkdir(parents=True)
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "packages"
+        / "persistence"
+        / "tests"
+        / "fixtures"
+        / "session-metadata-v1.json"
+    )
+    (session_dir / "metadata.json").write_text(
+        fixture.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    summary = SessionCatalog(tmp_path / "sessions").get("session-1")
+
+    assert summary.title == "Synthetic session"
+    assert summary.created_at == "2026-08-02T12:00:00Z"
 
 
 def test_catalog_discovers_paired_event_stores_and_derives_waiting_state(tmp_path: Path) -> None:
@@ -297,29 +319,29 @@ def test_catalog_skips_corrupt_metadata_without_hiding_other_sessions(tmp_path: 
         catalog.get("corrupt-session")
 
 
-def test_catalog_closes_temporary_descriptor_when_metadata_open_fails(
+def test_catalog_recovers_after_interrupted_metadata_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    closed_descriptors: list[int] = []
-    real_close = os.close
+    original_write_all = persistence_files._write_all
 
-    def fail_fdopen(*_args: object, **_kwargs: object) -> None:
-        raise OSError("synthetic open failure")
+    def fail_write(descriptor: int, content: bytes, *, operation: str) -> None:
+        if operation == "atomic write":
+            original_write_all(descriptor, content[:1], operation=operation)
+            raise OSError("synthetic write failure")
+        original_write_all(descriptor, content, operation=operation)
 
-    def record_close(descriptor: int) -> None:
-        closed_descriptors.append(descriptor)
-        real_close(descriptor)
+    monkeypatch.setattr(persistence_files, "_write_all", fail_write)
 
-    monkeypatch.setattr("heartwood.gateway._session_catalog.os.fdopen", fail_fdopen)
-    monkeypatch.setattr("heartwood.gateway._session_catalog.os.close", record_close)
-
-    with pytest.raises(OSError, match="synthetic open failure"):
+    with pytest.raises(OSError, match="synthetic write failure"):
         SessionCatalog(tmp_path).create()
 
-    assert closed_descriptors
     session_dir = next(tmp_path.iterdir())
-    assert list(session_dir.glob(".metadata-*")) == []
+    assert not (session_dir / "metadata.json").exists()
+    assert not tuple(session_dir.glob(".metadata.json-*"))
+
+    monkeypatch.undo()
+    assert SessionCatalog(tmp_path).get(session_dir.name).status == "empty"
 
 
 def test_catalog_rejects_invalid_titles_and_unknown_renames(tmp_path: Path) -> None:
