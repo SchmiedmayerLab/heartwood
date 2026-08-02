@@ -174,7 +174,7 @@ function removeFieldTitles(value, propertyMap = false) {
   );
 }
 
-function minimizeRuntimeSchema(value) {
+function minimizeRuntimeSchema(value, propertyMap = false) {
   if (Array.isArray(value)) {
     return value.map((item) => minimizeRuntimeSchema(item));
   }
@@ -184,7 +184,12 @@ function minimizeRuntimeSchema(value) {
 
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => key !== "default" && key !== "description")
-      .map(([key, item]) => [key, minimizeRuntimeSchema(item)]),
+      .filter(
+        ([key]) => propertyMap || (key !== "default" && key !== "description"),
+      )
+      .map(([key, item]) => [
+        key,
+        minimizeRuntimeSchema(item, !propertyMap && key === "properties"),
+      ]),
   );
 }

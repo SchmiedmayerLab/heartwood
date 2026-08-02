@@ -380,6 +380,7 @@ export const sessionProjectionJsonSchema = {
     ProjectionTaskActionDetails: {
       additionalProperties: false,
       properties: {
+        description: { anyOf: [{ type: "string" }, { type: "null" }] },
         kind: { const: "task", type: "string" },
         prompt: { anyOf: [{ type: "string" }, { type: "null" }] },
         resume: { anyOf: [{ type: "string" }, { type: "null" }] },

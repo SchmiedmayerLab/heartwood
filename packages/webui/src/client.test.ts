@@ -419,6 +419,31 @@ describe("GatewayClient", () => {
     ).resolves.toEqual({ events: [], projection });
   });
 
+  it("accepts projection fields named like JSON Schema annotations", async () => {
+    const action = syntheticAction({
+      details: {
+        kind: "task",
+        description: "Review the cohort summary",
+        prompt: "Check the generated result.",
+        subagentType: "research-reviewer",
+        resume: null,
+      },
+    });
+    const projection = syntheticProjection({ actions: [action] });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(projectionResponse([], projection))),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).resolves.toEqual({ events: [], projection });
+  });
+
   it("enforces canonical numeric projection constraints at runtime", async () => {
     const malformed = {
       ...syntheticProjection(),
