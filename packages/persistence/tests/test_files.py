@@ -265,7 +265,7 @@ def test_directory_sync_ignores_only_unsupported_operations(
     def unsupported(*_args: object, **_kwargs: object) -> None:
         raise OSError(errno.ENOTSUP, "synthetic unsupported directory sync")
 
-    monkeypatch.setattr(_files.os, operation, unsupported)
+    monkeypatch.setattr(f"heartwood.persistence._files.os.{operation}", unsupported)
 
     _files.fsync_directory(tmp_path)
 
@@ -277,7 +277,7 @@ def test_directory_sync_propagates_storage_failures(
     def failed_sync(_descriptor: int) -> None:
         raise OSError(errno.EIO, "synthetic storage failure")
 
-    monkeypatch.setattr(_files.os, "fsync", failed_sync)
+    monkeypatch.setattr("heartwood.persistence._files.os.fsync", failed_sync)
 
     with pytest.raises(OSError, match="synthetic storage failure"):
         _files.fsync_directory(tmp_path)
