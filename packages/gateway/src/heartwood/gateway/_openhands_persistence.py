@@ -27,6 +27,7 @@ from heartwood.persistence import (
     DurableFileError,
     MigrationError,
     MigrationResult,
+    native_file_lock,
     read_private_json,
     read_private_text,
     write_private_bytes_atomic,
@@ -36,6 +37,7 @@ from heartwood.persistence import (
 
 _CONTENT_POLICY = "heartwood.openhands-content-minimized.v1"
 _MARKER_NAME = ".heartwood-persistence.json"
+_MIGRATION_LOCK_SUFFIX = ".heartwood-migration.lock"
 _EVENT_FILE = re.compile(r"^event-(?P<index>[0-9]{5,})-[0-9A-Fa-f-]{8,}\.json$")
 
 _SAFE_ERROR_DETAILS = {
@@ -65,7 +67,12 @@ class ContentMinimizedLocalFileStore(LocalFileStore):
     ) -> None:
         super().__init__(root, cache_limit_size, cache_memory_size)
         self._heartwood_write_lock = RLock()
-        self._ensure_compatible_state()
+        persistence_root = Path(self.root)
+        migration_lock = persistence_root.with_name(
+            f".{persistence_root.name}{_MIGRATION_LOCK_SUFFIX}"
+        )
+        with native_file_lock(migration_lock, secure_parent=False):
+            self._ensure_compatible_state()
 
     def write(self, path: str, contents: str | bytes) -> None:
         """Atomically write one OpenHands record and keep the upstream cache coherent."""
@@ -81,6 +88,7 @@ class ContentMinimizedLocalFileStore(LocalFileStore):
                 self.cache[str(full_path)] = contents
             else:
                 write_private_bytes_atomic(full_path, contents)
+                self.cache.pop(str(full_path), None)
 
     def _ensure_compatible_state(self) -> None:
         root = Path(self.root)

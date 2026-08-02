@@ -203,7 +203,7 @@ def test_registry_rejects_invalid_registration_and_migration_contracts() -> None
 def test_registry_rejects_missing_schema_and_invalid_builtin_legacy_state() -> None:
     with pytest.raises(MigrationError, match="no schema version"):
         PERSISTENCE_MIGRATIONS.migrate(PROJECT_STATE_KIND, {})
-    with pytest.raises(MigrationError, match="unsupported fields"):
+    with pytest.raises(MigrationError, match="unsupported fields") as captured:
         PERSISTENCE_MIGRATIONS.migrate(
             PROJECT_STATE_KIND,
             {
@@ -211,6 +211,7 @@ def test_registry_rejects_missing_schema_and_invalid_builtin_legacy_state() -> N
                 "private_content": "must-not-appear-in-errors",
             },
         )
+    assert "must-not-appear-in-errors" not in str(captured.value)
     with pytest.raises(MigrationError, match="no SDK version"):
         PERSISTENCE_MIGRATIONS.migrate(
             OPENHANDS_STATE_KIND,

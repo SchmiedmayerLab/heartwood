@@ -266,6 +266,20 @@ def test_external_native_lock_does_not_change_parent_permissions(tmp_path: Path)
     assert stat.S_IMODE((parent / ".checkpoint.lock").stat().st_mode) == 0o600
 
 
+def test_native_lock_timeout_is_a_per_acquisition_setting(tmp_path: Path) -> None:
+    lock_path = tmp_path / ".state.lock"
+    singleton = FileLock(
+        lock_path,
+        mode=0o600,
+        fallback_to_soft=False,
+        is_singleton=True,
+        thread_local=True,
+    )
+
+    with _files.native_file_lock(lock_path, timeout=0):
+        assert singleton.is_locked
+
+
 def test_native_lock_failure_is_explicit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable(*_args: object, **_kwargs: object) -> None:
         raise OSError("unsupported filesystem")
@@ -289,6 +303,23 @@ def test_append_recovery_journal_contains_no_uncommitted_duplicate_after_recover
         {"value": "second"},
     ]
     assert not store.journal_path.exists()
+
+
+def test_jsonl_append_reuses_the_parsed_snapshot_for_its_prefix_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LockedJsonlStore(tmp_path / "records.jsonl")
+    store.append({"value": "first"})
+
+    def unexpected_prefix_read(_path: Path, _size: int) -> str:
+        pytest.fail("normal append must not re-read the verified prefix")
+
+    monkeypatch.setattr(_files, "_sha256_prefix", unexpected_prefix_read)
+
+    store.append({"value": "second"})
+
+    assert store.read_objects() == ({"value": "first"}, {"value": "second"})
 
 
 def _append_records(path: Path, worker: int, count: int) -> None:

@@ -176,6 +176,22 @@ def test_project_context_preserves_state_when_migration_fails(tmp_path: Path) ->
     assert project.state_path.read_text(encoding="utf-8") == unsupported
 
 
+def test_project_context_does_not_relabel_incompatible_current_formats(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    state = json.loads(project.state_path.read_text(encoding="utf-8"))
+    state["formats"]["session_event"] = "heartwood.session-event.v2"
+    incompatible = json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n"
+    project.state_path.write_text(incompatible, encoding="utf-8")
+
+    with pytest.raises(ProjectStateError, match=r"unsupported \.heartwood state schema"):
+        project.initialize()
+
+    assert project.state_path.read_text(encoding="utf-8") == incompatible
+
+
 @pytest.mark.parametrize("state_contents", ["{", '{"schema_version": "unknown"}'])
 def test_project_context_rejects_invalid_state_marker(
     tmp_path: Path,

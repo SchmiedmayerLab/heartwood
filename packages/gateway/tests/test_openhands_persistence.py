@@ -9,12 +9,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 
+import heartwood.gateway._openhands_persistence as openhands_persistence
 from heartwood.gateway._openhands_persistence import (
     ContentMinimizedLocalFileStore,
     OpenHandsPersistenceError,
@@ -34,6 +37,38 @@ def test_fresh_store_records_the_owned_schema_and_sdk_version(tmp_path: Path) ->
         "openhands_sdk_version": version("openhands-sdk"),
         "schema_version": "heartwood.openhands-state.v1",
     }
+
+
+def test_store_guards_compatibility_checks_with_a_process_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "openhands"
+    lock_held = False
+    observed: list[Path] = []
+    original_ensure = ContentMinimizedLocalFileStore._ensure_compatible_state
+
+    @contextmanager
+    def observed_lock(path: Path, *, secure_parent: bool = True) -> Iterator[None]:
+        nonlocal lock_held
+        assert not secure_parent
+        observed.append(path)
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    def observed_ensure(store: ContentMinimizedLocalFileStore) -> None:
+        assert lock_held
+        original_ensure(store)
+
+    monkeypatch.setattr(openhands_persistence, "native_file_lock", observed_lock)
+    monkeypatch.setattr(ContentMinimizedLocalFileStore, "_ensure_compatible_state", observed_ensure)
+
+    ContentMinimizedLocalFileStore(str(root))
+
+    assert observed == [tmp_path / ".openhands.heartwood-migration.lock"]
 
 
 def test_unversioned_marker_migrates_atomically_to_current_schema(tmp_path: Path) -> None:
@@ -170,6 +205,17 @@ def test_store_writes_binary_state_atomically(tmp_path: Path) -> None:
     store.write("binary-state", b"synthetic\x00state")
 
     assert (root / "binary-state").read_bytes() == b"synthetic\x00state"
+
+
+def test_binary_write_invalidates_cached_text(tmp_path: Path) -> None:
+    store = ContentMinimizedLocalFileStore(str(tmp_path / "openhands"))
+    store.write("state", "cached text")
+    assert store.read("state") == "cached text"
+
+    store.write("state", b"\xff")
+
+    with pytest.raises(UnicodeDecodeError):
+        store.read("state")
 
 
 @pytest.mark.parametrize(

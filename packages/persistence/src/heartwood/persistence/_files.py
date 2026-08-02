@@ -15,6 +15,7 @@ import stat
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -183,14 +184,13 @@ def native_file_lock(
     _reject_non_regular_target(path)
     lock = FileLock(
         path,
-        timeout=timeout,
         mode=0o600,
         fallback_to_soft=False,
         is_singleton=True,
         thread_local=True,
     )
     try:
-        lock.acquire()
+        lock.acquire(timeout=timeout)
     except FileLockTimeout as error:
         raise NativeLockUnavailableError(f"timed out acquiring persistence lock: {path}") from error
     except OSError as error:
@@ -202,6 +202,13 @@ def native_file_lock(
         yield
     finally:
         lock.release()
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonlSnapshot:
+    records: tuple[dict[str, Any], ...]
+    size: int
+    sha256: str
 
 
 class LockedJsonlStore:
@@ -223,19 +230,17 @@ class LockedJsonlStore:
         """Build and append one record from a stable snapshot under the same lock."""
         with native_file_lock(self.lock_path):
             self._recover_locked()
-            records = self._read_objects_locked()
-            payload = dict(build(records))
+            snapshot = self._read_snapshot_locked()
+            payload = dict(build(snapshot.records))
             line = (
                 json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
             ).encode("utf-8")
-            offset = _regular_size(self.path)
-            prefix_sha256 = _sha256_prefix(self.path, offset)
             write_private_json_atomic(
                 self.journal_path,
                 {
                     "schema_version": "heartwood.jsonl-append.v1",
-                    "offset": offset,
-                    "prefix_sha256": prefix_sha256,
+                    "offset": snapshot.size,
+                    "prefix_sha256": snapshot.sha256,
                     "line": line.decode("utf-8"),
                     "line_sha256": hashlib.sha256(line).hexdigest(),
                 },
@@ -256,10 +261,13 @@ class LockedJsonlStore:
             return self._read_objects_locked()
 
     def _read_objects_locked(self) -> tuple[dict[str, Any], ...]:
+        return self._read_snapshot_locked().records
+
+    def _read_snapshot_locked(self) -> _JsonlSnapshot:
         try:
             content = read_private_text(self.path)
         except FileNotFoundError:
-            return ()
+            content = ""
         if content and not content.endswith("\n"):
             raise AppendRecoveryError(f"JSON Lines record is incomplete: {self.path}")
         objects: list[dict[str, Any]] = []
@@ -273,7 +281,12 @@ class LockedJsonlStore:
             if not isinstance(payload, dict):
                 raise AppendRecoveryError(f"JSON Lines record must be an object: {self.path}")
             objects.append(payload)
-        return tuple(objects)
+        encoded = content.encode("utf-8")
+        return _JsonlSnapshot(
+            records=tuple(objects),
+            size=len(encoded),
+            sha256=hashlib.sha256(encoded).hexdigest(),
+        )
 
     def _recover_locked(self) -> bool:
         if not self.journal_path.exists():
@@ -358,16 +371,6 @@ def _write_all(descriptor: int, content: bytes, *, operation: str) -> None:
         if written <= 0:  # pragma: no cover - operating-system invariant
             raise OSError(f"durable {operation} made no progress")
         remaining = remaining[written:]
-
-
-def _regular_size(path: Path) -> int:
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return 0
-    if not stat.S_ISREG(metadata.st_mode):
-        raise DurableFileError(f"persisted path must be a regular file: {path}")
-    return metadata.st_size
 
 
 def _read_suffix(path: Path, offset: int) -> bytes:

@@ -16,7 +16,7 @@ SPDX-License-Identifier: MIT
 : A structured way for software components to communicate.
 
 **Audit checkpoint**
-: A canonical audit export signed by a deployment and bound to its session, origin, creation time, and retention declaration.
+: A canonical audit export with metadata signed by a deployment-owned Ed25519 key and bound to its deployment identifier, session, creation time, and retention declaration.
 
 **Audit export**
 : A scrubbed JSON Lines representation of the tamper-evident session audit chain.

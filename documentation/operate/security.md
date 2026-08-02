@@ -105,7 +105,7 @@ The audit log is hash-chained and export is scrubbed, but operational metadata c
 Store, retain, share, and delete audit artifacts under the same reviewed records policy as the surrounding project.
 Normal project exports remain replaceable by the project owner.
 Where authoritative evidence is required, create a signed checkpoint outside the project and verify it against a public key obtained through a separate trusted channel.
-The signature authenticates the checkpoint statement and audit content; it does not enforce retention, establish institutional approval, or prove that an intact chain was checkpointed before an earlier suffix was removed.
+The signature authenticates the supplied checkpoint statement and audit content; it does not enforce retention, establish institutional approval, or prove that no events were removed before checkpoint creation.
 See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
 ## Recommended Controls

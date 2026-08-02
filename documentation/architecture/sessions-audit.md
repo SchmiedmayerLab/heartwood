@@ -72,7 +72,8 @@ After process loss, a persisted OpenHands `RUNNING` state is reported as an unkn
 
 ## Persisted Schema Compatibility
 
-Every independently persisted Heartwood envelope declares a schema version.
+Every current independently persisted Heartwood envelope declares a schema version.
+Supported legacy inputs are migrated before typed validation.
 The project state marker records the current versions for project configuration, session events and metadata, command receipts, commit recovery, writer ownership, audit events, Skill metadata, and OpenHands state.
 A shared migration registry provides one deterministic, forward-only path for each supported older version without mutating its input.
 
