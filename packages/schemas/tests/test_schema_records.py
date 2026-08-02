@@ -168,6 +168,11 @@ def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> 
     with pytest.raises(ValidationError):
         AuditCheckpointStatement.model_validate(invalid)
 
+    invalid_checkpoint = checkpoint.model_dump(mode="json")
+    invalid_checkpoint["signature"] = "not-base64!"
+    with pytest.raises(ValidationError, match="canonical Base64"):
+        AuditCheckpoint.model_validate(invalid_checkpoint)
+
 
 def test_detector_evidence_bounds_confidence() -> None:
     DetectorEvidence(

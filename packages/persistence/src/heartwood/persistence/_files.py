@@ -165,6 +165,7 @@ def fsync_directory(path: Path) -> None:
     try:
         os.fsync(descriptor)
     except OSError:
+        # Some network filesystems permit directory opens but not directory fsync.
         pass
     finally:
         os.close(descriptor)

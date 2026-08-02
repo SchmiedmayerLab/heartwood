@@ -307,6 +307,26 @@ def test_catalog_keeps_unsupported_session_storage_visible(
     assert summary.event_count == 0
 
 
+def test_catalog_keeps_corrupt_metadata_visible_when_native_locks_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def native_lock_unavailable(_descriptor: int) -> bool:
+        raise OSError(errno.ENOSYS, "synthetic unsupported filesystem")
+
+    session_dir = tmp_path / "session-corrupt"
+    session_dir.mkdir()
+    (session_dir / "metadata.json").write_text("{", encoding="utf-8")
+    monkeypatch.setattr("filelock._unix._lock_fd_nonblocking", native_lock_unavailable)
+
+    summary = SessionCatalog(tmp_path).list()[0]
+
+    assert summary.session_id == "session-corrupt"
+    assert summary.title == "session-corrupt"
+    assert summary.status == "recovery-required"
+    assert summary.event_count == 0
+
+
 def test_catalog_skips_corrupt_metadata_without_hiding_other_sessions(tmp_path: Path) -> None:
     catalog = SessionCatalog(tmp_path)
     valid = catalog.create("Valid session")

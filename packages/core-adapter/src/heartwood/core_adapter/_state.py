@@ -13,11 +13,11 @@ import json
 import os
 import socket
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, overload
+from typing import Any
 
 from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
@@ -256,11 +256,11 @@ class FileSessionStore:
 
         events, events_truncate_at = _read_recoverable_records(
             self.events_path,
-            SessionEvent,
+            _session_event_json,
         )
         audit_events, audit_truncate_at = _read_recoverable_records(
             self.audit_path,
-            AuditEvent,
+            _audit_event_json,
         )
         _verify_recovery_prefix(audit_events, events)
         sequence = event.sequence
@@ -545,24 +545,10 @@ def _read_private_json(path: Path) -> dict[str, Any]:
     return read_private_json(path)
 
 
-@overload
-def _read_recoverable_records(
+def _read_recoverable_records[Record](
     path: Path,
-    record_type: type[SessionEvent],
-) -> tuple[tuple[SessionEvent, ...], int | None]: ...
-
-
-@overload
-def _read_recoverable_records(
-    path: Path,
-    record_type: type[AuditEvent],
-) -> tuple[tuple[AuditEvent, ...], int | None]: ...
-
-
-def _read_recoverable_records(
-    path: Path,
-    record_type: type[SessionEvent] | type[AuditEvent],
-) -> tuple[tuple[SessionEvent, ...] | tuple[AuditEvent, ...], int | None]:
+    parser: Callable[[str], Record],
+) -> tuple[tuple[Record, ...], int | None]:
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
@@ -581,9 +567,7 @@ def _read_recoverable_records(
         content = content[:boundary]
     try:
         lines = tuple(line for line in content.decode("utf-8").splitlines() if line)
-        if record_type is SessionEvent:
-            return tuple(_session_event_json(line) for line in lines), truncate_at
-        return tuple(_audit_event_json(line) for line in lines), truncate_at
+        return tuple(parser(line) for line in lines), truncate_at
     except (UnicodeDecodeError, ValueError) as error:
         raise SessionRecoveryError(f"unable to recover session records in {path}") from error
 

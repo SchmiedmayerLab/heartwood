@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime
@@ -194,7 +195,7 @@ class AuditCheckpoint(_HeartwoodRecord):
     def _validate_signature(cls, value: str) -> str:
         try:
             decoded = base64.b64decode(value, validate=True)
-        except ValueError as error:
+        except binascii.Error as error:
             raise ValueError("signature must be canonical Base64") from error
         if len(decoded) != 64 or base64.b64encode(decoded).decode("ascii") != value:
             raise ValueError("signature must be a canonical Ed25519 signature")

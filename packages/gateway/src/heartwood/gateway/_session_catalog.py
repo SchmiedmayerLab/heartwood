@@ -198,14 +198,17 @@ def _summary(
 
 def _unavailable_summary(session_dir: Path) -> SessionSummary:
     metadata_path = session_dir / "metadata.json"
-    if metadata_path.exists():
+    try:
         metadata = _read_metadata(metadata_path)
-    else:
-        timestamp = (
-            datetime.fromtimestamp(session_dir.stat().st_mtime, UTC)
-            .isoformat(timespec="seconds")
-            .replace("+00:00", "Z")
-        )
+    except SessionCatalogError:
+        try:
+            timestamp = (
+                datetime.fromtimestamp(session_dir.stat().st_mtime, UTC)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
+        except OSError:
+            timestamp = _utc_timestamp()
         metadata = _SessionMetadata(
             title=session_dir.name,
             created_at=timestamp,

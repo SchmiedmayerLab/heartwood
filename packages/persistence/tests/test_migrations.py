@@ -179,7 +179,7 @@ def test_registry_rejects_invalid_registration_and_migration_contracts() -> None
             "missing",
             source_version="record.v1",
             target_version="record.v2",
-            migrate=lambda payload: dict(payload),
+            migrate=dict,
         )
 
     registry.register_kind("record", current_version="record.v2")
@@ -188,7 +188,7 @@ def test_registry_rejects_invalid_registration_and_migration_contracts() -> None
             "record",
             source_version="record.v1",
             target_version="record.v1",
-            migrate=lambda payload: dict(payload),
+            migrate=dict,
         )
     registry.register(
         "record",

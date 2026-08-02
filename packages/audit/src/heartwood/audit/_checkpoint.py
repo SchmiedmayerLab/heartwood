@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -149,10 +150,11 @@ def verify_audit_checkpoint(
     if checkpoint.signing_key_id != _key_id(trusted_key):
         raise AuditCheckpointError("audit checkpoint signing key does not match the trusted key")
     try:
-        trusted_key.verify(
-            base64.b64decode(checkpoint.signature, validate=True),
-            _statement_bytes(checkpoint.statement),
-        )
+        signature = base64.b64decode(checkpoint.signature, validate=True)
+    except binascii.Error as error:
+        raise AuditCheckpointError("audit checkpoint signature is invalid") from error
+    try:
+        trusted_key.verify(signature, _statement_bytes(checkpoint.statement))
     except (InvalidSignature, ValueError) as error:
         raise AuditCheckpointError("audit checkpoint signature is invalid") from error
     return AuditCheckpointVerification(checkpoint=checkpoint, audit=verification)

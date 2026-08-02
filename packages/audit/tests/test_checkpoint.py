@@ -135,6 +135,20 @@ def test_checkpoint_verification_rejects_malformed_bundle_and_statement(
         verify_audit_checkpoint(bundle=bundle, public_key=public_key)
 
 
+def test_checkpoint_verification_rejects_non_base64_signature(tmp_path: Path) -> None:
+    bundle, public_key = _checkpoint_bundle(tmp_path)
+    checkpoint_path = bundle / CHECKPOINT_FILENAME
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["signature"] = "not-base64!"
+    checkpoint_path.write_text(
+        json.dumps(checkpoint, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AuditCheckpointError, match="bundle is malformed"):
+        verify_audit_checkpoint(bundle=bundle, public_key=public_key)
+
+
 def test_checkpoint_requires_private_key_permissions(tmp_path: Path) -> None:
     private_key, _public_key = _write_key_pair(tmp_path)
     private_key.chmod(0o640)
