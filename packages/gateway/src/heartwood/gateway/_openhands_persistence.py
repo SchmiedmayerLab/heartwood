@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 from importlib.metadata import version
@@ -163,7 +164,7 @@ def _validate_and_minimize_existing_state(
     replacements: list[tuple[Path, str]] = []
     event_indices: list[int] = []
     for path in sorted(root.rglob("*")):
-        metadata = path.lstat()
+        metadata = _entry_metadata(path)
         if stat.S_ISLNK(metadata.st_mode) or not (
             stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
         ):
@@ -171,10 +172,10 @@ def _validate_and_minimize_existing_state(
                 "OpenHands persistence contains a symbolic link or special file"
             )
         if stat.S_ISDIR(metadata.st_mode):
-            path.chmod(0o700)
+            _set_entry_mode(path, 0o700)
             continue
         relative = path.relative_to(root)
-        path.chmod(0o600)
+        _set_entry_mode(path, 0o600)
         if marker_path is not None and path == marker_path:
             continue
         if relative == Path("base_state.json"):
@@ -200,6 +201,20 @@ def _validate_and_minimize_existing_state(
         raise OpenHandsPersistenceError("OpenHands event sequence contains a gap")
     for path, minimized in replacements:
         write_private_text_atomic(path, minimized)
+
+
+def _entry_metadata(path: Path) -> os.stat_result:
+    try:
+        return path.lstat()
+    except OSError as error:
+        raise OpenHandsPersistenceError("OpenHands persistence entry is unavailable") from error
+
+
+def _set_entry_mode(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except OSError as error:
+        raise OpenHandsPersistenceError("OpenHands persistence entry is unavailable") from error
 
 
 def _minimize_event(contents: str) -> str:

@@ -173,6 +173,15 @@ def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> 
     with pytest.raises(ValidationError, match="canonical Base64"):
         AuditCheckpoint.model_validate(invalid_checkpoint)
 
+    early_retention = statement.model_dump(mode="json")
+    early_retention["retention"]["retain_until"] = "2026-08-01"
+    with pytest.raises(ValidationError, match="earlier than created_at"):
+        AuditCheckpointStatement.model_validate(early_retention)
+
+    invalid_checkpoint["signature"] = base64.b64encode(bytes(32)).decode("ascii")
+    with pytest.raises(ValidationError, match="canonical Ed25519"):
+        AuditCheckpoint.model_validate(invalid_checkpoint)
+
 
 def test_detector_evidence_bounds_confidence() -> None:
     DetectorEvidence(

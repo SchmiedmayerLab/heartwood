@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -17,12 +18,32 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from heartwood.gateway import ProjectContext, ProjectStateError, SessionGateway
 
 
-def test_gateway_creates_and_verifies_checkpoint_outside_project(tmp_path: Path) -> None:
+@pytest.fixture
+def gateway_factory() -> Iterator[Callable[[Path], SessionGateway]]:
+    gateways: list[SessionGateway] = []
+
+    def create(project_root: Path) -> SessionGateway:
+        gateway = SessionGateway(
+            project=ProjectContext(project_root),
+            backend_id="deterministic",
+        )
+        gateways.append(gateway)
+        return gateway
+
+    yield create
+    for gateway in gateways:
+        gateway.stop()
+
+
+def test_gateway_creates_and_verifies_checkpoint_outside_project(
+    tmp_path: Path,
+    gateway_factory: Callable[[Path], SessionGateway],
+) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
     deployment_root = tmp_path / "deployment"
     private_key, public_key = _write_key_pair(deployment_root)
-    gateway = SessionGateway(project=ProjectContext(project_root), backend_id="deterministic")
+    gateway = gateway_factory(project_root)
     bundle = deployment_root / "session-main"
 
     created = gateway.create_audit_checkpoint(
@@ -39,19 +60,19 @@ def test_gateway_creates_and_verifies_checkpoint_outside_project(tmp_path: Path)
     assert verified == created
     assert current == created.audit
     assert created.checkpoint.statement.audit_event_count > 0
-    gateway.stop()
 
 
 @pytest.mark.parametrize("path_kind", ["output", "signing-key"])
 def test_gateway_rejects_checkpoint_resources_inside_agent_project(
     tmp_path: Path,
     path_kind: str,
+    gateway_factory: Callable[[Path], SessionGateway],
 ) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
     deployment_root = tmp_path / "deployment"
     private_key, _public_key = _write_key_pair(deployment_root)
-    gateway = SessionGateway(project=ProjectContext(project_root), backend_id="deterministic")
+    gateway = gateway_factory(project_root)
     output = deployment_root / "checkpoint"
     if path_kind == "output":
         output = project_root / "checkpoint"
@@ -71,13 +92,15 @@ def test_gateway_rejects_checkpoint_resources_inside_agent_project(
         )
 
     assert not gateway.project.sessions_dir.exists()
-    gateway.stop()
 
 
-def test_gateway_copy_rejects_reserved_state_and_final_symlink(tmp_path: Path) -> None:
+def test_gateway_copy_rejects_reserved_state_and_final_symlink(
+    tmp_path: Path,
+    gateway_factory: Callable[[Path], SessionGateway],
+) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
-    gateway = SessionGateway(project=ProjectContext(project_root), backend_id="deterministic")
+    gateway = gateway_factory(project_root)
     gateway.create_audit_checkpoint(
         session_id="main",
         output=tmp_path / "deployment" / "checkpoint",
@@ -102,7 +125,6 @@ def test_gateway_copy_rejects_reserved_state_and_final_symlink(tmp_path: Path) -
     directory.mkdir()
     with pytest.raises(ProjectStateError, match="write the audit copy safely"):
         gateway.copy_audit_export("main", directory)
-    gateway.stop()
 
 
 def _write_key_pair(root: Path) -> tuple[Path, Path]:

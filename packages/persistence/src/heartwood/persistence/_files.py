@@ -126,6 +126,7 @@ def append_private_bytes(path: Path, content: bytes) -> None:
     """Durably append bytes to an owner-only regular file."""
     _prepare_parent(path)
     _reject_non_regular_target(path)
+    created = not path.exists()
     descriptor = _open_regular(
         path,
         os.O_APPEND | os.O_CREAT | os.O_WRONLY,
@@ -137,6 +138,8 @@ def append_private_bytes(path: Path, content: bytes) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    if created:
+        fsync_directory(path.parent)
 
 
 def truncate_private_file(path: Path, size: int) -> None:

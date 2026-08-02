@@ -71,6 +71,7 @@ def test_empty_replay_does_not_create_session_state(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
     assert service.replay_events() == ()
+    assert service.store.verified_head() == (0, None)
     assert not service.store.session_dir.exists()
 
 

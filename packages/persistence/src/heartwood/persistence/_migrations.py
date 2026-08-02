@@ -76,9 +76,15 @@ class MigrationRegistry:
     def __init__(self) -> None:
         self._current: dict[str, str] = {}
         self._steps: dict[tuple[str, str], _MigrationStep] = {}
+        self._frozen = False
+
+    def freeze(self) -> None:
+        """Reject further changes to this registry."""
+        self._frozen = True
 
     def register_kind(self, kind: str, *, current_version: str) -> None:
         """Register the one schema version newly written for a persisted kind."""
+        self._require_mutable()
         _require_identifier(kind, "persisted kind")
         _require_identifier(current_version, "current schema version")
         existing = self._current.get(kind)
@@ -95,6 +101,7 @@ class MigrationRegistry:
         migrate: Migration,
     ) -> None:
         """Register one forward-only migration step."""
+        self._require_mutable()
         if kind not in self._current:
             raise MigrationError(f"persisted kind is not registered: {kind}")
         _require_identifier(source_version, "source schema version")
@@ -168,6 +175,10 @@ class MigrationRegistry:
                 supported.append(candidate)
         return tuple(sorted(supported))
 
+    def _require_mutable(self) -> None:
+        if self._frozen:
+            raise MigrationError("migration registry is frozen")
+
 
 def _project_state_v1_to_v2(payload: Mapping[str, object]) -> JsonObject:
     if set(payload) != {"schema_version"}:
@@ -223,6 +234,7 @@ def _build_registry() -> MigrationRegistry:
         target_version=OPENHANDS_STATE_VERSION,
         migrate=_openhands_unversioned_to_v1,
     )
+    registry.freeze()
     return registry
 
 

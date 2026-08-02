@@ -66,6 +66,7 @@ def test_project_context_serializes_concurrent_initialization(
     original_validate = ProjectContext._validate_state_root
 
     def pause_first_write(path: Path, content: str, *, secure_parent: bool = True) -> None:
+        # The state lock keeps the second initializer out of this branch.
         if path.name == ".gitignore" and not first_thread:
             first_thread.append(get_ident())
             first_write_started.set()
@@ -170,9 +171,11 @@ def test_project_context_preserves_state_when_migration_fails(tmp_path: Path) ->
     unsupported = '{"schema_version":"heartwood.project-state.v0","private":"value"}\n'
     project.state_path.write_text(unsupported, encoding="utf-8")
 
-    with pytest.raises(ProjectStateError):
+    with pytest.raises(ProjectStateError) as captured:
         project.initialize()
 
+    assert "private" not in str(captured.value)
+    assert "value" not in str(captured.value)
     assert project.state_path.read_text(encoding="utf-8") == unsupported
 
 

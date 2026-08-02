@@ -441,6 +441,8 @@ class FileSessionStore:
     ) -> tuple[tuple[SessionEvent, ...], tuple[AuditEvent, ...], AuditVerification]:
         if not self.session_dir.exists():
             verification = AuditLog(self.audit_path).verify(())
+            self._next_sequence = 0
+            self._last_audit_hash = None
             return (), (), verification
         acquired_writer = False
         try:

@@ -12,6 +12,8 @@ import errno
 import json
 import multiprocessing
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,11 +162,20 @@ def test_jsonl_read_rejects_invalid_records(
         store.read_objects()
 
 
-@pytest.mark.parametrize("failure", ["malformed", "invalid", "digest", "suffix"])
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("malformed", "journal is malformed"),
+        ("invalid", "journal is invalid"),
+        ("digest", "journal digest does not match"),
+        ("suffix", "does not match its recovery journal"),
+    ],
+)
 def test_jsonl_recovery_rejects_invalid_journal_or_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
+    message: str,
 ) -> None:
     store = LockedJsonlStore(tmp_path / "audit.jsonl")
     store.append({"sequence": 0})
@@ -192,7 +203,7 @@ def test_jsonl_recovery_rejects_invalid_journal_or_target(
             )
         store.journal_path.write_text(json.dumps(journal), encoding="utf-8")
 
-    with pytest.raises(AppendRecoveryError):
+    with pytest.raises(AppendRecoveryError, match=message):
         store.recover()
 
 
@@ -256,6 +267,21 @@ def test_external_atomic_write_does_not_change_parent_permissions(tmp_path: Path
     assert stat.S_IMODE((parent / "audit.jsonl").stat().st_mode) == 0o600
 
 
+def test_append_syncs_a_new_directory_entry_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    synchronized: list[Path] = []
+    monkeypatch.setattr(_files, "fsync_directory", synchronized.append)
+    path = tmp_path / "records.jsonl"
+
+    _files.append_private_bytes(path, b"first\n")
+    _files.append_private_bytes(path, b"second\n")
+
+    assert synchronized == [tmp_path]
+    assert path.read_bytes() == b"first\nsecond\n"
+
+
 @pytest.mark.parametrize("operation", ["open", "fsync"])
 def test_directory_sync_ignores_only_unsupported_operations(
     tmp_path: Path,
@@ -316,6 +342,35 @@ def test_native_lock_failure_is_explicit(tmp_path: Path, monkeypatch: pytest.Mon
 
     with pytest.raises(NativeLockUnavailableError, match="required native lock"):
         LockedJsonlStore(tmp_path / "records.jsonl").read_objects()
+
+
+def test_native_lock_timeout_is_explicit_across_processes(tmp_path: Path) -> None:
+    lock_path = tmp_path / ".state.lock"
+    script = """
+import sys
+from pathlib import Path
+from heartwood.persistence import NativeLockUnavailableError, native_file_lock
+
+try:
+    with native_file_lock(Path(sys.argv[1]), timeout=0):
+        pass
+except NativeLockUnavailableError as error:
+    if "timed out" not in str(error):
+        raise
+else:
+    raise AssertionError("child process unexpectedly acquired the native lock")
+"""
+
+    with _files.native_file_lock(lock_path):
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(lock_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_append_recovery_journal_contains_no_uncommitted_duplicate_after_recovery(

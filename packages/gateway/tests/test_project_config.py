@@ -84,8 +84,7 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
 
 def test_checked_in_project_config_compatibility_fixture_loads(tmp_path: Path) -> None:
     fixture = (
-        Path(__file__).resolve().parents[3]
-        / "packages"
+        Path(__file__).resolve().parents[2]
         / "persistence"
         / "tests"
         / "fixtures"

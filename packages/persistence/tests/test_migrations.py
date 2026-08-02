@@ -200,6 +200,22 @@ def test_registry_rejects_invalid_registration_and_migration_contracts() -> None
         registry.migrate("record", {"schema_version": "record.v1"})
 
 
+def test_shared_registry_is_frozen_after_construction() -> None:
+    with pytest.raises(MigrationError, match="registry is frozen"):
+        PERSISTENCE_MIGRATIONS.register_kind("new-record", current_version="record.v1")
+
+    registry = MigrationRegistry()
+    registry.register_kind("record", current_version="record.v1")
+    registry.freeze()
+    with pytest.raises(MigrationError, match="registry is frozen"):
+        registry.register(
+            "record",
+            source_version="record.v0",
+            target_version="record.v1",
+            migrate=dict,
+        )
+
+
 def test_registry_rejects_missing_schema_and_invalid_builtin_legacy_state() -> None:
     with pytest.raises(MigrationError, match="no schema version"):
         PERSISTENCE_MIGRATIONS.migrate(PROJECT_STATE_KIND, {})

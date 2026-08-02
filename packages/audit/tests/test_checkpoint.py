@@ -271,7 +271,7 @@ def test_checkpoint_rejects_invalid_input_identity_and_key_material(tmp_path: Pa
 
 
 def test_checkpoint_rejects_invalid_retention_and_unexpected_files(tmp_path: Path) -> None:
-    private_key, public_key = _write_key_pair(tmp_path)
+    private_key, _public_key = _write_key_pair(tmp_path)
     with pytest.raises(AuditCheckpointError, match="metadata is invalid"):
         create_audit_checkpoint(
             audit_content=_audit_content(tmp_path),
@@ -284,10 +284,10 @@ def test_checkpoint_rejects_invalid_retention_and_unexpected_files(tmp_path: Pat
             created_at=_CREATED_AT,
         )
 
-    bundle, _ = _checkpoint_bundle(tmp_path / "valid")
+    bundle, bundle_public_key = _checkpoint_bundle(tmp_path / "valid")
     (bundle / "unexpected.txt").write_text("not part of the checkpoint", encoding="utf-8")
     with pytest.raises(AuditCheckpointError, match="unexpected files"):
-        verify_audit_checkpoint(bundle=bundle, public_key=public_key)
+        verify_audit_checkpoint(bundle=bundle, public_key=bundle_public_key)
 
 
 def test_checkpoint_rejects_unsafe_output_parents_and_bundle_paths(tmp_path: Path) -> None:

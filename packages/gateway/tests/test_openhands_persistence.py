@@ -165,8 +165,19 @@ def test_unversioned_sdk_mismatch_does_not_rewrite_existing_state(tmp_path: Path
     assert event_path.read_bytes() == event_before
 
 
-@pytest.mark.parametrize("failure", ["gap", "malformed", "symlink"])
-def test_markerless_store_rejects_incompatible_state(tmp_path: Path, failure: str) -> None:
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("gap", "sequence contains a gap"),
+        ("malformed", "event state is malformed"),
+        ("symlink", "symbolic link or special file"),
+    ],
+)
+def test_markerless_store_rejects_incompatible_state(
+    tmp_path: Path,
+    failure: str,
+    message: str,
+) -> None:
     root = tmp_path / "openhands"
     events = root / "events"
     events.mkdir(parents=True)
@@ -185,7 +196,7 @@ def test_markerless_store_rejects_incompatible_state(tmp_path: Path, failure: st
         outside.write_text(event, encoding="utf-8")
         (events / "event-00000-12345678.json").symlink_to(outside)
 
-    with pytest.raises(OpenHandsPersistenceError):
+    with pytest.raises(OpenHandsPersistenceError, match=message):
         ContentMinimizedLocalFileStore(str(root))
 
 
@@ -222,6 +233,7 @@ def test_binary_write_invalidates_cached_text(tmp_path: Path) -> None:
     ("marker_update", "message"),
     [
         ({"unexpected": "field"}, "marker is malformed"),
+        ({"schema_version": "heartwood.openhands-state.v99"}, "schema is unsupported"),
         ({"content_policy": "unsupported"}, "content policy is unsupported"),
         ({"adopted_from": "unknown"}, "origin is unsupported"),
     ],
@@ -262,3 +274,24 @@ def test_markerless_store_rejects_unsupported_event_filename(tmp_path: Path) -> 
 
     with pytest.raises(OpenHandsPersistenceError, match="filename is unsupported"):
         ContentMinimizedLocalFileStore(str(tmp_path / "openhands"))
+
+
+def test_store_normalizes_filesystem_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "openhands"
+    root.mkdir()
+    state = root / "base_state.json"
+    state.write_text("{}", encoding="utf-8")
+    original_chmod = Path.chmod
+
+    def unavailable(path: Path, mode: int, *, follow_symlinks: bool = True) -> None:
+        if path == state:
+            raise OSError("synthetic unavailable entry")
+        original_chmod(path, mode, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "chmod", unavailable)
+
+    with pytest.raises(OpenHandsPersistenceError, match="entry is unavailable"):
+        ContentMinimizedLocalFileStore(str(root))
