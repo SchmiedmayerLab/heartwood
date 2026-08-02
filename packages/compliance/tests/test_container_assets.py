@@ -970,6 +970,16 @@ def test_current_main_action_skips_superseded_workflows(tmp_path: Path) -> None:
     assert invalid.returncode != 0
     assert "Invalid expected main revision" in invalid.stderr
 
+    invalid_current = subprocess.run(
+        ["bash", str(script), expected_sha, "invalid"],
+        check=False,
+        capture_output=True,
+        env={**os.environ, "GITHUB_OUTPUT": str(tmp_path / "invalid-current-output")},
+        text=True,
+    )
+    assert invalid_current.returncode != 0
+    assert "Unable to resolve the current main revision" in invalid_current.stderr
+
 
 def test_gpu_qualification_workflow_offers_every_candidate_configuration() -> None:
     workflow = _read(".github/workflows/gpu-qualification.yml")
