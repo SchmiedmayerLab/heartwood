@@ -134,16 +134,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check GPU moving-tag ownership
+        id: main-revision
+        uses: ./.github/actions/check-current-main
+        with:
+          expected-sha: ${{ github.sha }}
       - name: Promote validated generic and Terra tags
+        if: steps.main-revision.outputs.current == 'true'
         env:
           GIT_SHA: ${{ github.sha }}
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          current_main="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
-          if [ "${current_main}" != "${GIT_SHA}" ]; then
-            echo "refusing to move GPU channel tags from a stale main workflow" >&2
-            exit 1
-          fi
           for tuple in \
             "gpu-nvidia edge-gpu-nvidia false" \
             "terra-gpu-nvidia edge-terra-gpu-nvidia true"; do
