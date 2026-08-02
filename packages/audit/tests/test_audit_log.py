@@ -145,6 +145,12 @@ def test_malformed_audit_exports_and_lock_failures_remain_distinct(
     path.write_text("[]\n", encoding="utf-8")
     with pytest.raises(AuditIntegrityError, match="audit log is malformed"):
         AuditLog(path).read()
+    with pytest.raises(AuditIntegrityError, match="audit log is malformed"):
+        AuditLog(path).append(
+            session_id="session-1",
+            event_type="command.received",
+            occurred_at="2026-01-01T00:00:00Z",
+        )
 
     def unavailable(*_args: object, **_kwargs: object) -> None:
         raise OSError("unsupported filesystem")

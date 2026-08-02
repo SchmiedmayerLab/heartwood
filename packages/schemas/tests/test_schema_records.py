@@ -178,6 +178,15 @@ def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> 
     with pytest.raises(ValidationError, match="earlier than created_at"):
         AuditCheckpointStatement.model_validate(early_retention)
 
+    for created_at, message in (
+        ("not-a-timestamp", "valid ISO 8601 timestamp"),
+        ("2026-08-02T12:00:00", "include a timezone"),
+    ):
+        invalid_created_at = statement.model_dump(mode="json")
+        invalid_created_at["created_at"] = created_at
+        with pytest.raises(ValidationError, match=message):
+            AuditCheckpointStatement.model_validate(invalid_created_at)
+
     invalid_checkpoint["signature"] = base64.b64encode(bytes(32)).decode("ascii")
     with pytest.raises(ValidationError, match="canonical Ed25519"):
         AuditCheckpoint.model_validate(invalid_checkpoint)
