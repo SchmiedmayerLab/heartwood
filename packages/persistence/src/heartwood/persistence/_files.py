@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -21,6 +22,13 @@ from typing import Any
 
 from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
+
+_UNSUPPORTED_DIRECTORY_SYNC_ERRORS = {
+    errno.EBADF,
+    errno.EINVAL,
+    errno.ENOSYS,
+    errno.ENOTSUP,
+}
 
 
 class DurableFileError(ValueError):
@@ -161,13 +169,15 @@ def fsync_directory(path: Path) -> None:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     try:
         descriptor = os.open(path, flags)
-    except OSError:
-        return
+    except OSError as error:
+        if error.errno in _UNSUPPORTED_DIRECTORY_SYNC_ERRORS:
+            return
+        raise
     try:
         os.fsync(descriptor)
-    except OSError:
-        # Some network filesystems permit directory opens but not directory fsync.
-        pass
+    except OSError as error:
+        if error.errno not in _UNSUPPORTED_DIRECTORY_SYNC_ERRORS:
+            raise
     finally:
         os.close(descriptor)
 

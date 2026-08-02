@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import multiprocessing
 import stat
@@ -253,6 +254,33 @@ def test_external_atomic_write_does_not_change_parent_permissions(tmp_path: Path
 
     assert stat.S_IMODE(parent.stat().st_mode) == 0o755
     assert stat.S_IMODE((parent / "audit.jsonl").stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("operation", ["open", "fsync"])
+def test_directory_sync_ignores_only_unsupported_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    def unsupported(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.ENOTSUP, "synthetic unsupported directory sync")
+
+    monkeypatch.setattr(_files.os, operation, unsupported)
+
+    _files.fsync_directory(tmp_path)
+
+
+def test_directory_sync_propagates_storage_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failed_sync(_descriptor: int) -> None:
+        raise OSError(errno.EIO, "synthetic storage failure")
+
+    monkeypatch.setattr(_files.os, "fsync", failed_sync)
+
+    with pytest.raises(OSError, match="synthetic storage failure"):
+        _files.fsync_directory(tmp_path)
 
 
 def test_external_native_lock_does_not_change_parent_permissions(tmp_path: Path) -> None:
