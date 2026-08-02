@@ -155,6 +155,8 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
 
 def _runtime_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     items = [f"Status: {view_model.researcher_status.label}"]
+    if view_model.researcher_notice is not None:
+        items.append(f"{view_model.researcher_notice.label}: {view_model.researcher_notice.detail}")
     if view_model.usage is not None:
         usage = view_model.usage
         items.append(

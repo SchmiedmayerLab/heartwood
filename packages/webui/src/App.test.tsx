@@ -447,6 +447,16 @@ class FakeClient implements HeartwoodClient {
         errorCode: commandFailure?.code ?? null,
         message: commandFailure?.message ?? null,
       },
+      researcherNotice:
+        commandFailure === null ? null : (
+          {
+            noticeId: `command:${command.command_id}:rejected`,
+            code: "request-not-applied",
+            label: "Request Not Applied",
+            detail: commandFailure.message,
+            tone: "attention",
+          }
+        ),
       conversation:
         command.kind === "chat" && prompt ?
           [
@@ -463,15 +473,17 @@ class FakeClient implements HeartwoodClient {
           ]
         : current.conversation,
       pendingApproval:
-        command.kind === "approve" || command.kind === "deny" ?
-          null
+        commandFailure !== null ? current.pendingApproval
+        : command.kind === "approve" || command.kind === "deny" ? null
         : current.pendingApproval,
       paused:
-        command.kind === "pause" ? true
+        commandFailure !== null ? current.paused
+        : command.kind === "pause" ? true
         : command.kind === "resume" ? false
         : current.paused,
       lifecycle:
-        command.kind === "pause" ?
+        commandFailure !== null ? current.lifecycle
+        : command.kind === "pause" ?
           {
             status: "paused",
             canPause: false,
@@ -494,14 +506,7 @@ class FakeClient implements HeartwoodClient {
           }
         : current.lifecycle,
       researcherStatus:
-        commandFailure !== null ?
-          {
-            code: "denied",
-            label: "Request Not Applied",
-            detail: commandFailure.message,
-            tone: "attention",
-            recoverable: true,
-          }
+        commandFailure !== null ? current.researcherStatus
         : command.kind === "pause" ?
           {
             code: "paused",
@@ -528,7 +533,8 @@ class FakeClient implements HeartwoodClient {
           }
         : current.researcherStatus,
       availableCommands:
-        command.kind === "pause" ? ["chat", "resume"]
+        commandFailure !== null ? current.availableCommands
+        : command.kind === "pause" ? ["chat", "resume"]
         : command.kind === "resume" ? ["chat", "pause"]
         : command.kind === "approve" || command.kind === "deny" ? ["chat"]
         : current.availableCommands,
@@ -1369,6 +1375,31 @@ describe("App", () => {
     expect(screen.getByLabelText("Task")).toBeEnabled();
   });
 
+  it("keeps the active session connected when it is selected again", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    const replayCalls = client.replayCalls;
+    const activeSession = screen.getByRole("button", {
+      name: /Synthetic analysis, Ready/u,
+    });
+    expect(activeSession).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(activeSession);
+
+    expect(client.replayCalls).toBe(replayCalls);
+    expect(
+      screen.getByRole("heading", { name: "Synthetic analysis" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Task")).toBeEnabled();
+  });
+
   it("ignores a retired stream after selecting another session", async () => {
     const client = new FakeClient();
     client.currentSessions = [
@@ -1757,6 +1788,33 @@ describe("App", () => {
     expect(
       screen.getByLabelText("Agent response in progress"),
     ).toHaveTextContent("Current streamed response");
+  });
+
+  it("keeps transient token streams as escaped plain text", async () => {
+    const client = new FakeClient();
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+
+    act(() => {
+      client.emitStream(
+        syntheticProjection({
+          lifecycle: {
+            status: "running",
+            canPause: true,
+            canResume: false,
+            canSteer: true,
+          },
+          streamingText: "**partial model response**",
+          availableCommands: ["chat", "pause"],
+        }),
+      );
+    });
+
+    const streaming = screen.getByLabelText("Agent response in progress");
+    expect(
+      within(streaming).getByText("**partial model response**"),
+    ).toBeVisible();
+    expect(streaming.querySelector(".markdown-content")).toBeNull();
   });
 
   it("accepts an authoritative projection from a restarted stream epoch", async () => {
@@ -3224,13 +3282,64 @@ describe("App error handling", () => {
     await screen.findByRole("heading", { name: "Synthetic analysis" });
     fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
 
-    const status = await screen.findByRole("status", { name: "Agent status" });
-    expect(status).toHaveTextContent("Request Not Applied");
-    expect(status).toHaveTextContent(
+    const notice = await screen.findByRole("alert", {
+      name: "Request outcome",
+    });
+    expect(notice).toHaveTextContent("Request Not Applied");
+    expect(notice).toHaveTextContent(
       "HW-AGENT-005: The operation is unavailable.",
     );
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("status", { name: "Agent status" }),
+    ).not.toBeInTheDocument();
     expect(client.auditExportCalls).toBe(0);
+  });
+
+  it("presents a rejected command without replacing the active lifecycle", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    await screen.findByRole("heading", { name: "Synthetic analysis" });
+    act(() => {
+      client.emitStream(
+        syntheticProjection({
+          lifecycle: {
+            status: "running",
+            canPause: true,
+            canResume: false,
+            canSteer: true,
+          },
+          researcherStatus: {
+            code: "working",
+            label: "Heartwood Is Working",
+            detail: "You can send guidance or pause while the task is active.",
+            tone: "progress",
+            recoverable: true,
+          },
+          availableCommands: ["chat", "pause"],
+        }),
+      );
+    });
+    client.commandFailure = {
+      code: "HW-AGENT-005",
+      message: "HW-AGENT-005: The pause request reached a stable boundary.",
+    };
+
+    const pause = screen.getByLabelText("Pause agent");
+    await waitFor(() => expect(pause).toBeEnabled());
+    fireEvent.click(pause);
+
+    const notice = await screen.findByRole("alert", {
+      name: "Request outcome",
+    });
+    expect(notice).toHaveTextContent("Request Not Applied");
+    expect(
+      screen.getByRole("status", { name: "Agent status" }),
+    ).toHaveTextContent("Heartwood Is Working");
   });
 
   it("renders gateway command errors", async () => {

@@ -45,6 +45,8 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionOtherActionDetails,
+    ProjectionResearcherNotice,
+    ProjectionResearcherStatus,
     ProjectionSubagent,
     ProjectionSuggestion,
     ProjectionTask,
@@ -1080,6 +1082,38 @@ def test_line_formatter_renders_gateway_owned_suggestions_without_internal_ids()
     assert "Suggested next steps:" in rendered
     assert "Inspect the Project: Inspect this project without changing files." in rendered
     assert "inspect-project" not in rendered
+
+
+def test_line_formatter_renders_gateway_owned_command_notice() -> None:
+    projection = SessionProjection(
+        session_id="terminal-command-notice",
+        event_count=0,
+        revision=-1,
+        lifecycle=ProjectionLifecycleState(
+            status=SessionLifecycle.RUNNING,
+            can_pause=True,
+            can_steer=True,
+        ),
+        researcher_status=ProjectionResearcherStatus(
+            code="working",
+            label="Heartwood Is Working",
+            detail="You can send guidance or pause while the task is active.",
+            tone="progress",
+        ),
+        researcher_notice=ProjectionResearcherNotice(
+            notice_id="command:pause-race:rejected",
+            code="request-not-applied",
+            label="Request Not Applied",
+            detail="The task reached a stable boundary before pause was applied.",
+            tone="attention",
+        ),
+    )
+
+    rendered = "\n".join(format_projection_lines(projection))
+
+    assert "Status: Heartwood Is Working" in rendered
+    assert "Notice: Request Not Applied" in rendered
+    assert "stable boundary" in rendered
 
 
 def test_interaction_activity_matches_the_submitted_operation() -> None:

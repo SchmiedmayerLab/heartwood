@@ -62,6 +62,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Export the audit record from the session controls.
 
 The session header and conversation use the same gateway-owned states as the other interfaces, including ready, working, waiting for review, paused, complete, rejected, and recovery-required conditions.
+When a command cannot be applied, the browser presents a separate request notice without replacing the authoritative agent lifecycle.
 Task and specialist labels are shown in researcher-facing language; OpenHands identifiers remain available under **Technical details** when they are needed for diagnosis.
 
 Agent responses support headings, lists, tables, quotations, links, inline code, and code blocks.

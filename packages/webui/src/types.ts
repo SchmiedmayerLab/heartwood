@@ -66,6 +66,7 @@ export type ProjectionModelContext = Projection.ProjectionModelContext;
 export type ProjectionLifecycle = Projection.ProjectionLifecycleState;
 export type ProjectionLifecycleStatus = ProjectionLifecycle["status"];
 export type ProjectionResearcherStatus = Projection.ProjectionResearcherStatus;
+export type ProjectionResearcherNotice = Projection.ProjectionResearcherNotice;
 export type ProjectionTask = Projection.ProjectionTask;
 export type ProjectionUsage = Projection.ProjectionUsage;
 export type ProjectionSubagent = Projection.ProjectionSubagent;

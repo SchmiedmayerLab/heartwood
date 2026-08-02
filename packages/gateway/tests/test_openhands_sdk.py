@@ -40,6 +40,8 @@ from openhands.sdk.event import (
 from openhands.sdk.event import (
     Event as OpenHandsEvent,
 )
+from openhands.sdk.event.conversation_error import ConversationErrorEvent
+from openhands.sdk.event.error_classification import ErrorClassification, FailureKind
 from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, Metrics, TextContent
 from openhands.sdk.llm.llm import LLMCallContext
 from openhands.sdk.llm.streaming import TokenCallbackType
@@ -99,6 +101,7 @@ from heartwood.gateway import (
     SessionGateway,
     SessionProjection,
 )
+from heartwood.gateway._openhands_failures import classified_error_code
 from heartwood.gateway._openhands_sdk import (
     ConversationFactory,
     OpenHandsSdkError,
@@ -257,6 +260,7 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
     assert context.load_user_skills is False
     assert context.load_public_skills is False
     assert context.load_project_skills is False
+    assert context.load_memory is False
     suffix = context.system_message_suffix or ""
     assert "invoke_skill" in suffix
     assert "not tools named after their identifiers" in suffix
@@ -825,7 +829,6 @@ def test_openhands_adapter_uses_typed_public_state_only() -> None:
 
     assert "type(event).__name__" not in source
     assert "getattr(" not in source
-    assert "openhands.sdk.event.conversation_error" not in source
     assert "restore_pending" not in source
     assert "self._pending" not in source
     assert "self._captured" not in source
@@ -879,6 +882,66 @@ def test_public_conversation_state_projects_a_content_safe_error(
         for event in events
     )
     backend.close()
+
+
+def test_typed_conversation_error_replaces_generic_stopped_state(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    state.execution_status = ConversationExecutionStatus.ERROR
+    state.events = (
+        ConversationErrorEvent(
+            id="provider-authentication-error",
+            source="environment",
+            code="OpenAIError",
+            detail="Incorrect API key provided: private-provider-detail",
+        ),
+    )
+    conversation.state = state
+    backend = _backend(
+        tmp_path,
+        cast(
+            ConversationFactory,
+            lambda _event_callback, _token_callback: conversation,
+        ),
+    )
+
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    errors = [event for event in events if isinstance(event, BackendErrorEvent)]
+    assert [event.error_code for event in errors] == [
+        BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED
+    ]
+    assert "private-provider-detail" not in repr(events)
+    backend.close()
+
+
+@pytest.mark.parametrize(
+    ("kind", "retryable", "expected"),
+    [
+        (FailureKind.AUTH, False, BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED),
+        (FailureKind.QUOTA, False, BackendErrorCode.PROVIDER_QUOTA_EXHAUSTED),
+        (FailureKind.RATE_LIMIT, True, BackendErrorCode.PROVIDER_RATE_LIMITED),
+        (FailureKind.CONFIG, False, BackendErrorCode.MODEL_CONFIGURATION_INVALID),
+        (FailureKind.TRANSIENT, True, BackendErrorCode.PROVIDER_UNAVAILABLE),
+        (FailureKind.AGENT_ACTION, True, BackendErrorCode.ACTION_FAILED),
+        (FailureKind.AGENT_ACTION, False, BackendErrorCode.CONVERSATION_STOPPED),
+        (FailureKind.INTERNAL, False, BackendErrorCode.WORKER_STOPPED),
+        (FailureKind.UNKNOWN, False, BackendErrorCode.UNKNOWN),
+    ],
+)
+def test_openhands_failure_classification_maps_to_stable_diagnostics(
+    kind: FailureKind,
+    retryable: bool,
+    expected: BackendErrorCode,
+) -> None:
+    classification = ErrorClassification(kind=kind, retryable=retryable)
+
+    assert classified_error_code(classification, fallback=BackendErrorCode.UNKNOWN) == expected
 
 
 @pytest.mark.parametrize(

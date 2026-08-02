@@ -443,6 +443,11 @@ def format_conversation_lines(
 def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
     """Render current task, usage, and specialist state from the projection."""
     lines: list[str] = []
+    if projection.researcher_notice is not None:
+        lines.append(
+            f"Notice: {terminal_safe_text(projection.researcher_notice.label)}: "
+            f"{terminal_safe_text(projection.researcher_notice.detail)}"
+        )
     if projection.researcher_status.code != "ready":
         lines.append(f"Status: {projection.researcher_status.label}")
     if projection.actions:

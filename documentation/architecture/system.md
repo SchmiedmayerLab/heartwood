@@ -81,6 +81,7 @@ The selected platform adapter advertises supported ingress modes, while deployme
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
+OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.

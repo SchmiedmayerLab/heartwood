@@ -22,6 +22,7 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionModelContext,
+    ProjectionResearcherNotice,
     ProjectionResearcherStatus,
     ProjectionSubagent,
     ProjectionSuggestion,
@@ -107,6 +108,11 @@ class NotebookViewModel:
     def researcher_status(self) -> ProjectionResearcherStatus:
         """Return the shared researcher-facing session state."""
         return self.projection.researcher_status
+
+    @property
+    def researcher_notice(self) -> ProjectionResearcherNotice | None:
+        """Return the latest non-lifecycle outcome that requires attention."""
+        return self.projection.researcher_notice
 
     @property
     def task_plan(self) -> tuple[ProjectionTask, ...]:

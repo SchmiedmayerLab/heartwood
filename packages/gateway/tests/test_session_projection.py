@@ -222,6 +222,7 @@ def test_rejected_action_set_owns_the_researcher_status() -> None:
     assert projection.lifecycle.status == SessionLifecycle.IDLE
     assert projection.researcher_status.code == "denied"
     assert projection.researcher_status.label == "Action Set Rejected"
+    assert projection.researcher_notice is None
     assert projection.available_commands == ("chat",)
 
 
@@ -725,25 +726,67 @@ def test_projection_owns_nonfatal_command_outcomes() -> None:
     assert projection.last_command_outcome.status == "rejected"
     assert projection.last_command_outcome.command_id == "resume-1"
     assert projection.last_command_outcome.error_code == "HW-AGENT-005"
-    assert projection.researcher_status.code == "denied"
-    assert projection.researcher_status.tone == "attention"
+    assert projection.researcher_status.code == "ready"
+    assert projection.researcher_notice is not None
+    assert projection.researcher_notice.notice_id == "command:resume-1:rejected"
+    assert projection.researcher_notice.code == "request-not-applied"
+    assert projection.researcher_notice.label == "Request Not Applied"
+    assert projection.researcher_notice.tone == "attention"
 
 
-def test_projection_owns_bounded_contextual_suggestions() -> None:
-    empty = project_session((), session_id="session-1")
-    assert [item.suggestion_id for item in empty.suggestions] == [
-        "inspect-project",
-        "plan-project",
-    ]
-
-    running = project_session(
-        (_event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),),
+def test_nonfatal_command_rejection_does_not_hide_active_lifecycle() -> None:
+    projection = project_session(
+        (
+            _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+            _event(
+                1,
+                EventKind.COMMAND_RECEIVED,
+                {
+                    "command_id": "pause-race",
+                    "command_kind": "pause",
+                },
+            ),
+            _event(
+                2,
+                EventKind.ERROR_RECORDED,
+                {
+                    "code": "HW-AGENT-005",
+                    "reason": "The task reached a stable boundary before pause was applied",
+                    "affects_lifecycle": False,
+                },
+            ),
+        ),
         session_id="session-1",
     )
-    assert running.suggestions == ()
 
-    recoverable = project_session(
-        (
+    assert projection.lifecycle.status == SessionLifecycle.RUNNING
+    assert projection.researcher_status.code == "working"
+    assert projection.researcher_notice is not None
+    assert projection.researcher_notice.label == "Request Not Applied"
+    assert projection.researcher_notice.detail == (
+        "HW-AGENT-005: The task reached a stable boundary before pause was applied"
+    )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_suggestion_ids"),
+    [
+        ("ready", ("inspect-project", "plan-project")),
+        ("running", ()),
+        ("recoverable-error", ("recover-task",)),
+        ("terminal-error", ()),
+    ],
+    ids=("ready", "running", "recoverable-error", "terminal-error"),
+)
+def test_projection_owns_bounded_contextual_suggestions(
+    scenario: str,
+    expected_suggestion_ids: tuple[str, ...],
+) -> None:
+    events: tuple[SessionEvent, ...] = ()
+    if scenario == "running":
+        events = (_event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),)
+    elif scenario == "recoverable-error":
+        events = (
             _event(
                 0,
                 EventKind.ERROR_RECORDED,
@@ -752,13 +795,9 @@ def test_projection_owns_bounded_contextual_suggestions() -> None:
                     "reason": "The agent conversation stopped",
                 },
             ),
-        ),
-        session_id="session-1",
-    )
-    assert [item.suggestion_id for item in recoverable.suggestions] == ["recover-task"]
-
-    terminal = project_session(
-        (
+        )
+    elif scenario == "terminal-error":
+        events = (
             _event(
                 0,
                 EventKind.ERROR_RECORDED,
@@ -767,10 +806,10 @@ def test_projection_owns_bounded_contextual_suggestions() -> None:
                     "reason": "The agent outcome is unknown",
                 },
             ),
-        ),
-        session_id="session-1",
-    )
-    assert terminal.suggestions == ()
+        )
+    projection = project_session(events, session_id="session-1")
+
+    assert tuple(item.suggestion_id for item in projection.suggestions) == (expected_suggestion_ids)
 
 
 def test_projection_enriches_specialist_presentation_without_client_reducers() -> None:
@@ -838,6 +877,58 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
     specialist = projection.subagents[0]
     assert specialist.role_label == "Research Planner"
     assert specialist.status_label == "Complete"
+    assert specialist.task_summary == "Review the synthetic analysis plan"
+    assert specialist.result_summary == "Plan review completed"
+
+
+def test_projection_uses_parent_action_as_specialist_presentation_fallback() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "task-call-parent",
+                    "action_id": "action-parent",
+                    "tool_name": "task",
+                    "kind": "task",
+                    "risk": "low",
+                    "arguments": {
+                        "description": "Review the synthetic analysis plan",
+                        "subagent_type": "research-planner",
+                    },
+                },
+            ),
+            _event(
+                1,
+                EventKind.SUBAGENT_UPDATED,
+                {
+                    "subagent": {
+                        "invocation_id": "sdk-generated-invocation",
+                        "task_id": "task-1",
+                        "agent_name": "research-planner",
+                        "status": "completed",
+                        "parent_session_id": "session-1",
+                        "parent_action_id": "action-parent",
+                    }
+                },
+            ),
+            _event(
+                2,
+                EventKind.TOOL_EXECUTION_RECORDED,
+                {
+                    "tool_call_id": "task-call-parent",
+                    "action_id": "action-parent",
+                    "tool_name": "task",
+                    "exit_code": 0,
+                    "summary": "Plan review completed",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    specialist = projection.subagents[0]
     assert specialist.task_summary == "Review the synthetic analysis plan"
     assert specialist.result_summary == "Plan review completed"
 

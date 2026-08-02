@@ -113,6 +113,11 @@ interface SafeMarkdownProps {
   content: string;
 }
 
+interface BoundedSafeText {
+  text: string;
+  truncated: boolean;
+}
+
 interface MarkdownBoundaryProps extends SafeMarkdownProps {
   children: ReactNode;
 }
@@ -131,8 +136,10 @@ class MarkdownBoundary extends Component<
     return { failed: true };
   }
 
-  override componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    // The model response remains available as escaped plain text below.
+  override componentDidCatch(error: Error, _info: ErrorInfo): void {
+    console.error("Heartwood could not render a model response as Markdown.", {
+      name: error.name,
+    });
   }
 
   override componentDidUpdate(previous: MarkdownBoundaryProps): void {
@@ -150,13 +157,7 @@ class MarkdownBoundary extends Component<
 }
 
 export const SafeMarkdown = ({ content }: SafeMarkdownProps) => {
-  const rawContent = content.slice(0, MAX_RENDERED_CHARACTERS);
-  const safeContent = displaySafeText(rawContent);
-  const truncated =
-    content.length > MAX_RENDERED_CHARACTERS ||
-    safeContent.length > MAX_RENDERED_CHARACTERS;
-  const rendered =
-    truncated ? safeContent.slice(0, MAX_RENDERED_CHARACTERS) : safeContent;
+  const { text: rendered, truncated } = displayBoundedSafeText(content);
   return (
     <MarkdownBoundary content={rendered}>
       <div className="markdown-content">
@@ -181,13 +182,25 @@ export const SafeMarkdown = ({ content }: SafeMarkdownProps) => {
 
 const safeUrl = (value: string): string => {
   const candidate = displaySafeText(value).trim();
-  if (candidate.startsWith("#")) return candidate;
   try {
     const parsed = new URL(candidate);
     return SAFE_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : "";
   } catch {
     return "";
   }
+};
+
+export const displayBoundedSafeText = (content: string): BoundedSafeText => {
+  const rawContent = content.slice(0, MAX_RENDERED_CHARACTERS);
+  const safeContent = displaySafeText(rawContent);
+  const truncated =
+    content.length > MAX_RENDERED_CHARACTERS ||
+    safeContent.length > MAX_RENDERED_CHARACTERS;
+  return {
+    text:
+      truncated ? safeContent.slice(0, MAX_RENDERED_CHARACTERS) : safeContent,
+    truncated,
+  };
 };
 
 export const displaySafeText = (value: string): string => {

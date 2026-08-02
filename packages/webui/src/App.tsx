@@ -714,6 +714,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   };
 
   const selectSession = (nextSessionId: string) => {
+    if (nextSessionId === sessionIdRef.current) return;
     selectionGeneration.current += 1;
     clearProjection();
     setPrompt("");

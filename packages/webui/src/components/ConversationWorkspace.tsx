@@ -42,7 +42,11 @@ import type {
   ProjectionSuggestion,
   SessionProjection,
 } from "../types";
-import { displaySafeText, SafeMarkdown } from "./SafeMarkdown";
+import {
+  displayBoundedSafeText,
+  displaySafeText,
+  SafeMarkdown,
+} from "./SafeMarkdown";
 
 interface ConversationWorkspaceProps {
   conversationEndRef: RefObject<HTMLDivElement | null>;
@@ -160,6 +164,7 @@ export const ConversationWorkspace = ({
         {requestStatus === "busy" && requestActivity !== null ?
           <RequestActivity activity={requestActivity} />
         : null}
+        <ResearcherNotice projection={projection} />
         <RuntimeStatus projection={projection} />
         <div ref={conversationEndRef} aria-hidden="true" />
       </div>
@@ -384,19 +389,49 @@ const ConversationItem = ({ message }: { message: ConversationMessage }) => {
   );
 };
 
-const StreamingMessage = ({ content }: { content: string }) => (
-  <article
-    aria-label="Agent response in progress"
-    className="conversation-message agent streaming-message"
-  >
-    <div className="conversation-meta">
-      <small>Agent</small>
-      <span>Responding</span>
-    </div>
-    <SafeMarkdown content={content} />
-    <span aria-hidden="true" className="streaming-cursor" />
-  </article>
-);
+const StreamingMessage = ({ content }: { content: string }) => {
+  const rendered = displayBoundedSafeText(content);
+  return (
+    <article
+      aria-label="Agent response in progress"
+      className="conversation-message agent streaming-message"
+    >
+      <div className="conversation-meta">
+        <small>Agent</small>
+        <span>Responding</span>
+      </div>
+      <p>{rendered.text}</p>
+      {rendered.truncated ?
+        <span className="markdown-truncated" role="note">
+          The in-progress response is too large to display completely.
+        </span>
+      : null}
+      <span aria-hidden="true" className="streaming-cursor" />
+    </article>
+  );
+};
+
+const ResearcherNotice = ({
+  projection,
+}: {
+  projection: SessionProjection | null;
+}) => {
+  const notice = projection?.researcherNotice;
+  if (notice === undefined || notice === null) return null;
+  return (
+    <section
+      aria-label="Request outcome"
+      className={`researcher-notice ${notice.tone}`}
+      role="alert"
+    >
+      <CircleX aria-hidden="true" size={16} />
+      <div>
+        <strong>{displaySafeText(notice.label)}</strong>
+        <p>{displaySafeText(notice.detail)}</p>
+      </div>
+    </section>
+  );
+};
 
 const ActionHistory = ({
   actions,

@@ -8,7 +8,11 @@
 
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { displaySafeText, SafeMarkdown } from "./SafeMarkdown";
+import {
+  displayBoundedSafeText,
+  displaySafeText,
+  SafeMarkdown,
+} from "./SafeMarkdown";
 
 describe("SafeMarkdown", () => {
   it("renders the supported GitHub-Flavored Markdown structure", () => {
@@ -61,7 +65,7 @@ print("synthetic")
       <SafeMarkdown
         content={`<script>alert("unsafe")</script>
 
-[unsafe](javascript:alert(1)) [relative](/credential) [safe](https://example.org/result)`}
+[unsafe](javascript:alert(1)) [relative](/credential) [fragment](#result) [safe](https://example.org/result)`}
       />,
     );
 
@@ -69,6 +73,7 @@ print("synthetic")
     expect(screen.queryByText(/alert\("unsafe"\)/u)).toBeNull();
     expect(screen.getByText("unsafe")).not.toHaveAttribute("href");
     expect(screen.getByText("relative")).not.toHaveAttribute("href");
+    expect(screen.getByText("fragment")).not.toHaveAttribute("href");
     expect(screen.getByRole("link", { name: "safe" })).toHaveAttribute(
       "href",
       "https://example.org/result",
@@ -105,5 +110,15 @@ describe("displaySafeText", () => {
     expect(displaySafeText("line one\nline\t\u0000\u2066two")).toBe(
       "line one\nline\t\\x00\\u2066two",
     );
+  });
+
+  it("bounds transient text without parsing it as Markdown", () => {
+    expect(displayBoundedSafeText("**still streaming**")).toEqual({
+      text: "**still streaming**",
+      truncated: false,
+    });
+    expect(displayBoundedSafeText("a".repeat(200_001))).toMatchObject({
+      truncated: true,
+    });
   });
 });

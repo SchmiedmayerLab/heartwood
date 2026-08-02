@@ -76,6 +76,7 @@ export interface SessionProjection {
    */
   paused: boolean;
   pendingApproval: ProjectionApprovalGroup | null;
+  researcherNotice: ProjectionResearcherNotice | null;
   researcherStatus: ProjectionResearcherStatus;
   revision: number;
   schema_version: "heartwood.session-projection.v1";
@@ -225,6 +226,16 @@ export interface ProjectionApprovalGroup {
   decision: ("approved" | "denied") | null;
   decisionScope: "all";
   groupId: string;
+}
+/**
+ * A non-lifecycle outcome that every interface must present.
+ */
+export interface ProjectionResearcherNotice {
+  code: "request-not-applied";
+  detail: string;
+  label: string;
+  noticeId: string;
+  tone: "attention" | "danger";
 }
 /**
  * Stable researcher-facing state derived from the session lifecycle.

@@ -133,6 +133,36 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Inspect the session and continue in a new session; do not repeat the task blindly.",
         "/reference/troubleshooting/#hw-agent-007-an-agent-turn-has-an-unknown-outcome",
     ),
+    "agent-provider-authentication": DiagnosticDefinition(
+        "HW-AGENT-008",
+        "The model provider rejected the configured credential",
+        "Open model settings, update the credential, and validate the connection again.",
+        "/reference/troubleshooting/#hw-agent-008-model-provider-authentication-failed",
+    ),
+    "agent-provider-quota": DiagnosticDefinition(
+        "HW-AGENT-009",
+        "The model provider reported an exhausted quota or budget",
+        "Review the provider quota or select another approved model connection.",
+        "/reference/troubleshooting/#hw-agent-009-model-provider-quota-exhausted",
+    ),
+    "agent-provider-rate-limit": DiagnosticDefinition(
+        "HW-AGENT-010",
+        "The model provider temporarily limited requests",
+        "Wait briefly, then retry the task without repeating any uncertain action.",
+        "/reference/troubleshooting/#hw-agent-010-model-provider-rate-limited",
+    ),
+    "agent-model-configuration": DiagnosticDefinition(
+        "HW-AGENT-011",
+        "The selected model connection is not configured correctly",
+        "Open model settings, correct the connection, and validate it before retrying.",
+        "/reference/troubleshooting/#hw-agent-011-model-configuration-is-invalid",
+    ),
+    "agent-provider-unavailable": DiagnosticDefinition(
+        "HW-AGENT-012",
+        "The model provider is temporarily unavailable",
+        "Check the connection and provider status, then retry the task.",
+        "/reference/troubleshooting/#hw-agent-012-model-provider-is-unavailable",
+    ),
     "agent-unknown": DiagnosticDefinition(
         "HW-AGENT-999",
         "The agent runtime reported an error",

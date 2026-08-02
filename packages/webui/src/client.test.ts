@@ -419,6 +419,39 @@ describe("GatewayClient", () => {
     ).resolves.toEqual({ events: [], projection });
   });
 
+  it("enforces canonical numeric projection constraints at runtime", async () => {
+    const malformed = {
+      ...syntheticProjection(),
+      usage: {
+        usageId: "total",
+        purposeLabel: "Total Model Activity",
+        modelName: "synthetic-model",
+        callCount: 1,
+        promptTokens: 1,
+        completionTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        contextWindow: -1,
+        accumulatedCost: 0,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(projectionResponse([], malformed))),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Gateway response included an invalid session projection",
+    );
+  });
+
   it("reports malformed projection JSON with recovery guidance", async () => {
     vi.stubGlobal(
       "fetch",

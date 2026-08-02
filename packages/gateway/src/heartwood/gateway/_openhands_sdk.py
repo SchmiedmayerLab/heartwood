@@ -26,7 +26,7 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
-from openhands.sdk import LLM, AgentContext, Conversation, LLMStreamChunk, Tool
+from openhands.sdk import LLM, AgentContext, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.conversation import (
     BaseConversation,
     ConversationExecutionStatus,
@@ -42,6 +42,7 @@ from openhands.sdk.event import (
     PauseEvent,
     UserRejectObservation,
 )
+from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import Metrics, content_to_str
 from openhands.sdk.security import (
     AlwaysConfirm,
@@ -99,10 +100,20 @@ from heartwood.core_adapter import (
     pending_action_group,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
+from heartwood.gateway._openhands_failures import (
+    backend_error as _backend_error,
+)
+from heartwood.gateway._openhands_failures import (
+    classified_error_code as _classified_error_code,
+)
+from heartwood.gateway._openhands_failures import (
+    install_privacy_safe_retry_logging,
+)
 from heartwood.gateway._openhands_models import (
     OpenHandsModelError,
     request_endpoint_for_model,
 )
+from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
     SubscriptionError,
@@ -110,6 +121,8 @@ from heartwood.gateway._subscriptions import (
 )
 from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
 from heartwood.schemas import ActionConfirmationMode, JsonValue
+
+install_privacy_safe_retry_logging()
 
 
 class OpenHandsSdkError(RuntimeError):
@@ -641,10 +654,15 @@ class OpenHandsSdkBackend:
         )
         agent = settings.create_agent()
         conversation_id = uuid.uuid5(uuid.NAMESPACE_URL, self.conversation_key)
-        conversation = Conversation(
+        conversation_store = ContentMinimizedLocalFileStore(
+            LocalConversation.get_persistence_dir(self.persistence_dir, conversation_id),
+            cache_limit_size=_AGENT_MAX_ITERATIONS_PER_RUN,
+        )
+        conversation = LocalConversation(
             agent=agent,
             workspace=self.workspace,
             persistence_dir=self.persistence_dir,
+            file_store=conversation_store,
             conversation_id=conversation_id,
             callbacks=[callback],
             token_callbacks=[token_callback],
@@ -1269,7 +1287,20 @@ class OpenHandsSdkBackend:
                     source_event_id=f"{source}:execution",
                 ),
                 BackendErrorEvent(
-                    error_code=BackendErrorCode.ACTION_FAILED,
+                    error_code=_classified_error_code(
+                        event.classification,
+                        fallback=BackendErrorCode.ACTION_FAILED,
+                    ),
+                    source_event_id=f"{source}:error",
+                ),
+            )
+        if isinstance(event, ConversationErrorEvent):
+            return (
+                BackendErrorEvent(
+                    error_code=_classified_error_code(
+                        event.classification,
+                        fallback=BackendErrorCode.UNKNOWN,
+                    ),
                     source_event_id=f"{source}:error",
                 ),
             )
@@ -1334,6 +1365,9 @@ class OpenHandsSdkBackend:
                     ),
                 )
             )
+        has_typed_conversation_error = any(
+            isinstance(event, ConversationErrorEvent) for event in branch
+        )
         if (
             state.execution_status
             in {
@@ -1342,6 +1376,7 @@ class OpenHandsSdkBackend:
                 ConversationExecutionStatus.DELETING,
             }
             and not run_failed
+            and not has_typed_conversation_error
         ):
             events.append(
                 BackendErrorEvent(
@@ -1728,17 +1763,6 @@ def _conversation_runtime_options() -> _ConversationRuntimeOptions:
     }
 
 
-def _backend_error(
-    _error: Exception,
-    *,
-    source_event_id: str | None = None,
-) -> BackendEvent:
-    return BackendErrorEvent(
-        error_code=BackendErrorCode.WORKER_STOPPED,
-        source_event_id=source_event_id,
-    )
-
-
 def _agent_context(
     skills: list[Skill],
 ) -> AgentContext:
@@ -1748,6 +1772,7 @@ def _agent_context(
         load_user_skills=False,
         load_public_skills=False,
         load_project_skills=False,
+        load_memory=False,
         system_message_suffix=(
             "Operate only inside the configured project directory. Do not inspect or modify "
             "reserved .heartwood state. Skills are context resources, not tools named after "

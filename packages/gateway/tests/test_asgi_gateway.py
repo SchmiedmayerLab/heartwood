@@ -90,6 +90,23 @@ def test_asgi_http_rejects_an_oversized_request_before_routing(tmp_path: Path) -
     }
 
 
+def test_asgi_http_accepts_a_request_at_the_exact_body_limit(tmp_path: Path) -> None:
+    command = _command(CommandKind.PAUSE)
+    body = command + (b" " * (1_048_576 - len(command)))
+
+    sent = asyncio.run(
+        _http_call(
+            GatewayAsgiApp(_gateway(tmp_path)),
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=body,
+        )
+    )
+
+    assert len(body) == 1_048_576
+    assert sent[0]["status"] == 200
+
+
 def test_asgi_http_bounds_the_total_body_across_receive_chunks(tmp_path: Path) -> None:
     async def scenario() -> list[dict[str, object]]:
         messages = iter(

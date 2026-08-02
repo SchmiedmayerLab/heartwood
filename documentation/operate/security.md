@@ -41,6 +41,8 @@ Do not enable the outlines disk cache, share runtime caches between users or tru
 
 Raw credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs, and audit exports by design.
 Heartwood resolves process values, operator bindings, optional system-keyring entries, or platform identity only for named provider calls.
+Provider failures are reduced to OpenHands' typed failure category while the exception is still in process.
+Raw provider exception text is replaced before OpenHands runtime persistence and is not retained in Heartwood retry logs, session events, or audit data.
 
 Project-scoped keyring persistence is explicit and available only where a functional system credential store exists.
 Custom compatible-service tokens remain process-only.

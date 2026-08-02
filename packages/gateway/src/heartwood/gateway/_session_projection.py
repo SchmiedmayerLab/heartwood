@@ -40,7 +40,7 @@ class _ProjectionRecord(BaseModel):
 
 
 class ProjectionActivity(_ProjectionRecord):
-    sequence: int
+    sequence: int = Field(ge=0)
     kind: EventKind
     label: str
     detail: str
@@ -48,7 +48,7 @@ class ProjectionActivity(_ProjectionRecord):
 
 class ProjectionMessage(_ProjectionRecord):
     id: str
-    sequence: int
+    sequence: int = Field(ge=0)
     role: Literal["user", "agent", "trace"]
     label: str
     content: str
@@ -62,7 +62,7 @@ class ProjectionTerminalActionDetails(_ProjectionRecord):
     kind: Literal["terminal"] = "terminal"
     command: str
     is_input: bool = Field(default=False, serialization_alias="isInput")
-    timeout: float | None = None
+    timeout: float | None = Field(default=None, ge=0)
     reset: bool = False
 
 
@@ -144,8 +144,8 @@ class ProjectionActionRecord(_ProjectionRecord):
     ]
     decision: Literal["approved", "rejected"] | None = None
     outcome: ProjectionActionOutcome | None = None
-    proposed_sequence: int = Field(serialization_alias="proposedSequence")
-    updated_sequence: int = Field(serialization_alias="updatedSequence")
+    proposed_sequence: int = Field(ge=0, serialization_alias="proposedSequence")
+    updated_sequence: int = Field(ge=0, serialization_alias="updatedSequence")
 
 
 class ProjectionApprovalGroup(_ProjectionRecord):
@@ -192,6 +192,16 @@ class ProjectionResearcherStatus(_ProjectionRecord):
     recoverable: bool = True
 
 
+class ProjectionResearcherNotice(_ProjectionRecord):
+    """A non-lifecycle outcome that every interface must present."""
+
+    notice_id: str = Field(serialization_alias="noticeId")
+    code: Literal["request-not-applied"]
+    label: str
+    detail: str
+    tone: Literal["attention", "danger"]
+
+
 class ProjectionCommandOutcome(_ProjectionRecord):
     """Gateway-owned outcome of the most recently accepted command."""
 
@@ -218,7 +228,7 @@ class ProjectionUsage(_ProjectionRecord):
     cache_read_tokens: int = Field(default=0, ge=0, serialization_alias="cacheReadTokens")
     cache_write_tokens: int = Field(default=0, ge=0, serialization_alias="cacheWriteTokens")
     reasoning_tokens: int = Field(default=0, ge=0, serialization_alias="reasoningTokens")
-    context_window: int | None = Field(default=None, serialization_alias="contextWindow")
+    context_window: int | None = Field(default=None, ge=0, serialization_alias="contextWindow")
     accumulated_cost: float = Field(default=0.0, ge=0, serialization_alias="accumulatedCost")
 
 
@@ -279,10 +289,13 @@ class SessionProjection(_ProjectionRecord):
         default_factory=lambda: _researcher_status(
             SessionLifecycle.IDLE,
             error_recoverable=True,
-            command_outcome=None,
             latest_action_denied=False,
         ),
         serialization_alias="researcherStatus",
+    )
+    researcher_notice: ProjectionResearcherNotice | None = Field(
+        default=None,
+        serialization_alias="researcherNotice",
     )
     last_command_outcome: ProjectionCommandOutcome | None = Field(
         default=None,
@@ -769,9 +782,9 @@ def project_session(
         researcher_status=_researcher_status(
             lifecycle_status,
             error_recoverable=lifecycle_error_recoverable,
-            command_outcome=command_outcome,
             latest_action_denied=_latest_action_was_denied(projected_actions),
         ),
+        researcher_notice=_researcher_notice(command_outcome),
         last_command_outcome=command_outcome,
         task_plan=tasks,
         usage=usage,
@@ -1227,7 +1240,6 @@ def _researcher_status(
     lifecycle: SessionLifecycle,
     *,
     error_recoverable: bool,
-    command_outcome: ProjectionCommandOutcome | None,
     latest_action_denied: bool,
 ) -> ProjectionResearcherStatus:
     if lifecycle == SessionLifecycle.RUNNING:
@@ -1277,20 +1289,25 @@ def _researcher_status(
             detail="The proposed actions were not run. Heartwood is ready for revised guidance.",
             tone="attention",
         )
-    if command_outcome is not None and command_outcome.status == "rejected":
-        return ProjectionResearcherStatus(
-            code="denied",
-            label="Request Not Applied",
-            detail=(
-                command_outcome.message or "Review the request and session state before retrying."
-            ),
-            tone="attention",
-        )
     return ProjectionResearcherStatus(
         code="ready",
         label="Ready",
         detail="Heartwood is ready for the next task.",
         tone="neutral",
+    )
+
+
+def _researcher_notice(
+    command_outcome: ProjectionCommandOutcome | None,
+) -> ProjectionResearcherNotice | None:
+    if command_outcome is None or command_outcome.status != "rejected":
+        return None
+    return ProjectionResearcherNotice(
+        notice_id=f"command:{command_outcome.command_id}:rejected",
+        code="request-not-applied",
+        label="Request Not Applied",
+        detail=(command_outcome.message or "Review the request and session state before retrying."),
+        tone="attention",
     )
 
 
@@ -1525,6 +1542,7 @@ __all__ = [
     "ProjectionMessage",
     "ProjectionModelContext",
     "ProjectionOtherActionDetails",
+    "ProjectionResearcherNotice",
     "ProjectionResearcherStatus",
     "ProjectionSubagent",
     "ProjectionSuggestion",

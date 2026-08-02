@@ -33,6 +33,7 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionOtherActionDetails,
+    ProjectionResearcherNotice,
     ProjectionSubagent,
     ProjectionSuggestion,
     ProjectionTask,
@@ -630,6 +631,30 @@ def test_notebook_exposes_gateway_owned_status_and_suggestions() -> None:
     assert view_model.suggestions is projection.suggestions
     assert sections["Suggested Next Steps"] == (
         "Inspect the Project: Inspect this project without changing files.",
+    )
+
+
+def test_notebook_exposes_gateway_owned_command_notice() -> None:
+    projection = SessionProjection(
+        session_id="notebook-command-notice",
+        event_count=0,
+        revision=-1,
+        researcher_notice=ProjectionResearcherNotice(
+            notice_id="command:pause-race:rejected",
+            code="request-not-applied",
+            label="Request Not Applied",
+            detail="The pause request was not applied.",
+            tone="attention",
+        ),
+    )
+
+    view_model = build_view_model(projection)
+    sections = {section.title: section.items for section in build_widget_spec(view_model)}
+
+    assert view_model.researcher_notice is projection.researcher_notice
+    assert sections["Runtime"][:2] == (
+        "Status: Ready",
+        "Request Not Applied: The pause request was not applied.",
     )
 
 

@@ -163,6 +163,7 @@ export const emptyProjection = (
     tone: "neutral",
     recoverable: true,
   },
+  researcherNotice: null,
   lastCommandOutcome: null,
   taskPlan: [],
   usage: null,
