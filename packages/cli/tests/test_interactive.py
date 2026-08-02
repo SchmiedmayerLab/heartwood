@@ -45,7 +45,10 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionOtherActionDetails,
+    ProjectionResearcherNotice,
+    ProjectionResearcherStatus,
     ProjectionSubagent,
+    ProjectionSuggestion,
     ProjectionTask,
     ProjectionTaskActionDetails,
     ProjectionTerminalActionDetails,
@@ -214,7 +217,7 @@ def test_plain_terminal_marks_bounded_action_output_as_truncated() -> None:
     rendered = "\n".join(format_action_record_lines(action))
 
     assert "$ pytest tests/test_analysis.py" in rendered
-    assert "action set action-set-synthetic · decision approved" in rendered
+    assert "decision approved (complete action set)" in rendered
     assert '"command":"pytest tests/test_analysis.py"' in rendered
     assert "modified results/report.txt (file-editor-action)" in rendered
     assert "synthetic failure" in rendered
@@ -730,6 +733,7 @@ def test_textual_terminal_appends_persisted_messages_and_replaces_transient_stat
                 streaming_text="Inspecting",
                 usage=ProjectionUsage(
                     usage_id="total",
+                    purpose_label="Total Model Activity",
                     model_name="synthetic-model",
                     call_count=1,
                     prompt_tokens=10,
@@ -779,6 +783,7 @@ def test_textual_terminal_appends_persisted_messages_and_replaces_transient_stat
                     "streaming_text": "",
                     "usage": ProjectionUsage(
                         usage_id="total",
+                        purpose_label="Total Model Activity",
                         model_name="synthetic-model",
                         call_count=2,
                         prompt_tokens=20,
@@ -960,8 +965,16 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
             ),
         ),
         task_plan=(
-            ProjectionTask(title="Inspect the synthetic cohort", status="done"),
-            ProjectionTask(title="Write the aggregate result", status="in-progress"),
+            ProjectionTask(
+                title="Inspect the synthetic cohort",
+                status="done",
+                status_label="Complete",
+            ),
+            ProjectionTask(
+                title="Write the aggregate result",
+                status="in-progress",
+                status_label="In Progress",
+            ),
         ),
         pending_approval=ProjectionApprovalGroup(
             group_id="action-set-synthetic",
@@ -988,6 +1001,7 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
         ),
         usage=ProjectionUsage(
             usage_id="total",
+            purpose_label="Total Model Activity",
             model_name="synthetic-model",
             call_count=2,
             prompt_tokens=120,
@@ -996,6 +1010,7 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
         usage_by_purpose=(
             ProjectionUsage(
                 usage_id="agent",
+                purpose_label="Primary Agent",
                 model_name="synthetic-model",
                 call_count=2,
                 prompt_tokens=120,
@@ -1007,9 +1022,13 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
                 invocation_id="task-call-1",
                 task_id="task-1",
                 agent_name="research-planner",
+                role_label="Research Planner",
                 status="completed",
+                status_label="Complete",
                 parent_session_id="session-test",
                 parent_action_id="action-1",
+                task_summary="Review the synthetic analysis plan",
+                result_summary="Plan review completed",
             ),
         ),
     )
@@ -1023,11 +1042,14 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "Write the aggregate result" in rendered
     assert '"file_text": "heartwood-corrected-review-ok\\n"' in rendered
     assert "Model activity: 2 calls · 150 tokens · synthetic-model" in rendered
-    assert "agent: 2 calls · 150 tokens" in rendered
+    assert "Primary Agent: 2 calls · 150 tokens" in rendered
     assert "Task plan:" in rendered
-    assert "[x] Inspect the synthetic cohort" in rendered
-    assert "[·] Write the aggregate result" in rendered
-    assert "research-planner: completed · invocation task-call-1 · task task-1" in rendered
+    assert "[x] Inspect the synthetic cohort (Complete)" in rendered
+    assert "[ ] Write the aggregate result (In Progress)" in rendered
+    assert "Research Planner: Complete" in rendered
+    assert "Task: Review the synthetic analysis plan" in rendered
+    assert "Result: Plan review completed" in rendered
+    assert "task-call-1" not in rendered
     assert lines[-2:] == (
         "Allow the complete set once: /allow",
         "Reject the complete set: /reject",
@@ -1038,6 +1060,60 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "Proposed terminal command" not in filtered
     assert "Model activity: 2 calls · 150 tokens · synthetic-model" in filtered
     assert "Review 2 actions as one OpenHands action set:" in filtered
+
+
+def test_line_formatter_renders_gateway_owned_suggestions_without_internal_ids() -> None:
+    projection = SessionProjection(
+        session_id="terminal-suggestions",
+        event_count=0,
+        revision=-1,
+        suggestions=(
+            ProjectionSuggestion(
+                suggestion_id="inspect-project",
+                label="Inspect the Project",
+                prompt="Inspect this project without changing files.",
+                kind="task",
+            ),
+        ),
+    )
+
+    rendered = "\n".join(format_projection_lines(projection))
+
+    assert "Suggested next steps:" in rendered
+    assert "Inspect the Project: Inspect this project without changing files." in rendered
+    assert "inspect-project" not in rendered
+
+
+def test_line_formatter_renders_gateway_owned_command_notice() -> None:
+    projection = SessionProjection(
+        session_id="terminal-command-notice",
+        event_count=0,
+        revision=-1,
+        lifecycle=ProjectionLifecycleState(
+            status=SessionLifecycle.RUNNING,
+            can_pause=True,
+            can_steer=True,
+        ),
+        researcher_status=ProjectionResearcherStatus(
+            code="working",
+            label="Heartwood Is Working",
+            detail="You can send guidance or pause while the task is active.",
+            tone="progress",
+        ),
+        researcher_notice=ProjectionResearcherNotice(
+            notice_id="command:pause-race:rejected",
+            code="request-not-applied",
+            label="Request Not Applied",
+            detail="The task reached a stable boundary before pause was applied.",
+            tone="attention",
+        ),
+    )
+
+    rendered = "\n".join(format_projection_lines(projection))
+
+    assert "Status: Heartwood Is Working" in rendered
+    assert "Notice: Request Not Applied" in rendered
+    assert "stable boundary" in rendered
 
 
 def test_interaction_activity_matches_the_submitted_operation() -> None:
@@ -1390,6 +1466,7 @@ def test_textual_terminal_reports_delayed_activity_without_claiming_agent_progre
 
     async def exercise() -> None:
         app = HeartwoodTerminalApp(IdleSession())
+        assert app._idle_status("ready") == "Ready · Action Review"
         async with app.run_test(size=(72, 20)):
             app._set_busy(
                 True,

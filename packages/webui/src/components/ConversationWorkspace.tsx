@@ -39,8 +39,14 @@ import type {
   ConversationMessage,
   ProjectionActionRecord,
   ProjectionApprovalGroup,
+  ProjectionSuggestion,
   SessionProjection,
 } from "../types";
+import {
+  displayBoundedSafeText,
+  displaySafeText,
+  SafeMarkdown,
+} from "./SafeMarkdown";
 
 interface ConversationWorkspaceProps {
   conversationEndRef: RefObject<HTMLDivElement | null>;
@@ -94,6 +100,31 @@ export const ConversationWorkspace = ({
       (action) =>
         action.state !== "awaiting-review" && action.state !== "proposed",
     ) ?? [];
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const previousApprovalId = useRef<string | null>(
+    pendingApproval?.groupId ?? null,
+  );
+
+  useEffect(() => {
+    if (pendingApproval !== null) {
+      previousApprovalId.current = pendingApproval.groupId;
+      return;
+    }
+    if (
+      previousApprovalId.current === null ||
+      !modelConfigured ||
+      !canChat ||
+      requestStatus === "busy"
+    )
+      return;
+    previousApprovalId.current = null;
+    composerRef.current?.focus();
+  }, [canChat, modelConfigured, pendingApproval, requestStatus]);
+
+  const selectSuggestion = (suggestion: ProjectionSuggestion): void => {
+    onPrompt(suggestion.prompt);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
 
   return (
     <section className="conversation-workspace" aria-label="Agent conversation">
@@ -111,11 +142,13 @@ export const ConversationWorkspace = ({
         aria-label="Conversation transcript"
         className="conversation-list"
         role="log"
+        tabIndex={0}
       >
         {conversation.length === 0 && !projection?.streamingText ?
           <EmptyConversation
             disabled={!modelConfigured || !canChat}
-            onPrompt={onPrompt}
+            suggestions={projection?.suggestions ?? []}
+            onSelect={selectSuggestion}
           />
         : conversation.map((message) => (
             <ConversationItem key={message.id} message={message} />
@@ -131,6 +164,7 @@ export const ConversationWorkspace = ({
         {requestStatus === "busy" && requestActivity !== null ?
           <RequestActivity activity={requestActivity} />
         : null}
+        <ResearcherNotice projection={projection} />
         <RuntimeStatus projection={projection} />
         <div ref={conversationEndRef} aria-hidden="true" />
       </div>
@@ -146,10 +180,23 @@ export const ConversationWorkspace = ({
             busy={requestStatus === "busy"}
             onDecision={onDecision}
           />
+        : (
+          conversation.length > 0 &&
+          projection !== null &&
+          projection.suggestions.length > 0 &&
+          !running
+        ) ?
+          <SuggestionActions
+            compact
+            disabled={!modelConfigured || !canChat}
+            suggestions={projection.suggestions}
+            onSelect={selectSuggestion}
+          />
         : null}
         <div className="composer">
           <Textarea
             aria-label="Task"
+            ref={composerRef}
             disabled={
               !modelConfigured ||
               !canChat ||
@@ -255,31 +302,57 @@ const RequestActivity = ({ activity }: { activity: RequestActivityState }) => {
 
 const EmptyConversation = ({
   disabled,
-  onPrompt,
+  suggestions,
+  onSelect,
 }: {
   disabled: boolean;
-  onPrompt: (prompt: string) => void;
+  suggestions: readonly ProjectionSuggestion[];
+  onSelect: (suggestion: ProjectionSuggestion) => void;
 }) => (
   <div className="conversation-empty">
     <span className="empty-icon" aria-hidden="true">
       <MessageSquareText size={22} />
     </span>
     <h2>Start an analysis</h2>
-    <div className="starter-actions" aria-label="Task starters">
-      {TASK_STARTERS.map((starter) => (
+    <SuggestionActions
+      disabled={disabled}
+      suggestions={suggestions}
+      onSelect={onSelect}
+    />
+  </div>
+);
+
+const SuggestionActions = ({
+  compact = false,
+  disabled,
+  suggestions,
+  onSelect,
+}: {
+  compact?: boolean;
+  disabled: boolean;
+  suggestions: readonly ProjectionSuggestion[];
+  onSelect: (suggestion: ProjectionSuggestion) => void;
+}) => {
+  if (suggestions.length === 0) return null;
+  return (
+    <div
+      aria-label="Suggested next steps"
+      className={compact ? "suggestion-actions compact" : "suggestion-actions"}
+    >
+      {suggestions.map((suggestion) => (
         <Button
           disabled={disabled}
-          key={starter}
+          key={suggestion.suggestionId}
           size="sm"
           variant="outline"
-          onClick={() => onPrompt(starter)}
+          onClick={() => onSelect(suggestion)}
         >
-          {starter}
+          {suggestion.label}
         </Button>
       ))}
     </div>
-  </div>
-);
+  );
+};
 
 const ConversationItem = ({ message }: { message: ConversationMessage }) => {
   if (message.role === "trace") {
@@ -287,14 +360,14 @@ const ConversationItem = ({ message }: { message: ConversationMessage }) => {
       <div className="trace-message">
         <TerminalSquare size={15} aria-hidden="true" />
         <div>
-          <strong>{message.content}</strong>
+          <strong>{displaySafeText(message.content)}</strong>
           {message.detail ?
-            <span>{message.detail}</span>
+            <span>{displaySafeText(message.detail)}</span>
           : null}
           {message.technicalDetail ?
             <details className="trace-details">
               <summary>Exact action details</summary>
-              <pre tabIndex={0}>{message.technicalDetail}</pre>
+              <pre tabIndex={0}>{displaySafeText(message.technicalDetail)}</pre>
             </details>
           : null}
         </div>
@@ -304,31 +377,61 @@ const ConversationItem = ({ message }: { message: ConversationMessage }) => {
   return (
     <article className={`conversation-message ${message.role}`}>
       <div className="conversation-meta">
-        <small>{message.label}</small>
+        <small>{displaySafeText(message.label)}</small>
         {message.detail ?
-          <span>{message.detail}</span>
+          <span>{displaySafeText(message.detail)}</span>
         : null}
       </div>
-      <p>{message.content}</p>
+      {message.role === "agent" ?
+        <SafeMarkdown content={message.content} />
+      : <p>{displaySafeText(message.content)}</p>}
     </article>
   );
 };
 
-const StreamingMessage = ({ content }: { content: string }) => (
-  <article
-    aria-label="Agent response in progress"
-    className="conversation-message agent streaming-message"
-  >
-    <div className="conversation-meta">
-      <small>Agent</small>
-      <span>Responding</span>
-    </div>
-    <p>
-      {content}
+const StreamingMessage = ({ content }: { content: string }) => {
+  const rendered = displayBoundedSafeText(content);
+  return (
+    <article
+      aria-label="Agent response in progress"
+      className="conversation-message agent streaming-message"
+    >
+      <div className="conversation-meta">
+        <small>Agent</small>
+        <span>Responding</span>
+      </div>
+      <p>{rendered.text}</p>
+      {rendered.truncated ?
+        <span className="markdown-truncated" role="note">
+          The in-progress response is too large to display completely.
+        </span>
+      : null}
       <span aria-hidden="true" className="streaming-cursor" />
-    </p>
-  </article>
-);
+    </article>
+  );
+};
+
+const ResearcherNotice = ({
+  projection,
+}: {
+  projection: SessionProjection | null;
+}) => {
+  const notice = projection?.researcherNotice;
+  if (notice === undefined || notice === null) return null;
+  return (
+    <section
+      aria-label="Request outcome"
+      className={`researcher-notice ${notice.tone}`}
+      role="alert"
+    >
+      <CircleX aria-hidden="true" size={16} />
+      <div>
+        <strong>{displaySafeText(notice.label)}</strong>
+        <p>{displaySafeText(notice.detail)}</p>
+      </div>
+    </section>
+  );
+};
 
 const ActionHistory = ({
   actions,
@@ -350,7 +453,7 @@ const ActionHistory = ({
               <ActionStateIcon state={action.state} />
               <div>
                 <div className="action-history-heading">
-                  <strong>{actionHeading(action)}</strong>
+                  <strong>{displaySafeText(actionHeading(action))}</strong>
                   <Badge variant="secondary">
                     {actionStateLabel(action.state, actionPresentation)}
                   </Badge>
@@ -362,12 +465,13 @@ const ActionHistory = ({
                   </Badge>
                   {action.outcome !== null ?
                     <span>
-                      Exit {action.outcome.exitCode} · {action.outcome.summary}
+                      Exit {action.outcome.exitCode} ·{" "}
+                      {displaySafeText(action.outcome.summary)}
                     </span>
                   : null}
                   {action.groupId !== null ?
                     <span>
-                      Action set {action.groupId} ·{" "}
+                      Complete action set ·{" "}
                       {action.decision ?? "decision pending"}
                     </span>
                   : action.decision !== null ?
@@ -376,19 +480,23 @@ const ActionHistory = ({
                 </div>
                 {action.affectedPaths.length > 0 ?
                   <p>
-                    {action.affectedPaths
-                      .map(
-                        (path) =>
-                          `${path.effect}: ${path.path} (${path.provenance})`,
-                      )
-                      .join(", ")}
+                    {displaySafeText(
+                      action.affectedPaths
+                        .map(
+                          (path) =>
+                            `${path.effect}: ${path.path} (${path.provenance})`,
+                        )
+                        .join(", "),
+                    )}
                   </p>
                 : null}
                 {Object.keys(action.arguments).length > 0 ?
                   <details className="trace-details">
                     <summary>Exact arguments</summary>
                     <pre tabIndex={0}>
-                      {JSON.stringify(action.arguments, null, 2)}
+                      {displaySafeText(
+                        JSON.stringify(action.arguments, null, 2),
+                      )}
                     </pre>
                   </details>
                 : null}
@@ -398,9 +506,12 @@ const ActionHistory = ({
                       Action output
                       {action.outcome.resultTruncated ? " (truncated)" : ""}
                     </summary>
-                    <pre tabIndex={0}>{action.outcome.result}</pre>
+                    <pre tabIndex={0}>
+                      {displaySafeText(action.outcome.result)}
+                    </pre>
                   </details>
                 : null}
+                <ActionTechnicalDetails action={action} />
               </div>
             </li>
           );
@@ -424,6 +535,24 @@ const ActionStateIcon = ({
   : state === "failed" || state === "rejected" || state === "outcome-unknown" ?
     <CircleX aria-hidden="true" className="action-state-error" size={17} />
   : <Clock3 aria-hidden="true" className="action-state-pending" size={17} />;
+
+const ActionTechnicalDetails = ({
+  action,
+}: {
+  action: ProjectionActionRecord;
+}) => {
+  const details = [
+    `Tool call: ${action.toolCallId}`,
+    ...(action.actionId === null ? [] : [`Action: ${action.actionId}`]),
+    ...(action.groupId === null ? [] : [`Action set: ${action.groupId}`]),
+  ];
+  return (
+    <details className="trace-details">
+      <summary>Technical details</summary>
+      <pre tabIndex={0}>{displaySafeText(details.join("\n"))}</pre>
+    </details>
+  );
+};
 
 const actionHeading = (action: ProjectionActionRecord) => {
   if (action.details.kind === "terminal") {
@@ -452,6 +581,7 @@ const RuntimeStatus = ({
   if (
     projection === null ||
     (projection.lifecycle.status === "idle" &&
+      projection.researcherStatus.code === "ready" &&
       projection.taskPlan.length === 0 &&
       projection.usage === null &&
       projection.subagents.length === 0)
@@ -474,8 +604,9 @@ const RuntimeStatus = ({
             size={16}
           />
         : <ListChecks aria-hidden="true" size={16} />}
-        <strong>{lifecycleLabel(projection.lifecycle.status)}</strong>
+        <strong>{displaySafeText(projection.researcherStatus.label)}</strong>
       </div>
+      <p>{displaySafeText(projection.researcherStatus.detail)}</p>
       {projection.taskPlan.length > 0 ?
         <details>
           <summary>
@@ -484,8 +615,8 @@ const RuntimeStatus = ({
           <ol>
             {projection.taskPlan.map((task, index) => (
               <li key={`${index}-${task.title}`}>
-                <span>{task.title}</span>
-                <small>{taskStatusLabel(task.status)}</small>
+                <span>{displaySafeText(task.title)}</span>
+                <small>{displaySafeText(task.statusLabel)}</small>
               </li>
             ))}
           </ol>
@@ -494,13 +625,16 @@ const RuntimeStatus = ({
       <div className="runtime-status-metrics">
         {projection.usage ?
           <span>
-            {totalTokens.toLocaleString()} tokens · {projection.usage.modelName}
+            {totalTokens.toLocaleString()} tokens ·{" "}
+            {displaySafeText(projection.usage.modelName)}
             {projection.usage.contextWindow === null ?
               ""
-            : ` · ${projection.usage.contextWindow.toLocaleString()} context`}
+            : ` · ${projection.usage.contextWindow.toLocaleString()} context limit`
+            }
             {projection.usage.accumulatedCost <= 0 ?
               ""
-            : ` · $${projection.usage.accumulatedCost.toFixed(2)}`}
+            : ` · $${projection.usage.accumulatedCost.toFixed(2)} reported cost`
+            }
             {` · ${projection.usage.callCount.toLocaleString()} calls`}
           </span>
         : null}
@@ -511,7 +645,7 @@ const RuntimeStatus = ({
           <ul>
             {projection.usageByPurpose.map((usage) => (
               <li key={usage.usageId}>
-                <span>{usage.usageId}</span>
+                <span>{displaySafeText(usage.purposeLabel)}</span>
                 <small>
                   {usage.callCount.toLocaleString()} calls ·{" "}
                   {(
@@ -534,12 +668,29 @@ const RuntimeStatus = ({
             {projection.subagents.map((subagent) => (
               <li key={subagent.invocationId}>
                 <span>
-                  {subagent.agentName} ({subagent.status.replace("-", " ")})
+                  {displaySafeText(subagent.roleLabel)} (
+                  {displaySafeText(subagent.statusLabel)})
                 </span>
-                <small>
-                  Parent session {subagent.parentSessionId} · action{" "}
-                  {subagent.parentActionId}
-                </small>
+                {subagent.taskSummary ?
+                  <small>Task: {displaySafeText(subagent.taskSummary)}</small>
+                : null}
+                {subagent.resultSummary ?
+                  <small>
+                    Result: {displaySafeText(subagent.resultSummary)}
+                  </small>
+                : null}
+                <details className="trace-details">
+                  <summary>Technical details</summary>
+                  <pre tabIndex={0}>
+                    {displaySafeText(
+                      [
+                        `Invocation: ${subagent.invocationId}`,
+                        `Parent session: ${subagent.parentSessionId}`,
+                        `Parent action: ${subagent.parentActionId}`,
+                      ].join("\n"),
+                    )}
+                  </pre>
+                </details>
               </li>
             ))}
           </ul>
@@ -618,7 +769,7 @@ const ApprovalRequest = ({
                   {index + 1}
                 </span>
                 <div className="approval-action-content">
-                  <strong>{control.summary || tool}</strong>
+                  <strong>{displaySafeText(control.summary || tool)}</strong>
                   <div className="approval-action-meta">
                     <span>{tool}</span>
                     <Badge className={risk.className} variant="outline">
@@ -629,7 +780,9 @@ const ApprovalRequest = ({
                     <details className="approval-details">
                       <summary>Review Exact Arguments</summary>
                       <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
-                        {JSON.stringify(control.arguments, null, 2)}
+                        {displaySafeText(
+                          JSON.stringify(control.arguments, null, 2),
+                        )}
                       </pre>
                     </details>
                   : null}
@@ -666,30 +819,3 @@ const ApprovalRequest = ({
     </section>
   );
 };
-
-const lifecycleLabel = (
-  status: SessionProjection["lifecycle"]["status"],
-): string =>
-  ({
-    error: "Agent stopped with an error",
-    finished: "Task complete",
-    idle: "Ready",
-    paused: "Agent paused",
-    running: "Heartwood is working",
-    "waiting-for-confirmation": "Waiting for approval",
-  })[status];
-
-const taskStatusLabel = (
-  status: SessionProjection["taskPlan"][number]["status"],
-): string =>
-  ({
-    done: "Complete",
-    "in-progress": "In progress",
-    todo: "Not started",
-  })[status];
-
-const TASK_STARTERS = [
-  "Inspect the project",
-  "Summarize the available files",
-  "Identify the next safe step",
-];

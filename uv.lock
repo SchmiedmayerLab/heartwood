@@ -1674,8 +1674,8 @@ requires-dist = [
     { name = "huggingface-hub", specifier = "==1.24.0" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "openai", specifier = "==2.47.0" },
-    { name = "openhands-sdk", specifier = "==1.37.1" },
-    { name = "openhands-tools", specifier = "==1.37.1" },
+    { name = "openhands-sdk", specifier = "==1.40.0" },
+    { name = "openhands-tools", specifier = "==1.40.0" },
     { name = "packaging", specifier = "==26.2" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "tomli-w", specifier = "==1.2.0" },
@@ -3237,7 +3237,7 @@ wheels = [
 
 [[package]]
 name = "openhands-sdk"
-version = "1.37.1"
+version = "1.40.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -3258,14 +3258,14 @@ dependencies = [
     { name = "tree-sitter-bash" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4b/0e/feccb5e25db5560f7629810d0871eff7fb08463c70b1a0418aa8c3ec0179/openhands_sdk-1.37.1.tar.gz", hash = "sha256:c123a9fc86d289d1e5a92fae5d3f5fc4d4b615b1d8f40ed33028b784e5289c36", size = 646206, upload-time = "2026-07-24T16:32:33.487Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/77/aa90f74e61a1f134eac60d69f66ca32aa4e720945fd61fc6bf434b7de3df/openhands_sdk-1.40.0.tar.gz", hash = "sha256:5413dac766759ff48159a51fb6b50ab4ad3ce9bc77ce29c4d820adcdc66d815c", size = 652519, upload-time = "2026-08-01T02:40:49.969Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/e7/7f67965f94b2cb61edf86a637a0ffacca9a7e52ac9b44b4fdae358496457/openhands_sdk-1.37.1-py3-none-any.whl", hash = "sha256:d7d7723e7d44fbf0bed734875668cb7dba1fd441346fcc295b37513ff32130da", size = 772361, upload-time = "2026-07-24T16:32:29.251Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/30/ee77d0dbd68b16dc760422212ba23f8eb9139875200474e3cddd99f84c40/openhands_sdk-1.40.0-py3-none-any.whl", hash = "sha256:1c252c27ea5a2d8310b3b3c4a1a119e1d9a8c764f7cee527e43cbcc90a53dbd8", size = 779344, upload-time = "2026-08-01T02:40:45.662Z" },
 ]
 
 [[package]]
 name = "openhands-tools"
-version = "1.37.1"
+version = "1.40.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "binaryornot" },
@@ -3279,9 +3279,9 @@ dependencies = [
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/30/d4/6f75cf52a5194827fac24167a7dd854fab15202f9b51fc84343a721bc834/openhands_tools-1.37.1.tar.gz", hash = "sha256:5123ee1cbd0bc2cc9accfbd2f1ff3ccb0e8544083611e6277f57d95a56b53869", size = 146178, upload-time = "2026-07-24T16:32:34.396Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/ba/cf10f989cec4625fd6ca35cca3e56607439b1014982de74e1aa96fd78054/openhands_tools-1.40.0.tar.gz", hash = "sha256:4d2a9a25750516a7ead93fff8c66a42e319583f2c94c13c08312aae785dce990", size = 146500, upload-time = "2026-08-01T02:40:50.915Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/70/a8/eae92cbe0cc69b28df5620b721add78af8de78aedb59c60ab7a10e8113b2/openhands_tools-1.37.1-py3-none-any.whl", hash = "sha256:ebe9fb7c8fe98bcc010f1ed2ace2e6d1efaaf325c5fd781a65c5fffd8e45ea0d", size = 191452, upload-time = "2026-07-24T16:32:30.743Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/5a/90c36e1deca94257a88309cb865e664a7937f6587955256e1549d2f59fbe/openhands_tools-1.40.0-py3-none-any.whl", hash = "sha256:83becebdaa1afb0fdd6ed6a7e0078a1777ad7b791d543fd0c480c5828abc0390", size = 191979, upload-time = "2026-08-01T02:40:46.834Z" },
 ]
 
 [[package]]
@@ -3525,7 +3525,7 @@ name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "ptyprocess", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
+    { name = "ptyprocess" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/92/cc564bf6381ff43ce1f4d06852fc19a2f11d180f23dc32d9588bee2f149d/pexpect-4.9.0.tar.gz", hash = "sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f", size = 166450, upload-time = "2023-11-25T09:07:26.339Z" }
 wheels = [
@@ -7542,8 +7542,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
-    { name = "jeepney", marker = "python_full_version >= '3.15' or sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

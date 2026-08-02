@@ -76,6 +76,8 @@ export interface SessionProjection {
    */
   paused: boolean;
   pendingApproval: ProjectionApprovalGroup | null;
+  researcherNotice: ProjectionResearcherNotice | null;
+  researcherStatus: ProjectionResearcherStatus;
   revision: number;
   schema_version: "heartwood.session-projection.v1";
   sessionId: string;
@@ -83,6 +85,7 @@ export interface SessionProjection {
   streamRevision: number;
   streamingText: string;
   subagents: ProjectionSubagent[];
+  suggestions: ProjectionSuggestion[];
   taskPlan: ProjectionTask[];
   usage: ProjectionUsage | null;
   usageByPurpose: ProjectionUsage[];
@@ -224,16 +227,65 @@ export interface ProjectionApprovalGroup {
   decisionScope: "all";
   groupId: string;
 }
+/**
+ * A non-lifecycle outcome that every interface must present.
+ */
+export interface ProjectionResearcherNotice {
+  code: "request-not-applied";
+  detail: string;
+  label: string;
+  noticeId: string;
+  tone: "attention" | "danger";
+}
+/**
+ * Stable researcher-facing state derived from the session lifecycle.
+ */
+export interface ProjectionResearcherStatus {
+  code:
+    | "ready"
+    | "working"
+    | "waiting-for-review"
+    | "paused"
+    | "complete"
+    | "denied"
+    | "recoverable-failure"
+    | "terminal-failure";
+  detail: string;
+  label: string;
+  recoverable: boolean;
+  tone: "neutral" | "progress" | "attention" | "success" | "danger";
+}
 export interface ProjectionSubagent {
   agentName: string;
   invocationId: string;
   parentActionId: string;
   parentSessionId: string;
+  resultSummary: string | null;
+  roleLabel: string;
   status: "proposed" | "running" | "completed" | "error";
+  statusLabel: string;
   taskId: string | null;
+  taskSummary: string | null;
+}
+/**
+ * One bounded task suggestion derived from the authoritative session state.
+ */
+export interface ProjectionSuggestion {
+  kind: "task" | "follow-up" | "recovery";
+  label: string;
+  prompt: string;
+  suggestionId:
+    | "inspect-project"
+    | "plan-project"
+    | "continue-plan"
+    | "review-changes"
+    | "verify-work"
+    | "recover-task"
+    | "identify-next-step";
 }
 export interface ProjectionTask {
   status: "todo" | "in-progress" | "done";
+  statusLabel: string;
   title: string;
 }
 export interface ProjectionUsage {
@@ -245,6 +297,7 @@ export interface ProjectionUsage {
   contextWindow: number | null;
   modelName: string;
   promptTokens: number;
+  purposeLabel: string;
   reasoningTokens: number;
   usageId: string;
 }

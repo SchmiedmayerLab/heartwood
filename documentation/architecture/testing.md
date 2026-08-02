@@ -16,7 +16,7 @@ No single layer establishes every property of a deployment.
 | Unit and schema tests | Validation, state boundaries, policy, diagnostics, model planning, and serialization |
 | OpenHands conformance tests | Public typed events, explicit settings, background control, grouped approval, restart recovery, real Task Tracker execution, usage, and sequential specialists with deterministic `TestLLM` |
 | Gateway contract tests | Shared command/event behavior, action correlation, projection replay, bounded workspace inspection, coherent REST, WebSocket, and server-sent-events snapshots, transient ordering, credentials, sessions, and imports |
-| Interface tests | Terminal, browser, and notebook rendering of the gateway-owned projection, files, and changes |
+| Interface tests | Terminal, browser, and notebook rendering of gateway-owned status, suggestions, grouped review, files, and changes |
 | Container smoke tests | Entrypoint, filesystem, architecture, no-secret image layers, and deterministic OpenHands integration |
 | No-network smoke tests | Gateway, OpenHands, grouped action, tool, replay, and audit operation without outbound network |
 | Capable-model evaluation | Real Heartwood-managed inference, OpenHands-compatible tool proposal, bounded execution, and exact synthetic output |
@@ -37,6 +37,9 @@ OpenHands SDK conformance tests use the real conversation persistence layer and 
 They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state fails closed as an unknown outcome, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
 Workspace contract tests qualify the pinned OpenHands Git change and diff APIs, non-Git typed-action fallback, canonical path handling, nested private-state exclusion, traversal and symlink rejection, special and binary files, UTF-8 boundaries, limits, audit scrubbing, and cross-interface transport.
 The browser reference analysis stops its gateway, replays and mutates the same session through the CLI, restarts the gateway, and verifies that the browser receives the CLI update on one contiguous authoritative sequence.
+Browser tests build the current production assets before starting the preview server, exercise direct and fallback live-update states, scan the rendered interface with axe, and verify keyboard focus, reduced motion, and reflow at desktop, tablet, and narrow notebook widths.
+Adversarial response tests cover raw HTML, unsafe links, remote images, invisible control characters, oversized Markdown, heading hierarchy, and keyboard access to scrollable code and diff regions.
+Gateway transport tests bound request bodies, reject malformed text, keep API failures out of static-page fallback, and verify browser security headers for direct and Jupyter-proxied origins.
 
 Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths.
 Actual Terra and Carina qualification still requires the exact published artifact and synthetic task on those platforms because public CI cannot provision their managed workspaces.

@@ -154,6 +154,31 @@ Heartwood stopped during a model turn before OpenHands recorded a stable complet
 Do not repeat the task blindly because the provider may already have processed the request.
 Inspect the session replay and Activity & audit, then continue in a new session.
 
+### `HW-AGENT-008` — Model Provider Authentication Failed
+
+The model provider rejected the credential configured for the active connection.
+Open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.
+
+### `HW-AGENT-009` — Model Provider Quota Exhausted
+
+The provider reported that the configured quota, credit, or budget is exhausted.
+Review the approved provider account or select another approved model connection before continuing.
+
+### `HW-AGENT-010` — Model Provider Rate Limited
+
+The provider temporarily limited requests.
+Wait briefly and retry the task without repeating any action whose outcome is unknown.
+
+### `HW-AGENT-011` — Model Configuration Is Invalid
+
+The selected model, endpoint, or provider configuration cannot serve the requested task.
+Open model settings, correct the connection, and validate it before retrying.
+
+### `HW-AGENT-012` — Model Provider Is Unavailable
+
+The configured model service could not be reached or returned a temporary availability failure.
+Check the connection and provider status, then retry the task.
+
 ### `HW-AGENT-999` — The Agent Runtime Reported an Error
 
 An execution backend returned an error without a more specific stable code.

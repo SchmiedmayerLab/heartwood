@@ -38,6 +38,10 @@ const contracts = [
     ),
     rootName: "SessionProjection",
     sourceLabel: "gateway-owned Pydantic session projection",
+    runtimeSchemaOutput: join(
+      repositoryRoot,
+      "packages/webui/src/sessionProjectionSchema.generated.ts",
+    ),
   },
 ];
 
@@ -106,14 +110,42 @@ for (const contract of contracts) {
     ...prettierConfig,
     filepath: contract.output,
   });
+  const runtimeSchemaOutput =
+    contract.runtimeSchemaOutput === undefined ?
+      null
+    : await format(
+        `${bannerComment.replace("\n/* eslint-disable */", "")}export const sessionProjectionJsonSchema = ${JSON.stringify(minimizeRuntimeSchema(schema))} as const;\n`,
+        {
+          ...prettierConfig,
+          filepath: contract.runtimeSchemaOutput,
+        },
+      );
 
   if (checkOnly) {
     const current = await readFile(contract.output, "utf8").catch(() => "");
     if (current !== output) {
       staleOutputs.push(relative(repositoryRoot, contract.output));
     }
+    if (runtimeSchemaOutput !== null) {
+      const currentSchema = await readFile(
+        contract.runtimeSchemaOutput,
+        "utf8",
+      ).catch(() => "");
+      if (currentSchema !== runtimeSchemaOutput) {
+        staleOutputs.push(
+          relative(repositoryRoot, contract.runtimeSchemaOutput),
+        );
+      }
+    }
   } else {
     await writeFile(contract.output, output, "utf8");
+    if (runtimeSchemaOutput !== null) {
+      await writeFile(
+        contract.runtimeSchemaOutput,
+        runtimeSchemaOutput,
+        "utf8",
+      );
+    }
   }
 }
 
@@ -138,6 +170,26 @@ function removeFieldTitles(value, propertyMap = false) {
       .map(([key, item]) => [
         key,
         removeFieldTitles(item, key === "properties"),
+      ]),
+  );
+}
+
+function minimizeRuntimeSchema(value, propertyMap = false) {
+  if (Array.isArray(value)) {
+    return value.map((item) => minimizeRuntimeSchema(item));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(
+        ([key]) => propertyMap || (key !== "default" && key !== "description"),
+      )
+      .map(([key, item]) => [
+        key,
+        minimizeRuntimeSchema(item, !propertyMap && key === "properties"),
       ]),
   );
 }

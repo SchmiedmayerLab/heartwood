@@ -23,7 +23,12 @@ import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvi
 import { FileCode2, GitCompareArrows, MessagesSquare, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectedActionMode } from "./actionPresentation";
-import { GatewayClient, createCommand, type HeartwoodClient } from "./client";
+import {
+  GatewayClient,
+  createCommand,
+  type HeartwoodClient,
+  type SessionStreamState,
+} from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import {
@@ -77,6 +82,29 @@ interface ProjectionSelection {
 }
 
 type WorkspaceView = "changes" | "conversation" | "files";
+type SessionConnectionState = "replaying" | SessionStreamState;
+
+const connectionPresentation = {
+  replaying: {
+    label: "Recovering Session",
+    detail: "Restoring the saved conversation.",
+  },
+  connecting: {
+    label: "Connecting",
+    detail: "Connecting to live session updates.",
+  },
+  reconnecting: {
+    label: "Reconnecting",
+    detail: "Live updates were interrupted. Heartwood is reconnecting.",
+  },
+  degraded: {
+    label: "Live Updates Unavailable",
+    detail: "The saved conversation remains available.",
+  },
+} satisfies Record<
+  Exclude<SessionConnectionState, "connected">,
+  { label: string; detail: string }
+>;
 
 const emptyProfile = (): ModelProfileDraft => ({
   profile_id: "custom-profile",
@@ -109,6 +137,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   );
   const [requestActivity, setRequestActivity] =
     useState<RequestActivity | null>(null);
+  const [connectionState, setConnectionState] =
+    useState<SessionConnectionState>("connected");
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionRetry, setConnectionRetry] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [retryCommand, setRetryCommand] = useState<SessionCommand | null>(null);
   const [panel, setPanel] = useState<UtilityPanel>(null);
@@ -179,6 +211,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   );
 
   const updateSessionId = useCallback((nextSessionId: string | null) => {
+    if (sessionIdRef.current !== nextSessionId) {
+      setConnectionState(nextSessionId === null ? "connected" : "replaying");
+      setConnectionError(null);
+    }
     sessionIdRef.current = nextSessionId;
     setSessionId(nextSessionId);
   }, []);
@@ -274,6 +310,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       .replayEvents(sessionId)
       .then(({ projection: replayed }) => {
         if (!active || sessionIdRef.current !== sessionId) return;
+        setConnectionError(null);
         acceptProjection(replayed, sessionId);
         if (!commandInFlight.current) {
           setRequestStatus("idle");
@@ -281,27 +318,33 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         closeStream = resolvedClient.streamSession(
           sessionId,
           replayed.revision,
-          (streamed) => {
-            if (!active || sessionIdRef.current !== sessionId) return;
-            acceptProjection(streamed, sessionId);
-            refreshTimer ??= window.setTimeout(() => {
-              refreshTimer = null;
-              void refreshSessions().catch((caught: unknown) =>
-                setError(errorMessage(caught)),
-              );
-            }, 250);
-          },
-          (streamError) => {
-            if (!active || sessionIdRef.current !== sessionId) return;
-            setError(`Live session updates stopped: ${streamError.message}`);
-            setRequestStatus("error");
+          {
+            onProjection: (streamed) => {
+              if (!active || sessionIdRef.current !== sessionId) return;
+              acceptProjection(streamed, sessionId);
+              refreshTimer ??= window.setTimeout(() => {
+                refreshTimer = null;
+                void refreshSessions().catch((caught: unknown) =>
+                  setError(errorMessage(caught)),
+                );
+              }, 250);
+            },
+            onState: (state) => {
+              if (!active || sessionIdRef.current !== sessionId) return;
+              setConnectionState(state);
+              if (state === "connected") setConnectionError(null);
+            },
+            onError: (streamError) => {
+              if (!active || sessionIdRef.current !== sessionId) return;
+              setConnectionError(streamError.message);
+            },
           },
         );
       })
       .catch((caught: unknown) => {
         if (active && sessionIdRef.current === sessionId) {
-          setError(errorMessage(caught));
-          setRequestStatus("error");
+          setConnectionState("degraded");
+          setConnectionError(errorMessage(caught));
         }
       });
     return () => {
@@ -309,7 +352,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       if (refreshTimer !== null) window.clearTimeout(refreshTimer);
       closeStream();
     };
-  }, [acceptProjection, refreshSessions, resolvedClient, sessionId]);
+  }, [
+    acceptProjection,
+    connectionRetry,
+    refreshSessions,
+    resolvedClient,
+    sessionId,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -580,8 +629,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         outcome?.commandId === command.command_id &&
         outcome.status === "rejected"
       ) {
-        setError(outcome.message ?? "The command was rejected.");
-        setRequestStatus("error");
+        setRetryCommand(null);
+        setRequestStatus("idle");
         return false;
       }
       setRetryCommand(null);
@@ -645,6 +694,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       clearProjection();
       setPrompt("");
       setRetryCommand(null);
+      setConnectionState("replaying");
+      setConnectionError(null);
       updateSessionId(created.session_id);
       setMobileSessionsOpen(false);
     } catch (caught) {
@@ -663,11 +714,14 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   };
 
   const selectSession = (nextSessionId: string) => {
+    if (nextSessionId === sessionIdRef.current) return;
     selectionGeneration.current += 1;
     clearProjection();
     setPrompt("");
     setError(null);
     setRetryCommand(null);
+    setConnectionState("replaying");
+    setConnectionError(null);
     updateSessionId(nextSessionId);
     setMobileSessionsOpen(false);
     setPanel(null);
@@ -817,6 +871,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               startupPlan?.capabilities.display_name ?? "Checking environment"
             }
             projectLabel={projectLabel(startupPlan?.project_root)}
+            researcherStatus={projection?.researcherStatus ?? null}
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
@@ -855,6 +910,18 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 <X size={16} />
               </Button>
             </div>
+          : null}
+
+          {sessionId !== null && connectionState !== "connected" ?
+            <SessionConnectionNotice
+              detail={connectionError}
+              state={connectionState}
+              onRetry={() => {
+                setConnectionState("replaying");
+                setConnectionError(null);
+                setConnectionRetry((current) => current + 1);
+              }}
+            />
           : null}
 
           <Tabs
@@ -1105,6 +1172,35 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         />
       </main>
     </SpeziProvider>
+  );
+};
+
+const SessionConnectionNotice = ({
+  detail,
+  state,
+  onRetry,
+}: {
+  detail: string | null;
+  state: Exclude<SessionConnectionState, "connected">;
+  onRetry: () => void;
+}) => {
+  const presentation = connectionPresentation[state];
+  return (
+    <div
+      aria-live="polite"
+      className={`connection-notice ${state}`}
+      role="status"
+    >
+      <div className="connection-notice-copy">
+        <strong>{presentation.label}</strong>
+        <span>{detail ?? presentation.detail}</span>
+      </div>
+      {state === "degraded" ?
+        <Button size="sm" variant="outline" onClick={onRetry}>
+          Reconnect
+        </Button>
+      : null}
+    </div>
   );
 };
 

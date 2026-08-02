@@ -40,7 +40,7 @@ class _ProjectionRecord(BaseModel):
 
 
 class ProjectionActivity(_ProjectionRecord):
-    sequence: int
+    sequence: int = Field(ge=0)
     kind: EventKind
     label: str
     detail: str
@@ -48,7 +48,7 @@ class ProjectionActivity(_ProjectionRecord):
 
 class ProjectionMessage(_ProjectionRecord):
     id: str
-    sequence: int
+    sequence: int = Field(ge=0)
     role: Literal["user", "agent", "trace"]
     label: str
     content: str
@@ -62,7 +62,7 @@ class ProjectionTerminalActionDetails(_ProjectionRecord):
     kind: Literal["terminal"] = "terminal"
     command: str
     is_input: bool = Field(default=False, serialization_alias="isInput")
-    timeout: float | None = None
+    timeout: float | None = Field(default=None, ge=0)
     reset: bool = False
 
 
@@ -144,8 +144,8 @@ class ProjectionActionRecord(_ProjectionRecord):
     ]
     decision: Literal["approved", "rejected"] | None = None
     outcome: ProjectionActionOutcome | None = None
-    proposed_sequence: int = Field(serialization_alias="proposedSequence")
-    updated_sequence: int = Field(serialization_alias="updatedSequence")
+    proposed_sequence: int = Field(ge=0, serialization_alias="proposedSequence")
+    updated_sequence: int = Field(ge=0, serialization_alias="updatedSequence")
 
 
 class ProjectionApprovalGroup(_ProjectionRecord):
@@ -173,6 +173,35 @@ class ProjectionLifecycleState(_ProjectionRecord):
     can_steer: bool = Field(default=True, serialization_alias="canSteer")
 
 
+class ProjectionResearcherStatus(_ProjectionRecord):
+    """Stable researcher-facing state derived from the session lifecycle."""
+
+    code: Literal[
+        "ready",
+        "working",
+        "waiting-for-review",
+        "paused",
+        "complete",
+        "denied",
+        "recoverable-failure",
+        "terminal-failure",
+    ]
+    label: str
+    detail: str
+    tone: Literal["neutral", "progress", "attention", "success", "danger"]
+    recoverable: bool = True
+
+
+class ProjectionResearcherNotice(_ProjectionRecord):
+    """A non-lifecycle outcome that every interface must present."""
+
+    notice_id: str = Field(serialization_alias="noticeId")
+    code: Literal["request-not-applied"]
+    label: str
+    detail: str
+    tone: Literal["attention", "danger"]
+
+
 class ProjectionCommandOutcome(_ProjectionRecord):
     """Gateway-owned outcome of the most recently accepted command."""
 
@@ -186,10 +215,12 @@ class ProjectionCommandOutcome(_ProjectionRecord):
 class ProjectionTask(_ProjectionRecord):
     title: str
     status: Literal["todo", "in-progress", "done"]
+    status_label: str = Field(serialization_alias="statusLabel")
 
 
 class ProjectionUsage(_ProjectionRecord):
     usage_id: str = Field(serialization_alias="usageId")
+    purpose_label: str = Field(serialization_alias="purposeLabel")
     model_name: str = Field(serialization_alias="modelName")
     call_count: int = Field(ge=0, serialization_alias="callCount")
     prompt_tokens: int = Field(ge=0, serialization_alias="promptTokens")
@@ -197,7 +228,7 @@ class ProjectionUsage(_ProjectionRecord):
     cache_read_tokens: int = Field(default=0, ge=0, serialization_alias="cacheReadTokens")
     cache_write_tokens: int = Field(default=0, ge=0, serialization_alias="cacheWriteTokens")
     reasoning_tokens: int = Field(default=0, ge=0, serialization_alias="reasoningTokens")
-    context_window: int | None = Field(default=None, serialization_alias="contextWindow")
+    context_window: int | None = Field(default=None, ge=0, serialization_alias="contextWindow")
     accumulated_cost: float = Field(default=0.0, ge=0, serialization_alias="accumulatedCost")
 
 
@@ -205,9 +236,30 @@ class ProjectionSubagent(_ProjectionRecord):
     invocation_id: str = Field(serialization_alias="invocationId")
     task_id: str | None = Field(default=None, serialization_alias="taskId")
     agent_name: str = Field(serialization_alias="agentName")
+    role_label: str = Field(serialization_alias="roleLabel")
     status: Literal["proposed", "running", "completed", "error"]
+    status_label: str = Field(serialization_alias="statusLabel")
+    task_summary: str | None = Field(default=None, serialization_alias="taskSummary")
+    result_summary: str | None = Field(default=None, serialization_alias="resultSummary")
     parent_session_id: str = Field(serialization_alias="parentSessionId")
     parent_action_id: str = Field(serialization_alias="parentActionId")
+
+
+class ProjectionSuggestion(_ProjectionRecord):
+    """One bounded task suggestion derived from the authoritative session state."""
+
+    suggestion_id: Literal[
+        "inspect-project",
+        "plan-project",
+        "continue-plan",
+        "review-changes",
+        "verify-work",
+        "recover-task",
+        "identify-next-step",
+    ] = Field(serialization_alias="suggestionId")
+    label: str
+    prompt: str
+    kind: Literal["task", "follow-up", "recovery"]
 
 
 class SessionProjection(_ProjectionRecord):
@@ -233,6 +285,18 @@ class SessionProjection(_ProjectionRecord):
     )
     context: ProjectionModelContext = Field(default_factory=ProjectionModelContext)
     lifecycle: ProjectionLifecycleState = Field(default_factory=ProjectionLifecycleState)
+    researcher_status: ProjectionResearcherStatus = Field(
+        default_factory=lambda: _researcher_status(
+            SessionLifecycle.IDLE,
+            error_recoverable=True,
+            latest_action_denied=False,
+        ),
+        serialization_alias="researcherStatus",
+    )
+    researcher_notice: ProjectionResearcherNotice | None = Field(
+        default=None,
+        serialization_alias="researcherNotice",
+    )
     last_command_outcome: ProjectionCommandOutcome | None = Field(
         default=None,
         serialization_alias="lastCommandOutcome",
@@ -244,6 +308,7 @@ class SessionProjection(_ProjectionRecord):
         serialization_alias="usageByPurpose",
     )
     subagents: tuple[ProjectionSubagent, ...] = ()
+    suggestions: tuple[ProjectionSuggestion, ...] = ()
     streaming_text: str = Field(default="", serialization_alias="streamingText")
     available_commands: tuple[Literal["chat", "pause", "resume", "approve", "deny"], ...] = Field(
         default=("chat",), serialization_alias="availableCommands"
@@ -685,6 +750,15 @@ def project_session(
             or (lifecycle_status == SessionLifecycle.ERROR and lifecycle_error_recoverable)
         ),
     )
+    projected_actions = tuple(actions.values())
+    projected_subagents = tuple(
+        _enrich_subagent(subagent, actions=projected_actions) for subagent in subagents.values()
+    )
+    available_commands = _available_commands(
+        lifecycle=lifecycle_status,
+        has_pending_approval=pending_approval is not None,
+        error_recoverable=lifecycle_error_recoverable,
+    )
     return SessionProjection(
         session_id=session_id,
         event_count=len(events),
@@ -701,21 +775,31 @@ def project_session(
         stream_revision=stream_revision,
         activity=tuple(activity),
         conversation=tuple(conversation),
-        actions=tuple(actions.values()),
+        actions=projected_actions,
         pending_approval=pending_approval,
         context=context,
         lifecycle=lifecycle,
+        researcher_status=_researcher_status(
+            lifecycle_status,
+            error_recoverable=lifecycle_error_recoverable,
+            latest_action_denied=_latest_action_was_denied(projected_actions),
+        ),
+        researcher_notice=_researcher_notice(command_outcome),
         last_command_outcome=command_outcome,
         task_plan=tasks,
         usage=usage,
         usage_by_purpose=tuple(usage_by_purpose.values()),
-        subagents=tuple(subagents.values()),
-        streaming_text=(streaming_text if lifecycle_status == SessionLifecycle.RUNNING else ""),
-        available_commands=_available_commands(
+        subagents=projected_subagents,
+        suggestions=_suggestions(
             lifecycle=lifecycle_status,
-            has_pending_approval=pending_approval is not None,
+            conversation=tuple(conversation),
+            actions=projected_actions,
+            tasks=tasks,
+            available_commands=available_commands,
             error_recoverable=lifecycle_error_recoverable,
         ),
+        streaming_text=(streaming_text if lifecycle_status == SessionLifecycle.RUNNING else ""),
+        available_commands=available_commands,
     )
 
 
@@ -1035,6 +1119,11 @@ def _task(value: JsonValue) -> ProjectionTask:
     return ProjectionTask(
         title=_string(item.get("title")),
         status=status,
+        status_label={
+            "done": "Complete",
+            "in-progress": "In Progress",
+            "todo": "Not Started",
+        }[status],
     )
 
 
@@ -1042,8 +1131,10 @@ def _usage(value: dict[str, JsonValue]) -> ProjectionUsage | None:
     model_name = _string(value.get("model_name"))
     if not model_name:
         return None
+    usage_id = _string(value.get("usage_id")) or "total"
     return ProjectionUsage(
-        usage_id=_string(value.get("usage_id")) or "total",
+        usage_id=usage_id,
+        purpose_label=_usage_purpose_label(usage_id),
         model_name=model_name,
         call_count=_integer(value.get("call_count")),
         prompt_tokens=_integer(value.get("prompt_tokens")),
@@ -1067,14 +1158,273 @@ def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
         status = "proposed"
     else:
         status = "running"
+    agent_name = _string(value.get("agent_name"))
     return ProjectionSubagent(
         invocation_id=_string(value.get("invocation_id")),
         task_id=_string(value.get("task_id")) or None,
-        agent_name=_string(value.get("agent_name")),
+        agent_name=agent_name,
+        role_label=_subagent_role_label(agent_name),
         status=status,
+        status_label={
+            "completed": "Complete",
+            "error": "Stopped With an Error",
+            "proposed": "Proposed",
+            "running": "Working",
+        }[status],
         parent_session_id=_string(value.get("parent_session_id")),
         parent_action_id=_string(value.get("parent_action_id")),
     )
+
+
+def _enrich_subagent(
+    subagent: ProjectionSubagent,
+    *,
+    actions: tuple[ProjectionActionRecord, ...],
+) -> ProjectionSubagent:
+    action = next(
+        (item for item in actions if item.tool_call_id == subagent.invocation_id),
+        None,
+    ) or next(
+        (
+            item
+            for item in actions
+            if subagent.parent_action_id and item.action_id == subagent.parent_action_id
+        ),
+        None,
+    )
+    if action is None or action.details.kind != "task":
+        return subagent
+    task_summary = _bounded_summary(
+        action.details.description or action.details.prompt,
+    )
+    result_summary = None if action.outcome is None else _bounded_summary(action.outcome.summary)
+    return subagent.model_copy(
+        update={
+            "task_summary": task_summary,
+            "result_summary": result_summary,
+        }
+    )
+
+
+def _usage_purpose_label(value: str) -> str:
+    return {
+        "agent": "Primary Agent",
+        "condenser": "Context Management",
+        "critic": "Response Review",
+        "total": "Total Model Activity",
+    }.get(value, _display_identifier(value, fallback="Model Activity"))
+
+
+def _subagent_role_label(value: str) -> str:
+    return {
+        "research-planner": "Research Planner",
+    }.get(value, _display_identifier(value, fallback="Specialist"))
+
+
+def _display_identifier(value: str, *, fallback: str) -> str:
+    words = value.replace("_", "-").split("-")
+    rendered = " ".join(word.capitalize() for word in words if word)
+    return rendered or fallback
+
+
+def _bounded_summary(value: str | None, *, limit: int = 240) -> str | None:
+    if value is None:
+        return None
+    summary = " ".join(value.split())
+    if not summary:
+        return None
+    return summary if len(summary) <= limit else f"{summary[: limit - 3].rstrip()}..."
+
+
+def _researcher_status(
+    lifecycle: SessionLifecycle,
+    *,
+    error_recoverable: bool,
+    latest_action_denied: bool,
+) -> ProjectionResearcherStatus:
+    if lifecycle == SessionLifecycle.RUNNING:
+        return ProjectionResearcherStatus(
+            code="working",
+            label="Heartwood Is Working",
+            detail="You can send guidance or pause while the task is active.",
+            tone="progress",
+        )
+    if lifecycle == SessionLifecycle.WAITING_FOR_CONFIRMATION:
+        return ProjectionResearcherStatus(
+            code="waiting-for-review",
+            label="Waiting for Action Review",
+            detail="Review the complete proposed action set to continue.",
+            tone="attention",
+        )
+    if lifecycle == SessionLifecycle.PAUSED:
+        return ProjectionResearcherStatus(
+            code="paused",
+            label="Agent Paused",
+            detail="Resume the session when you are ready to continue.",
+            tone="attention",
+        )
+    if lifecycle == SessionLifecycle.FINISHED:
+        return ProjectionResearcherStatus(
+            code="complete",
+            label="Task Complete",
+            detail="Review the result and project changes before continuing.",
+            tone="success",
+        )
+    if lifecycle == SessionLifecycle.ERROR:
+        return ProjectionResearcherStatus(
+            code=("recoverable-failure" if error_recoverable else "terminal-failure"),
+            label=("Task Needs Attention" if error_recoverable else "Session Recovery Required"),
+            detail=(
+                "Review the failure and provide corrected guidance to continue."
+                if error_recoverable
+                else "Start a new session after reviewing Activity & audit."
+            ),
+            tone="danger",
+            recoverable=error_recoverable,
+        )
+    if latest_action_denied:
+        return ProjectionResearcherStatus(
+            code="denied",
+            label="Action Set Rejected",
+            detail="The proposed actions were not run. Heartwood is ready for revised guidance.",
+            tone="attention",
+        )
+    return ProjectionResearcherStatus(
+        code="ready",
+        label="Ready",
+        detail="Heartwood is ready for the next task.",
+        tone="neutral",
+    )
+
+
+def _researcher_notice(
+    command_outcome: ProjectionCommandOutcome | None,
+) -> ProjectionResearcherNotice | None:
+    if command_outcome is None or command_outcome.status != "rejected":
+        return None
+    return ProjectionResearcherNotice(
+        notice_id=f"command:{command_outcome.command_id}:rejected",
+        code="request-not-applied",
+        label="Request Not Applied",
+        detail=(command_outcome.message or "Review the request and session state before retrying."),
+        tone="attention",
+    )
+
+
+def _latest_action_was_denied(actions: tuple[ProjectionActionRecord, ...]) -> bool:
+    if not actions:
+        return False
+    latest_sequence = max(action.updated_sequence for action in actions)
+    return any(
+        action.updated_sequence == latest_sequence and action.decision == "rejected"
+        for action in actions
+    )
+
+
+def _suggestions(
+    *,
+    lifecycle: SessionLifecycle,
+    conversation: tuple[ProjectionMessage, ...],
+    actions: tuple[ProjectionActionRecord, ...],
+    tasks: tuple[ProjectionTask, ...],
+    available_commands: tuple[Literal["chat", "pause", "resume", "approve", "deny"], ...],
+    error_recoverable: bool,
+) -> tuple[ProjectionSuggestion, ...]:
+    if "chat" not in available_commands or lifecycle in {
+        SessionLifecycle.RUNNING,
+        SessionLifecycle.PAUSED,
+        SessionLifecycle.WAITING_FOR_CONFIRMATION,
+    }:
+        return ()
+    if lifecycle == SessionLifecycle.ERROR:
+        return (
+            (
+                ProjectionSuggestion(
+                    suggestion_id="recover-task",
+                    label="Review the Failure",
+                    prompt=(
+                        "Review the last failure, explain the likely cause, and propose the safest "
+                        "recovery step before changing project files."
+                    ),
+                    kind="recovery",
+                ),
+            )
+            if error_recoverable
+            else ()
+        )
+
+    substantive_messages = tuple(
+        message for message in conversation if message.role in {"user", "agent"}
+    )
+    if not substantive_messages:
+        return (
+            ProjectionSuggestion(
+                suggestion_id="inspect-project",
+                label="Inspect the Project",
+                prompt=(
+                    "Inspect this project and summarize its structure, relevant files, and likely "
+                    "entry points without changing files."
+                ),
+                kind="task",
+            ),
+            ProjectionSuggestion(
+                suggestion_id="plan-project",
+                label="Plan the Work",
+                prompt=(
+                    "Review this project and propose a concise, verifiable plan before making "
+                    "changes."
+                ),
+                kind="task",
+            ),
+        )
+
+    suggestions: list[ProjectionSuggestion] = []
+    if any(task.status != "done" for task in tasks):
+        suggestions.append(
+            ProjectionSuggestion(
+                suggestion_id="continue-plan",
+                label="Continue the Plan",
+                prompt="Continue with the next incomplete step in the current plan.",
+                kind="follow-up",
+            )
+        )
+    if any(action.affected_paths for action in actions if action.state == "succeeded"):
+        suggestions.append(
+            ProjectionSuggestion(
+                suggestion_id="review-changes",
+                label="Review the Changes",
+                prompt=(
+                    "Review the current project changes for correctness, safety, and missing "
+                    "tests. Report findings before making additional changes."
+                ),
+                kind="follow-up",
+            )
+        )
+    if lifecycle == SessionLifecycle.FINISHED:
+        suggestions.append(
+            ProjectionSuggestion(
+                suggestion_id="verify-work",
+                label="Verify the Work",
+                prompt=(
+                    "Run the most relevant available checks for the completed work and summarize "
+                    "the results."
+                ),
+                kind="follow-up",
+            )
+        )
+    if not suggestions:
+        suggestions.append(
+            ProjectionSuggestion(
+                suggestion_id="identify-next-step",
+                label="Identify the Next Step",
+                prompt=(
+                    "Review the current project and session state, then recommend the next safe, "
+                    "verifiable step."
+                ),
+                kind="follow-up",
+            )
+        )
+    return tuple(suggestions[:2])
 
 
 def _lifecycle(value: str) -> SessionLifecycle:
@@ -1192,7 +1542,10 @@ __all__ = [
     "ProjectionMessage",
     "ProjectionModelContext",
     "ProjectionOtherActionDetails",
+    "ProjectionResearcherNotice",
+    "ProjectionResearcherStatus",
     "ProjectionSubagent",
+    "ProjectionSuggestion",
     "ProjectionTask",
     "ProjectionTaskActionDetails",
     "ProjectionTerminalActionDetails",

@@ -12,7 +12,8 @@ import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
 import { LoaderCircle, Menu, Pencil, ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import type { SessionSummary } from "../types";
+import type { ProjectionResearcherStatus, SessionSummary } from "../types";
+import { displaySafeText } from "./SafeMarkdown";
 
 interface WorkspaceHeaderProps {
   actionModeLabel: string;
@@ -21,6 +22,7 @@ interface WorkspaceHeaderProps {
   modelStatus: "checking" | "denied" | "ready" | "setup";
   platformLabel: string;
   projectLabel: string;
+  researcherStatus: ProjectionResearcherStatus | null;
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
   onOpenActionReview: () => void;
@@ -35,6 +37,7 @@ export const WorkspaceHeader = ({
   modelStatus,
   platformLabel,
   projectLabel,
+  researcherStatus,
   requestStatus,
   session,
   onOpenActionReview,
@@ -104,8 +107,8 @@ export const WorkspaceHeader = ({
         <div className="workspace-actions">
           <StatusBadge
             modelStatus={modelStatus}
+            researcherStatus={researcherStatus}
             requestStatus={requestStatus}
-            session={session}
           />
         </div>
       </div>
@@ -170,12 +173,12 @@ const ContextFact = ({
 
 const StatusBadge = ({
   modelStatus,
+  researcherStatus,
   requestStatus,
-  session,
 }: {
   modelStatus: "checking" | "denied" | "ready" | "setup";
+  researcherStatus: ProjectionResearcherStatus | null;
   requestStatus: "idle" | "busy" | "error";
-  session: SessionSummary | null;
 }) => {
   if (requestStatus === "error" || modelStatus === "denied") {
     return <Badge variant="destructiveLight">Needs attention</Badge>;
@@ -198,15 +201,18 @@ const StatusBadge = ({
   if (modelStatus === "setup") {
     return <Badge variant="secondary">Setup needed</Badge>;
   }
-  const status = session?.status ?? "idle";
-  return <Badge variant="secondary">{statusLabel(status)}</Badge>;
+  if (researcherStatus?.tone === "danger") {
+    return (
+      <Badge variant="destructiveLight">
+        {displaySafeText(researcherStatus.label)}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="secondary">
+      {researcherStatus === null ?
+        "Loading session"
+      : displaySafeText(researcherStatus.label)}
+    </Badge>
+  );
 };
-
-const statusLabel = (status: string): string =>
-  ({
-    empty: "Ready",
-    error: "Needs attention",
-    idle: "Ready",
-    paused: "Paused",
-    waiting: "Action review needed",
-  })[status] ?? status;

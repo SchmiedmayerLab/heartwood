@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Literal, cast
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._gateway import SessionGateway
@@ -30,6 +30,11 @@ AsgiReceive = Callable[[], Awaitable[AsgiMessage]]
 AsgiScope = Mapping[str, object]
 AsgiSend = Callable[[AsgiMessage], Awaitable[None]]
 _HEAD_TAG = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+_MAX_REQUEST_BODY_BYTES = 1_048_576
+
+
+class _RequestBodyTooLargeError(ValueError):
+    """Raised when an HTTP request exceeds the bounded gateway envelope."""
 
 
 class GatewayAsgiApp:
@@ -104,7 +109,24 @@ class GatewayAsgiApp:
             )
             return
 
-        body = await _read_http_body(receive)
+        try:
+            body = await _read_http_body(receive)
+        except _RequestBodyTooLargeError:
+            await _send_json_response(
+                send,
+                status_code=413,
+                body={"error": "gateway request body exceeds 1 MiB"},
+            )
+            return
+        try:
+            decoded_body = body.decode("utf-8")
+        except UnicodeDecodeError:
+            await _send_json_response(
+                send,
+                status_code=400,
+                body={"error": "gateway request body must be UTF-8"},
+            )
+            return
         response = await asyncio.to_thread(
             self.rest.handle,
             RestRequest(
@@ -113,7 +135,7 @@ class GatewayAsgiApp:
                     path=request.path,
                     query_string=request.query_string,
                 ),
-                body=body.decode("utf-8"),
+                body=decoded_body,
             ),
         )
         if response.status_code != 404 or _is_gateway_api_path(request.path):
@@ -126,6 +148,7 @@ class GatewayAsgiApp:
                 static_dir=self.static_dir,
                 path=request.path,
                 browser_base_path=self.ingress.browser_base_path,
+                browser_origin=request.external_origin,
             )
             return
         await _send_json_response(send, status_code=404, body={"error": "unknown gateway route"})
@@ -145,6 +168,8 @@ class GatewayAsgiApp:
                 "headers": [
                     (b"content-type", b"text/event-stream"),
                     (b"cache-control", b"no-store"),
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"referrer-policy", b"no-referrer"),
                     (b"x-accel-buffering", b"no"),
                 ],
             }
@@ -252,11 +277,15 @@ class GatewayAsgiApp:
 
 async def _read_http_body(receive: AsgiReceive) -> bytes:
     chunks: list[bytes] = []
+    total_bytes = 0
     more_body = True
     while more_body:
         message = await receive()
         body = message.get("body", b"")
         if isinstance(body, bytes):
+            total_bytes += len(body)
+            if total_bytes > _MAX_REQUEST_BODY_BYTES:
+                raise _RequestBodyTooLargeError
             chunks.append(body)
         more_body = bool(message.get("more_body", False))
     return b"".join(chunks)
@@ -310,6 +339,8 @@ async def _send_json_response(
                 (b"content-type", b"application/json"),
                 (b"cache-control", b"no-store"),
                 (b"x-content-type-options", b"nosniff"),
+                (b"referrer-policy", b"no-referrer"),
+                (b"permissions-policy", b"camera=(), geolocation=(), microphone=()"),
             ],
         }
     )
@@ -327,6 +358,7 @@ async def _send_static_response(
     static_dir: Path,
     path: str,
     browser_base_path: str,
+    browser_origin: str,
 ) -> None:
     resolved = _static_file_path(static_dir, path=path)
     if resolved is None:
@@ -340,6 +372,11 @@ async def _send_static_response(
             "headers": [
                 (b"content-type", content_type.encode("ascii")),
                 (b"cache-control", b"no-store"),
+                (b"content-security-policy", _browser_content_security_policy(browser_origin)),
+                (b"permissions-policy", b"camera=(), geolocation=(), microphone=()"),
+                (b"referrer-policy", b"no-referrer"),
+                (b"x-content-type-options", b"nosniff"),
+                (b"x-frame-options", b"SAMEORIGIN"),
             ],
         }
     )
@@ -347,6 +384,25 @@ async def _send_static_response(
     if resolved.name == "index.html":
         body = _inject_browser_base_path(body, browser_base_path=browser_base_path)
     await send({"type": "http.response.body", "body": body})
+
+
+def _browser_content_security_policy(browser_origin: str) -> bytes:
+    origin = urlsplit(browser_origin)
+    websocket_scheme = "wss" if origin.scheme == "https" else "ws"
+    websocket_origin = f"{websocket_scheme}://{origin.netloc}"
+    policy = (
+        "default-src 'none'; "
+        "base-uri 'none'; "
+        f"connect-src 'self' {websocket_origin}; "
+        "font-src 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'self'; "
+        "img-src 'self' data:; "
+        "object-src 'none'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'"
+    )
+    return policy.encode("ascii")
 
 
 async def _wait_for_stream_signal(
@@ -425,7 +481,8 @@ def _static_file_path(
 
 
 def _is_gateway_api_path(path: str) -> bool:
-    return path.startswith(("/sessions/", "/settings/")) or path in {
+    return path.startswith(("/project/", "/sessions/", "/settings/")) or path in {
+        "/project",
         "/sessions",
         "/settings",
     }

@@ -34,6 +34,7 @@ class FakeWebSocket {
   onerror: (() => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
   onmessage: ((message: MessageEvent<string>) => void) | null = null;
+  onopen: (() => void) | null = null;
   readonly close = vi.fn();
 
   constructor(readonly url: string) {
@@ -42,6 +43,10 @@ class FakeWebSocket {
 
   fail(): void {
     this.onerror?.();
+  }
+
+  open(): void {
+    this.onopen?.();
   }
 
   closeWith(code: number): void {
@@ -63,8 +68,14 @@ class FakeWebSocket {
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
+  static readonly CLOSED = 2;
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
 
   private listener: ((message: MessageEvent<string>) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onopen: (() => void) | null = null;
+  readyState = FakeEventSource.CONNECTING;
   readonly close = vi.fn();
 
   constructor(readonly url: string) {
@@ -82,6 +93,17 @@ class FakeEventSource {
 
   emit(projection: SessionProjection): void {
     this.emitRaw(JSON.stringify(projectionResponse([], projection)));
+  }
+
+  fail(closed = false): void {
+    this.readyState =
+      closed ? FakeEventSource.CLOSED : FakeEventSource.CONNECTING;
+    this.onerror?.();
+  }
+
+  open(): void {
+    this.readyState = FakeEventSource.OPEN;
+    this.onopen?.();
   }
 
   emitRaw(data: string): void {
@@ -395,6 +417,64 @@ describe("GatewayClient", () => {
     await expect(
       new GatewayClient("/proxy/8767").replayEvents("session-test"),
     ).resolves.toEqual({ events: [], projection });
+  });
+
+  it("accepts projection fields named like JSON Schema annotations", async () => {
+    const action = syntheticAction({
+      details: {
+        kind: "task",
+        description: "Review the cohort summary",
+        prompt: "Check the generated result.",
+        subagentType: "research-reviewer",
+        resume: null,
+      },
+    });
+    const projection = syntheticProjection({ actions: [action] });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(projectionResponse([], projection))),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).resolves.toEqual({ events: [], projection });
+  });
+
+  it("enforces canonical numeric projection constraints at runtime", async () => {
+    const malformed = {
+      ...syntheticProjection(),
+      usage: {
+        usageId: "total",
+        purposeLabel: "Total Model Activity",
+        modelName: "synthetic-model",
+        callCount: 1,
+        promptTokens: 1,
+        completionTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        contextWindow: -1,
+        accumulatedCost: 0,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(projectionResponse([], malformed))),
+        ),
+    );
+
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Gateway response included an invalid session projection",
+    );
   });
 
   it("reports malformed projection JSON with recovery guidance", async () => {
@@ -1021,8 +1101,8 @@ describe("GatewayClient", () => {
     const received: SessionProjection[] = [];
     const client = new GatewayClient("/proxy/8767");
 
-    const cleanup = client.streamSession("session-test", 2, (projection) => {
-      received.push(projection);
+    const cleanup = client.streamSession("session-test", 2, {
+      onProjection: (projection) => received.push(projection),
     });
     FakeWebSocket.instances[0]?.fail();
     FakeEventSource.instances[0]?.emit(
@@ -1040,14 +1120,84 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
   });
 
+  it("reports connection recovery without treating fallback as command failure", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const states: string[] = [];
+    const onError = vi.fn();
+
+    const cleanup = new GatewayClient().streamSession(
+      "session-test",
+      undefined,
+      {
+        onError,
+        onProjection: vi.fn(),
+        onState: (state) => states.push(state),
+      },
+    );
+    FakeWebSocket.instances[0]?.open();
+    FakeWebSocket.instances[0]?.fail();
+    FakeEventSource.instances[0]?.open();
+    cleanup();
+
+    expect(states).toEqual([
+      "connecting",
+      "connected",
+      "reconnecting",
+      "connected",
+    ]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes an EventSource retry from a closed live-update stream", () => {
+    const websocketDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    Reflect.deleteProperty(globalThis, "WebSocket");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const states: string[] = [];
+    const errors: Error[] = [];
+
+    try {
+      const cleanup = new GatewayClient().streamSession(
+        "session-test",
+        undefined,
+        {
+          onError: (error) => errors.push(error),
+          onProjection: vi.fn(),
+          onState: (state) => states.push(state),
+        },
+      );
+      FakeEventSource.instances[0]?.fail();
+      FakeEventSource.instances[0]?.open();
+      FakeEventSource.instances[0]?.fail(true);
+      cleanup();
+
+      expect(states).toEqual([
+        "connecting",
+        "reconnecting",
+        "connected",
+        "degraded",
+      ]);
+      expect(errors.map((error) => error.message)).toEqual([
+        expect.stringContaining("stopped"),
+      ]);
+    } finally {
+      if (websocketDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
+      }
+    }
+  });
+
   it("falls back to server-sent events after an abnormal WebSocket close", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("EventSource", FakeEventSource);
     const received: SessionProjection[] = [];
     const client = new GatewayClient("/proxy/8767");
 
-    const cleanup = client.streamSession("session-test", 2, (projection) => {
-      received.push(projection);
+    const cleanup = client.streamSession("session-test", 2, {
+      onProjection: (projection) => received.push(projection),
     });
     FakeWebSocket.instances[0]?.closeWith(1011);
     FakeEventSource.instances[0]?.emit(syntheticProjection({ revision: 6 }));
@@ -1059,12 +1209,32 @@ describe("GatewayClient", () => {
     expect(received[0]?.revision).toBe(6);
   });
 
+  it("recovers through server-sent events after a graceful server close", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const states: string[] = [];
+    const client = new GatewayClient("/proxy/8767");
+
+    const cleanup = client.streamSession("session-test", 2, {
+      onProjection: vi.fn(),
+      onState: (state) => states.push(state),
+    });
+    FakeWebSocket.instances[0]?.open();
+    FakeWebSocket.instances[0]?.closeWith(1000);
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(states).toEqual(["connecting", "connected", "reconnecting"]);
+    cleanup();
+  });
+
   it("opens the fallback only once for repeated WebSocket failures", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("EventSource", FakeEventSource);
     const client = new GatewayClient("/proxy/8767");
 
-    const cleanup = client.streamSession("session-test", undefined, vi.fn());
+    const cleanup = client.streamSession("session-test", undefined, {
+      onProjection: vi.fn(),
+    });
     FakeWebSocket.instances[0]?.closeWith(1011);
     FakeWebSocket.instances[0]?.fail();
     FakeWebSocket.instances[0]?.closeWith(1000);
@@ -1084,13 +1254,9 @@ describe("GatewayClient", () => {
 
     try {
       const client = new GatewayClient("/proxy/8767");
-      const cleanup = client.streamSession(
-        "session-test",
-        undefined,
-        (projection) => {
-          received.push(projection);
-        },
-      );
+      const cleanup = client.streamSession("session-test", undefined, {
+        onProjection: (projection) => received.push(projection),
+      });
       FakeEventSource.instances[0]?.emit(emptyProjection());
       cleanup();
 
@@ -1117,13 +1283,17 @@ describe("GatewayClient", () => {
     Reflect.deleteProperty(globalThis, "WebSocket");
     Reflect.deleteProperty(globalThis, "EventSource");
 
+    const onError = vi.fn();
+    const onState = vi.fn();
     try {
       const cleanup = new GatewayClient().streamSession(
         "session-test",
         undefined,
-        vi.fn(),
+        { onError, onProjection: vi.fn(), onState },
       );
       expect(cleanup).not.toThrow();
+      expect(onState).toHaveBeenLastCalledWith("degraded");
+      expect(onError).toHaveBeenCalledOnce();
     } finally {
       if (websocketDescriptor !== undefined) {
         Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
@@ -1139,13 +1309,9 @@ describe("GatewayClient", () => {
     const received: SessionProjection[] = [];
     const client = new GatewayClient();
 
-    const cleanup = client.streamSession(
-      "session-test",
-      undefined,
-      (projection) => {
-        received.push(projection);
-      },
-    );
+    const cleanup = client.streamSession("session-test", undefined, {
+      onProjection: (projection) => received.push(projection),
+    });
     FakeWebSocket.instances[0]?.emit(
       syntheticProjection({ streamingText: "Working" }),
     );
@@ -1161,12 +1327,10 @@ describe("GatewayClient", () => {
     const onError = vi.fn();
     const client = new GatewayClient();
 
-    const cleanup = client.streamSession(
-      "session-test",
-      undefined,
-      vi.fn(),
+    const cleanup = client.streamSession("session-test", undefined, {
       onError,
-    );
+      onProjection: vi.fn(),
+    });
     FakeWebSocket.instances[0]?.emitRaw(
       JSON.stringify({ projection: emptyProjection() }),
     );
@@ -1180,18 +1344,39 @@ describe("GatewayClient", () => {
     expect(FakeEventSource.instances).toHaveLength(1);
   });
 
+  it("does not misclassify a WebSocket projection consumer failure", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const consumerFailure = new Error("Synthetic projection consumer failure");
+    const onError = vi.fn();
+    const client = new GatewayClient();
+
+    const cleanup = client.streamSession("session-test", undefined, {
+      onError,
+      onProjection: () => {
+        throw consumerFailure;
+      },
+    });
+
+    expect(() =>
+      FakeWebSocket.instances[0]?.emit(syntheticProjection()),
+    ).toThrow(consumerFailure);
+    expect(onError).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances[0]?.close).not.toHaveBeenCalled();
+    expect(FakeEventSource.instances).toHaveLength(0);
+    cleanup();
+  });
+
   it("reports malformed streamed JSON with recovery guidance", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal("EventSource", FakeEventSource);
     const onError = vi.fn();
     const client = new GatewayClient();
 
-    const cleanup = client.streamSession(
-      "session-test",
-      undefined,
-      vi.fn(),
+    const cleanup = client.streamSession("session-test", undefined, {
       onError,
-    );
+      onProjection: vi.fn(),
+    });
     FakeWebSocket.instances[0]?.emitRaw("{not-json");
     cleanup();
 
@@ -1214,18 +1399,51 @@ describe("GatewayClient", () => {
     const onError = vi.fn();
 
     try {
-      new GatewayClient().streamSession(
-        "session-test",
-        undefined,
-        vi.fn(),
+      new GatewayClient().streamSession("session-test", undefined, {
         onError,
-      );
+        onProjection: vi.fn(),
+      });
       FakeEventSource.instances[0]?.emitRaw(
         JSON.stringify({ projection: emptyProjection() }),
       );
 
       expect(onError).toHaveBeenCalledOnce();
       expect(FakeEventSource.instances[0]?.close).toHaveBeenCalled();
+    } finally {
+      if (websocketDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
+      }
+    }
+  });
+
+  it("does not misclassify an SSE projection consumer failure", () => {
+    const websocketDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    Reflect.deleteProperty(globalThis, "WebSocket");
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const consumerFailure = new Error("Synthetic projection consumer failure");
+    const onError = vi.fn();
+
+    try {
+      const cleanup = new GatewayClient().streamSession(
+        "session-test",
+        undefined,
+        {
+          onError,
+          onProjection: () => {
+            throw consumerFailure;
+          },
+        },
+      );
+
+      expect(() =>
+        FakeEventSource.instances[0]?.emit(syntheticProjection()),
+      ).toThrow(consumerFailure);
+      expect(onError).not.toHaveBeenCalled();
+      expect(FakeEventSource.instances[0]?.close).not.toHaveBeenCalled();
+      cleanup();
     } finally {
       if (websocketDescriptor !== undefined) {
         Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);

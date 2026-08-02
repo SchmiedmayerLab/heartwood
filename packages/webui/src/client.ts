@@ -56,6 +56,15 @@ import type {
 
 const noopCleanup = (): void => undefined;
 
+export type SessionStreamState =
+  "connecting" | "connected" | "reconnecting" | "degraded";
+
+export interface SessionStreamObserver {
+  onProjection: (projection: SessionProjection) => void;
+  onState?: (state: SessionStreamState) => void;
+  onError?: (error: Error) => void;
+}
+
 export interface SessionProjectionResponse {
   events: SessionEvent[];
   projection: SessionProjection;
@@ -87,8 +96,7 @@ export interface HeartwoodClient {
   streamSession(
     sessionId: string,
     afterSequence: number | undefined,
-    onProjection: (projection: SessionProjection) => void,
-    onError?: (error: Error) => void,
+    observer: SessionStreamObserver,
   ): () => void;
   getActionSettings(): Promise<ActionSettings>;
   selectActionConfirmationMode(
@@ -520,15 +528,17 @@ export class GatewayClient implements HeartwoodClient {
   streamSession(
     sessionId: string,
     afterSequence: number | undefined,
-    onProjection: (projection: SessionProjection) => void,
-    onError: (error: Error) => void = noopCleanup,
+    observer: SessionStreamObserver,
   ): () => void {
+    const onError = observer.onError ?? noopCleanup;
+    const onState = observer.onState ?? noopCleanup;
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
     const path = `/sessions/${sessionId}/events${query}`;
     let closed = false;
     let cleanup = (): void => {
       closed = true;
     };
+    onState("connecting");
     if ("WebSocket" in window) {
       const socket = new WebSocket(this.websocketUrl(path));
       let fallbackOpen = false;
@@ -537,22 +547,24 @@ export class GatewayClient implements HeartwoodClient {
           return;
         }
         fallbackOpen = true;
-        cleanup = this.openSse(sessionId, afterSequence, onProjection, onError);
+        onState("reconnecting");
+        cleanup = this.openSse(sessionId, afterSequence, observer);
       };
+      socket.onopen = (): void => onState("connected");
       socket.onmessage = (message): void => {
+        let payload: SessionProjectionResponse;
         try {
-          onProjection(parseProjectionPayload(String(message.data)).projection);
+          payload = parseProjectionPayload(String(message.data));
         } catch (caught) {
           onError(asError(caught));
           socket.close(1002, "invalid Heartwood projection");
           openFallback();
+          return;
         }
+        onState("connected");
+        observer.onProjection(payload.projection);
       };
-      socket.onclose = (event): void => {
-        if (event.code !== 1000) {
-          openFallback();
-        }
-      };
+      socket.onclose = (): void => openFallback();
       socket.onerror = (): void => {
         socket.close();
         openFallback();
@@ -566,7 +578,7 @@ export class GatewayClient implements HeartwoodClient {
         cleanup();
       };
     }
-    cleanup = this.openSse(sessionId, afterSequence, onProjection, onError);
+    cleanup = this.openSse(sessionId, afterSequence, observer);
     return (): void => {
       closed = true;
       cleanup();
@@ -576,26 +588,50 @@ export class GatewayClient implements HeartwoodClient {
   private openSse(
     sessionId: string,
     afterSequence: number | undefined,
-    onProjection: (projection: SessionProjection) => void,
-    onError: (error: Error) => void,
+    observer: SessionStreamObserver,
   ): () => void {
+    const onError = observer.onError ?? noopCleanup;
+    const onState = observer.onState ?? noopCleanup;
     if (!("EventSource" in window)) {
+      onState("degraded");
+      onError(
+        new Error(
+          "Live session updates are unavailable in this browser. Reload the session to check for updates.",
+        ),
+      );
       return noopCleanup;
     }
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
     const source = new EventSource(
       this.url(`/sessions/${sessionId}/events/stream${query}`),
     );
+    source.onopen = (): void => onState("connected");
+    source.onerror = (): void => {
+      if (source.readyState === EventSource.CLOSED) {
+        onState("degraded");
+        onError(
+          new Error(
+            "Live session updates stopped. Reload the session to reconnect.",
+          ),
+        );
+      } else {
+        onState("reconnecting");
+      }
+    };
     source.addEventListener("heartwood-session-events", (message): void => {
+      let payload: SessionProjectionResponse;
       try {
-        onProjection(
-          parseProjectionPayload((message as MessageEvent<string>).data)
-            .projection,
+        payload = parseProjectionPayload(
+          (message as MessageEvent<string>).data,
         );
       } catch (caught) {
         source.close();
+        onState("degraded");
         onError(asError(caught));
+        return;
       }
+      onState("connected");
+      observer.onProjection(payload.projection);
     });
     return (): void => {
       source.close();

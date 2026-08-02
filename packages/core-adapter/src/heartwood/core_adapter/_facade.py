@@ -45,6 +45,11 @@ class BackendErrorCode(StrEnum):
     INVALID_STATE = "HW-AGENT-005"
     ACTION_OUTCOME_UNKNOWN = "HW-AGENT-006"
     AGENT_OUTCOME_UNKNOWN = "HW-AGENT-007"
+    PROVIDER_AUTHENTICATION_FAILED = "HW-AGENT-008"
+    PROVIDER_QUOTA_EXHAUSTED = "HW-AGENT-009"
+    PROVIDER_RATE_LIMITED = "HW-AGENT-010"
+    MODEL_CONFIGURATION_INVALID = "HW-AGENT-011"
+    PROVIDER_UNAVAILABLE = "HW-AGENT-012"
     UNKNOWN = "HW-AGENT-999"
 
 
@@ -79,6 +84,17 @@ def backend_error_message(code: BackendErrorCode) -> str:
             "A previously started agent turn has an unknown outcome; inspect the session "
             "and continue in a new session"
         ),
+        BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED: (
+            "The model provider rejected the configured credential"
+        ),
+        BackendErrorCode.PROVIDER_QUOTA_EXHAUSTED: (
+            "The model provider reported an exhausted quota or budget"
+        ),
+        BackendErrorCode.PROVIDER_RATE_LIMITED: ("The model provider temporarily limited requests"),
+        BackendErrorCode.MODEL_CONFIGURATION_INVALID: (
+            "The selected model connection is not configured correctly"
+        ),
+        BackendErrorCode.PROVIDER_UNAVAILABLE: ("The model provider is temporarily unavailable"),
         BackendErrorCode.UNKNOWN: "The agent runtime reported an error",
     }[code]
 

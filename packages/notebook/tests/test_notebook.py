@@ -33,7 +33,9 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionOtherActionDetails,
+    ProjectionResearcherNotice,
     ProjectionSubagent,
+    ProjectionSuggestion,
     ProjectionTask,
     ProjectionTaskActionDetails,
     ProjectionTerminalActionDetails,
@@ -259,7 +261,7 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     assert pending.group_id == "action-set-synthetic"
     assert [action.tool_call_id for action in pending.actions] == ["tool-1", "tool-2"]
     assert approval_items == (
-        "Review action set action-set-synthetic (2 actions): pending",
+        "Review 2 actions as one complete set: pending",
         (
             "1. Run the synthetic cohort command\n"
             "Terminal Command · Medium Risk\n"
@@ -557,10 +559,12 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
             ProjectionTask(
                 title="Validate the synthetic cohort",
                 status="in-progress",
+                status_label="In Progress",
             ),
         ),
         usage=ProjectionUsage(
             usage_id="total",
+            purpose_label="Total Model Activity",
             model_name="synthetic-model",
             call_count=2,
             prompt_tokens=128,
@@ -571,9 +575,13 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
                 invocation_id="task-call-1",
                 task_id="task-1",
                 agent_name="research-planner",
+                role_label="Research Planner",
                 status="running",
+                status_label="Working",
                 parent_session_id="notebook-complete-projection",
                 parent_action_id="action-1",
+                task_summary="Review the synthetic analysis plan",
+                result_summary="Plan review is in progress",
             ),
         ),
         streaming_text="Checking column types",
@@ -590,10 +598,63 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
     assert view_model.subagents is projection.subagents
     assert view_model.streaming_text == "Checking column types"
     assert sections["Conversation"][-1] == "Agent (working): Checking column types"
-    assert sections["Tasks"] == ("in-progress: Validate the synthetic cohort",)
-    assert sections["Specialists"] == ("research-planner: running (task-call-1)",)
+    assert sections["Tasks"] == ("In Progress: Validate the synthetic cohort",)
+    assert sections["Specialists"] == (
+        "Research Planner: Working\n"
+        "Task: Review the synthetic analysis plan\n"
+        "Result: Plan review is in progress",
+    )
     assert sections["Runtime"][-1] == (
         "Usage: 128 input, 32 output tokens across 2 calls (synthetic-model)"
+    )
+
+
+def test_notebook_exposes_gateway_owned_status_and_suggestions() -> None:
+    projection = SessionProjection(
+        session_id="notebook-suggestions",
+        event_count=0,
+        revision=-1,
+        suggestions=(
+            ProjectionSuggestion(
+                suggestion_id="inspect-project",
+                label="Inspect the Project",
+                prompt="Inspect this project without changing files.",
+                kind="task",
+            ),
+        ),
+    )
+
+    view_model = build_view_model(projection)
+    sections = {section.title: section.items for section in build_widget_spec(view_model)}
+
+    assert view_model.researcher_status.label == "Ready"
+    assert view_model.suggestions is projection.suggestions
+    assert sections["Suggested Next Steps"] == (
+        "Inspect the Project: Inspect this project without changing files.",
+    )
+
+
+def test_notebook_exposes_gateway_owned_command_notice() -> None:
+    projection = SessionProjection(
+        session_id="notebook-command-notice",
+        event_count=0,
+        revision=-1,
+        researcher_notice=ProjectionResearcherNotice(
+            notice_id="command:pause-race:rejected",
+            code="request-not-applied",
+            label="Request Not Applied",
+            detail="The pause request was not applied.",
+            tone="attention",
+        ),
+    )
+
+    view_model = build_view_model(projection)
+    sections = {section.title: section.items for section in build_widget_spec(view_model)}
+
+    assert view_model.researcher_notice is projection.researcher_notice
+    assert sections["Runtime"][:2] == (
+        "Status: Ready",
+        "Request Not Applied: The pause request was not applied.",
     )
 
 
@@ -628,7 +689,7 @@ def test_notebook_marks_bounded_action_output_as_truncated() -> None:
 
     assert sections["Agent Actions"] == (
         "Failed: $ pytest tests/test_analysis.py · exit 1: terminal failed · output truncated\n"
-        "Action set: action-set-synthetic · decision: approved\n"
+        "Complete action set decision: approved\n"
         'Arguments:\n{\n  "command": "pytest tests/test_analysis.py"\n}\n'
         "Output:\nsynthetic failure\n",
     )
@@ -817,6 +878,7 @@ def test_widget_spec_covers_expected_sections(tmp_path: Path) -> None:
         "Action Review",
         "Agent Actions",
         "Tasks",
+        "Suggested Next Steps",
         "Runtime",
         "Specialists",
     ]

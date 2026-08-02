@@ -35,6 +35,11 @@ _SAFE_ERROR_REASONS = {
     "An agent action failed",
     "The agent conversation stopped",
     "The agent worker stopped",
+    "The model provider reported an exhausted quota or budget",
+    "The model provider rejected the configured credential",
+    "The model provider temporarily limited requests",
+    "The model provider is temporarily unavailable",
+    "The selected model connection is not configured correctly",
 }
 
 
@@ -171,11 +176,28 @@ def _fast_provider_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(openhands_sdk_module, "_AGENT_PROGRESS_POLL_SECONDS", 0.01)
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_authentication_failures_are_safe_non_retryable_and_idempotent(
+@pytest.fixture(autouse=True)
+def _provider_logs_are_content_safe(
+    caplog: pytest.LogCaptureFixture,
+) -> Iterator[None]:
+    yield
+    serialized = "\n".join(record.getMessage() for record in caplog.records)
+    for private_value in (_API_KEY, _RESPONSE_MARKER, _PRIVATE_ENDPOINT):
+        assert private_value not in serialized
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (401, "HW-AGENT-008"),
+        (403, "HW-AGENT-012"),
+    ],
+)
+def test_provider_access_failures_are_safe_and_idempotent(
     tmp_path: Path,
     mock_provider: _MockProviderServer,
     status: int,
+    expected_code: str,
 ) -> None:
     mock_provider.state.enqueue(_json_error(status))
     service = _service(tmp_path, mock_provider)
@@ -189,7 +211,7 @@ def test_authentication_failures_are_safe_non_retryable_and_idempotent(
         assert replayed == SessionResult(events=initial.events, replayed=True)
         assert len(mock_provider.state.requests) == 1
         _assert_request_uses_credential(mock_provider.state.requests[0])
-        _assert_safe_failure(events, service)
+        _assert_safe_failure(events, service, expected_code=expected_code)
     finally:
         service.close()
 
@@ -241,12 +263,16 @@ def test_new_command_recovers_after_a_terminal_provider_failure(
     try:
         service.handle(_command(command_id="terminal-failure"))
         failed_events = _wait_for_terminal_events(service)
+        _assert_safe_failure(failed_events, service)
+    finally:
+        service.close()
 
-        service.handle(_command(command_id="recovery-command"))
-        recovered_events = _wait_for_terminal_events(service, expected_status="finished")
+    restored = _service(tmp_path, mock_provider)
+    try:
+        restored.handle(_command(command_id="recovery-command"))
+        recovered_events = _wait_for_terminal_events(restored, expected_status="finished")
 
         assert len(mock_provider.state.requests) == 2
-        _assert_safe_failure(failed_events, service)
         assert _agent_messages(recovered_events) == ["Recovered on the next command."]
         lifecycle_statuses = [
             event.payload.get("status")
@@ -255,14 +281,21 @@ def test_new_command_recovers_after_a_terminal_provider_failure(
         ]
         assert lifecycle_statuses[-1] == "finished"
     finally:
-        service.close()
+        restored.close()
 
 
-@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (429, "HW-AGENT-010"),
+        (503, "HW-AGENT-012"),
+    ],
+)
 def test_transient_provider_failures_stop_at_the_configured_retry_bound(
     tmp_path: Path,
     mock_provider: _MockProviderServer,
     status: int,
+    expected_code: str,
 ) -> None:
     mock_provider.state.enqueue(*(_json_error(status) for _ in range(6)))
     service = _service(tmp_path, mock_provider)
@@ -272,7 +305,7 @@ def test_transient_provider_failures_stop_at_the_configured_retry_bound(
         events = _wait_for_terminal_events(service)
 
         assert len(mock_provider.state.requests) == 6
-        _assert_safe_failure(events, service)
+        _assert_safe_failure(events, service, expected_code=expected_code)
     finally:
         service.close()
 
@@ -631,6 +664,8 @@ def _assert_request_uses_credential(request: _RecordedRequest) -> None:
 def _assert_safe_failure(
     events: tuple[SessionEvent, ...],
     service: SessionService,
+    *,
+    expected_code: str | None = None,
 ) -> None:
     errors = _error_events(events)
     assert errors
@@ -640,6 +675,8 @@ def _assert_safe_failure(
         and str(event.payload["code"]).startswith("HW-AGENT-")
         for event in errors
     )
+    if expected_code is not None:
+        assert expected_code in {event.payload.get("code") for event in errors}
     statuses = [
         event.payload.get("status")
         for event in events
@@ -651,6 +688,7 @@ def _assert_safe_failure(
         (
             _serialized_events(events),
             _audit_export(service),
+            _persisted_openhands_state(service),
         )
     )
     for private_value in (_API_KEY, _RESPONSE_MARKER, _PRIVATE_ENDPOINT):
@@ -688,6 +726,13 @@ def _audit_export(service: SessionService) -> str:
         )
     )
     return service.store.read_audit_export()
+
+
+def _persisted_openhands_state(service: SessionService) -> str:
+    persistence_dir = cast(OpenHandsSdkBackend, service.backend).persistence_dir
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in persistence_dir.rglob("*") if path.is_file()
+    )
 
 
 def _json_error(status: int) -> _ScriptedResponse:

@@ -44,6 +44,12 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(
     page.getByRole("log", { name: "Conversation transcript" }),
   ).toBeVisible();
+  const inactiveWorkspacePanels = page.locator(
+    '.workspace-tab-panel[data-state="inactive"]',
+  );
+  await expect(inactiveWorkspacePanels).toHaveCount(2);
+  await expect(inactiveWorkspacePanels.first()).toBeHidden();
+  await expect(inactiveWorkspacePanels.last()).toBeHidden();
   const task = page.getByRole("textbox", { name: "Task", exact: true });
   await expect(task).toBeDisabled();
   await expect(page.getByLabel("Pause agent")).toBeDisabled();
@@ -233,6 +239,65 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await expectNoAccessibilityViolations(page);
 });
 
+test("keeps grouped action review usable on a tablet viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.goto("/");
+  await page.keyboard.press("Escape");
+
+  const approval = page.getByRole("region", {
+    name: "One Decision for This Action Set",
+  });
+  await expect(approval).toBeInViewport({ ratio: 1 });
+  await expect(page.getByLabel("Reject 1 action")).toBeVisible();
+  await expect(page.getByLabel("Allow 1 action once")).toBeVisible();
+  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 768);
+  await expectNoAccessibilityViolations(page);
+});
+
+test("supports keyboard review, reduced motion, and high-zoom reflow", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/?configured-model=1");
+  await page.keyboard.press("Escape");
+
+  const approval = page.getByRole("region", {
+    name: "One Decision for This Action Set",
+  });
+  const heading = approval.getByRole("heading", {
+    name: "One Decision for This Action Set",
+  });
+  await expect(heading).toBeFocused();
+  const argumentsDisclosure = approval.getByText("Review Exact Arguments");
+  await argumentsDisclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(argumentsDisclosure.locator("..")).toHaveAttribute("open", "");
+
+  const reject = page.getByLabel("Reject 1 action");
+  await reject.focus();
+  await page.keyboard.press("Enter");
+  await expect(approval).toBeHidden();
+  await expect(
+    page.getByRole("status", { name: "Agent status" }),
+  ).toContainText("Action Set Rejected");
+  await expect(page.getByLabel("Task", { exact: true })).toBeFocused();
+  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 320);
+
+  const animationName = await page.evaluate(() => {
+    const marker = document.createElement("span");
+    marker.className = "streaming-cursor";
+    document.body.append(marker);
+    const value = window.getComputedStyle(marker).animationName;
+    marker.remove();
+    return value;
+  });
+  expect(animationName).toBe("none");
+  await expectNoAccessibilityViolations(page);
+});
+
 test("confirms a new project before creating private state", async ({
   page,
 }) => {
@@ -385,11 +450,43 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     persistent_storage: "Current project directory",
     credential_backends: ["process", "keyring"],
   });
+  const ensureConfiguredModelFromPage = (): void => {
+    if (
+      modelSettings.active_profile !== null ||
+      !new URL(page.url()).searchParams.has("configured-model")
+    ) {
+      return;
+    }
+    modelSettings = {
+      ...modelSettings,
+      active_profile: "heartwood",
+      profiles: [
+        {
+          profile_id: "heartwood",
+          model: "openai/synthetic-coder",
+          policy_endpoint: "http://127.0.0.1:8765/v1/chat/completions",
+          capability_tier: "supervised",
+          base_url: "http://127.0.0.1:8765/v1",
+          credential_kind: "none",
+          auth_type: "api_key",
+          subscription_vendor: null,
+          api_key_env: null,
+          api_key_file: null,
+          api_version: null,
+          aws_region_name: null,
+          aws_profile_name: null,
+          description: "Heartwood-managed synthetic coder",
+          credential_status: "configured",
+        },
+      ],
+    };
+  };
   const isProjectInitialized = (): boolean => {
     projectInitialized ??= !new URL(page.url()).searchParams.has("new-project");
     return projectInitialized;
   };
   const startupPlan = (): StartupPlan => {
+    ensureConfiguredModelFromPage();
     const initialized = isProjectInitialized();
     const ready = modelSettings.active_profile !== null;
     const phase =
@@ -579,17 +676,21 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       if (payload.kind === "chat") {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
       }
+      const resolvesApproval =
+        sessionId === "session-test" &&
+        (payload.kind === "approve" || payload.kind === "deny");
       const nextEvents =
-        sessionId === "session-test" && payload.kind === "approve" ?
+        resolvesApproval ?
           [
             event(sessionEvents.length, "confirmation.resolved", {
-              decision: "approved",
+              decision: payload.kind === "approve" ? "approved" : "denied",
               tool_call_id: "session-test-toolcall-0",
             }),
           ]
         : [];
       sessionEvents = [...sessionEvents, ...nextEvents];
-      if (sessionId === "session-test" && payload.kind === "approve") {
+      if (resolvesApproval) {
+        const approved = payload.kind === "approve";
         sessionProjection = {
           ...sessionProjection,
           eventCount: sessionEvents.length,
@@ -602,10 +703,21 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
             canResume: false,
             canSteer: true,
           },
+          researcherStatus:
+            approved ?
+              sessionProjection.researcherStatus
+            : {
+                code: "denied",
+                label: "Action Set Rejected",
+                detail:
+                  "The proposed actions were not run. Heartwood is ready for revised guidance.",
+                tone: "attention",
+                recoverable: true,
+              },
           actions: sessionProjection.actions.map((action) => ({
             ...action,
-            state: "approved" as const,
-            decision: "approved" as const,
+            state: approved ? ("approved" as const) : ("rejected" as const),
+            decision: approved ? ("approved" as const) : ("rejected" as const),
             updatedSequence:
               sessionEvents.at(-1)?.sequence ?? action.updatedSequence,
           })),
@@ -863,7 +975,10 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       ],
     }),
   );
-  await page.route("**/settings/models", (route) => json(route, modelSettings));
+  await page.route("**/settings/models", (route) => {
+    ensureConfiguredModelFromPage();
+    return json(route, modelSettings);
+  });
   await page.route("**/settings/skills", (route) =>
     json(route, {
       skills: [

@@ -443,6 +443,13 @@ def format_conversation_lines(
 def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
     """Render current task, usage, and specialist state from the projection."""
     lines: list[str] = []
+    if projection.researcher_notice is not None:
+        lines.append(
+            f"Notice: {terminal_safe_text(projection.researcher_notice.label)}: "
+            f"{terminal_safe_text(projection.researcher_notice.detail)}"
+        )
+    if projection.researcher_status.code != "ready":
+        lines.append(f"Status: {projection.researcher_status.label}")
     if projection.actions:
         lines.append("Agent actions:")
         for action in projection.actions:
@@ -450,7 +457,8 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
     if projection.task_plan:
         lines.append("Task plan:")
         lines.extend(
-            f"  [{'x' if task.status == 'done' else '·'}] {terminal_safe_text(task.title)}"
+            f"  [{'x' if task.status == 'done' else ' '}] "
+            f"{terminal_safe_text(task.title)} ({task.status_label})"
             for task in projection.task_plan
         )
     if projection.usage is not None:
@@ -461,17 +469,26 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
             f"{total_tokens:,} tokens · {terminal_safe_text(usage.model_name)}"
         )
         lines.extend(
-            f"  {terminal_safe_text(item.usage_id)}: {item.call_count} calls · "
+            f"  {terminal_safe_text(item.purpose_label)}: {item.call_count} calls · "
             f"{item.prompt_tokens + item.completion_tokens:,} tokens"
             for item in projection.usage_by_purpose
         )
     if projection.subagents:
         lines.append("Specialists:")
+        for item in projection.subagents:
+            lines.append(
+                f"  {terminal_safe_text(item.role_label)}: {terminal_safe_text(item.status_label)}"
+            )
+            if item.task_summary is not None:
+                lines.append(f"    Task: {terminal_safe_text(item.task_summary)}")
+            if item.result_summary is not None:
+                lines.append(f"    Result: {terminal_safe_text(item.result_summary)}")
+    if projection.suggestions:
+        lines.append("Suggested next steps:")
         lines.extend(
-            f"  {terminal_safe_text(item.agent_name)}: {item.status} · invocation "
-            f"{terminal_safe_text(item.invocation_id)}"
-            f"{f' · task {terminal_safe_text(item.task_id)}' if item.task_id is not None else ''}"
-            for item in projection.subagents
+            f"  {terminal_safe_text(item.label)}: "
+            f"{terminal_safe_text(item.prompt, preserve_newlines=True)}"
+            for item in projection.suggestions
         )
     return tuple(lines)
 
@@ -492,8 +509,7 @@ def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...
         heading = f"  [{state}] {terminal_safe_text(action.summary)}"
     lines = [heading]
     if action.group_id is not None:
-        decision = action.decision or "pending"
-        lines.append(f"    action set {terminal_safe_text(action.group_id)} · decision {decision}")
+        lines.append(f"    decision {action.decision or 'pending'} (complete action set)")
     elif action.decision is not None:
         lines.append(f"    decision {action.decision} (automatic policy)")
     if action.arguments:

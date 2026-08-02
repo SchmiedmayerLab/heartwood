@@ -63,9 +63,6 @@ jobs:
       - name: Run unit tests
         working-directory: packages/webui
         run: npm run test
-      - name: Build assets
-        working-directory: packages/webui
-        run: npm run build
       - name: Check npm licenses
         working-directory: packages/webui
         run: npm run license:check

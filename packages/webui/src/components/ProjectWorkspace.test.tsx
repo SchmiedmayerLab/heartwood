@@ -146,6 +146,9 @@ describe("ProjectWorkspace", () => {
       }),
     ).toHaveAttribute("aria-readonly", "true");
     expect(
+      within(preview).getByLabelText("Scrollable file contents: analysis.py"),
+    ).toHaveAttribute("tabindex", "0");
+    expect(
       within(workspace).getByText("Only the bounded prefix is shown."),
     ).toBeInTheDocument();
   });
@@ -272,6 +275,16 @@ describe("ProjectWorkspace", () => {
         name: "Modified file contents: second.py",
       }),
     ).toHaveAttribute("aria-readonly", "true");
+    expect(
+      within(changePreview).getByLabelText(
+        "Scrollable original file contents: second.py",
+      ),
+    ).toHaveAttribute("tabindex", "0");
+    expect(
+      within(changePreview).getByLabelText(
+        "Scrollable modified file contents: second.py",
+      ),
+    ).toHaveAttribute("tabindex", "0");
 
     await act(async () => {
       resolveFirst?.({
