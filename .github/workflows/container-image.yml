@@ -192,18 +192,19 @@ jobs:
           candidate-references: ${{ steps.candidates.outputs.references }}
           diagnostic-name: generic commit tag
           validation-mode: linux-multi-platform-index
+      - name: Check generic moving-tag ownership
+        id: main-revision
+        uses: ./.github/actions/check-current-main
+        with:
+          expected-sha: ${{ github.sha }}
       - name: Promote generic moving tag
+        if: steps.main-revision.outputs.current == 'true'
         env:
           COMMIT_DIGEST: ${{ steps.commit.outputs.digest }}
           GIT_SHA: ${{ github.sha }}
           IMAGE_CHANNEL: edge
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          current_main="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
-          if [ "${current_main}" != "${GIT_SHA}" ]; then
-            echo "refusing to move the generic channel tag from a stale main workflow" >&2
-            exit 1
-          fi
           docker buildx imagetools create \
             --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}" \
             "${IMAGE_NAME}:sha-${GIT_SHA}"
@@ -388,18 +389,19 @@ jobs:
             --platform terra \
             --image-name "${IMAGE_NAME}" \
             --reference "sha-${GIT_SHA}-terra"
+      - name: Check Terra moving-tag ownership
+        id: main-revision
+        uses: ./.github/actions/check-current-main
+        with:
+          expected-sha: ${{ github.sha }}
       - name: Promote Terra moving tag
+        if: steps.main-revision.outputs.current == 'true'
         env:
           COMMIT_DIGEST: ${{ steps.commit.outputs.digest }}
           GIT_SHA: ${{ github.sha }}
           IMAGE_CHANNEL: edge
           IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
-          current_main="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main | awk '{print $1}')"
-          if [ "${current_main}" != "${GIT_SHA}" ]; then
-            echo "refusing to move the Terra channel tag from a stale main workflow" >&2
-            exit 1
-          fi
           docker buildx imagetools create --prefer-index=false \
             --tag "${IMAGE_NAME}:${IMAGE_CHANNEL}-terra" \
             "${IMAGE_NAME}:sha-${GIT_SHA}-terra"

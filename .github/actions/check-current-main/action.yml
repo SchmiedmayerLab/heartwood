@@ -1,0 +1,37 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Check Current Main Revision
+description: Determine whether a workflow still represents the current main revision.
+
+inputs:
+  expected-sha:
+    description: Commit SHA represented by the workflow.
+    required: true
+
+outputs:
+  current:
+    description: Whether the workflow commit is still the current main revision.
+    value: ${{ steps.check.outputs.current }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check current main revision
+      id: check
+      shell: bash
+      env:
+        EXPECTED_SHA: ${{ inputs.expected-sha }}
+      run: |
+        set -euo pipefail
+
+        current_main="$(
+          git ls-remote \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+            refs/heads/main \
+            | awk '{print $1}'
+        )"
+        bash "${GITHUB_ACTION_PATH}/check.sh" "${EXPECTED_SHA}" "${current_main}"

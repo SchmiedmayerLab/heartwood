@@ -285,7 +285,7 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
     assert 'to_entries | all(.value.result == "success")' in readiness
     assert "group: main-validation-${{ github.ref }}" in workflow
     assert "  pull_request:" not in workflow
-    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" in workflow
     assert "  pull_request:" in pull_request_workflow
     assert "  push:" not in pull_request_workflow
     assert "name: Release Candidate Ready" in pull_request_workflow
