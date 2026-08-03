@@ -153,6 +153,8 @@ class ProposedToolCall:
     kind: Literal["terminal", "file-editor", "task", "other"] = "other"
     affected_paths: tuple[str, ...] = ()
     project_path: str | None = None
+    specialist_label: str | None = None
+    specialist_capability: Literal["advisory", "project-actions"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +210,7 @@ class BackendSubagent:
     invocation_id: str
     task_id: str | None
     agent_name: str
+    role_label: str
     status: BackendSubagentStatus
     parent_session_id: str
     parent_action_id: str

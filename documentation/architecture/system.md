@@ -83,6 +83,7 @@ The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
+The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
 Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
@@ -90,7 +91,20 @@ ChatGPT account access uses OpenHands' native subscription registry, OAuth crede
 
 The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
 Tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled unless a future reviewed contract enables them.
-The verified `research-planner` specialist is tool-free and can produce a bounded analysis plan before the parent agent changes project files.
+
+### Research Specialist Catalog
+
+The gateway loads the maintained specialist catalog through OpenHands `AgentDefinition` and registers enabled roles with OpenHands' public agent factory and Task tool.
+Heartwood validates presentation metadata, model inheritance, confirmation mode, iteration and usage limits, tool capability, and repository-verified Skill references before registration.
+It injects verified OpenHands `Skill` objects directly and disables user, public, and project Skill discovery for child agents.
+
+The enabled planning and review roles are advisory and tool-free.
+They inherit the parent's model route, run sequentially through OpenHands, and receive only the evidence delegated by the parent agent.
+Heartwood projects OpenHands Task lifecycle, lineage, result, failure, and combined usage into the same gateway-owned session view used by every interface.
+It does not add a scheduler, child-agent loop, conversation store, or role-specific interface reducer.
+
+The catalog includes a project-action implementation role but does not register it.
+The pinned public OpenHands task interface does not expose nested child actions for gateway-owned review or restore their lineage after a restart, so a tool-capable child fails closed instead of receiving project tools.
 
 The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
 The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.

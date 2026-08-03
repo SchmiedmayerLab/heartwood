@@ -453,9 +453,13 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         assert replay.replace_transcript
 
         action_settings = session.submit("/permissions")
+        specialists = session.submit("/specialists")
         selected = session.submit("/permissions auto-approve-low-risk")
         assert "Review Every Action" in (action_settings.message or "")
         assert "Low-Risk Automation" in (action_settings.message or "")
+        assert "Research Planner" in (specialists.message or "")
+        assert "Analysis Implementer" in (specialists.message or "")
+        assert "Not available in this release" in (specialists.message or "")
         assert not selected.failed
         assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
     finally:
@@ -1062,6 +1066,39 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "Review 2 actions as one OpenHands action set:" in filtered
 
 
+def test_line_formatter_renders_catalog_specialist_approval_details() -> None:
+    action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Review the analysis plan",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(
+                description="Review the analysis plan",
+                prompt="Review the supplied synthetic analysis plan.",
+                subagent_type="research-planner",
+                role_label="Research Planner",
+                capability="advisory",
+            )
+        }
+    )
+    projection = SessionProjection(
+        session_id="terminal-specialist-approval",
+        event_count=1,
+        revision=0,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-specialist",
+            actions=(action,),
+        ),
+    )
+
+    rendered = "\n".join(format_projection_lines(projection))
+
+    assert "Specialist: Research Planner" in rendered
+    assert "Capability: Advisory" in rendered
+    assert "Objective: Review the supplied synthetic analysis plan." in rendered
+
+
 def test_line_formatter_renders_gateway_owned_suggestions_without_internal_ids() -> None:
     projection = SessionProjection(
         session_id="terminal-suggestions",
@@ -1122,12 +1159,14 @@ def test_interaction_activity_matches_the_submitted_operation() -> None:
     assert "model" not in interaction_activity("/reject").guidance
     assert interaction_activity("/unknown").label == "Running the command"
     assert interaction_activity("/permissions").label == "Updating action review"
+    assert interaction_activity("/specialists").label == "Loading research specialists"
 
 
 def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert action_mode_label("always-confirm") == "Review Every Action"
     assert action_mode_label("future-mode") == "future-mode"
     assert action_tool_label("file_editor") == "File Change"
+    assert action_tool_label("task") == "Specialist Review"
     assert action_tool_label("terminal") == "Terminal Command"
     assert action_tool_label("custom") == "custom Action"
     assert action_tool_label("") == "Tool Action"

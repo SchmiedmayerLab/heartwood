@@ -423,8 +423,10 @@ describe("GatewayClient", () => {
     const action = syntheticAction({
       details: {
         kind: "task",
+        capability: "advisory",
         description: "Review the cohort summary",
         prompt: "Check the generated result.",
+        roleLabel: "Research Reviewer",
         subagentType: "research-reviewer",
         resume: null,
       },
@@ -982,6 +984,19 @@ describe("GatewayClient", () => {
       "/proxy/8767/settings/skills/community%20summary",
       { method: "DELETE" },
     );
+  });
+
+  it("loads the shared research-specialist catalog", async () => {
+    const settings = { specialists: [] };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      new GatewayClient("/proxy/8767").getSpecialistSettings(),
+    ).resolves.toEqual(settings);
+    expect(fetch).toHaveBeenCalledWith("/proxy/8767/settings/specialists");
   });
 
   it("reports gateway errors", async () => {

@@ -58,6 +58,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  SpecialistSettings,
   StartupPlan,
   SubscriptionDeviceLogin,
   WorkspaceChanges,
@@ -959,6 +960,10 @@ class FakeClient implements HeartwoodClient {
 
   getSkillSettings(): Promise<SkillSettings> {
     return Promise.resolve({ skills: [bundledSkill()] });
+  }
+
+  getSpecialistSettings(): Promise<SpecialistSettings> {
+    return Promise.resolve(specialistSettings());
   }
 
   inspectSkill(source: string): Promise<SkillSummary> {
@@ -2121,6 +2126,21 @@ describe("App", () => {
     });
   });
 
+  it("shows catalog-owned specialist identity and objective during approval", async () => {
+    render(
+      <App
+        client={new SpecialistPendingClient()}
+        initialSessionId="session-test"
+      />,
+    );
+
+    expect(await screen.findByText("Research Planner")).toBeVisible();
+    expect(screen.getByText("Advisory review")).toBeVisible();
+    expect(
+      screen.getByText("Review the supplied synthetic analysis plan."),
+    ).toBeVisible();
+  });
+
   it("disables grouped decisions that the projection does not allow", async () => {
     const client = new FakeClient();
     client.projections.set(
@@ -3113,6 +3133,21 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
   });
+
+  it("presents the shared bounded specialist catalog", async () => {
+    render(<App client={new FakeClient()} initialSessionId="session-test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Specialists" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Research specialists" }),
+    ).toBeVisible();
+    expect(screen.getByText("Research Planner")).toBeVisible();
+    expect(screen.getByText("Data Quality Reviewer")).toBeVisible();
+    fireEvent.click(screen.getByText("Additional roles"));
+    expect(screen.getByText("Analysis Implementer")).toBeVisible();
+    expect(screen.getByText(/visible child action review/u)).toBeVisible();
+  });
 });
 
 class PendingClient extends FakeClient {
@@ -3176,6 +3211,42 @@ class BatchPendingClient extends PendingClient {
       events: syntheticEvents(),
       projection,
     });
+  }
+}
+
+class SpecialistPendingClient extends PendingClient {
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    this.replayCalls += 1;
+    const action = syntheticAction({
+      toolName: "task",
+      summary: "Review the analysis plan",
+      arguments: {
+        description: "Review the analysis plan",
+        prompt: "Review the supplied synthetic analysis plan.",
+        subagent_type: "research-planner",
+      },
+      details: {
+        kind: "task",
+        capability: "advisory",
+        description: "Review the analysis plan",
+        prompt: "Review the supplied synthetic analysis plan.",
+        roleLabel: "Research Planner",
+        subagentType: "research-planner",
+        resume: null,
+      },
+    });
+    const projection = syntheticProjection({
+      sessionId,
+      actions: [action],
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [action],
+        decision: null,
+        decisionScope: "all",
+      },
+    });
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({ events: syntheticEvents(), projection });
   }
 }
 
@@ -3563,6 +3634,58 @@ const bundledSkill = (): SkillSummary => ({
   approval_summary: "Writes reviewed aggregate output.",
   declared_tools: ["write-aggregate-json"],
   requires_network: false,
+});
+
+const specialistSettings = (): SpecialistSettings => ({
+  specialists: [
+    {
+      specialist_id: "research-planner",
+      label: "Research Planner",
+      description: "Develops a sequential analysis plan.",
+      presentation_summary: "Advisory · Uses the active model · Up to 12 steps",
+      capability: "advisory",
+      availability: "available",
+      unavailable_reason: null,
+      model_route: "inherit",
+      tools: [],
+      skills: [],
+      permission_mode: "always_confirm",
+      max_iterations: 12,
+      max_budget_usd: 1,
+    },
+    {
+      specialist_id: "data-quality-reviewer",
+      label: "Data Quality Reviewer",
+      description: "Reviews supplied evidence for data-quality concerns.",
+      presentation_summary: "Advisory · Uses the active model · Up to 12 steps",
+      capability: "advisory",
+      availability: "available",
+      unavailable_reason: null,
+      model_route: "inherit",
+      tools: [],
+      skills: ["omop-cohort-summary"],
+      permission_mode: "always_confirm",
+      max_iterations: 12,
+      max_budget_usd: 1,
+    },
+    {
+      specialist_id: "analysis-implementer",
+      label: "Analysis Implementer",
+      description: "Implements bounded research-analysis changes.",
+      presentation_summary:
+        "Project actions · Uses the active model · Up to 40 steps",
+      capability: "project-actions",
+      availability: "unavailable",
+      unavailable_reason:
+        "Tool-enabled specialists require visible child action review and restart-safe recovery from OpenHands.",
+      model_route: "inherit",
+      tools: ["terminal", "heartwood_project_file_editor"],
+      skills: ["omop-cohort-summary"],
+      permission_mode: "always_confirm",
+      max_iterations: 40,
+      max_budget_usd: 2,
+    },
+  ],
 });
 
 const sessionSummary = (

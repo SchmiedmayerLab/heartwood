@@ -185,6 +185,11 @@ class RestGateway:
             except SkillSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(skill_settings))
+        if parts == ("settings", "specialists") and request.method == "GET":
+            return RestResponse(
+                status_code=200,
+                body=_json_object(self.gateway.specialist_settings()),
+            )
         if parts == ("settings", "skills", "inspect") and request.method == "POST":
             return self._handle_skill_inspection(body=request.body)
         if parts == ("settings", "skills", "install") and request.method == "POST":

@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from heartwood.schemas import (
     ModelCatalogRequest,
     SessionSummaryResponse,
+    SpecialistSettingsResponse,
     api_contract_schema,
     api_response,
 )
@@ -81,4 +82,44 @@ def test_api_contract_schema_contains_requests_and_responses() -> None:
     assert isinstance(definitions, dict)
     assert "ModelCatalogRequest" in definitions
     assert "SessionSummaryResponse" in definitions
+    assert "SpecialistSettingsResponse" in definitions
     assert schema["anyOf"]
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("model_route", "external-model"),
+        ("permission_mode", "bypass"),
+        ("presentation_summary", ""),
+        ("max_iterations", 0),
+        ("max_budget_usd", 0.0),
+    ],
+)
+def test_specialist_response_rejects_structural_contract_drift(
+    field: str,
+    unsafe_value: object,
+) -> None:
+    role: dict[str, object] = {
+        "specialist_id": "bounded-reviewer",
+        "label": "Bounded Reviewer",
+        "description": "Reviews supplied synthetic evidence.",
+        "presentation_summary": "Advisory · Uses the active model · Up to 4 steps",
+        "capability": "advisory",
+        "availability": "available",
+        "unavailable_reason": None,
+        "model_route": "inherit",
+        "tools": [],
+        "skills": [],
+        "permission_mode": "always_confirm",
+        "max_iterations": 4,
+        "max_budget_usd": 1.0,
+    }
+    api_response(SpecialistSettingsResponse, {"specialists": [role]})
+    role[field] = unsafe_value
+
+    with pytest.raises(ValidationError):
+        api_response(
+            SpecialistSettingsResponse,
+            {"specialists": [role]},
+        )

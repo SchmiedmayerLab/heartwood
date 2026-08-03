@@ -231,7 +231,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "FROM heartwood-image-metadata AS runtime-image" in dockerfile
     assert dockerfile.index("uv sync --locked") < dockerfile.index("ARG HEARTWOOD_REVISION=unknown")
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0"' in bake
+    assert 'default = "0.3.0-beta.1"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
     assert bake.count('HEARTWOOD_REVISION = "${GIT_SHA}"') == 2
     generic_build = workflow.split("      - name: Build and stage image by digest\n", maxsplit=1)[
@@ -790,6 +790,8 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "npm run build" in packager
     assert "packages/webui/dist/index.html" in packager
     assert 'test -f "${source}/agents/verified/research-planner.md"' in real_smoke
+    assert 'test -f "${source}/agents/verified/statistical-reviewer.md"' in real_smoke
+    assert '"${installation}/bin/heartwood" specialists' in real_smoke
     assert '"${installation}/bin/heartwood-jupyter" --version' in real_smoke
     assert '"${installation}/bin/heartwood" --interface web' in real_smoke
     assert "installer accepted a corrupted checksum" in smoke
@@ -1113,6 +1115,11 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert 'self.path != "/v1/models"' in model_stub
     assert "models validate heartwood" in smoke
     assert ' --prompt "' in smoke
+    assert smoke.count('heartwood --session-id "${session_id}" allow') == 2
+    assert "Research Planner: Complete" in smoke
+    assert 'tool_names.count("task") != 1' in smoke
+    assert 'tool_names.count("terminal") != 3' in smoke
+    assert "specialist prompt or result leaked into the audit export" in smoke
     assert " chat " not in smoke
     assert " detect " not in smoke
     assert "call-heartwood-reference-analysis" not in smoke
@@ -1175,6 +1182,40 @@ def test_local_model_stub_preserves_explicit_action_risk() -> None:
     assert "<parameter=command>printf heartwood-openhands-action</parameter>" in prompt_call
     assert "<parameter=security_risk>LOW</parameter>" in prompt_call
     assert prompt_call.endswith("</function>")
+
+
+def test_local_model_stub_scopes_specialist_results_to_the_current_task() -> None:
+    path = _repo_root() / "images/generic/scripts/local_model_stub.py"
+    spec = importlib.util.spec_from_file_location("heartwood_local_model_stub_task", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    messages: list[object] = [
+        {"role": "user", "content": "Build the first target-condition cohort."},
+        {
+            "role": "tool",
+            "content": "SPECIALIST REVIEW COMPLETE: verify the first cohort.",
+        },
+        {"role": "assistant", "content": "The first cohort is complete."},
+        {"role": "user", "content": "Build the second target-condition cohort."},
+    ]
+
+    task_message, tool_results = module._current_task_context(messages)
+
+    assert task_message == messages[-1]
+    assert tool_results == []
+    assert module._has_specialist_result(tool_results) is False
+
+    messages.append(
+        {
+            "role": "tool",
+            "content": "SPECIALIST REVIEW COMPLETE: verify the second cohort.",
+        }
+    )
+    _, tool_results = module._current_task_context(messages)
+
+    assert module._has_specialist_result(tool_results) is True
 
 
 def test_local_model_stub_streams_typed_tool_calls_and_final_text() -> None:
@@ -1284,9 +1325,16 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert 'RUNTIME_ROOT / "packages" / "webui" / "dist"' in jupyter_smoke
     assert '"waiting-for-confirmation"' in jupyter_smoke
     assert '"pendingApproval"' in jupyter_smoke
+    assert '"terra-demo-smoke-allow-specialist"' in jupyter_smoke
+    assert 'specialist_details.get("kind") != "task"' in jupyter_smoke
+    assert 'specialist_details.get("subagentType") != "research-planner"' in jupyter_smoke
+    assert '"terra-demo-smoke-allow-project-actions"' in jupyter_smoke
+    assert 'details.get("kind") != "terminal"' in jupyter_smoke
     assert '"target_type": "action-set"' in jupyter_smoke
     assert '"confirmation.resolved"' in jupyter_smoke
     assert '"tool.execution.recorded"' in jupyter_smoke
+    assert 'subagent.get("status") == "completed"' in jupyter_smoke
+    assert 'subagent.get("parentSessionId") == SESSION_ID' in jupyter_smoke
     assert "os.chdir(PROJECT_ROOT)" in jupyter_smoke
     assert "NotebookSession(session_id=" in jupyter_smoke
     assert '"project/readiness"' in jupyter_smoke

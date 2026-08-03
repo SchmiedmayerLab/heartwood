@@ -152,10 +152,12 @@ export interface ProjectionFileEditorActionDetails {
  * Typed sequential-specialist arguments from one OpenHands action.
  */
 export interface ProjectionTaskActionDetails {
+  capability: ("advisory" | "project-actions") | null;
   description: string | null;
   kind: "task";
   prompt: string | null;
   resume: string | null;
+  roleLabel: string | null;
   subagentType: string | null;
 }
 /**
@@ -262,7 +264,7 @@ export interface ProjectionSubagent {
   parentSessionId: string;
   resultSummary: string | null;
   roleLabel: string;
-  status: "proposed" | "running" | "completed" | "error";
+  status: "proposed" | "running" | "completed" | "error" | "rejected";
   statusLabel: string;
   taskId: string | null;
   taskSummary: string | null;

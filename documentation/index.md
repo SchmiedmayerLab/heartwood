@@ -36,6 +36,11 @@ You can allow or reject the complete set after inspecting every proposed command
 Repository-verified Skills provide reusable instructions and tools for supported research workflows.
 Projects can add explicitly reviewed Skills for additional workflows.
 
+### Request Focused Research Review
+
+The parent agent can delegate one bounded task at a time to advisory specialists for research planning, data quality, cohort and feature definitions, statistical methods, or reproducibility.
+These [research specialists](use/specialists.md) use the active model and return their review to the same conversation without receiving project tools.
+
 ### Continue Across Interfaces
 
 The terminal, browser, and notebook bridge use the same project configuration, model selection, sessions, action decisions, and audit history when the platform supports those interfaces.
@@ -69,6 +74,7 @@ See [Security and Controlled Data](operate/security.md) before using restricted 
 
 - [Your First Project](start/index.md) provides the shortest complete path from installation to a reviewed action.
 - [Work With Heartwood](use/index.md) explains the normal conversation, action, replay, and audit workflow.
+- [Research Specialists](use/specialists.md) explains focused planning and review through OpenHands.
 - [Models](models/index.md) compares institution-managed, hosted, compatible-service, and Heartwood-managed routes.
 - [Platforms](platforms/index.md) covers containers, Terra, and Stanford Carina.
 - [Diagnostics and Troubleshooting](reference/troubleshooting.md) maps stable `HW-*` codes to recovery steps.

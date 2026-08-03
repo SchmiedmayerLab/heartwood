@@ -97,4 +97,4 @@ __all__ = [
     "write_private_text_atomic",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0-beta.1"

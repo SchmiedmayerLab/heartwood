@@ -32,6 +32,7 @@ When project direction changes, update the relevant architecture or operations p
 | Deployment responsibilities and platform extension contract | [documentation/operate/index.md](documentation/operate/index.md) |
 | Release support, compatibility, and deprecation policy | [documentation/operate/support.md](documentation/operate/support.md) |
 | Browser workflow | [documentation/use/browser.md](documentation/use/browser.md) |
+| Research specialist roles and boundaries | [documentation/use/specialists.md](documentation/use/specialists.md) |
 | Command reference | [documentation/reference/cli.md](documentation/reference/cli.md) |
 | Readiness states, stable diagnostics, and recovery steps | [documentation/reference/troubleshooting.md](documentation/reference/troubleshooting.md) |
 | Qualified GPU runtime, model, and platform combinations | [documentation/reference/gpu-compatibility.md](documentation/reference/gpu-compatibility.md) |

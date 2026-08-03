@@ -324,7 +324,7 @@ export const sessionProjectionJsonSchema = {
         resultSummary: { anyOf: [{ type: "string" }, { type: "null" }] },
         roleLabel: { type: "string" },
         status: {
-          enum: ["proposed", "running", "completed", "error"],
+          enum: ["proposed", "running", "completed", "error", "rejected"],
           type: "string",
         },
         statusLabel: { type: "string" },
@@ -380,13 +380,28 @@ export const sessionProjectionJsonSchema = {
     ProjectionTaskActionDetails: {
       additionalProperties: false,
       properties: {
+        capability: {
+          anyOf: [
+            { enum: ["advisory", "project-actions"], type: "string" },
+            { type: "null" },
+          ],
+        },
         description: { anyOf: [{ type: "string" }, { type: "null" }] },
         kind: { const: "task", type: "string" },
         prompt: { anyOf: [{ type: "string" }, { type: "null" }] },
         resume: { anyOf: [{ type: "string" }, { type: "null" }] },
+        roleLabel: { anyOf: [{ type: "string" }, { type: "null" }] },
         subagentType: { anyOf: [{ type: "string" }, { type: "null" }] },
       },
-      required: ["kind", "description", "prompt", "subagentType", "resume"],
+      required: [
+        "kind",
+        "description",
+        "prompt",
+        "subagentType",
+        "roleLabel",
+        "capability",
+        "resume",
+      ],
       type: "object",
     },
     ProjectionTerminalActionDetails: {

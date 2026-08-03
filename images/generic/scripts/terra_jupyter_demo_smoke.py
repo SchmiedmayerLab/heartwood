@@ -319,36 +319,58 @@ def _verify_gateway_session(external_base: str) -> None:
     task_kinds = {event["kind"] for event in task["events"]}
     if not {"command.received", "user_message.recorded"}.issubset(task_kinds):
         raise AssertionError("gateway chat did not accept the OpenHands task")
-    waiting = _wait_for_session_state(
-        external_base,
-        status="waiting-for-confirmation",
-    )
-    waiting_projection = waiting["projection"]
-    if not isinstance(waiting_projection, dict):
-        raise AssertionError("gateway did not return a session projection")
-    pending_approval = waiting_projection.get("pendingApproval")
-    if not isinstance(pending_approval, dict):
-        raise AssertionError("gateway did not project the pending OpenHands action set")
-    actions = pending_approval.get("actions")
-    target_id = pending_approval.get("groupId")
-    if not isinstance(actions, list) or len(actions) != 2 or not isinstance(target_id, str):
-        raise AssertionError("gateway did not preserve the grouped OpenHands approval")
+    specialist_target_id, specialist_actions = _wait_for_pending_approval(external_base)
+    if len(specialist_actions) != 1:
+        raise AssertionError("gateway did not preserve one OpenHands specialist approval")
+    specialist_details = specialist_actions[0].get("details")
+    if (
+        not isinstance(specialist_details, dict)
+        or specialist_details.get("kind") != "task"
+        or specialist_details.get("subagentType") != "research-planner"
+    ):
+        raise AssertionError("gateway did not preserve the OpenHands research-planner approval")
 
-    _trace("approving OpenHands action set")
-    allowed = _request_json(
+    _trace("approving OpenHands specialist action set")
+    specialist_allowed = _request_json(
         urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
         data=_gateway_command(
             "approve",
-            "terra-demo-smoke-allow",
+            "terra-demo-smoke-allow-specialist",
             {
-                "target_id": target_id,
+                "target_id": specialist_target_id,
                 "target_type": "action-set",
             },
         ),
     )
-    allowed_kinds = {event["kind"] for event in allowed["events"]}
-    if "approval.recorded" not in allowed_kinds:
-        raise AssertionError("gateway did not record the grouped approval")
+    specialist_allowed_kinds = {event["kind"] for event in specialist_allowed["events"]}
+    if "approval.recorded" not in specialist_allowed_kinds:
+        raise AssertionError("gateway did not record the specialist approval")
+
+    project_target_id, project_actions = _wait_for_pending_approval(
+        external_base,
+        previous_group_id=specialist_target_id,
+    )
+    if len(project_actions) != 2 or any(
+        not isinstance(details := action.get("details"), dict) or details.get("kind") != "terminal"
+        for action in project_actions
+    ):
+        raise AssertionError("gateway did not preserve the grouped OpenHands project approval")
+
+    _trace("approving OpenHands project action set")
+    project_allowed = _request_json(
+        urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/commands"),
+        data=_gateway_command(
+            "approve",
+            "terra-demo-smoke-allow-project-actions",
+            {
+                "target_id": project_target_id,
+                "target_type": "action-set",
+            },
+        ),
+    )
+    project_allowed_kinds = {event["kind"] for event in project_allowed["events"]}
+    if "approval.recorded" not in project_allowed_kinds:
+        raise AssertionError("gateway did not record the grouped project approval")
     completed = _wait_for_session_state(external_base, status="finished")
     completed_kinds = {event["kind"] for event in completed["events"]}
     if not {"confirmation.resolved", "tool.execution.recorded"}.issubset(completed_kinds):
@@ -356,6 +378,20 @@ def _verify_gateway_session(external_base: str) -> None:
             "gateway allow did not execute the pending OpenHands action set: "
             f"{sorted(completed_kinds)}"
         )
+    completed_projection = completed.get("projection")
+    completed_subagents = (
+        completed_projection.get("subagents") if isinstance(completed_projection, dict) else None
+    )
+    if not isinstance(completed_subagents, list) or not any(
+        isinstance(subagent, dict)
+        and subagent.get("agentName") == "research-planner"
+        and subagent.get("roleLabel") == "Research Planner"
+        and subagent.get("status") == "completed"
+        and subagent.get("statusLabel") == "Complete"
+        and subagent.get("parentSessionId") == SESSION_ID
+        for subagent in completed_subagents
+    ):
+        raise AssertionError("gateway did not preserve completed specialist lineage")
     artifact = PROJECT_ROOT / "cohort-summary.json"
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     summary = payload["summary"]
@@ -400,6 +436,38 @@ def _wait_for_session_state(
         time.sleep(0.1)
     raise AssertionError(
         f"gateway session did not reach {status}: {json.dumps(last_response, sort_keys=True)}"
+    )
+
+
+def _wait_for_pending_approval(
+    external_base: str,
+    *,
+    previous_group_id: str | None = None,
+) -> tuple[str, list[dict[str, object]]]:
+    deadline = time.time() + REQUEST_TIMEOUT
+    last_response: dict[str, object] | None = None
+    url = urllib.parse.urljoin(external_base, f"sessions/{SESSION_ID}/events")
+    while time.time() < deadline:
+        response = _request_json(url)
+        last_response = response
+        projection = response.get("projection")
+        lifecycle = projection.get("lifecycle") if isinstance(projection, dict) else None
+        pending = projection.get("pendingApproval") if isinstance(projection, dict) else None
+        group_id = pending.get("groupId") if isinstance(pending, dict) else None
+        actions = pending.get("actions") if isinstance(pending, dict) else None
+        if (
+            isinstance(lifecycle, dict)
+            and lifecycle.get("status") == "waiting-for-confirmation"
+            and isinstance(group_id, str)
+            and group_id != previous_group_id
+            and isinstance(actions, list)
+            and all(isinstance(action, dict) for action in actions)
+        ):
+            return group_id, [action for action in actions if isinstance(action, dict)]
+        time.sleep(0.1)
+    raise AssertionError(
+        "gateway session did not expose the next pending approval: "
+        f"{json.dumps(last_response, sort_keys=True)}"
     )
 
 

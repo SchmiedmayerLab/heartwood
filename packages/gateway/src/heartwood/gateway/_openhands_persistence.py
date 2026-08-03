@@ -16,10 +16,11 @@ from importlib.metadata import version
 from pathlib import Path
 from threading import RLock
 
-from openhands.sdk import LocalFileStore
-from openhands.sdk.event import Event
+from openhands.sdk import LocalFileStore, TextContent
+from openhands.sdk.event import Event, ObservationEvent
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.event.error_classification import FailureKind
+from openhands.tools.task import TaskObservation
 
 from heartwood.persistence import (
     OPENHANDS_STATE_KIND,
@@ -219,12 +220,23 @@ def _set_entry_mode(path: Path, mode: int) -> None:
 
 def _minimize_event(contents: str) -> str:
     event = Event.model_validate_json(contents)
-    if not isinstance(event, ConversationErrorEvent):
-        return contents
-    classification = event.classification
-    kind = FailureKind.UNKNOWN if classification is None else classification.kind
-    detail = _SAFE_ERROR_DETAILS.get(kind, _SAFE_ERROR_DETAILS[FailureKind.UNKNOWN])
-    return event.model_copy(update={"detail": detail}).model_dump_json(exclude_none=True)
+    if isinstance(event, ConversationErrorEvent):
+        classification = event.classification
+        kind = FailureKind.UNKNOWN if classification is None else classification.kind
+        detail = _SAFE_ERROR_DETAILS.get(kind, _SAFE_ERROR_DETAILS[FailureKind.UNKNOWN])
+        return event.model_copy(update={"detail": detail}).model_dump_json(exclude_none=True)
+    if (
+        isinstance(event, ObservationEvent)
+        and isinstance(event.observation, TaskObservation)
+        and event.observation.is_error
+    ):
+        observation = event.observation.model_copy(
+            update={"content": [TextContent(text=_SAFE_ERROR_DETAILS[FailureKind.AGENT_ACTION])]}
+        )
+        return event.model_copy(
+            update={"observation": observation, "extended_content": []}
+        ).model_dump_json(exclude_none=True)
+    return contents
 
 
 def _fresh_marker() -> dict[str, object]:

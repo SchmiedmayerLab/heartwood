@@ -105,6 +105,15 @@ Combined model usage is available through `view.usage`, and agent and condenser 
 Sequential specialist work and parent lineage are available through `view.subagents`.
 The small gateway-owned set in `view.suggestions` provides the same editable next-step prompts shown in the terminal and browser.
 
+Inspect the same specialist catalog used by the terminal and browser:
+
+```python
+catalog = session.specialist_settings()
+[(role["label"], role["availability"]) for role in catalog["specialists"]]
+```
+
+Specialist delegation remains part of the parent OpenHands conversation; the notebook does not maintain a separate agent registry or task queue.
+
 ## Inspect Files and Changes
 
 The notebook bridge exposes the same bounded read-only service as the terminal and browser without building a separate notebook file browser:

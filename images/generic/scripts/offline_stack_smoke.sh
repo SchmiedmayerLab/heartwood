@@ -85,6 +85,7 @@ heartwood --session-id "${session_id}" \
   --prompt "Build the synthetic target-condition cohort for concept 201826 with the repository-verified cohort Skill. Use the localized OMOP reference tables, minimum age 18, aggregate count floor 20, and write cohort-summary.json. Report the cohort definition and quality checks without row-level values." \
   | tee -a "${transcript}"
 heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
+heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" \
   --prompt "Propose the bounded synthetic action for rejection." | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" reject | tee -a "${transcript}"
@@ -127,6 +128,7 @@ grep -q "build the aggregate synthetic target-condition cohort" "${transcript}"
 grep -q "as one OpenHands action set" "${transcript}"
 grep -q "Allow the complete set once: /allow" "${transcript}"
 grep -q "Action set approved" "${transcript}"
+grep -q "Research Planner: Complete" "${transcript}"
 grep -Fq '[Succeeded] $' "${transcript}"
 grep -q "Action set rejected" "${transcript}"
 grep -q "Agent: The synthetic target-condition cohort summary is ready for review." "${transcript}"
@@ -173,7 +175,13 @@ executions = [
     for event in approved_events + events
     if event["kind"] == "tool.execution.recorded"
 ]
-if len(executions) != 3 or any(execution.get("exit_code") != 0 for execution in executions):
+tool_names = [execution.get("tool_name") for execution in executions]
+if (
+    len(executions) != 4
+    or tool_names.count("task") != 1
+    or tool_names.count("terminal") != 3
+    or any(execution.get("exit_code") != 0 for execution in executions)
+):
     raise SystemExit(f"unexpected tool execution records: {executions}")
 decision = next(event for event in events if event["kind"] == "model_call.decision.recorded")
 if decision["payload"]["model_profile"]["action_confirmation_mode"] != "confirm-risky":
@@ -203,6 +211,11 @@ if checks["aggregate_only_output"] is not True or not payload["export_guard"]["e
     raise SystemExit("reference analysis violated aggregate output expectations")
 PY
 test -s "${audit_copy}"
+if grep -Fq "Plan the supplied synthetic target-condition cohort workflow" "${audit_copy}" \
+  || grep -Fq "SPECIALIST REVIEW COMPLETE" "${audit_copy}"; then
+  echo "specialist prompt or result leaked into the audit export" >&2
+  exit 1
+fi
 heartwood actions set ask-every-time | tee -a "${transcript}"
 "${heartwood_python}" "${runtime_root}/images/generic/scripts/terra_jupyter_demo_smoke.py" \
   | tee -a "${transcript}"

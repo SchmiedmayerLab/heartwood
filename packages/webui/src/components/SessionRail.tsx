@@ -15,11 +15,12 @@ import {
   Plus,
   Settings,
   Sprout,
+  UsersRound,
 } from "lucide-react";
 import type { SessionSummary } from "../types";
 
 export type UtilityPanel =
-  "action-review" | "activity" | "settings" | "skills" | null;
+  "action-review" | "activity" | "settings" | "skills" | "specialists" | null;
 
 interface SessionRailProps {
   activePanel: UtilityPanel;
@@ -96,6 +97,14 @@ export const SessionRailContent = ({
     </nav>
 
     <nav className="rail-tools" aria-label="Project tools">
+      <Button
+        aria-pressed={activePanel === "specialists"}
+        variant={activePanel === "specialists" ? "secondary" : "ghost"}
+        onClick={() => onOpenPanel("specialists")}
+      >
+        <UsersRound size={17} />
+        Specialists
+      </Button>
       <Button
         aria-pressed={activePanel === "skills"}
         variant={activePanel === "skills" ? "secondary" : "ghost"}

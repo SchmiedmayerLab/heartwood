@@ -39,6 +39,7 @@ from heartwood.gateway import (
 )
 from heartwood.schemas import (
     ActionSettingsResponse,
+    SpecialistSettingsResponse,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
     WorkspaceFileResponse,
@@ -150,6 +151,11 @@ _COMMAND_ACTIVITIES = {
         waiting_label="Still updating action review",
         guidance="Heartwood is waiting for the active project services to close safely.",
     ),
+    "/specialists": InteractionActivity(
+        label="Loading research specialists",
+        waiting_label="Still loading research specialists",
+        guidance="Heartwood is validating the bundled specialist catalog.",
+    ),
 }
 _STABLE_WAIT_TIMEOUT_SECONDS = 3600.0
 
@@ -195,6 +201,10 @@ class InteractiveSession:
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared project action-confirmation settings."""
         return self.gateway.action_settings()
+
+    def specialist_settings(self) -> SpecialistSettingsResponse:
+        """Return the shared bounded research-specialist catalog."""
+        return self.gateway.specialist_settings()
 
     def workspace_tree(
         self,
@@ -290,6 +300,8 @@ class InteractiveSession:
                 return InteractionResult(
                     message=terminal_safe_text(str(error), preserve_newlines=True)
                 )
+        if directive == "/specialists" and len(parts) == 1:
+            return InteractionResult(message=format_specialist_settings(self.specialist_settings()))
         try:
             if directive == "/files" and len(parts) in {1, 2}:
                 tree = self.workspace_tree(parts[1] if len(parts) == 2 else ".")
@@ -351,7 +363,7 @@ def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
         "/allow  /reject  /permissions  /pause  /resume  /status  "
-        "/files  /show  /changes  /replay  /audit-export  /help  /exit"
+        "/specialists  /files  /show  /changes  /replay  /audit-export  /help  /exit"
     )
 
 
@@ -404,6 +416,20 @@ def format_projection_lines(
             risk_label = action_risk_label(action.risk)
             summary = terminal_safe_text(action.summary) or tool_label
             lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
+            if action.details.kind == "task":
+                role = action.details.role_label or action.details.subagent_type
+                if role:
+                    lines.append(f"     Specialist: {terminal_safe_text(role)}")
+                if action.details.capability:
+                    lines.append(
+                        "     Capability: "
+                        + terminal_safe_text(action.details.capability.replace("-", " ").title())
+                    )
+                if action.details.prompt:
+                    lines.append(
+                        "     Objective: "
+                        + terminal_safe_text(action.details.prompt, preserve_newlines=True)
+                    )
             if argument_lines := format_action_arguments(action.arguments):
                 lines.append("     Arguments:")
                 lines.extend(f"       {line}" for line in argument_lines)
@@ -503,7 +529,9 @@ def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...
         path = terminal_safe_text(details.path or "path unavailable")
         heading = f"  [{state}] {details.operation} {path}"
     elif details.kind == "task":
-        specialist = details.subagent_type or details.description or action.tool_name
+        specialist = (
+            details.role_label or details.subagent_type or details.description or action.tool_name
+        )
         heading = f"  [{state}] specialist {terminal_safe_text(specialist)}"
     else:
         heading = f"  [{state}] {terminal_safe_text(action.summary)}"
@@ -585,5 +613,38 @@ def format_action_settings(settings: ActionSettingsResponse) -> str:
             lines.append(f"  {terminal_safe_text(reason, preserve_newlines=True)}")
         else:
             lines.append(f"  Select: /permissions {terminal_safe_text(item['command_value'])}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def format_specialist_settings(settings: SpecialistSettingsResponse) -> str:
+    """Format the gateway-owned specialist catalog for terminal clients."""
+    lines = ["Research specialists", ""]
+    for availability, heading in (
+        ("available", "Available"),
+        ("unavailable", "Not available in this release"),
+    ):
+        roles = [role for role in settings["specialists"] if role["availability"] == availability]
+        if not roles:
+            continue
+        lines.append(heading)
+        for role in roles:
+            lines.append(f"  {terminal_safe_text(role['label'])}")
+            lines.append(f"    {terminal_safe_text(role['description'], preserve_newlines=True)}")
+            if role["skills"]:
+                lines.append(
+                    "    Skills: "
+                    + ", ".join(terminal_safe_text(skill) for skill in role["skills"])
+                )
+            if availability == "available":
+                lines.append(f"    {terminal_safe_text(role['presentation_summary'])}")
+            elif role["unavailable_reason"]:
+                lines.append(
+                    "    "
+                    + terminal_safe_text(
+                        role["unavailable_reason"],
+                        preserve_newlines=True,
+                    )
+                )
         lines.append("")
     return "\n".join(lines).rstrip()

@@ -273,6 +273,44 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     )
 
 
+def test_notebook_renders_catalog_specialist_approval_details() -> None:
+    action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Review the analysis plan",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(
+                description="Review the analysis plan",
+                prompt="Review the supplied synthetic analysis plan.",
+                subagent_type="research-planner",
+                role_label="Research Planner",
+                capability="advisory",
+            )
+        }
+    )
+    projection = SessionProjection(
+        session_id="notebook-specialist-approval",
+        event_count=1,
+        revision=0,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-specialist",
+            actions=(action,),
+        ),
+    )
+
+    approval_items = next(
+        section.items
+        for section in build_widget_spec(build_view_model(projection))
+        if section.title == "Action Review"
+    )
+    rendered = "\n".join(approval_items)
+
+    assert "Specialist: Research Planner" in rendered
+    assert "Capability: Advisory" in rendered
+    assert "Objective: Review the supplied synthetic analysis plan." in rendered
+
+
 def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -> None:
     session = _deterministic_session(tmp_path / "sessions", "notebook-models")
     profile = ModelProfile(
@@ -444,6 +482,11 @@ def test_notebook_and_browser_transport_share_gateway_setup_projections(tmp_path
     projections = (
         (notebook.model_settings(), gateway.model_settings(), "/settings/models"),
         (notebook.action_settings(), gateway.action_settings(), "/settings/actions"),
+        (
+            notebook.specialist_settings(),
+            gateway.specialist_settings(),
+            "/settings/specialists",
+        ),
         (notebook.project_readiness(), gateway.project_readiness(), "/project/readiness"),
         (
             notebook.platform_capabilities(),

@@ -43,6 +43,51 @@ def _message_text(message: dict[str, object]) -> str:
     return ""
 
 
+def _current_task_context(
+    messages: list[object],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Return the latest researcher task and only its subsequent tool results."""
+    researcher_messages = [
+        message
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "user"
+    ]
+    latest_researcher_message = researcher_messages[-1] if researcher_messages else {}
+    task_message = next(
+        (
+            message
+            for message in reversed(researcher_messages)
+            if not _message_text(message).lower().lstrip().startswith("execution result of [")
+        ),
+        {},
+    )
+    task_index = max(
+        (index for index, message in enumerate(messages) if message is task_message),
+        default=-1,
+    )
+    native_tool_results = [
+        message
+        for index, message in enumerate(messages)
+        if index > task_index and isinstance(message, dict) and message.get("role") == "tool"
+    ]
+    prompt_tool_results = (
+        [latest_researcher_message]
+        if _message_text(latest_researcher_message)
+        .lower()
+        .lstrip()
+        .startswith("execution result of [")
+        else []
+    )
+    return task_message, [*native_tool_results, *prompt_tool_results]
+
+
+def _has_specialist_result(tool_results: list[dict[str, object]]) -> bool:
+    """Return whether the current task received a specialist result."""
+    return any(
+        "specialist review complete:" in json.dumps(result).lower() for result in tool_results
+    )
+
+
 def _terminal_call(
     call_id: str,
     command: str,
@@ -63,6 +108,30 @@ def _terminal_call(
                     "security_risk": security_risk,
                     "summary": summary,
                     "timeout": 10,
+                },
+                sort_keys=True,
+            ),
+        },
+    }
+
+
+def _task_call(
+    call_id: str,
+    *,
+    description: str,
+    prompt: str,
+    subagent_type: str,
+) -> dict[str, object]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "task",
+            "arguments": json.dumps(
+                {
+                    "description": description,
+                    "prompt": prompt,
+                    "subagent_type": subagent_type,
                 },
                 sort_keys=True,
             ),
@@ -178,40 +247,13 @@ class LocalModelHandler(BaseHTTPRequestHandler):
         serialized_messages = json.dumps(messages).lower()
         native_tool_mode = bool(payload.get("tools"))
         prompt_tool_mode = "<function=example_function_name>" in serialized_messages
-        researcher_messages = [
-            message
-            for message in messages
-            if isinstance(message, dict) and message.get("role") == "user"
-        ]
-        latest_researcher_message = researcher_messages[-1] if researcher_messages else {}
-        task_message = next(
-            (
-                message
-                for message in reversed(researcher_messages)
-                if not _message_text(message).lower().lstrip().startswith("execution result of [")
-            ),
-            {},
-        )
+        task_message, tool_results = _current_task_context(messages)
         serialized_task_message = json.dumps(task_message).lower()
-        task_index = max(
-            (index for index, message in enumerate(messages) if message is task_message),
-            default=-1,
+        has_specialist_result = _has_specialist_result(tool_results)
+        has_execution_result = any(
+            "specialist review complete:" not in json.dumps(result).lower()
+            for result in tool_results
         )
-        native_tool_results = [
-            message
-            for index, message in enumerate(messages)
-            if index > task_index and isinstance(message, dict) and message.get("role") == "tool"
-        ]
-        prompt_tool_results = (
-            [latest_researcher_message]
-            if _message_text(latest_researcher_message)
-            .lower()
-            .lstrip()
-            .startswith("execution result of [")
-            else []
-        )
-        tool_results = [*native_tool_results, *prompt_tool_results]
-        has_tool_result = bool(tool_results)
         medium_risk = "medium-risk network check" in serialized_task_message
         task_kind = (
             "cohort"
@@ -226,7 +268,17 @@ class LocalModelHandler(BaseHTTPRequestHandler):
         )
         message: dict[str, object]
         finish_reason: str
-        if has_tool_result:
+        specialist_response = (
+            "SPECIALIST REVIEW COMPLETE: Verify the supplied assumptions, evidence, "
+            "validation steps, and reproducibility requirements."
+            if "do not claim to inspect files, execute code, access a network, or modify "
+            "project state" in serialized_messages
+            else None
+        )
+        if specialist_response is not None:
+            message = {"role": "assistant", "content": specialist_response}
+            finish_reason = "stop"
+        elif has_execution_result:
             final_messages = {
                 "cohort": "The synthetic target-condition cohort summary is ready for review.",
                 "baseline": "The training-only age baseline is ready for review.",
@@ -243,6 +295,24 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 ),
             }
             finish_reason = "stop"
+        elif task_kind == "cohort" and native_tool_mode and not has_specialist_result:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _task_call(
+                        "call-heartwood-reference-planner",
+                        description="review the synthetic cohort plan",
+                        prompt=(
+                            "Plan the supplied synthetic target-condition cohort workflow. "
+                            "Identify aggregate quality checks and evidence needed before "
+                            "project actions. Do not inspect files or use tools."
+                        ),
+                        subagent_type="research-planner",
+                    )
+                ],
+            }
+            finish_reason = "tool_calls"
         elif native_tool_mode or prompt_tool_mode:
             runtime_root = os.environ.get("HEARTWOOD_RUNTIME_ROOT") or None
             tool_python = os.environ.get("HEARTWOOD_TOOL_PYTHON") or sys.executable

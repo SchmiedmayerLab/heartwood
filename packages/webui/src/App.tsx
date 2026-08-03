@@ -63,6 +63,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  SpecialistSettings,
   StartupPlan,
 } from "./types";
 
@@ -171,6 +172,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [skillSettings, setSkillSettings] = useState<SkillSettings | null>(
     null,
   );
+  const [specialistSettings, setSpecialistSettings] =
+    useState<SpecialistSettings | null>(null);
   const [skillCandidate, setSkillCandidate] = useState<SkillSummary | null>(
     null,
   );
@@ -231,23 +234,26 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   }, [resolvedClient]);
 
   const loadProjectState = useCallback(async () => {
-    const [actions, models, artifacts, skills, startup] = await Promise.all([
-      resolvedClient.getActionSettings(),
-      resolvedClient.getModelSettings(),
-      resolvedClient.getModelArtifacts(),
-      resolvedClient.getSkillSettings(),
-      resolvedClient.getStartupPlan(),
-    ]);
-    return { actions, models, artifacts, skills, startup };
+    const [actions, models, artifacts, skills, specialists, startup] =
+      await Promise.all([
+        resolvedClient.getActionSettings(),
+        resolvedClient.getModelSettings(),
+        resolvedClient.getModelArtifacts(),
+        resolvedClient.getSkillSettings(),
+        resolvedClient.getSpecialistSettings(),
+        resolvedClient.getStartupPlan(),
+      ]);
+    return { actions, models, artifacts, skills, specialists, startup };
   }, [resolvedClient]);
 
   const refreshProjectState = useCallback(async () => {
     const state = await loadProjectState();
-    const { actions, models, artifacts, skills, startup } = state;
+    const { actions, models, artifacts, skills, specialists, startup } = state;
     setActionSettings(actions);
     setModelSettings(models);
     setModelArtifacts(artifacts);
     setSkillSettings(skills);
+    setSpecialistSettings(specialists);
     setStartupPlan(startup);
     setProjectReadiness(startup.readiness);
     return { models, readiness: startup.readiness };
@@ -363,12 +369,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   useEffect(() => {
     let active = true;
     void loadProjectState()
-      .then(({ actions, models, artifacts, skills, startup }) => {
+      .then(({ actions, models, artifacts, skills, specialists, startup }) => {
         if (!active) return;
         setActionSettings(actions);
         setModelSettings(models);
         setModelArtifacts(artifacts);
         setSkillSettings(skills);
+        setSpecialistSettings(specialists);
         setStartupPlan(startup);
         setProjectReadiness(startup.readiness);
         if (
@@ -1044,6 +1051,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           skillCandidate={skillCandidate}
           skillSettings={skillSettings}
           skillSource={skillSource}
+          specialistSettings={specialistSettings}
           validation={activeValidation}
           onClose={() => setPanel(null)}
           onConnectModel={connectModel}

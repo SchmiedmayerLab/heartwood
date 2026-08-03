@@ -81,6 +81,8 @@ class ProjectionTaskActionDetails(_ProjectionRecord):
     description: str | None = None
     prompt: str | None = None
     subagent_type: str | None = Field(default=None, serialization_alias="subagentType")
+    role_label: str | None = Field(default=None, serialization_alias="roleLabel")
+    capability: Literal["advisory", "project-actions"] | None = None
     resume: str | None = None
 
 
@@ -237,7 +239,7 @@ class ProjectionSubagent(_ProjectionRecord):
     task_id: str | None = Field(default=None, serialization_alias="taskId")
     agent_name: str = Field(serialization_alias="agentName")
     role_label: str = Field(serialization_alias="roleLabel")
-    status: Literal["proposed", "running", "completed", "error"]
+    status: Literal["proposed", "running", "completed", "error", "rejected"]
     status_label: str = Field(serialization_alias="statusLabel")
     task_summary: str | None = Field(default=None, serialization_alias="taskSummary")
     result_summary: str | None = Field(default=None, serialization_alias="resultSummary")
@@ -828,6 +830,8 @@ def _action_record(
             arguments=arguments,
             affected_paths=affected_paths,
             project_path=_safe_project_relative_path(payload.get("project_path")),
+            specialist_label=_string(payload.get("specialist_label")) or None,
+            specialist_capability=_specialist_capability(payload.get("specialist_capability")),
         ),
         affected_paths=affected_paths,
         state="proposed",
@@ -842,6 +846,8 @@ def _action_details(
     arguments: dict[str, JsonValue],
     affected_paths: tuple[ProjectionAffectedPath, ...],
     project_path: str | None,
+    specialist_label: str | None,
+    specialist_capability: Literal["advisory", "project-actions"] | None,
 ) -> ProjectionActionDetails:
     if kind == "terminal":
         return ProjectionTerminalActionDetails(
@@ -869,6 +875,8 @@ def _action_details(
             description=_string(arguments.get("description")) or None,
             prompt=_string(arguments.get("prompt")) or None,
             subagent_type=_string(arguments.get("subagent_type")) or None,
+            role_label=specialist_label,
+            capability=specialist_capability,
             resume=_string(arguments.get("resume")) or None,
         )
     return ProjectionOtherActionDetails()
@@ -917,6 +925,16 @@ def _action_kind(
     if value == "task":
         return "task"
     return "other"
+
+
+def _specialist_capability(
+    value: JsonValue | None,
+) -> Literal["advisory", "project-actions"] | None:
+    if value == "advisory":
+        return "advisory"
+    if value == "project-actions":
+        return "project-actions"
+    return None
 
 
 def _approval_decision(
@@ -1149,11 +1167,13 @@ def _usage(value: dict[str, JsonValue]) -> ProjectionUsage | None:
 
 def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
     status_value = _string(value.get("status"))
-    status: Literal["proposed", "running", "completed", "error"]
+    status: Literal["proposed", "running", "completed", "error", "rejected"]
     if status_value == "completed":
         status = "completed"
     elif status_value == "error":
         status = "error"
+    elif status_value == "rejected":
+        status = "rejected"
     elif status_value == "proposed":
         status = "proposed"
     else:
@@ -1163,12 +1183,14 @@ def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
         invocation_id=_string(value.get("invocation_id")),
         task_id=_string(value.get("task_id")) or None,
         agent_name=agent_name,
-        role_label=_subagent_role_label(agent_name),
+        role_label=_string(value.get("role_label"))
+        or _display_identifier(agent_name, fallback="Specialist"),
         status=status,
         status_label={
             "completed": "Complete",
             "error": "Stopped With an Error",
             "proposed": "Proposed",
+            "rejected": "Not Run",
             "running": "Working",
         }[status],
         parent_session_id=_string(value.get("parent_session_id")),
@@ -1197,11 +1219,19 @@ def _enrich_subagent(
     task_summary = _bounded_summary(
         action.details.description or action.details.prompt,
     )
-    result_summary = None if action.outcome is None else _bounded_summary(action.outcome.summary)
+    result_summary = (
+        None
+        if action.outcome is None
+        else _bounded_summary(action.outcome.result or action.outcome.summary)
+    )
+    status = "rejected" if action.state == "rejected" else subagent.status
+    status_label = "Not Run" if status == "rejected" else subagent.status_label
     return subagent.model_copy(
         update={
             "task_summary": task_summary,
             "result_summary": result_summary,
+            "status": status,
+            "status_label": status_label,
         }
     )
 
@@ -1213,12 +1243,6 @@ def _usage_purpose_label(value: str) -> str:
         "critic": "Response Review",
         "total": "Total Model Activity",
     }.get(value, _display_identifier(value, fallback="Model Activity"))
-
-
-def _subagent_role_label(value: str) -> str:
-    return {
-        "research-planner": "Research Planner",
-    }.get(value, _display_identifier(value, fallback="Specialist"))
 
 
 def _display_identifier(value: str, *, fallback: str) -> str:

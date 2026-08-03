@@ -18,7 +18,10 @@ const presentation: ActionPresentation = {
   other_tool_label_template: "{tool_name} Action",
   risk_labels: { low: "Low Risk" },
   state_labels: { "awaiting-review": "Awaiting Review" },
-  tool_labels: { terminal: "Terminal Command" },
+  tool_labels: {
+    task: "Specialist Review",
+    terminal: "Terminal Command",
+  },
   unknown_risk_label: "Not Classified",
   unknown_tool_label: "Tool Action",
 };
@@ -30,6 +33,7 @@ describe("action presentation", () => {
     );
     expect(actionStateLabel("outcome-unknown", null)).toBe("Outcome Unknown");
     expect(actionToolLabel("terminal", presentation)).toBe("Terminal Command");
+    expect(actionToolLabel("task", presentation)).toBe("Specialist Review");
     expect(actionToolLabel("custom", presentation)).toBe("custom Action");
     expect(actionToolLabel("", null)).toBe("Tool Action");
     expect(actionRiskPresentation("low", presentation)).toEqual({
