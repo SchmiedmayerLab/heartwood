@@ -14,6 +14,7 @@ from heartwood.gateway._action_settings import ACTION_MODE_OPTIONS
 
 ACTION_TOOL_LABELS = {
     "file_editor": "File Change",
+    "task": "Specialist Review",
     "terminal": "Terminal Command",
 }
 ACTION_RISK_LABELS = {

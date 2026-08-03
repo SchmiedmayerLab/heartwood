@@ -1133,6 +1133,7 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert action_mode_label("always-confirm") == "Review Every Action"
     assert action_mode_label("future-mode") == "future-mode"
     assert action_tool_label("file_editor") == "File Change"
+    assert action_tool_label("task") == "Specialist Review"
     assert action_tool_label("terminal") == "Terminal Command"
     assert action_tool_label("custom") == "custom Action"
     assert action_tool_label("") == "Tool Action"
