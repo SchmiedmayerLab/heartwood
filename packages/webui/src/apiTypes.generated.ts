@@ -47,6 +47,7 @@ export type ApiResponse =
   | SessionSummaryResponse
   | SkillSettingsResponse
   | SkillSummaryResponse
+  | SpecialistSettingsResponse
   | StartupPlanResponse
   | SubscriptionDeviceLoginResponse
   | WorkspaceChangesResponse
@@ -558,6 +559,29 @@ export interface SkillSummaryResponse {
   skill_id: string;
   source: "bundled" | "candidate" | "installed";
   trust_tier: string;
+}
+/**
+ * Validated research-specialist catalog shared by every interface.
+ */
+export interface SpecialistSettingsResponse {
+  specialists: SpecialistRoleResponse[];
+}
+/**
+ * One bounded research specialist exposed by the shared gateway.
+ */
+export interface SpecialistRoleResponse {
+  availability: "available" | "unavailable";
+  capability: "advisory" | "project-actions";
+  description: string;
+  label: string;
+  max_budget_usd: number;
+  max_iterations: number;
+  model_route: "inherit";
+  permission_mode: "always_confirm";
+  skills: string[];
+  specialist_id: string;
+  tools: string[];
+  unavailable_reason: string | null;
 }
 /**
  * Shared startup decision for one interaction surface.

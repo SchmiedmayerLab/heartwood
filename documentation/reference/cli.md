@@ -70,6 +70,15 @@ The selected non-secret model profile remains in the project until another conne
 | `heartwood skills install PATH --approve` | Install a reviewed extension into project state |
 | `heartwood skills remove NAME` | Remove an installed extension |
 
+## Research Specialists
+
+| Command | Purpose |
+|---|---|
+| `heartwood specialists` | Show available advisory specialists and any disabled roles with their reason |
+
+Inside an interactive terminal session, `/specialists` presents the same gateway-owned catalog.
+Specialists are selected by the parent OpenHands agent during a task; this command inspects the available roles rather than launching a separate agent session.
+
 ## Session Automation
 
 | Command | Purpose |

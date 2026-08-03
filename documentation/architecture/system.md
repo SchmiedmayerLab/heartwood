@@ -90,7 +90,20 @@ ChatGPT account access uses OpenHands' native subscription registry, OAuth crede
 
 The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
 Tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled unless a future reviewed contract enables them.
-The verified `research-planner` specialist is tool-free and can produce a bounded analysis plan before the parent agent changes project files.
+
+### Research Specialist Catalog
+
+The gateway loads the maintained specialist catalog through OpenHands `AgentDefinition` and registers enabled roles with OpenHands' public agent factory and Task tool.
+Heartwood validates presentation metadata, model inheritance, confirmation mode, iteration and usage limits, tool capability, and repository-verified Skill references before registration.
+It injects verified OpenHands `Skill` objects directly and disables user, public, and project Skill discovery for child agents.
+
+The enabled planning and review roles are advisory and tool-free.
+They inherit the parent's model route, run sequentially through OpenHands, and receive only the evidence delegated by the parent agent.
+Heartwood projects OpenHands Task lifecycle, lineage, result, failure, and combined usage into the same gateway-owned session view used by every interface.
+It does not add a scheduler, child-agent loop, conversation store, or role-specific interface reducer.
+
+The catalog includes a project-action implementation role but does not register it.
+The pinned public OpenHands task interface does not provide the restart-safe child-action approval and cancellation contract Heartwood requires, so a tool-capable child fails closed instead of receiving project tools.
 
 The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
 The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.

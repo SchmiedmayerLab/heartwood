@@ -231,7 +231,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "FROM heartwood-image-metadata AS runtime-image" in dockerfile
     assert dockerfile.index("uv sync --locked") < dockerfile.index("ARG HEARTWOOD_REVISION=unknown")
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.2.0"' in bake
+    assert 'default = "0.3.0-beta.1"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
     assert bake.count('HEARTWOOD_REVISION = "${GIT_SHA}"') == 2
     generic_build = workflow.split("      - name: Build and stage image by digest\n", maxsplit=1)[
@@ -790,6 +790,8 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "npm run build" in packager
     assert "packages/webui/dist/index.html" in packager
     assert 'test -f "${source}/agents/verified/research-planner.md"' in real_smoke
+    assert 'test -f "${source}/agents/verified/statistical-reviewer.md"' in real_smoke
+    assert '"${installation}/bin/heartwood" specialists' in real_smoke
     assert '"${installation}/bin/heartwood-jupyter" --version' in real_smoke
     assert '"${installation}/bin/heartwood" --interface web' in real_smoke
     assert "installer accepted a corrupted checksum" in smoke

@@ -90,6 +90,13 @@ test("supports the researcher conversation and session workflow", async ({
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("session-test-audit.jsonl");
 
+  await page.getByRole("button", { name: "Specialists" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Research specialists" }),
+  ).toBeVisible();
+  await expect(page.getByText("Research Planner")).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).click();
+
   await page.getByRole("button", { name: "Skills" }).click();
   await expect(page.getByRole("heading", { name: "Skills" })).toBeVisible();
   await expect(page.getByText("omop-cohort-summary")).toBeVisible();
@@ -1015,6 +1022,26 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           approval_summary: "Writes reviewed aggregate output.",
           declared_tools: ["write-aggregate-json"],
           requires_network: false,
+        },
+      ],
+    }),
+  );
+  await page.route("**/settings/specialists", (route) =>
+    json(route, {
+      specialists: [
+        {
+          specialist_id: "research-planner",
+          label: "Research Planner",
+          description: "Develops a concise, sequential analysis plan.",
+          capability: "advisory",
+          availability: "available",
+          unavailable_reason: null,
+          model_route: "inherit",
+          tools: [],
+          skills: [],
+          permission_mode: "always_confirm",
+          max_iterations: 12,
+          max_budget_usd: 1,
         },
       ],
     }),

@@ -58,6 +58,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  SpecialistSettings,
   StartupPlan,
   SubscriptionDeviceLogin,
   WorkspaceChanges,
@@ -959,6 +960,10 @@ class FakeClient implements HeartwoodClient {
 
   getSkillSettings(): Promise<SkillSettings> {
     return Promise.resolve({ skills: [bundledSkill()] });
+  }
+
+  getSpecialistSettings(): Promise<SpecialistSettings> {
+    return Promise.resolve(specialistSettings());
   }
 
   inspectSkill(source: string): Promise<SkillSummary> {
@@ -3113,6 +3118,21 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
   });
+
+  it("presents the shared bounded specialist catalog", async () => {
+    render(<App client={new FakeClient()} initialSessionId="session-test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Specialists" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Research specialists" }),
+    ).toBeVisible();
+    expect(screen.getByText("Research Planner")).toBeVisible();
+    expect(screen.getByText("Data Quality Reviewer")).toBeVisible();
+    fireEvent.click(screen.getByText("Additional roles"));
+    expect(screen.getByText("Analysis Implementer")).toBeVisible();
+    expect(screen.getByText(/restart-safe child approval/u)).toBeVisible();
+  });
 });
 
 class PendingClient extends FakeClient {
@@ -3563,6 +3583,54 @@ const bundledSkill = (): SkillSummary => ({
   approval_summary: "Writes reviewed aggregate output.",
   declared_tools: ["write-aggregate-json"],
   requires_network: false,
+});
+
+const specialistSettings = (): SpecialistSettings => ({
+  specialists: [
+    {
+      specialist_id: "research-planner",
+      label: "Research Planner",
+      description: "Develops a sequential analysis plan.",
+      capability: "advisory",
+      availability: "available",
+      unavailable_reason: null,
+      model_route: "inherit",
+      tools: [],
+      skills: [],
+      permission_mode: "always_confirm",
+      max_iterations: 12,
+      max_budget_usd: 1,
+    },
+    {
+      specialist_id: "data-quality-reviewer",
+      label: "Data Quality Reviewer",
+      description: "Reviews supplied evidence for data-quality concerns.",
+      capability: "advisory",
+      availability: "available",
+      unavailable_reason: null,
+      model_route: "inherit",
+      tools: [],
+      skills: ["omop-cohort-summary"],
+      permission_mode: "always_confirm",
+      max_iterations: 12,
+      max_budget_usd: 1,
+    },
+    {
+      specialist_id: "analysis-implementer",
+      label: "Analysis Implementer",
+      description: "Implements bounded research-analysis changes.",
+      capability: "project-actions",
+      availability: "unavailable",
+      unavailable_reason:
+        "Tool-enabled specialists require restart-safe child approval and cancellation support from OpenHands.",
+      model_route: "inherit",
+      tools: ["terminal", "heartwood_project_file_editor"],
+      skills: ["omop-cohort-summary"],
+      permission_mode: "always_confirm",
+      max_iterations: 40,
+      max_budget_usd: 2,
+    },
+  ],
 });
 
 const sessionSummary = (

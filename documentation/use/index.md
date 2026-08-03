@@ -16,8 +16,9 @@ The normal workflow is the same in every supported interface.
 3. **Describe an outcome.** State what should change, what must remain untouched, and how success can be verified.
 4. **Watch progress.** Heartwood reports active work and elapsed time for longer model, download, and startup operations.
 5. **Review the action set.** Inspect every proposed command or file operation before allowing the group.
-6. **Verify the result.** Ask the agent to run bounded checks and inspect the resulting files or diff yourself.
-7. **Continue or export.** Resume the session later, replay its events, or export the scrubbed audit record.
+6. **Use focused review when useful.** The parent agent can delegate one bounded planning or research-review task at a time through OpenHands.
+7. **Verify the result.** Ask the agent to run bounded checks and inspect the resulting files or diff yourself.
+8. **Continue or export.** Resume the session later, replay its events, or export the scrubbed audit record.
 
 ## Write Effective Requests
 
@@ -43,6 +44,8 @@ All interfaces use the project selected by the process current directory.
 They do not maintain separate browser, terminal, or notebook workspaces.
 They can continue the same session sequentially, and Heartwood prevents separate processes from writing that session at the same time.
 Stop the active writer before moving a session to another interface, or choose distinct session identifiers for simultaneous work.
+
+The [research specialists](specialists.md) page explains the available advisory roles, their limits, and how the same catalog appears in every interface.
 
 ## Verify Before Trusting the Result
 

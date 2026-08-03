@@ -984,6 +984,19 @@ describe("GatewayClient", () => {
     );
   });
 
+  it("loads the shared research-specialist catalog", async () => {
+    const settings = { specialists: [] };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(settings)));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      new GatewayClient("/proxy/8767").getSpecialistSettings(),
+    ).resolves.toEqual(settings);
+    expect(fetch).toHaveBeenCalledWith("/proxy/8767/settings/specialists");
+  });
+
   it("reports gateway errors", async () => {
     vi.stubGlobal(
       "fetch",

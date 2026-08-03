@@ -57,6 +57,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Inspect task progress, model-call totals, and sequential specialist status below the conversation.
 - Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
+- Open **Specialists** to inspect the bounded reviewers available to the parent agent.
 - Select the current **Action review** value in the session header to change when Heartwood pauses.
 - Open **Settings** to change the selected model or action-review mode.
 - Export the audit record from the session controls.
@@ -64,6 +65,12 @@ These suggestions come from the gateway and are the same ones shown by the termi
 The session header and conversation use the same gateway-owned states as the other interfaces, including ready, working, waiting for review, paused, complete, rejected, and recovery-required conditions.
 When a command cannot be applied, the browser presents a separate request notice without replacing the authoritative agent lifecycle.
 Task and specialist labels are shown in researcher-facing language; OpenHands identifiers remain available under **Technical details** when they are needed for diagnosis.
+
+![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists.png)
+
+When the parent delegates work, the OpenHands Task action appears in the normal grouped review flow.
+Heartwood runs one specialist at a time and shows its lifecycle and final result in the shared session projection.
+See [Research Specialists](specialists.md) for the available roles and their boundaries.
 
 Agent responses support headings, lists, tables, quotations, links, inline code, and code blocks.
 Heartwood treats every response as untrusted content: raw HTML and unsafe links are removed, remote images are not loaded, invisible control characters are made visible, and very large responses are truncated for display.

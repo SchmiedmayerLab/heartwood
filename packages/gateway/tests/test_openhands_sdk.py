@@ -58,8 +58,8 @@ from openhands.sdk.settings import (
 )
 from openhands.sdk.skills import load_skills_from_dir
 from openhands.sdk.subagent import (
+    get_agent_factory,
     get_registered_agent_definitions,
-    load_agents_from_dir,
     register_agent_if_absent,
 )
 from openhands.sdk.testing import TestLLM
@@ -125,6 +125,11 @@ from heartwood.gateway._openhands_sdk import (
     _usage,
     _usage_source_event_id,
 )
+from heartwood.gateway._specialists import (
+    SpecialistCatalog,
+    SpecialistCatalogError,
+    load_specialist_catalog,
+)
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -143,16 +148,17 @@ def test_verified_skills_load_through_openhands_native_loader() -> None:
     }
 
 
-def test_research_planner_is_a_tool_free_specialized_agent(tmp_path: Path) -> None:
-    definitions = load_agents_from_dir(_repository_root() / "agents" / "verified")
+def test_bundled_tool_free_specialists_register_with_openhands(tmp_path: Path) -> None:
+    catalog = _specialist_catalog()
 
-    assert len(definitions) == 1
-    definition = definitions[0]
-    assert definition.name == "research-planner"
-    assert definition.tools == []
-    assert definition.model == "inherit"
-    assert definition.max_iteration_per_run == 12
-    assert "Do not claim to inspect files" in definition.system_prompt
+    assert [role.specialist_id for role in catalog.available_roles] == [
+        "research-planner",
+        "data-quality-reviewer",
+        "cohort-feature-reviewer",
+        "statistical-reviewer",
+        "reproducibility-reviewer",
+    ]
+    assert all(role.definition.tools == [] for role in catalog.available_roles)
 
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
@@ -160,7 +166,7 @@ def test_research_planner_is_a_tool_free_specialized_agent(tmp_path: Path) -> No
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="specialist-registration",
-        agents_dir=_repository_root() / "agents" / "verified",
+        specialist_catalog=catalog,
         env={},
         conversation_factory=_finished_conversation_factory(
             tmp_path,
@@ -168,7 +174,13 @@ def test_research_planner_is_a_tool_free_specialized_agent(tmp_path: Path) -> No
         ),
     )
     backend._register_specialized_agents()
-    assert "research-planner" in {item.name for item in get_registered_agent_definitions()}
+    registered = {item.name for item in get_registered_agent_definitions()}
+    assert {role.specialist_id for role in catalog.available_roles} <= registered
+    assert "analysis-implementer" not in registered
+    for role in catalog.available_roles:
+        registered_definition = get_agent_factory(role.specialist_id).definition
+        assert registered_definition.max_iteration_per_run == role.definition.max_iteration_per_run
+        assert registered_definition.max_budget_per_run == role.definition.max_budget_per_run
 
 
 def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
@@ -180,8 +192,18 @@ def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
                 "---",
                 "name: unsafe-specialist",
                 "description: Attempts unaudited child actions.",
+                "model: inherit",
                 "tools:",
                 "  - terminal",
+                "skills: []",
+                "max_iteration_per_run: 4",
+                "max_budget_per_run: 1.0",
+                "permission_mode: always_confirm",
+                "heartwood:",
+                "  label: Unsafe Specialist",
+                "  capability: project-actions",
+                "  availability: available",
+                "  order: 1",
                 "---",
                 "",
                 "Run a terminal action.",
@@ -190,22 +212,8 @@ def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    backend = OpenHandsSdkBackend(
-        profile=_local_profile(),
-        workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
-        persistence_dir=tmp_path / "openhands",
-        conversation_key="unsafe-specialist-registration",
-        agents_dir=agents_dir,
-        env={},
-        conversation_factory=_finished_conversation_factory(
-            tmp_path,
-            TestLLM.from_messages([]),
-        ),
-    )
-
-    with pytest.raises(OpenHandsSdkError, match="must be tool-free"):
-        backend._register_specialized_agents()
+    with pytest.raises(SpecialistCatalogError, match="cannot use tools"):
+        load_specialist_catalog(agents_dir, _repository_root() / "skills" / "verified")
 
 
 def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
@@ -226,7 +234,17 @@ def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
                 "---",
                 f"name: {specialist_name}",
                 "description: Verified tool-free specialist.",
+                "model: inherit",
                 "tools: []",
+                "skills: []",
+                "max_iteration_per_run: 4",
+                "max_budget_per_run: 1.0",
+                "permission_mode: always_confirm",
+                "heartwood:",
+                "  label: Collision Specialist",
+                "  capability: advisory",
+                "  availability: available",
+                "  order: 1",
                 "---",
                 "",
                 "Return a bounded plan.",
@@ -241,7 +259,10 @@ def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="specialist-collision",
-        agents_dir=agents_dir,
+        specialist_catalog=load_specialist_catalog(
+            agents_dir,
+            _repository_root() / "skills" / "verified",
+        ),
         env={},
         conversation_factory=_finished_conversation_factory(
             tmp_path,
@@ -2451,8 +2472,41 @@ def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
     backend.close()
 
 
-def test_packaged_research_planner_returns_output_to_the_parent_agent(
+@pytest.mark.parametrize(
+    ("specialist_id", "delegated_prompt", "specialist_result"),
+    [
+        (
+            "research-planner",
+            "Plan a synthetic cohort analysis.",
+            "Define the cohort, validate denominators, and record assumptions.",
+        ),
+        (
+            "data-quality-reviewer",
+            "Review supplied aggregate missingness and duplicate counts.",
+            "Verify missingness denominators and resolve duplicate person records.",
+        ),
+        (
+            "cohort-feature-reviewer",
+            "Review supplied index dates, windows, and feature definitions.",
+            "Resolve index-date ambiguity and verify that features precede outcomes.",
+        ),
+        (
+            "statistical-reviewer",
+            "Review a supplied train-test split and held-out model metrics.",
+            "Use patient-level splitting and report uncertainty for held-out metrics.",
+        ),
+        (
+            "reproducibility-reviewer",
+            "Review supplied revisions, parameters, seeds, and output checks.",
+            "Record immutable inputs, the environment lock, seeds, and validation commands.",
+        ),
+    ],
+)
+def test_packaged_advisory_specialists_return_output_to_the_parent_agent(
     tmp_path: Path,
+    specialist_id: str,
+    delegated_prompt: str,
+    specialist_result: str,
 ) -> None:
     llm = TestLLM.from_messages(
         [
@@ -2464,17 +2518,16 @@ def test_packaged_research_planner_returns_output_to_the_parent_agent(
                         id="packaged-task-call",
                         name="task",
                         arguments=(
-                            '{"description":"Plan analysis","prompt":"Plan a synthetic '
-                            'cohort analysis","subagent_type":"research-planner"}'
+                            '{"description":"Review synthetic evidence","prompt":'
+                            f'{json.dumps(delegated_prompt)},"subagent_type":'
+                            f"{json.dumps(specialist_id)}}}"
                         ),
                         origin="completion",
                     )
                 ],
             ),
-            _assistant_message(
-                "Inspect the synthetic cohort, validate denominators, and record assumptions."
-            ),
-            _assistant_message("The research plan was incorporated into the parent task."),
+            _assistant_message(specialist_result),
+            _assistant_message("The specialist review was incorporated into the parent task."),
         ]
     )
     backend = OpenHandsSdkBackend(
@@ -2483,7 +2536,7 @@ def test_packaged_research_planner_returns_output_to_the_parent_agent(
         skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="packaged-specialist",
-        agents_dir=_repository_root() / "agents" / "verified",
+        specialist_catalog=_specialist_catalog(),
         env={},
         conversation_factory=_conversation_factory(
             tmp_path,
@@ -2503,17 +2556,288 @@ def test_packaged_research_planner_returns_output_to_the_parent_agent(
 
     assert any(
         isinstance(event, BackendSubagentEvent)
-        and event.subagent.agent_name == "research-planner"
+        and event.subagent.agent_name == specialist_id
+        and event.subagent.role_label == _specialist_catalog().role(specialist_id).label
         and event.subagent.status == BackendSubagentStatus.COMPLETED
         for event in events
     )
     assert any(
         isinstance(event, BackendAgentMessageEvent)
-        and event.message == "The research plan was incorporated into the parent task."
+        and event.message == "The specialist review was incorporated into the parent task."
         for event in events
     )
     assert llm.call_count == 2
     backend.close()
+
+
+def test_parent_cancels_specialist_delegation_before_the_child_starts(
+    tmp_path: Path,
+) -> None:
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="")],
+                tool_calls=[
+                    MessageToolCall(
+                        id="rejected-specialist-call",
+                        name="task",
+                        arguments=(
+                            '{"description":"Review synthetic evidence","prompt":'
+                            '"Review supplied aggregate counts","subagent_type":'
+                            '"data-quality-reviewer"}'
+                        ),
+                        origin="completion",
+                    )
+                ],
+            ),
+            _assistant_message("This child response must not be consumed."),
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="rejected-specialist",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[Tool(name=TaskToolSet.name)],
+        ),
+    )
+    backend._register_specialized_agents()
+    backend.submit_turn(session_id="session-1", prompt="Review the aggregates")
+    group = _wait_for_pending_group(backend)
+
+    events = backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=False,
+    )
+
+    assert llm.call_count == 1
+    assert all(
+        not isinstance(event, BackendSubagentEvent)
+        or event.subagent.status != BackendSubagentStatus.COMPLETED
+        for event in events
+    )
+    assert backend.pending_action_group(session_id="session-1") is None
+    backend.close()
+
+
+def test_specialist_task_resumes_sequentially_with_the_same_lineage(
+    tmp_path: Path,
+) -> None:
+    llm = TestLLM.from_messages(
+        [
+            _task_message(
+                "initial-review-call",
+                description="Review cohort definition",
+                prompt="Review the supplied synthetic cohort definition.",
+                specialist_id="cohort-feature-reviewer",
+            ),
+            _assistant_message("The index date needs one explicit tie-breaking rule."),
+            _task_message(
+                "resumed-review-call",
+                description="Review revised cohort",
+                prompt="Review the supplied tie-breaking rule and finish the assessment.",
+                specialist_id="cohort-feature-reviewer",
+                resume="task_00000001",
+            ),
+            _assistant_message("The revised rule resolves the index-date ambiguity."),
+            _assistant_message("The resumed cohort review is complete."),
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="resumed-specialist",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[Tool(name=TaskToolSet.name)],
+        ),
+    )
+    backend._register_specialized_agents()
+    backend.submit_turn(session_id="session-1", prompt="Review the cohort")
+    first_group = _wait_for_pending_group(backend)
+    backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=first_group.group_id,
+        approved=True,
+    )
+    second_group = _wait_for_pending_group(backend)
+    second_events = backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=second_group.group_id,
+        approved=True,
+    )
+    events = (*second_events, *_wait_for_lifecycle(backend, BackendLifecycle.FINISHED))
+
+    completed = [
+        event.subagent
+        for event in events
+        if isinstance(event, BackendSubagentEvent)
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+    ]
+    assert completed
+    assert {item.agent_name for item in completed} == {"cohort-feature-reviewer"}
+    assert {item.task_id for item in completed} == {"task_00000001"}
+    assert any(
+        isinstance(event, BackendAgentMessageEvent)
+        and event.message == "The resumed cohort review is complete."
+        for event in events
+    )
+    backend.close()
+
+
+def test_specialist_failure_is_projected_to_the_parent(
+    tmp_path: Path,
+) -> None:
+    llm = TestLLM.from_messages(
+        [
+            _task_message(
+                "failed-review-call",
+                description="Review synthetic evidence",
+                prompt="Review the supplied synthetic data-quality evidence.",
+                specialist_id="data-quality-reviewer",
+            ),
+            RuntimeError("synthetic specialist failure"),
+            _assistant_message("The specialist could not complete the review."),
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="failed-specialist",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[Tool(name=TaskToolSet.name)],
+        ),
+    )
+    backend._register_specialized_agents()
+    backend.submit_turn(session_id="session-1", prompt="Review data quality")
+    group = _wait_for_pending_group(backend)
+    continued = backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    events = (*continued, *_wait_for_lifecycle(backend, BackendLifecycle.FINISHED))
+
+    assert any(
+        isinstance(event, BackendSubagentEvent)
+        and event.subagent.agent_name == "data-quality-reviewer"
+        and event.subagent.status == BackendSubagentStatus.ERROR
+        for event in events
+    )
+    assert "synthetic specialist failure" not in repr(events)
+    backend.close()
+
+
+def test_completed_specialist_workflow_replays_without_model_calls(
+    tmp_path: Path,
+) -> None:
+    conversation_id = uuid.uuid4()
+    persistence_dir = tmp_path / "openhands"
+    first_llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="")],
+                tool_calls=[
+                    MessageToolCall(
+                        id="replayed-specialist-call",
+                        name="task",
+                        arguments=(
+                            '{"description":"Review cohort timing","prompt":'
+                            '"Review supplied synthetic index dates","subagent_type":'
+                            '"cohort-feature-reviewer"}'
+                        ),
+                        origin="completion",
+                    )
+                ],
+            ),
+            _assistant_message("The supplied feature windows avoid outcome leakage."),
+            _assistant_message("The cohort review is complete."),
+        ]
+    )
+    first = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=persistence_dir,
+        conversation_key="specialist-replay",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            first_llm,
+            tools=[Tool(name=TaskToolSet.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    first._register_specialized_agents()
+    first.submit_turn(session_id="session-1", prompt="Review cohort timing")
+    group = _wait_for_pending_group(first)
+    first.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+    _wait_for_lifecycle(first, BackendLifecycle.FINISHED)
+    first.close()
+
+    restored_llm = TestLLM.from_messages([])
+    restored = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=persistence_dir,
+        conversation_key="specialist-replay",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            restored_llm,
+            tools=[Tool(name=TaskToolSet.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+
+    replayed = restored.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert restored_llm.call_count == 0
+    assert any(
+        isinstance(event, BackendSubagentEvent)
+        and event.subagent.agent_name == "cohort-feature-reviewer"
+        and event.subagent.role_label == "Cohort and Feature Reviewer"
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+        for event in replayed
+    )
+    assert any(
+        isinstance(event, BackendAgentMessageEvent)
+        and event.message == "The cohort review is complete."
+        for event in replayed
+    )
+    restored.close()
 
 
 def test_translation_reports_analyzed_risk_and_nonzero_exit() -> None:
@@ -2616,6 +2940,7 @@ def test_typed_action_evidence_uses_openhands_ids_and_only_structured_file_paths
     assert terminal_call.affected_paths == ()
     assert terminal_call.project_path is None
     assert task_call.kind == "task"
+    assert task_call.summary == "Plan analysis"
 
 
 @pytest.mark.parametrize(
@@ -3132,6 +3457,35 @@ def _subagent_action_event() -> ActionEvent:
     )
 
 
+def _task_message(
+    call_id: str,
+    *,
+    description: str,
+    prompt: str,
+    specialist_id: str,
+    resume: str | None = None,
+) -> Message:
+    arguments: dict[str, str] = {
+        "description": description,
+        "prompt": prompt,
+        "subagent_type": specialist_id,
+    }
+    if resume is not None:
+        arguments["resume"] = resume
+    return Message(
+        role="assistant",
+        content=[TextContent(text="")],
+        tool_calls=[
+            MessageToolCall(
+                id=call_id,
+                name="task",
+                arguments=json.dumps(arguments, sort_keys=True),
+                origin="completion",
+            )
+        ],
+    )
+
+
 def _local_profile(
     *,
     max_input_tokens: int | None = None,
@@ -3160,6 +3514,13 @@ def _remote_profile() -> ModelProfile:
 
 def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _specialist_catalog() -> SpecialistCatalog:
+    return load_specialist_catalog(
+        _repository_root() / "agents" / "verified",
+        _repository_root() / "skills" / "verified",
+    )
 
 
 class _FailingAnalyzer:

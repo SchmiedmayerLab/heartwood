@@ -28,6 +28,7 @@ nav = [
         { "Notebooks" = "use/notebooks.md" },
         { "Actions and Audit History" = "use/actions-audit.md" },
         { "Research Skills" = "use/skills.md" },
+        { "Research Specialists" = "use/specialists.md" },
     ] },
     { "Models" = [
         { "Choose Where Models Run" = "models/index.md" },

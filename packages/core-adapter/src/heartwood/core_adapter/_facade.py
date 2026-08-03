@@ -208,6 +208,7 @@ class BackendSubagent:
     invocation_id: str
     task_id: str | None
     agent_name: str
+    role_label: str
     status: BackendSubagentStatus
     parent_session_id: str
     parent_action_id: str

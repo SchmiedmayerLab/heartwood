@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Any, Concatenate, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Concatenate, Literal, Protocol, cast
 from uuid import uuid4
 
 from heartwood.adapters.platform import select_platform_adapter
@@ -173,6 +173,7 @@ from heartwood.schemas import (
     SessionSummaryResponse,
     SkillSettingsResponse,
     SkillSummaryResponse,
+    SpecialistSettingsResponse,
     StartupPlanResponse,
     SubscriptionDeviceLoginResponse,
     WorkspaceChangesResponse,
@@ -182,6 +183,9 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+
+if TYPE_CHECKING:
+    from heartwood.gateway._specialists import SpecialistCatalog
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
 _PROJECTED_COMMANDS = frozenset(
@@ -482,6 +486,7 @@ class SessionGateway:
             installed_dir=self.installed_skills_dir,
             audit_path=self.project.audit_dir / "skill-installations.jsonl",
         )
+        self._specialist_catalog_cache: SpecialistCatalog | None = None
         self._service_factory = service_factory
         self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
@@ -1744,6 +1749,13 @@ class SessionGateway:
             {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]},
         )
 
+    def specialist_settings(self) -> SpecialistSettingsResponse:
+        """Return the validated research-specialist catalog."""
+        return api_response(
+            SpecialistSettingsResponse,
+            self._specialist_catalog().safe_dict(),
+        )
+
     def inspect_skill(self, source: Path) -> SkillSummaryResponse:
         """Verify a mounted Skill source without installing it."""
         return api_response(SkillSummaryResponse, self.skill_manager.inspect(source).safe_dict())
@@ -1886,7 +1898,7 @@ class SessionGateway:
             workspace=self.project.root,
             skills_dir=self.skill_manager.bundled_dir,
             additional_skills_dirs=(self.installed_skills_dir,),
-            agents_dir=_repository_root() / "agents" / "verified",
+            specialist_catalog=self._specialist_catalog(),
             persistence_dir=self.sessions_root / session_id / "openhands",
             conversation_key=f"{self.project.root}#{session_id}",
             credential_environment_names=tuple(
@@ -1906,6 +1918,19 @@ class SessionGateway:
                 else None
             ),
         )
+
+    def _specialist_catalog(self) -> SpecialistCatalog:
+        catalog = self._specialist_catalog_cache
+        if catalog is not None:
+            return catalog
+        from heartwood.gateway._specialists import load_specialist_catalog
+
+        catalog = load_specialist_catalog(
+            _repository_root() / "agents" / "verified",
+            self.skill_manager.bundled_dir,
+        )
+        self._specialist_catalog_cache = catalog
+        return catalog
 
     def _publish_background_events(
         self,

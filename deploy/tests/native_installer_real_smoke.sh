@@ -38,10 +38,14 @@ test -f "${runtime}/llama.cpp/.heartwood-runtime.tar.gz"
 test -x "${installation}/bin/heartwood-jupyter"
 test -f "${source}/packages/webui/dist/index.html"
 test -f "${source}/agents/verified/research-planner.md"
+test -f "${source}/agents/verified/statistical-reviewer.md"
+test -f "${source}/agents/verified/analysis-implementer.md"
 test ! -e "${installation}/.installer"
 "${installation}/bin/heartwood" --version | grep --quiet '^heartwood '
 "${installation}/bin/heartwood-jupyter" --version | grep --quiet '^[0-9]'
 "${installation}/bin/heartwood" models managed | grep --quiet 'Qwen'
+"${installation}/bin/heartwood" specialists | grep --quiet 'Statistical Reviewer'
+"${installation}/bin/heartwood" specialists | grep --quiet 'Not available in this release'
 
 mkdir -m 700 "${project}"
 (

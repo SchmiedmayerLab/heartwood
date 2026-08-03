@@ -27,6 +27,7 @@ Heartwood reuses OpenHands for the agent loop and coding tools, then adds projec
 - Recommended Heartwood-managed models plus best-effort support for arbitrary public Hugging Face repositories and reviewed offline imports.
 - Clear review of complete OpenHands action sets before execution.
 - Repository-verified research Skills and explicitly installed project extensions.
+- Bounded research-planning, data-quality, cohort, statistical, and reproducibility specialists delegated through OpenHands.
 - Persistent sessions, replay, and scrubbed audit export.
 - Versioned workstation, NVIDIA, Terra, and native Stanford Carina artifacts.
 
@@ -45,14 +46,21 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.2.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.1 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
 Open [http://127.0.0.1:8767/](http://127.0.0.1:8767/), confirm the project, and choose an authorized model connection. Heartwood treats the mounted host directory as the project and keeps private state in `.heartwood/` inside it.
 
 For the interactive terminal, replace the final command with `heartwood`.
-The [stable documentation](https://schmiedmayerlab.github.io/heartwood/) provides the complete first task and action-review workflow for this release.
+The [prerelease documentation](https://schmiedmayerlab.github.io/heartwood/preview/) provides the complete first task and action-review workflow for this release.
+
+## Focused Research Review
+
+The parent agent can ask one bounded specialist at a time to plan an analysis or review supplied evidence for data-quality, cohort, statistical, or reproducibility concerns.
+Specialists use the active model and verified Skills, and their delegation appears in the same action-review flow as other OpenHands work.
+
+![Heartwood browser interface showing the available research specialists](documentation/assets/screenshots/browser-specialists.png)
 
 ## Choose a Setup
 

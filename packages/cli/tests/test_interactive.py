@@ -453,9 +453,13 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         assert replay.replace_transcript
 
         action_settings = session.submit("/permissions")
+        specialists = session.submit("/specialists")
         selected = session.submit("/permissions auto-approve-low-risk")
         assert "Review Every Action" in (action_settings.message or "")
         assert "Low-Risk Automation" in (action_settings.message or "")
+        assert "Research Planner" in (specialists.message or "")
+        assert "Analysis Implementer" in (specialists.message or "")
+        assert "Not available in this release" in (specialists.message or "")
         assert not selected.failed
         assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
     finally:
@@ -1122,6 +1126,7 @@ def test_interaction_activity_matches_the_submitted_operation() -> None:
     assert "model" not in interaction_activity("/reject").guidance
     assert interaction_activity("/unknown").label == "Running the command"
     assert interaction_activity("/permissions").label == "Updating action review"
+    assert interaction_activity("/specialists").label == "Loading research specialists"
 
 
 def test_terminal_presentation_uses_researcher_facing_labels() -> None:

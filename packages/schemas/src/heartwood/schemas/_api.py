@@ -65,6 +65,8 @@ __all__ = [
     "SkillInstallRequest",
     "SkillSettingsResponse",
     "SkillSummaryResponse",
+    "SpecialistRoleResponse",
+    "SpecialistSettingsResponse",
     "StartupPlanResponse",
     "SubscriptionDeviceLoginRequest",
     "SubscriptionDeviceLoginResponse",
@@ -849,6 +851,29 @@ class SkillSettingsResponse(_ApiResponse):
     skills: list[SkillSummaryResponse]
 
 
+class SpecialistRoleResponse(_ApiResponse):
+    """One bounded research specialist exposed by the shared gateway."""
+
+    specialist_id: str
+    label: str
+    description: str
+    capability: Literal["advisory", "project-actions"]
+    availability: Literal["available", "unavailable"]
+    unavailable_reason: str | None
+    model_route: Literal["inherit"]
+    tools: list[str]
+    skills: list[str]
+    permission_mode: Literal["always_confirm"]
+    max_iterations: int
+    max_budget_usd: float
+
+
+class SpecialistSettingsResponse(_ApiResponse):
+    """Validated research-specialist catalog shared by every interface."""
+
+    specialists: list[SpecialistRoleResponse]
+
+
 type ApiResponse = (
     ActionSettingsResponse
     | AuditExportResponse
@@ -866,6 +891,7 @@ type ApiResponse = (
     | SessionSummaryResponse
     | SkillSettingsResponse
     | SkillSummaryResponse
+    | SpecialistSettingsResponse
     | StartupPlanResponse
     | SubscriptionDeviceLoginResponse
     | WorkspaceChangesResponse

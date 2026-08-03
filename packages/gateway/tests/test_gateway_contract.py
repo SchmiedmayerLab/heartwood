@@ -2858,6 +2858,36 @@ def test_rest_manages_skill_settings(
     assert removed.body == {"skills": []}
 
 
+def test_gateway_exposes_one_bounded_specialist_catalog(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+
+    settings = gateway.specialist_settings()
+    response = RestGateway(gateway).handle(RestRequest(method="GET", path="/settings/specialists"))
+
+    assert response.status_code == 200
+    assert response.body == settings
+    specialists = settings["specialists"]
+    assert [item["specialist_id"] for item in specialists] == [
+        "research-planner",
+        "data-quality-reviewer",
+        "cohort-feature-reviewer",
+        "statistical-reviewer",
+        "reproducibility-reviewer",
+        "analysis-implementer",
+    ]
+    assert [
+        item["specialist_id"] for item in specialists if item["availability"] == "available"
+    ] == [
+        "research-planner",
+        "data-quality-reviewer",
+        "cohort-feature-reviewer",
+        "statistical-reviewer",
+        "reproducibility-reviewer",
+    ]
+    assert specialists[-1]["availability"] == "unavailable"
+    assert specialists[-1]["unavailable_reason"]
+
+
 def test_rest_skill_routes_validate_request_shapes(tmp_path: Path) -> None:
     rest = RestGateway(_gateway(tmp_path))
     responses = (

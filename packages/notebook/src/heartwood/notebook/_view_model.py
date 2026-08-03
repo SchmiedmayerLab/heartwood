@@ -44,6 +44,7 @@ from heartwood.schemas import (
     ModelValidationResponse,
     PlatformCapabilitiesResponse,
     ProjectReadinessResponse,
+    SpecialistSettingsResponse,
     StartupPlanResponse,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
@@ -319,6 +320,10 @@ class NotebookSession:
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared action-confirmation settings."""
         return self.gateway.action_settings()
+
+    def specialist_settings(self) -> SpecialistSettingsResponse:
+        """Return the same bounded specialist catalog used by terminal and browser clients."""
+        return self.gateway.specialist_settings()
 
     def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
         """Select a deployment-allowed action-confirmation mode."""

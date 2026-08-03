@@ -62,6 +62,7 @@ Replay verifies the audit chain and the one-to-one hash binding between each aud
 Use `/audit-export` or the browser export control to create a JSON Lines file for review.
 The export is scrubbed and content-minimized.
 It records task counts and statuses instead of task titles or notes, usage totals instead of completion content, and stable error codes instead of provider details.
+Specialist delegation instructions and returned review prose remain out of the audit export; only minimized lifecycle, action, and usage evidence is retained there.
 Exact action arguments, commands, affected paths, file content, diffs, tool output, and failure text remain in private session state and are not copied into the audit export.
 Operational identifiers, decisions, classifications, counts, and timestamps may still be sensitive in context.
 

@@ -82,6 +82,7 @@ import type {
   SessionProjection,
   SkillSettings,
   SkillSummary,
+  SpecialistSettings,
   StartupPlan,
   SubscriptionDeviceLogin,
 } from "../types";
@@ -100,6 +101,7 @@ interface UtilitySheetProps {
   skillCandidate: SkillSummary | null;
   skillSettings: SkillSettings | null;
   skillSource: string;
+  specialistSettings: SpecialistSettings | null;
   settings: ModelSettings | null;
   validation: ModelValidation | null;
   onClose: () => void;
@@ -156,6 +158,9 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
       : null}
       {props.panel === "skills" ?
         <SkillsContent {...props} />
+      : null}
+      {props.panel === "specialists" ?
+        <SpecialistsContent {...props} />
       : null}
       {props.panel === "settings" || props.panel === "action-review" ?
         <SettingsContent key={props.panel} {...props} />
@@ -310,6 +315,74 @@ const SkillsContent = ({
     </details>
   </>
 );
+
+const SpecialistsContent = ({ specialistSettings }: UtilitySheetProps) => {
+  const available =
+    specialistSettings?.specialists.filter(
+      (role) => role.availability === "available",
+    ) ?? [];
+  const unavailable =
+    specialistSettings?.specialists.filter(
+      (role) => role.availability === "unavailable",
+    ) ?? [];
+  return (
+    <>
+      <SheetHeader>
+        <SheetTitle>Research specialists</SheetTitle>
+        <SheetDescription>
+          Bounded reviewers the agent can use for focused research tasks
+        </SheetDescription>
+      </SheetHeader>
+      <section className="panel-section specialist-list">
+        <h3>Available</h3>
+        {available.length ?
+          available.map((role) => (
+            <article className="specialist-row" key={role.specialist_id}>
+              <div>
+                <strong>{role.label}</strong>
+                <span>{role.description}</span>
+                <small>
+                  Advisory · Uses the active model · Up to {role.max_iterations}{" "}
+                  steps
+                </small>
+              </div>
+              {role.skills.length ?
+                <div className="specialist-skills" aria-label="Verified Skills">
+                  {role.skills.map((skill) => (
+                    <Badge key={skill} variant="secondary">
+                      {skill}
+                    </Badge>
+                  ))}
+                </div>
+              : null}
+            </article>
+          ))
+        : <p className="panel-empty">No specialists available</p>}
+      </section>
+      {unavailable.length ?
+        <details className="advanced-section">
+          <summary>Additional roles</summary>
+          <div className="advanced-section-content specialist-list">
+            {unavailable.map((role) => (
+              <article
+                className="specialist-row unavailable"
+                key={role.specialist_id}
+              >
+                <div>
+                  <strong>{role.label}</strong>
+                  <span>{role.description}</span>
+                  {role.unavailable_reason ?
+                    <small>{role.unavailable_reason}</small>
+                  : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </details>
+      : null}
+    </>
+  );
+};
 
 const SettingsContent = (props: UtilitySheetProps) => {
   const {

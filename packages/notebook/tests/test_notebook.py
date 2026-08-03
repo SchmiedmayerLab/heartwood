@@ -444,6 +444,11 @@ def test_notebook_and_browser_transport_share_gateway_setup_projections(tmp_path
     projections = (
         (notebook.model_settings(), gateway.model_settings(), "/settings/models"),
         (notebook.action_settings(), gateway.action_settings(), "/settings/actions"),
+        (
+            notebook.specialist_settings(),
+            gateway.specialist_settings(),
+            "/settings/specialists",
+        ),
         (notebook.project_readiness(), gateway.project_readiness(), "/project/readiness"),
         (
             notebook.platform_capabilities(),

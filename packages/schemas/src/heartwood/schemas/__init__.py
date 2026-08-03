@@ -57,6 +57,8 @@ from heartwood.schemas._api import (
     SkillInstallRequest,
     SkillSettingsResponse,
     SkillSummaryResponse,
+    SpecialistRoleResponse,
+    SpecialistSettingsResponse,
     StartupPlanResponse,
     SubscriptionDeviceLoginRequest,
     SubscriptionDeviceLoginResponse,
@@ -157,6 +159,8 @@ __all__ = [
     "SkillMetadata",
     "SkillSettingsResponse",
     "SkillSummaryResponse",
+    "SpecialistRoleResponse",
+    "SpecialistSettingsResponse",
     "StartupPlanResponse",
     "SubscriptionDeviceLoginRequest",
     "SubscriptionDeviceLoginResponse",
@@ -175,4 +179,4 @@ __all__ = [
     "schema_names",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0-beta.1"

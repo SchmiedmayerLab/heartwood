@@ -70,6 +70,30 @@ def _terminal_call(
     }
 
 
+def _task_call(
+    call_id: str,
+    *,
+    description: str,
+    prompt: str,
+    subagent_type: str,
+) -> dict[str, object]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "task",
+            "arguments": json.dumps(
+                {
+                    "description": description,
+                    "prompt": prompt,
+                    "subagent_type": subagent_type,
+                },
+                sort_keys=True,
+            ),
+        },
+    }
+
+
 def _prompt_terminal_call(command: str, summary: str, security_risk: str = "LOW") -> str:
     return "\n".join(
         (
@@ -211,7 +235,11 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             else []
         )
         tool_results = [*native_tool_results, *prompt_tool_results]
-        has_tool_result = bool(tool_results)
+        has_specialist_result = "specialist review complete:" in serialized_messages
+        has_execution_result = any(
+            "specialist review complete:" not in json.dumps(result).lower()
+            for result in tool_results
+        )
         medium_risk = "medium-risk network check" in serialized_task_message
         task_kind = (
             "cohort"
@@ -226,7 +254,44 @@ class LocalModelHandler(BaseHTTPRequestHandler):
         )
         message: dict[str, object]
         finish_reason: str
-        if has_tool_result:
+        specialist_response = next(
+            (
+                response
+                for marker, response in (
+                    (
+                        "you are a research-analysis planning specialist",
+                        "SPECIALIST REVIEW COMPLETE: Define the cohort, verify denominators, "
+                        "run aggregate quality checks, and record assumptions.",
+                    ),
+                    (
+                        "you are a biomedical research data-quality reviewer",
+                        "SPECIALIST REVIEW COMPLETE: Verify missingness, duplicate records, "
+                        "temporal consistency, and aggregate denominators.",
+                    ),
+                    (
+                        "you are a biomedical cohort and feature-definition reviewer",
+                        "SPECIALIST REVIEW COMPLETE: Verify index dates, observation windows, "
+                        "eligibility, and outcome leakage.",
+                    ),
+                    (
+                        "you are a statistical methods reviewer",
+                        "SPECIALIST REVIEW COMPLETE: Verify the estimand, split strategy, "
+                        "uncertainty, and held-out evaluation.",
+                    ),
+                    (
+                        "you are a biomedical research reproducibility reviewer",
+                        "SPECIALIST REVIEW COMPLETE: Record revisions, parameters, seeds, "
+                        "commands, artifacts, and validation results.",
+                    ),
+                )
+                if marker in serialized_messages
+            ),
+            None,
+        )
+        if specialist_response is not None:
+            message = {"role": "assistant", "content": specialist_response}
+            finish_reason = "stop"
+        elif has_execution_result:
             final_messages = {
                 "cohort": "The synthetic target-condition cohort summary is ready for review.",
                 "baseline": "The training-only age baseline is ready for review.",
@@ -243,6 +308,24 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 ),
             }
             finish_reason = "stop"
+        elif task_kind == "cohort" and native_tool_mode and not has_specialist_result:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _task_call(
+                        "call-heartwood-reference-planner",
+                        description="review the synthetic cohort plan",
+                        prompt=(
+                            "Plan the supplied synthetic target-condition cohort workflow. "
+                            "Identify aggregate quality checks and evidence needed before "
+                            "project actions. Do not inspect files or use tools."
+                        ),
+                        subagent_type="research-planner",
+                    )
+                ],
+            }
+            finish_reason = "tool_calls"
         elif native_tool_mode or prompt_tool_mode:
             runtime_root = os.environ.get("HEARTWOOD_RUNTIME_ROOT") or None
             tool_python = os.environ.get("HEARTWOOD_TOOL_PYTHON") or sys.executable

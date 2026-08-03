@@ -1747,6 +1747,21 @@ def test_skills_inspect_install_and_remove_use_project_local_extensions(
     assert "installation approval is required" in captured.err
 
 
+def test_specialists_lists_the_shared_bounded_catalog(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _run(tmp_path / "analysis", monkeypatch, ["specialists"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Research specialists" in output
+    assert "Research Planner" in output
+    assert "Data Quality Reviewer" in output
+    assert "Analysis Implementer" in output
+    assert "Not available in this release" in output
+
+
 def test_audit_export_uses_project_sessions(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

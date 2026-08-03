@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from heartwood.schemas import (
     ModelCatalogRequest,
     SessionSummaryResponse,
+    SpecialistSettingsResponse,
     api_contract_schema,
     api_response,
 )
@@ -81,4 +82,30 @@ def test_api_contract_schema_contains_requests_and_responses() -> None:
     assert isinstance(definitions, dict)
     assert "ModelCatalogRequest" in definitions
     assert "SessionSummaryResponse" in definitions
+    assert "SpecialistSettingsResponse" in definitions
     assert schema["anyOf"]
+
+
+def test_specialist_response_rejects_unsafe_contract_drift() -> None:
+    with pytest.raises(ValidationError):
+        api_response(
+            SpecialistSettingsResponse,
+            {
+                "specialists": [
+                    {
+                        "specialist_id": "unsafe",
+                        "label": "Unsafe",
+                        "description": "Attempts to widen policy.",
+                        "capability": "project-actions",
+                        "availability": "available",
+                        "unavailable_reason": None,
+                        "model_route": "external-model",
+                        "tools": ["terminal"],
+                        "skills": [],
+                        "permission_mode": "bypass",
+                        "max_iterations": 4,
+                        "max_budget_usd": 1.0,
+                    }
+                ]
+            },
+        )

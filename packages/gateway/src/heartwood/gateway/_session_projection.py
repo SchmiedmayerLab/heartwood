@@ -1163,7 +1163,8 @@ def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
         invocation_id=_string(value.get("invocation_id")),
         task_id=_string(value.get("task_id")) or None,
         agent_name=agent_name,
-        role_label=_subagent_role_label(agent_name),
+        role_label=_string(value.get("role_label"))
+        or _display_identifier(agent_name, fallback="Specialist"),
         status=status,
         status_label={
             "completed": "Complete",
@@ -1213,12 +1214,6 @@ def _usage_purpose_label(value: str) -> str:
         "critic": "Response Review",
         "total": "Total Model Activity",
     }.get(value, _display_identifier(value, fallback="Model Activity"))
-
-
-def _subagent_role_label(value: str) -> str:
-    return {
-        "research-planner": "Research Planner",
-    }.get(value, _display_identifier(value, fallback="Specialist"))
 
 
 def _display_identifier(value: str, *, fallback: str) -> str:

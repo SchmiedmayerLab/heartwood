@@ -47,6 +47,9 @@ const exportPrompt =
 const failurePrompt =
   "Run the failing-action integration check and report the terminal failure " +
   "without changing the completed reference artifacts.";
+const delegatedSpecialistPrompt =
+  "Plan the supplied synthetic target-condition cohort workflow.";
+const specialistResultMarker = "SPECIALIST REVIEW COMPLETE:";
 const processes = [];
 const logs = [];
 const runtimeEnvironment = Object.assign({}, process.env, {
@@ -149,6 +152,25 @@ async function main() {
     ).toBeVisible();
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
+    await page
+      .getByRole("button", { name: "Specialists", exact: true })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Research specialists" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Research Planner", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Data Quality Reviewer", { exact: true }),
+    ).toBeVisible();
+    await captureDesktopScreenshot(
+      page,
+      "browser-specialists.png",
+      "research specialists",
+    );
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+
     await page.getByLabel("Open action review settings").click();
     await expect(
       page.getByRole("tab", { name: "Action Review" }),
@@ -164,11 +186,14 @@ async function main() {
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     await runApprovedTask(page, task, {
+      approvalSummaries: [
+        "review the synthetic cohort plan",
+        "build the aggregate synthetic target-condition cohort",
+      ],
       captureApproval: true,
       finalMessage:
         "The synthetic target-condition cohort summary is ready for review.",
       prompt: cohortPrompt,
-      summary: "build the aggregate synthetic target-condition cohort",
     });
     await captureReferenceScreenshots(page);
     await inspectProjectEvidence(page);
@@ -246,7 +271,7 @@ async function main() {
       .getByRole("button", { name: "Activity & audit", exact: true })
       .click();
     await expect(page.getByText("Tool execution", { exact: true })).toHaveCount(
-      5,
+      6,
     );
     await expect(
       page.getByText("terminal · exit=0", { exact: true }),
@@ -272,9 +297,14 @@ async function main() {
     const audit = fs.readFileSync(downloadPath, "utf8");
     if (
       !audit.includes("audit.export.recorded") ||
-      [cohortPrompt, baselinePrompt, exportPrompt, failurePrompt].some(
-        (prompt) => audit.includes(prompt),
-      )
+      [
+        cohortPrompt,
+        baselinePrompt,
+        exportPrompt,
+        failurePrompt,
+        delegatedSpecialistPrompt,
+        specialistResultMarker,
+      ].some((privateContent) => audit.includes(privateContent))
     ) {
       throw new Error(
         "browser audit export is incomplete or contains prompt content",
@@ -309,6 +339,7 @@ async function main() {
       replay.match(/\[succeeded\] \$/gu)?.length !== 5 ||
       replay.match(/terminal completed/gu)?.length !== 4 ||
       replay.match(/terminal failed/gu)?.length !== 1 ||
+      !replay.includes("Research Planner: Complete") ||
       !replay.includes(
         "Agent: The synthetic target-condition cohort summary is ready for review.",
       ) ||
@@ -372,29 +403,33 @@ async function runApprovedTask(page, task, taskSpec) {
   await expect(task).toBeEnabled({ timeout: 60_000 });
   await task.fill(taskSpec.prompt);
   await task.press("Enter");
-  const approval = page
-    .getByRole("region", { name: "One Decision for This Action Set" })
-    .last();
-  await expect(approval).toBeVisible({ timeout: 60_000 });
-  await expect(
-    approval.getByText(taskSpec.summary, { exact: true }),
-  ).toBeVisible();
-  if (taskSpec.captureApproval === true) {
-    await assertFullyVisible(page, approval, "complete action review");
-    await assertFullyVisible(
-      page,
-      approval.getByRole("button", { name: /^Allow \d+ actions? once$/u }),
-      "action review decision controls",
-    );
-    await captureDesktopScreenshot(
-      page,
-      "browser-action-review.png",
-      "action review",
-    );
+  const approvalSummaries = taskSpec.approvalSummaries ?? [taskSpec.summary];
+  for (const [index, summary] of approvalSummaries.entries()) {
+    const approval = page
+      .getByRole("region", { name: "One Decision for This Action Set" })
+      .last();
+    await expect(approval).toBeVisible({ timeout: 60_000 });
+    await expect(approval.getByText(summary, { exact: true })).toBeVisible();
+    if (
+      taskSpec.captureApproval === true &&
+      index === approvalSummaries.length - 1
+    ) {
+      await assertFullyVisible(page, approval, "complete action review");
+      await assertFullyVisible(
+        page,
+        approval.getByRole("button", { name: /^Allow \d+ actions? once$/u }),
+        "action review decision controls",
+      );
+      await captureDesktopScreenshot(
+        page,
+        "browser-action-review.png",
+        "action review",
+      );
+    }
+    await approval
+      .getByRole("button", { name: /^Allow \d+ actions? once$/u })
+      .click();
   }
-  await approval
-    .getByRole("button", { name: /^Allow \d+ actions? once$/u })
-    .click();
   await expect(
     page.getByText(taskSpec.finalMessage, { exact: true }),
   ).toBeVisible({ timeout: 60_000 });

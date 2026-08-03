@@ -1659,6 +1659,7 @@ summary:focus-visible {
 
 .activity-row > div,
 .skill-row > div,
+.specialist-row > div,
 .artifact-row > div,
 .profile-row > button:first-child,
 .validation-status {
@@ -1671,6 +1672,8 @@ summary:focus-visible {
 .activity-row span,
 .skill-row span,
 .skill-row small,
+.specialist-row span,
+.specialist-row small,
 .artifact-row span,
 .artifact-row small,
 .profile-row span,
@@ -1683,6 +1686,7 @@ summary:focus-visible {
 
 .activity-row strong,
 .skill-row strong,
+.specialist-row strong,
 .artifact-row strong,
 .profile-row strong {
   font-size: 0.82rem;
@@ -1697,6 +1701,7 @@ summary:focus-visible {
 }
 
 .skill-row,
+.specialist-row,
 .artifact-row,
 .profile-row {
   display: grid;
@@ -1705,6 +1710,21 @@ summary:focus-visible {
   gap: 9px;
   padding: 10px 0;
   border-bottom: 1px solid #e1e6e2;
+}
+
+.specialist-row {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.specialist-row.unavailable {
+  opacity: 0.78;
+}
+
+.specialist-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 .skill-row button,

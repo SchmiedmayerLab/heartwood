@@ -60,12 +60,7 @@ from openhands.sdk.settings import (
     VerificationSettings,
 )
 from openhands.sdk.skills import Skill
-from openhands.sdk.subagent import (
-    AgentDefinition,
-    agent_definition_to_factory,
-    load_agents_from_dir,
-    register_agent_if_absent,
-)
+from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
 from openhands.sdk.tool.schema import Observation
 from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
 from openhands.tools.file_editor import FileEditorAction
@@ -114,6 +109,11 @@ from heartwood.gateway._openhands_models import (
     request_endpoint_for_model,
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.gateway._specialists import (
+    SpecialistCatalog,
+    SpecialistCatalogError,
+    specialist_agent_factory,
+)
 from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
     SubscriptionError,
@@ -186,7 +186,7 @@ class OpenHandsSdkBackend:
         persistence_dir: Path,
         conversation_key: str,
         additional_skills_dirs: Sequence[Path] = (),
-        agents_dir: Path | None = None,
+        specialist_catalog: SpecialistCatalog | None = None,
         credential_environment_names: Sequence[str] = (),
         action_confirmation_mode: ActionConfirmationMode = "always-confirm",
         env: Mapping[str, str] | None = None,
@@ -203,7 +203,7 @@ class OpenHandsSdkBackend:
         self.workspace = workspace.resolve()
         self.skills_dir = skills_dir.resolve()
         self.additional_skills_dirs = tuple(path.resolve() for path in additional_skills_dirs)
-        self.agents_dir = None if agents_dir is None else agents_dir.resolve()
+        self.specialist_catalog = specialist_catalog
         self.persistence_dir = persistence_dir.resolve()
         self.conversation_key = conversation_key
         self._credential_environment_names = tuple(sorted(set(credential_environment_names)))
@@ -677,14 +677,10 @@ class OpenHandsSdkBackend:
         return conversation
 
     def _register_specialized_agents(self) -> None:
-        if self.agents_dir is None:
+        if self.specialist_catalog is None:
             return
-        for definition in load_agents_from_dir(self.agents_dir):
-            if definition.tools:
-                raise OpenHandsSdkError(
-                    f"specialized agent {definition.name} must be tool-free until "
-                    "Heartwood supports audited child-action confirmation"
-                )
+        for role in self.specialist_catalog.available_roles:
+            definition = role.definition
             with _SPECIALIST_REGISTRATION_LOCK:
                 registered_definition = _REGISTERED_HEARTWOOD_SPECIALISTS.get(definition.name)
                 if registered_definition is not None:
@@ -695,10 +691,7 @@ class OpenHandsSdkBackend:
                     continue
                 registered = register_agent_if_absent(
                     name=definition.name,
-                    factory_func=agent_definition_to_factory(
-                        definition,
-                        work_dir=self.workspace,
-                    ),
+                    factory_func=specialist_agent_factory(role),
                     description=definition,
                 )
                 if not registered:
@@ -707,6 +700,14 @@ class OpenHandsSdkBackend:
                         f"{definition.name}"
                     )
                 _REGISTERED_HEARTWOOD_SPECIALISTS[definition.name] = definition
+
+    def _specialist_role_label(self, specialist_id: str) -> str:
+        if self.specialist_catalog is None:
+            return _specialist_fallback_label(specialist_id)
+        try:
+            return self.specialist_catalog.role(specialist_id).label
+        except SpecialistCatalogError:
+            return _specialist_fallback_label(specialist_id)
 
     def _handle_sdk_event(self, event: Event) -> None:
         """Leave durable translation to the persisted OpenHands state.
@@ -1013,6 +1014,7 @@ class OpenHandsSdkBackend:
                     invocation_id=event.tool_call_id,
                     task_id=None,
                     agent_name=event.action.subagent_type,
+                    role_label=self._specialist_role_label(event.action.subagent_type),
                     status=status,
                     parent_session_id=session_id,
                     parent_action_id=event.id,
@@ -1190,6 +1192,7 @@ class OpenHandsSdkBackend:
                             invocation_id=event.tool_call_id,
                             task_id=None,
                             agent_name=event.action.subagent_type,
+                            role_label=self._specialist_role_label(event.action.subagent_type),
                             status=BackendSubagentStatus.PROPOSED,
                             parent_session_id=session_id,
                             parent_action_id=event.id,
@@ -1241,6 +1244,7 @@ class OpenHandsSdkBackend:
                             invocation_id=event.tool_call_id,
                             task_id=event.observation.task_id,
                             agent_name=event.observation.subagent,
+                            role_label=self._specialist_role_label(event.observation.subagent),
                             status=(
                                 BackendSubagentStatus.ERROR
                                 if event.observation.is_error
@@ -1437,13 +1441,22 @@ def _tool_call(
         tool_call_id=event.tool_call_id,
         tool_name=tool_name,
         risk=cast(Any, risk),
-        summary=event.summary or f"run {tool_name}",
+        summary=_tool_summary(event, tool_name=tool_name),
         arguments=_tool_arguments(event),
         action_id=event.id,
         kind=_tool_kind(event),
         affected_paths=_affected_paths(event, project_path=project_path),
         project_path=project_path,
     )
+
+
+def _tool_summary(event: ActionEvent, *, tool_name: str) -> str:
+    action = event.action
+    if isinstance(action, TaskAction) and action.description:
+        description = action.description.strip()
+        if description:
+            return description
+    return event.summary or f"run {tool_name}"
 
 
 def _tool_arguments(event: ActionEvent) -> dict[str, JsonValue]:
@@ -1540,7 +1553,13 @@ def _tool_observation(
     resolved_exit_code = exit_code if isinstance(exit_code, int) else (1 if is_error else 0)
     failed = is_error or resolved_exit_code != 0
     tool_name = event.tool_name or "unknown-tool"
-    result, result_truncated = _bounded_tool_result(observation.text)
+    result: str | None
+    result_truncated: bool
+    if isinstance(observation, TaskObservation) and failed:
+        result = "The specialist could not complete the delegated task."
+        result_truncated = False
+    else:
+        result, result_truncated = _bounded_tool_result(observation.text)
     return BackendToolExecutionEvent(
         tool_execution=ToolExecution(
             tool_call_id=event.tool_call_id,
@@ -1833,3 +1852,9 @@ def _configure_upstream_defaults(env: Mapping[str, str] | None) -> None:
         ("OPENHANDS_SUPPRESS_BANNER", "1"),
     ):
         os.environ.setdefault(name, configured.get(name, default))
+
+
+def _specialist_fallback_label(specialist_id: str) -> str:
+    words = specialist_id.replace("_", "-").split("-")
+    label = " ".join(word.capitalize() for word in words if word)
+    return label or "Specialist"

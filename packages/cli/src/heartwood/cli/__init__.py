@@ -34,6 +34,7 @@ from heartwood.cli._interactive import (
     command_help,
     format_action_settings,
     format_projection_lines,
+    format_specialist_settings,
     interaction_activity,
 )
 from heartwood.cli._launch import LaunchOptions, run_launch
@@ -112,7 +113,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0-beta.1"
 
 _PROG = "heartwood"
 
@@ -415,6 +416,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     remove_skill = skill_subparsers.add_parser("remove", help="Remove an installed extension.")
     remove_skill.add_argument("name")
+
+    subparsers.add_parser(
+        "specialists",
+        help="List bounded research specialists available to the agent.",
+    )
 
     files = subparsers.add_parser("files", help="Inspect bounded project files.")
     file_subparsers = files.add_subparsers(dest="files_command", metavar="<files-command>")
@@ -728,6 +734,9 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return _handle_actions(parser, gateway, args)
         if args.command == "skills":
             return _handle_skills(parser, gateway, args)
+        if args.command == "specialists":
+            print(format_specialist_settings(gateway.specialist_settings()))
+            return 0
         if args.command == "files":
             return _handle_files(parser, gateway, args)
         if args.command == "changes":
