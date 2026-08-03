@@ -1911,10 +1911,10 @@ def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argume
 
     registry_path = tmp_path / "config" / "heartwood" / "checkpoint-signers.toml"
     registry_path.write_text(
-            registry_path.read_text(encoding="utf-8").replace(
-                "http://127.0.0.1:8771/v1/checkpoints/sign",
-                "https://signer.example:443/v1/checkpoints/sign",
-            ),
+        registry_path.read_text(encoding="utf-8").replace(
+            "http://127.0.0.1:8771/v1/checkpoints/sign",
+            "https://signer.example:443/v1/checkpoints/sign",
+        ),
         encoding="utf-8",
     )
     registry_path.chmod(0o600)
