@@ -1325,9 +1325,16 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert 'RUNTIME_ROOT / "packages" / "webui" / "dist"' in jupyter_smoke
     assert '"waiting-for-confirmation"' in jupyter_smoke
     assert '"pendingApproval"' in jupyter_smoke
+    assert '"terra-demo-smoke-allow-specialist"' in jupyter_smoke
+    assert 'specialist_details.get("kind") != "task"' in jupyter_smoke
+    assert 'specialist_details.get("subagentType") != "research-planner"' in jupyter_smoke
+    assert '"terra-demo-smoke-allow-project-actions"' in jupyter_smoke
+    assert 'details.get("kind") != "terminal"' in jupyter_smoke
     assert '"target_type": "action-set"' in jupyter_smoke
     assert '"confirmation.resolved"' in jupyter_smoke
     assert '"tool.execution.recorded"' in jupyter_smoke
+    assert 'subagent.get("status") == "completed"' in jupyter_smoke
+    assert 'subagent.get("parentSessionId") == SESSION_ID' in jupyter_smoke
     assert "os.chdir(PROJECT_ROOT)" in jupyter_smoke
     assert "NotebookSession(session_id=" in jupyter_smoke
     assert '"project/readiness"' in jupyter_smoke
