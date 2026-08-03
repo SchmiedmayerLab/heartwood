@@ -139,6 +139,11 @@ def test_registry_rejects_modified_trust_and_private_token_permissions(tmp_path:
 
     setup.authorization_token.write_text("valid-token\n", encoding="utf-8")
     setup.authorization_token.chmod(0o600)
+    registry = load_checkpoint_signer_registry(setup.registry)
+    setup.authorization_token.unlink()
+    with pytest.raises(CheckpointSignerError, match="authorization token is unavailable"):
+        registry.profile().authorization_token()
+
     setup.registry.chmod(0o620)
     with pytest.raises(CheckpointSignerError, match="not writable by other users"):
         load_checkpoint_signer_registry(setup.registry)
@@ -153,10 +158,21 @@ def test_registry_and_local_setup_fail_closed_on_unsafe_paths(tmp_path: Path) ->
     link.symlink_to(setup.registry)
     with pytest.raises(CheckpointSignerError, match="symbolic link"):
         load_checkpoint_signer_registry(link)
+    with pytest.raises(CheckpointSignerError, match="bounded regular file"):
+        load_checkpoint_signer_registry(tmp_path)
 
     with pytest.raises(CheckpointSignerError, match="absolute path"):
         discover_checkpoint_signer_registry(
             {"HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY": "relative.toml"}
+        )
+    with pytest.raises(CheckpointSignerError, match="registry is unavailable"):
+        discover_checkpoint_signer_registry(
+            {"HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY": str(tmp_path / "missing.toml")}
+        )
+    with pytest.raises(CheckpointSignerError, match="XDG_CONFIG_HOME"):
+        discover_checkpoint_signer_registry(
+            {"XDG_CONFIG_HOME": "relative"},
+            system_path=tmp_path / "missing-system",
         )
 
     with pytest.raises(CheckpointSignerError, match="initialize local checkpoint signer"):
@@ -165,6 +181,41 @@ def test_registry_and_local_setup_fail_closed_on_unsafe_paths(tmp_path: Path) ->
             profile_id="Invalid Profile",
         )
     assert not (tmp_path / "invalid-profile" / "checkpoint-signers.toml").exists()
+
+
+def test_registry_rejects_malformed_or_incomplete_documents(tmp_path: Path) -> None:
+    setup = initialize_local_checkpoint_signer(directory=tmp_path / "operator")
+    documents = (
+        ("profiles = [\n", "registry is invalid"),
+        (
+            "\n".join(
+                (
+                    'schema_version = "heartwood.checkpoint-signer-registry.v1"',
+                    'default_profile = "local-development"',
+                    "profiles = {}",
+                    "",
+                )
+            ),
+            "must contain profiles",
+        ),
+        (
+            "\n".join(
+                (
+                    'schema_version = "heartwood.checkpoint-signer-registry.v1"',
+                    'default_profile = "local-development"',
+                    'profiles = { local-development = "not-a-table" }',
+                    "",
+                )
+            ),
+            "profile must be a table",
+        ),
+    )
+
+    for document, message in documents:
+        setup.registry.write_text(document, encoding="utf-8")
+        setup.registry.chmod(0o600)
+        with pytest.raises(CheckpointSignerError, match=message):
+            load_checkpoint_signer_registry(setup.registry)
 
 
 def test_profile_pins_remote_identity_and_verifies_response_before_use(tmp_path: Path) -> None:
@@ -231,6 +282,17 @@ def test_production_registry_supports_p256_without_project_or_private_key_materi
     assert profile.algorithm == "ecdsa-p256-sha256"
     assert profile.authorization_token() is None
 
+    registry_path.write_text(
+        registry_path.read_text(encoding="utf-8").replace(
+            'algorithm = "ecdsa-p256-sha256"',
+            'algorithm = "ed25519"',
+        ),
+        encoding="utf-8",
+    )
+    registry_path.chmod(0o600)
+    with pytest.raises(CheckpointSignerError, match="algorithm does not match its public key"):
+        load_checkpoint_signer_registry(registry_path)
+
 
 @pytest.mark.parametrize(
     ("transform", "message"),
@@ -238,6 +300,14 @@ def test_production_registry_supports_p256_without_project_or_private_key_materi
         (
             lambda text: text.replace('mode = "development"', 'mode = "production"'),
             "HTTPS",
+        ),
+        (
+            lambda text: text.replace('mode = "development"', 'mode = "unsupported"'),
+            "unsupported checkpoint signer mode",
+        ),
+        (
+            lambda text: text.replace('mode = "development"', 'mode = ""'),
+            "mode must be a non-empty string",
         ),
         (
             lambda text: text.replace('algorithm = "ed25519"', 'algorithm = "rsa"'),
@@ -253,6 +323,41 @@ def test_production_registry_supports_p256_without_project_or_private_key_materi
         (
             lambda text: text.replace("timeout_seconds = 15", "timeout_seconds = nan"),
             "signer timeout",
+        ),
+        (
+            lambda text: text.replace("timeout_seconds = 15", 'timeout_seconds = "15"'),
+            "timeout_seconds must be numeric",
+        ),
+        (
+            lambda text: text.replace(
+                'signer_id = "local-development"',
+                'signer_id = "unsafe signer"',
+            ),
+            "safe identifier",
+        ),
+        (
+            lambda text: (
+                "\n".join(
+                    'trusted_public_key = "relative.pem"'
+                    if line.startswith("trusted_public_key =")
+                    else line
+                    for line in text.splitlines()
+                )
+                + "\n"
+            ),
+            "trusted_public_key must be an absolute path",
+        ),
+        (
+            lambda text: (
+                "\n".join(
+                    f'public_key_sha256 = "sha256:{"0" * 64}"'
+                    if line.startswith("public_key_sha256 =")
+                    else line
+                    for line in text.splitlines()
+                )
+                + "\n"
+            ),
+            "fingerprint does not match",
         ),
         (
             lambda text: text.replace('key_version = "v1"', 'key_version = "version 1"'),
