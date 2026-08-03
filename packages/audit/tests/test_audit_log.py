@@ -104,11 +104,37 @@ def test_audit_append_rejects_session_change_and_corrupt_tail(tmp_path: Path) ->
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["event_hash"] = f"sha256:{'0' * 64}"
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    with pytest.raises(AuditIntegrityError, match="tail is invalid"):
+    with pytest.raises(AuditIntegrityError, match="event hash mismatch"):
         log.append(
             session_id="session-1",
             event_type="session.paused",
             occurred_at="2026-01-01T00:00:01Z",
+        )
+
+
+def test_audit_append_rejects_corruption_before_an_intact_tail(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path)
+    for sequence in range(3):
+        log.append(
+            session_id="session-1",
+            event_type="command.received",
+            occurred_at=f"2026-01-01T00:00:0{sequence}Z",
+            payload={"command_id": f"command-{sequence}"},
+        )
+
+    records = tuple(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
+    records[0]["payload"]["command_id"] = "changed"
+    path.write_text(
+        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AuditIntegrityError, match="event hash mismatch"):
+        log.append(
+            session_id="session-1",
+            event_type="session.paused",
+            occurred_at="2026-01-01T00:00:03Z",
         )
 
 

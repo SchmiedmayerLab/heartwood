@@ -1909,6 +1909,20 @@ def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argume
     assert observed["port"] == 8771
     assert observed["access_log"] is False
 
+    registry_path = tmp_path / "config" / "heartwood" / "checkpoint-signers.toml"
+    registry_path.write_text(
+            registry_path.read_text(encoding="utf-8").replace(
+                "http://127.0.0.1:8771/v1/checkpoints/sign",
+                "https://signer.example:443/v1/checkpoints/sign",
+            ),
+        encoding="utf-8",
+    )
+    registry_path.chmod(0o600)
+    observed.clear()
+    assert _run(project, monkeypatch, ["signer", "serve-local"]) == 65
+    assert "local signer must bind a loopback host" in capsys.readouterr().err
+    assert observed == {}
+
 
 def test_audit_signer_selection_persists_only_the_deployment_profile(
     tmp_path: Path,
@@ -1916,7 +1930,8 @@ def test_audit_signer_selection_persists_only_the_deployment_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "analysis"
-    operator = tmp_path / "operator"
+    default_operator = tmp_path / "default-operator"
+    selected_operator = tmp_path / "selected-operator"
     assert (
         _run(
             project,
@@ -1925,33 +1940,60 @@ def test_audit_signer_selection_persists_only_the_deployment_profile(
                 "signer",
                 "init-local",
                 "--directory",
-                str(operator),
+                str(default_operator),
                 "--profile",
-                "offline-development",
+                "deployment-default",
             ],
         )
         == 0
     )
-    registry = load_checkpoint_signer_registry(operator / "checkpoint-signers.toml")
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "signer",
+                "init-local",
+                "--directory",
+                str(selected_operator),
+                "--profile",
+                "project-selected",
+                "--port",
+                "8772",
+            ],
+        )
+        == 0
+    )
+    default_registry = load_checkpoint_signer_registry(default_operator / "checkpoint-signers.toml")
+    selected_registry = load_checkpoint_signer_registry(
+        selected_operator / "checkpoint-signers.toml"
+    )
+    registry = CheckpointSignerRegistry(
+        profiles=(default_registry.profile(), selected_registry.profile()),
+        default_profile="deployment-default",
+    )
     _install_deterministic_gateway(
         monkeypatch,
         checkpoint_signer_registry=registry,
     )
     capsys.readouterr()
 
-    assert _run(project, monkeypatch, ["audit", "signer", "list"]) == 0
     assert (
         _run(
             project,
             monkeypatch,
-            ["audit", "signer", "select", "offline-development"],
+            ["audit", "signer", "select", "project-selected"],
         )
         == 0
     )
+    capsys.readouterr()
+    assert _run(project, monkeypatch, ["audit", "signer", "list"]) == 0
 
     persisted = tomllib.loads((project / ".heartwood" / "config.toml").read_text(encoding="utf-8"))
-    assert persisted["audit"] == {"signer_profile": "offline-development"}
-    assert "offline-development" in capsys.readouterr().out
+    assert persisted["audit"] == {"signer_profile": "project-selected"}
+    output = capsys.readouterr().out
+    assert "deployment-default (deployment default)" in output
+    assert "project-selected (active)" in output
 
 
 def test_cli_reports_active_browser_session_without_traceback(

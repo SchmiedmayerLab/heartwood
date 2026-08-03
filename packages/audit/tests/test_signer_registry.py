@@ -252,6 +252,7 @@ def test_production_registry_supports_p256_without_project_or_private_key_materi
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
+    public_path.chmod(0o644)
     registry_path = operator / "checkpoint-signers.toml"
     registry_path.write_text(
         "\n".join(

@@ -1992,14 +1992,14 @@ def _handle_audit_signer(
         print("No deployment checkpoint signer registry is installed.")
         print("Production checkpoints remain unavailable until an operator configures one.")
         return 1
-    selected = gateway.config_store.load().audit_settings.signer_profile
     active = gateway.active_checkpoint_signer().profile_id
+    default = gateway.default_checkpoint_signer().profile_id
     print("Checkpoint signers")
     for profile in profiles:
         markers = []
         if profile.profile_id == active:
             markers.append("active")
-        if selected is None and profile.profile_id == active:
+        if profile.profile_id == default:
             markers.append("deployment default")
         suffix = f" ({', '.join(markers)})" if markers else ""
         print(f"  {profile.profile_id}{suffix}: {profile.mode}, {profile.algorithm}")
@@ -2137,6 +2137,8 @@ def _handle_local_signer_serve(
         raise CheckpointSignerError("local signer registry endpoint must include a host and port")
     selected_host = configured_host if host is None else host
     selected_port = configured_port if port is None else port
+    if selected_host not in {"127.0.0.1", "::1"}:
+        raise CheckpointSignerError("local signer must bind a loopback host")
     host_url = f"[{selected_host}]" if ":" in selected_host else selected_host
     expected_endpoint = f"http://{host_url}:{selected_port}/v1/checkpoints/sign"
     if configured_endpoint != urlsplit(expected_endpoint):

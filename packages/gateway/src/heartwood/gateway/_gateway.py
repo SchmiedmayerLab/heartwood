@@ -727,6 +727,10 @@ class SessionGateway:
         """Return deployment-approved signer profiles without resolving credentials."""
         return self._checkpoint_signer_registry().profiles
 
+    def default_checkpoint_signer(self) -> CheckpointSignerProfile:
+        """Return the deployment-owned default without changing project selection."""
+        return self._checkpoint_signer_registry().profile()
+
     def active_checkpoint_signer(self) -> CheckpointSignerProfile:
         """Resolve the project selection or deployment-owned default profile."""
         selected = self.config_store.load().audit_settings.signer_profile

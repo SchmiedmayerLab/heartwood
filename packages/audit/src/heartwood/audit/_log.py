@@ -107,9 +107,9 @@ class AuditLog:
         def build(records: tuple[dict[str, object], ...]) -> dict[str, object]:
             events = tuple(_audit_event(record) for record in records)
             if events:
-                _verify_tail(events)
                 if any(event.session_id != session_id for event in events):
                     raise AuditIntegrityError("audit append session does not match existing log")
+                _verify_audit_chain(events)
             event = prepare_audit_event(
                 session_id=session_id,
                 sequence=len(events),
@@ -164,6 +164,17 @@ class AuditLog:
 
 def verify_audit_events(events: tuple[AuditEvent, ...]) -> AuditVerification:
     """Fully verify an in-memory audit stream and return its stable identity."""
+    terminal_event_hash = _verify_audit_chain(events)
+    canonical = canonical_audit_jsonl(events).encode("utf-8")
+    return AuditVerification(
+        event_count=len(events),
+        terminal_event_hash=terminal_event_hash,
+        content_sha256=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+        size_bytes=len(canonical),
+    )
+
+
+def _verify_audit_chain(events: tuple[AuditEvent, ...]) -> str | None:
     previous_hash: str | None = None
     session_id: str | None = None
     for expected_sequence, event in enumerate(events):
@@ -178,13 +189,7 @@ def verify_audit_events(events: tuple[AuditEvent, ...]) -> AuditVerification:
         if event.event_hash != compute_event_hash(event):
             raise AuditIntegrityError(f"audit event hash mismatch at {event.event_id}")
         previous_hash = event.event_hash
-    canonical = canonical_audit_jsonl(events).encode("utf-8")
-    return AuditVerification(
-        event_count=len(events),
-        terminal_event_hash=previous_hash,
-        content_sha256=f"sha256:{hashlib.sha256(canonical).hexdigest()}",
-        size_bytes=len(canonical),
-    )
+    return previous_hash
 
 
 def verify_audit_jsonl(content: str) -> tuple[tuple[AuditEvent, ...], AuditVerification]:
@@ -217,14 +222,6 @@ def _audit_event(payload: object) -> AuditEvent:
         raise AuditIntegrityError("audit record must be an object")
     migrated = PERSISTENCE_MIGRATIONS.migrate(AUDIT_EVENT_KIND, payload)
     return AuditEvent.model_validate(migrated.payload)
-
-
-def _verify_tail(events: tuple[AuditEvent, ...]) -> None:
-    last = events[-1]
-    if last.sequence != len(events) - 1 or last.event_hash != compute_event_hash(last):
-        raise AuditIntegrityError(f"audit tail is invalid at {last.event_id}")
-    if len(events) > 1 and last.previous_event_hash != events[-2].event_hash:
-        raise AuditIntegrityError(f"audit tail link is invalid at {last.event_id}")
 
 
 _SENSITIVE_KEYS = {
