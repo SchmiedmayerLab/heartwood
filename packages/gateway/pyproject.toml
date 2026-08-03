@@ -16,8 +16,10 @@ dependencies = [
     "anthropic==0.120.2",
     "filelock==3.32.0",
     "heartwood-adapters",
+    "heartwood-audit",
     "heartwood-core-adapter",
     "heartwood-model-policy",
+    "heartwood-persistence",
     "heartwood-schemas",
     "heartwood-session",
     "heartwood-skills",
@@ -40,8 +42,10 @@ packages = ["src/heartwood"]
 
 [tool.uv.sources]
 heartwood-adapters = { workspace = true }
+heartwood-audit = { workspace = true }
 heartwood-core-adapter = { workspace = true }
 heartwood-model-policy = { workspace = true }
+heartwood-persistence = { workspace = true }
 heartwood-schemas = { workspace = true }
 heartwood-session = { workspace = true }
 heartwood-skills = { workspace = true }

@@ -17,6 +17,7 @@ dependencies = [
     "heartwood-adapters",
     "heartwood-audit",
     "heartwood-model-policy",
+    "heartwood-persistence",
     "heartwood-schemas",
     "heartwood-session",
 ]
@@ -32,5 +33,6 @@ packages = ["src/heartwood"]
 heartwood-adapters = { workspace = true }
 heartwood-audit = { workspace = true }
 heartwood-model-policy = { workspace = true }
+heartwood-persistence = { workspace = true }
 heartwood-schemas = { workspace = true }
 heartwood-session = { workspace = true }

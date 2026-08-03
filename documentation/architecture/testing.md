@@ -14,6 +14,7 @@ No single layer establishes every property of a deployment.
 | Layer | Establishes |
 |---|---|
 | Unit and schema tests | Validation, state boundaries, policy, diagnostics, model planning, and serialization |
+| Persistence fault tests | Atomic replacement, append-boundary interruption, deterministic recovery, process concurrency, schema migration, symbolic-link rejection, and private permissions |
 | OpenHands conformance tests | Public typed events, explicit settings, background control, grouped approval, restart recovery, real Task Tracker execution, usage, and sequential specialists with deterministic `TestLLM` |
 | Gateway contract tests | Shared command/event behavior, action correlation, projection replay, bounded workspace inspection, coherent REST, WebSocket, and server-sent-events snapshots, transient ordering, credentials, sessions, and imports |
 | Interface tests | Terminal, browser, and notebook rendering of gateway-owned status, suggestions, grouped review, files, and changes |
@@ -40,6 +41,10 @@ The browser reference analysis stops its gateway, replays and mutates the same s
 Browser tests build the current production assets before starting the preview server, exercise direct and fallback live-update states, scan the rendered interface with axe, and verify keyboard focus, reduced motion, and reflow at desktop, tablet, and narrow notebook widths.
 Adversarial response tests cover raw HTML, unsafe links, remote images, invisible control characters, oversized Markdown, heading hierarchy, and keyboard access to scrollable code and diff regions.
 Gateway transport tests bound request bodies, reject malformed text, keep API failures out of static-page fallback, and verify browser security headers for direct and Jupyter-proxied origins.
+
+Persistence compatibility fixtures cover every current project, configuration, session, audit, Skill, and OpenHands envelope.
+Each fixture must pass the deterministic migration registry and its owning typed loader.
+Audit checkpoint tests cover content minimization, canonical encoding, deployment-registry precedence, project isolation, signer authentication, endpoint and file constraints, pinned signer identity, remote-response verification, local-service boundaries, concurrent publication, interrupted publication, wrong-key and content tampering, retention validation, and independently trusted verification.
 
 Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths.
 Actual Terra and Carina qualification still requires the exact published artifact and synthetic task on those platforms because public CI cannot provision their managed workspaces.

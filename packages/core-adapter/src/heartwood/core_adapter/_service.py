@@ -20,7 +20,7 @@ from typing import assert_never, cast
 
 from heartwood.adapters import PlatformAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter, select_platform_adapter
-from heartwood.audit import AuditIntegrityError, AuditLog
+from heartwood.audit import AuditIntegrityError, AuditLog, prepare_audit_event
 from heartwood.core_adapter._facade import (
     AgentBackend,
     BackendAgentMessageEvent,
@@ -831,22 +831,16 @@ class SessionService:
             EventKind.AUDIT_EXPORT_RECORDED,
             {
                 "path": str(self.store.audit_export_path),
-                "event_count": len(self.audit_log.read()) + 1,
+                "event_count": self.store.next_sequence() + 1,
                 "scrubbed": True,
             },
         )
-        self.store.write_audit_export(self.audit_log.export_jsonl())
+        content, _verification = self.store.verified_audit_export()
+        self.store.write_audit_export(content)
         return event
 
     def _record_event(self, kind: EventKind, payload: dict[str, JsonValue]) -> SessionEvent:
-        sequence = self.store.next_sequence()
-        audit_events = self.audit_log.read()
-        self.audit_log.verify(audit_events)
-        if len(audit_events) != sequence:
-            raise AuditIntegrityError(
-                "session event and audit logs have different lengths before append"
-            )
-        previous_event_hash = audit_events[-1].event_hash if audit_events else None
+        sequence, previous_event_hash = self.store.verified_head()
         occurred_at = self.clock()
         event = SessionEvent(
             event_id=f"{self.store.session_id}-event-{sequence:06d}",
@@ -861,8 +855,10 @@ class SessionService:
             **_audit_payload(kind, payload),
             "session_event_hash": compute_session_event_hash(event),
         }
-        audit_event = self.audit_log.prepare(
+        audit_event = prepare_audit_event(
             session_id=self.store.session_id,
+            sequence=sequence,
+            previous_event_hash=previous_event_hash,
             event_type=kind.value,
             occurred_at=occurred_at,
             payload=audit_payload,

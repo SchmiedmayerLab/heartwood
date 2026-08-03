@@ -26,6 +26,7 @@ path = [
     "skills/**/*.json",
     "evals/**/*.json",
     "documentation/**/*.ipynb",
+    "packages/persistence/tests/fixtures/**/*.json",
     "packages/webui/package.json",
     "packages/webui/package-lock.json",
     "packages/webui/tsconfig.json",

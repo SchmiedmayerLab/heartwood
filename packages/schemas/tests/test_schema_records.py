@@ -8,12 +8,18 @@
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 from pydantic import ValidationError
 
 from heartwood.schemas import (
     ApprovalRecord,
+    AuditCheckpoint,
+    AuditCheckpointSignature,
+    AuditCheckpointStatement,
     AuditEvent,
+    AuditRetention,
     ConfirmationRequest,
     DetectorEvidence,
     EgressAttestationRecord,
@@ -28,7 +34,12 @@ from heartwood.schemas import (
 def test_schema_inventory_is_versioned() -> None:
     expected = {
         "approval-record.v1",
+        "audit-checkpoint-sign-request.v1",
+        "audit-checkpoint-signature.v1",
+        "audit-checkpoint-statement.v1",
+        "audit-checkpoint.v2",
         "audit-event.v1",
+        "audit-retention.v1",
         "confirmation-request.v1",
         "detector-evidence.v1",
         "egress-attestation-record.v1",
@@ -131,6 +142,66 @@ def test_audit_and_attestation_records_are_hash_chain_ready() -> None:
         reason="endpoint is not allowlisted",
     )
     assert event.payload["decision_id"] == attestation.decision_id
+
+
+def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> None:
+    statement = AuditCheckpointStatement(
+        deployment_id="carina-research",
+        session_id="session-1",
+        created_at="2026-08-02T12:00:00Z",
+        audit_event_count=1,
+        terminal_event_hash=f"sha256:{'a' * 64}",
+        audit_content_sha256=f"sha256:{'b' * 64}",
+        audit_size_bytes=256,
+        retention=AuditRetention(
+            policy_id="research-audit-7y",
+            retain_until="2033-08-02",
+        ),
+    )
+    signature = AuditCheckpointSignature(
+        algorithm="ed25519",
+        signer_id="carina-records",
+        key_id="audit-signing",
+        key_version="2026-08",
+        public_key_sha256=f"sha256:{'c' * 64}",
+        value=base64.b64encode(bytes(64)).decode("ascii"),
+    )
+    checkpoint = AuditCheckpoint(statement=statement, signature=signature)
+
+    assert checkpoint.statement == statement
+
+    invalid = statement.model_dump(mode="json")
+    invalid["audit_event_count"] = 0
+    with pytest.raises(ValidationError):
+        AuditCheckpointStatement.model_validate(invalid)
+
+    invalid_checkpoint = checkpoint.model_dump(mode="json")
+    invalid_checkpoint["signature"]["value"] = "not-base64!"
+    with pytest.raises(ValidationError, match="canonical Base64"):
+        AuditCheckpoint.model_validate(invalid_checkpoint)
+
+    early_retention = statement.model_dump(mode="json")
+    early_retention["retention"]["retain_until"] = "2026-08-01"
+    with pytest.raises(ValidationError, match="earlier than created_at"):
+        AuditCheckpointStatement.model_validate(early_retention)
+
+    for created_at, message in (
+        ("not-a-timestamp", "valid ISO 8601 timestamp"),
+        ("2026-08-02T12:00:00", "include a timezone"),
+    ):
+        invalid_created_at = statement.model_dump(mode="json")
+        invalid_created_at["created_at"] = created_at
+        with pytest.raises(ValidationError, match=message):
+            AuditCheckpointStatement.model_validate(invalid_created_at)
+
+    invalid_checkpoint["signature"]["value"] = base64.b64encode(bytes(32)).decode("ascii")
+    with pytest.raises(ValidationError, match="Ed25519 signature must contain 64 bytes"):
+        AuditCheckpoint.model_validate(invalid_checkpoint)
+
+    invalid_checkpoint = checkpoint.model_dump(mode="json")
+    invalid_checkpoint["signature"]["key_version"] = "version\u0000"
+    with pytest.raises(ValidationError, match="string_pattern_mismatch"):
+        AuditCheckpoint.model_validate(invalid_checkpoint)
 
 
 def test_detector_evidence_bounds_confidence() -> None:

@@ -38,6 +38,7 @@ When project direction changes, update the relevant architecture or operations p
 | Product boundaries and durable technical rationale | [documentation/architecture/index.md](documentation/architecture/index.md) |
 | Project, gateway, adapter, interface, and data-flow architecture | [documentation/architecture/system.md](documentation/architecture/system.md) |
 | Security and controlled-data responsibilities | [documentation/operate/security.md](documentation/operate/security.md) |
+| Authoritative audit exports, signing, and retention | [documentation/operate/audit-checkpoints.md](documentation/operate/audit-checkpoints.md) |
 | Audit integrity and session persistence | [documentation/architecture/sessions-audit.md](documentation/architecture/sessions-audit.md) |
 | Testing layers and evidence language | [documentation/architecture/testing.md](documentation/architecture/testing.md) |
 | Python and web development workflow | [documentation/contribute/development.md](documentation/contribute/development.md) |

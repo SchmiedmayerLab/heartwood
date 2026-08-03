@@ -37,6 +37,7 @@ from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFo
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.gateway._startup import InterfaceKind
 from heartwood.gateway._workspace import WorkspaceInspectionError
+from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import (
     ActionConfirmationRequest,
     ApiRequest,
@@ -85,6 +86,13 @@ class RestGateway:
 
     def handle(self, request: RestRequest) -> RestResponse:
         """Handle a REST-style request."""
+        try:
+            return self._handle(request)
+        except NativeLockUnavailableError:
+            return _error(409, "project storage does not support required process locks")
+
+    def _handle(self, request: RestRequest) -> RestResponse:
+        """Dispatch one request after applying shared boundary error handling."""
         parsed = urlsplit(request.path)
         parts = tuple(part for part in parsed.path.split("/") if part)
         if parts == ("sessions",) and request.method == "GET":

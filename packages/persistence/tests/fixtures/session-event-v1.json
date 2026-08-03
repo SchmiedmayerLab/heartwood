@@ -1,0 +1,1 @@
+{"event_id":"session-1-event-000000","kind":"command.received","occurred_at":"2026-08-02T12:00:00Z","payload":{"command_id":"command-1"},"previous_event_hash":null,"schema_version":"heartwood.session-event.v1","sequence":0,"session_id":"session-1"}

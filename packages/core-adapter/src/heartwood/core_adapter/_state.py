@@ -12,18 +12,43 @@ import hashlib
 import json
 import os
 import socket
-import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
 from filelock import FileLock
 from filelock import Timeout as FileLockTimeout
 
-from heartwood.audit import AuditIntegrityError, AuditLog, compute_event_hash
+from heartwood.audit import (
+    AuditIntegrityError,
+    AuditLog,
+    AuditVerification,
+    canonical_audit_jsonl,
+    compute_event_hash,
+)
+from heartwood.persistence import (
+    AUDIT_EVENT_KIND,
+    PERSISTENCE_MIGRATIONS,
+    SESSION_COMMAND_RECEIPT_KIND,
+    SESSION_COMMAND_RECEIPT_VERSION,
+    SESSION_COMMIT_KIND,
+    SESSION_COMMIT_VERSION,
+    SESSION_EVENT_KIND,
+    SESSION_WRITER_KIND,
+    SESSION_WRITER_VERSION,
+    MigrationError,
+    NativeLockUnavailableError,
+    append_private_bytes,
+    fsync_directory,
+    read_private_json,
+    read_private_text,
+    truncate_private_file,
+    write_private_json_atomic,
+    write_private_text_atomic,
+)
 from heartwood.schemas import AuditEvent
 from heartwood.session import SessionEvent, compute_session_event_hash, validate_session_id
 
@@ -72,6 +97,7 @@ class FileSessionStore:
         self.pending_commit_path = self.session_dir / ".pending-commit.json"
         self.commands_dir = self.session_dir / ".commands"
         self._next_sequence: int | None = None
+        self._last_audit_hash: str | None = None
         self._writer_lock: FileLock | None = None
         self._snapshot_lock = FileLock(
             self.snapshot_lock_path,
@@ -120,7 +146,7 @@ class FileSessionStore:
             _write_private_json_atomic(
                 self.writer_metadata_path,
                 {
-                    "schema_version": "heartwood.session-writer.v1",
+                    "schema_version": SESSION_WRITER_VERSION,
                     "session_id": self.session_id,
                     "pid": os.getpid(),
                     "host": socket.gethostname(),
@@ -141,10 +167,10 @@ class FileSessionStore:
             return
         try:
             with suppress(OSError, ValueError):
-                metadata = _read_private_json(self.writer_metadata_path)
+                metadata = _writer_record(_read_private_json(self.writer_metadata_path))
                 if metadata.get("token") == self._writer_token:
                     self.writer_metadata_path.unlink(missing_ok=True)
-                    _fsync_directory(self.session_dir)
+                    fsync_directory(self.session_dir)
         finally:
             self._writer_lock = None
             self._writer_token = None
@@ -183,7 +209,7 @@ class FileSessionStore:
             _write_private_json_atomic(
                 self.pending_commit_path,
                 {
-                    "schema_version": "heartwood.session-commit.v1",
+                    "schema_version": SESSION_COMMIT_VERSION,
                     "session_event": event.model_dump(mode="json"),
                     "audit_event": audit_event.model_dump(mode="json"),
                 },
@@ -191,8 +217,9 @@ class FileSessionStore:
             _append_private_json_line(self.audit_path, audit_event.model_dump_json())
             _append_private_json_line(self.events_path, event.model_dump_json())
             self.pending_commit_path.unlink()
-            _fsync_directory(self.session_dir)
+            fsync_directory(self.session_dir)
             self._next_sequence = event.sequence + 1
+            self._last_audit_hash = audit_event.event_hash
 
     def recover_pending_commit(self) -> bool:
         """Complete one interrupted paired event and audit append."""
@@ -207,11 +234,14 @@ class FileSessionStore:
         if not self.pending_commit_path.exists():
             return False
         try:
-            payload = _read_private_json(self.pending_commit_path)
-            if payload.get("schema_version") != "heartwood.session-commit.v1":
-                raise SessionRecoveryError("unsupported pending session commit")
-            event = SessionEvent.model_validate(payload.get("session_event"))
-            audit_event = AuditEvent.model_validate(payload.get("audit_event"))
+            payload = PERSISTENCE_MIGRATIONS.migrate(
+                SESSION_COMMIT_KIND,
+                _read_private_json(self.pending_commit_path),
+            ).payload
+            event = _session_event(payload.get("session_event"))
+            audit_event = _audit_event(payload.get("audit_event"))
+        except MigrationError as error:
+            raise SessionRecoveryError("unsupported pending session commit") from error
         except (OSError, ValueError) as error:
             if isinstance(error, SessionRecoveryError):
                 raise
@@ -226,11 +256,11 @@ class FileSessionStore:
 
         events, events_truncate_at = _read_recoverable_records(
             self.events_path,
-            SessionEvent,
+            _session_event_json,
         )
         audit_events, audit_truncate_at = _read_recoverable_records(
             self.audit_path,
-            AuditEvent,
+            _audit_event_json,
         )
         _verify_recovery_prefix(audit_events, events)
         sequence = event.sequence
@@ -246,16 +276,17 @@ class FileSessionStore:
         elif audit_event.previous_event_hash is not None or event.previous_event_hash is not None:
             raise SessionRecoveryError("first pending commit must not reference a previous hash")
         if audit_truncate_at is not None:
-            _truncate_private_file(self.audit_path, audit_truncate_at)
+            truncate_private_file(self.audit_path, audit_truncate_at)
         if events_truncate_at is not None:
-            _truncate_private_file(self.events_path, events_truncate_at)
+            truncate_private_file(self.events_path, events_truncate_at)
         if len(audit_events) == sequence:
             _append_private_json_line(self.audit_path, audit_event.model_dump_json())
         if len(events) == sequence:
             _append_private_json_line(self.events_path, event.model_dump_json())
         self.pending_commit_path.unlink()
-        _fsync_directory(self.session_dir)
+        fsync_directory(self.session_dir)
         self._next_sequence = sequence + 1
+        self._last_audit_hash = audit_event.event_hash
         return True
 
     def command_record(self, command_id: str) -> dict[str, Any] | None:
@@ -264,7 +295,7 @@ class FileSessionStore:
         if not path.exists():
             return None
         try:
-            payload = _read_private_json(path)
+            payload = _command_record(_read_private_json(path))
         except (OSError, ValueError) as error:
             raise SessionRecoveryError(f"command receipt is malformed for {command_id}") from error
         _validate_command_record(payload, command_id)
@@ -289,7 +320,7 @@ class FileSessionStore:
         unresolved: list[tuple[int, str]] = []
         for path in self.commands_dir.glob("*.json"):
             try:
-                payload = _read_private_json(path)
+                payload = _command_record(_read_private_json(path))
                 command_id = payload.get("command_id")
                 if not isinstance(command_id, str):
                     raise SessionRecoveryError(f"invalid command receipt in {path}")
@@ -320,7 +351,7 @@ class FileSessionStore:
         _write_private_json_atomic(
             self._command_path(command_id),
             {
-                "schema_version": "heartwood.session-command-receipt.v1",
+                "schema_version": SESSION_COMMAND_RECEIPT_VERSION,
                 "session_id": self.session_id,
                 "command_id": command_id,
                 "command_hash": command_hash,
@@ -377,7 +408,7 @@ class FileSessionStore:
         _write_private_json_atomic(
             self._command_path(command_id),
             {
-                "schema_version": "heartwood.session-command-receipt.v1",
+                "schema_version": SESSION_COMMAND_RECEIPT_VERSION,
                 "session_id": self.session_id,
                 "command_id": command_id,
                 "command_hash": command_hash,
@@ -390,16 +421,29 @@ class FileSessionStore:
     def read_events(self) -> tuple[SessionEvent, ...]:
         """Read persisted session events."""
         try:
-            with _open_private_read(self.events_path) as file:
-                lines = file.read().splitlines()
+            lines = read_private_text(self.events_path).splitlines()
         except FileNotFoundError:
             return ()
-        return tuple(SessionEvent.model_validate_json(line) for line in lines if line)
+        return tuple(_session_event_json(line) for line in lines if line)
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         """Recover if needed, then return one verified event-and-audit snapshot."""
+        events, _audit_events, _verification = self._verified_records()
+        return events
+
+    def verified_audit_export(self) -> tuple[str, AuditVerification]:
+        """Return a stable canonical export after full paired-log verification."""
+        _events, audit_events, verification = self._verified_records()
+        return canonical_audit_jsonl(audit_events), verification
+
+    def _verified_records(
+        self,
+    ) -> tuple[tuple[SessionEvent, ...], tuple[AuditEvent, ...], AuditVerification]:
         if not self.session_dir.exists():
-            return ()
+            verification = AuditLog(self.audit_path).verify(())
+            self._next_sequence = 0
+            self._last_audit_hash = None
+            return (), (), verification
         acquired_writer = False
         try:
             while True:
@@ -408,8 +452,13 @@ class FileSessionStore:
                         try:
                             audit_log = AuditLog(self.audit_path)
                             audit_events = audit_log.read()
-                            audit_log.verify(audit_events)
+                            verification = audit_log.verify(audit_events)
                             events = self.read_events()
+                        except NativeLockUnavailableError as error:
+                            raise SessionStorageCapabilityError(
+                                "session storage does not support required process locks: "
+                                f"{self.session_id}"
+                            ) from error
                         except (OSError, UnicodeDecodeError, ValueError) as error:
                             if isinstance(error, AuditIntegrityError):
                                 raise
@@ -417,7 +466,11 @@ class FileSessionStore:
                                 f"session {self.session_id} records are malformed"
                             ) from error
                         _verify_event_correspondence(audit_events, events)
-                        return events
+                        self._next_sequence = len(events)
+                        self._last_audit_hash = (
+                            audit_events[-1].event_hash if audit_events else None
+                        )
+                        return events, audit_events, verification
                 if not self.owns_writer:
                     self.acquire_writer()
                     acquired_writer = True
@@ -429,8 +482,14 @@ class FileSessionStore:
     def next_sequence(self) -> int:
         """Return the next sequence without advancing until the event is durable."""
         if self._next_sequence is None:
-            self._next_sequence = len(self.read_events())
+            self.replay_events()
+        if self._next_sequence is None:  # pragma: no cover - replay invariant
+            raise SessionRecoveryError("session sequence could not be initialized")
         return self._next_sequence
+
+    def verified_head(self) -> tuple[int, str | None]:
+        """Return the sequence and audit hash established by full replay verification."""
+        return self.next_sequence(), self._last_audit_hash
 
     def write_audit_export(self, content: str) -> None:
         """Write the scrubbed audit export as an owner-only file."""
@@ -441,8 +500,7 @@ class FileSessionStore:
 
     def read_audit_export(self) -> str:
         """Read the generated audit export without following symbolic links."""
-        with _open_private_read(self.audit_export_path) as file:
-            return file.read()
+        return read_private_text(self.audit_export_path)
 
     def _prepare_session_dir(self) -> None:
         if self.session_dir.is_symlink():
@@ -473,75 +531,25 @@ class FileSessionStore:
         return self.commands_dir / f"{digest}.json"
 
 
-def _open_private_read(path: Path) -> TextIO:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    return os.fdopen(descriptor, encoding="utf-8")
-
-
 def _append_private_json_line(path: Path, content: str) -> None:
-    data = (content + "\n").encode("utf-8")
-    flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        os.fchmod(descriptor, 0o600)
-        remaining = memoryview(data)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:  # pragma: no cover - operating-system invariant
-                raise OSError("session append made no progress")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    append_private_bytes(path, (content + "\n").encode("utf-8"))
 
 
 def _write_private_text_atomic(path: Path, content: str) -> None:
-    _write_private_bytes_atomic(path, content.encode("utf-8"))
+    write_private_text_atomic(path, content)
 
 
 def _write_private_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    content = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
-    _write_private_bytes_atomic(path, content.encode("utf-8"))
-
-
-def _write_private_bytes_atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
-    temporary_path = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, 0o600)
-        remaining = memoryview(content)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:  # pragma: no cover - operating-system invariant
-                raise OSError("atomic session write made no progress")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
-        temporary_path.replace(path)
-        path.chmod(0o600)
-        _fsync_directory(path.parent)
-    except Exception:
-        if descriptor >= 0:
-            with suppress(OSError):
-                os.close(descriptor)
-        temporary_path.unlink(missing_ok=True)
-        raise
+    write_private_json_atomic(path, payload)
 
 
 def _read_private_json(path: Path) -> dict[str, Any]:
-    with _open_private_read(path) as file:
-        payload = json.load(file)
-    if not isinstance(payload, dict):
-        raise ValueError(f"expected an object in {path}")
-    return payload
+    return read_private_json(path)
 
 
-def _read_recoverable_records[Record: (SessionEvent, AuditEvent)](
+def _read_recoverable_records[Record](
     path: Path,
-    record_type: type[Record],
+    parser: Callable[[str], Record],
 ) -> tuple[tuple[Record, ...], int | None]:
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -560,24 +568,10 @@ def _read_recoverable_records[Record: (SessionEvent, AuditEvent)](
         truncate_at = boundary
         content = content[:boundary]
     try:
-        records = tuple(
-            record_type.model_validate_json(line)
-            for line in content.decode("utf-8").splitlines()
-            if line
-        )
+        lines = tuple(line for line in content.decode("utf-8").splitlines() if line)
+        return tuple(parser(line) for line in lines), truncate_at
     except (UnicodeDecodeError, ValueError) as error:
         raise SessionRecoveryError(f"unable to recover session records in {path}") from error
-    return records, truncate_at
-
-
-def _truncate_private_file(path: Path, size: int) -> None:
-    flags = os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    try:
-        os.ftruncate(descriptor, size)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _validate_pending_position[Record](
@@ -656,7 +650,7 @@ def _verify_event_correspondence(
 
 def _validate_command_record(payload: dict[str, Any], command_id: str) -> None:
     if (
-        payload.get("schema_version") != "heartwood.session-command-receipt.v1"
+        payload.get("schema_version") != SESSION_COMMAND_RECEIPT_VERSION
         or payload.get("command_id") != command_id
         or not isinstance(payload.get("session_id"), str)
         or not isinstance(payload.get("command_hash"), str)
@@ -676,7 +670,7 @@ def _validate_command_record(payload: dict[str, Any], command_id: str) -> None:
 
 def _writer_owner_summary(path: Path) -> str:
     try:
-        payload = _read_private_json(path)
+        payload = _writer_record(_read_private_json(path))
     except (OSError, ValueError):
         return ""
     pid = payload.get("pid")
@@ -686,16 +680,58 @@ def _writer_owner_summary(path: Path) -> str:
     return ""
 
 
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+def _command_record(payload: dict[str, Any]) -> dict[str, Any]:
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, str) or not schema_version:
+        raise SessionRecoveryError("session command receipt is invalid")
     try:
-        descriptor = os.open(path, flags)
-    except OSError:
-        return
+        return PERSISTENCE_MIGRATIONS.migrate(
+            SESSION_COMMAND_RECEIPT_KIND,
+            payload,
+        ).payload
+    except MigrationError as error:
+        raise SessionRecoveryError("session command receipt schema is unsupported") from error
+
+
+def _writer_record(payload: dict[str, Any]) -> dict[str, Any]:
     try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        return PERSISTENCE_MIGRATIONS.migrate(SESSION_WRITER_KIND, payload).payload
+    except MigrationError as error:
+        raise SessionRecoveryError("session writer metadata schema is unsupported") from error
+
+
+def _session_event_json(content: str | bytes) -> SessionEvent:
+    try:
+        return _session_event(json.loads(content))
+    except json.JSONDecodeError as error:
+        raise SessionRecoveryError("session event record is malformed") from error
+
+
+def _session_event(payload: object) -> SessionEvent:
+    if not isinstance(payload, dict):
+        raise SessionRecoveryError("session event record must be an object")
+    try:
+        migrated = PERSISTENCE_MIGRATIONS.migrate(SESSION_EVENT_KIND, payload)
+        return SessionEvent.model_validate(migrated.payload)
+    except (MigrationError, ValueError) as error:
+        raise SessionRecoveryError("session event schema is unsupported") from error
+
+
+def _audit_event_json(content: str | bytes) -> AuditEvent:
+    try:
+        return _audit_event(json.loads(content))
+    except json.JSONDecodeError as error:
+        raise SessionRecoveryError("audit event record is malformed") from error
+
+
+def _audit_event(payload: object) -> AuditEvent:
+    if not isinstance(payload, dict):
+        raise SessionRecoveryError("audit event record must be an object")
+    try:
+        migrated = PERSISTENCE_MIGRATIONS.migrate(AUDIT_EVENT_KIND, payload)
+        return AuditEvent.model_validate(migrated.payload)
+    except (MigrationError, ValueError) as error:
+        raise SessionRecoveryError("audit event schema is unsupported") from error
 
 
 def _utc_now() -> str:

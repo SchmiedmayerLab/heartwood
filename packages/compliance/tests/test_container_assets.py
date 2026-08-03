@@ -610,7 +610,10 @@ exit 0
     )
 
     assert result.returncode == 0, result.stderr
-    assert "models refresh heartwood" in marker.read_text(encoding="utf-8")
+    invocations = marker.read_text(encoding="utf-8")
+    assert "models refresh heartwood" in invocations
+    assert f"audit export --output {project / 'heartwood-audit-export.jsonl'}" in invocations
+    assert f"--output {project / '.heartwood' / 'audit-export.jsonl'}" not in invocations
     assert not decoy_marker.exists()
 
 
@@ -1097,6 +1100,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "coding-agent model must be outside the disposable test project" in coding_agent
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
+    assert 'audit_path="${project}/heartwood-audit-export.jsonl"' in coding_agent
+    assert 'audit_path="${state_root}/' not in coding_agent
     assert "Checking direct model inference" in coding_agent
     assert "verify_coding_agent_e2e.py" in coding_agent
     assert "/tmp/heartwood-model-cache/.heartwood/models:/models:ro" in capable_workflow

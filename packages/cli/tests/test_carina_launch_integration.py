@@ -426,6 +426,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         "HEARTWOOD_TEST_SRUN_LOG": str(srun_log),
         "HEARTWOOD_TEST_SCRATCH": str(scratch),
         "HEARTWOOD_TEST_SECRET": "must-not-cross-allocation",
+        "HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY": str(tmp_path / "signers.toml"),
     }
     completed = _run_with_pty(
         (
@@ -473,6 +474,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
     )
     assert (project.runtime_dir / "synthetic-vllm-call-count").read_text(encoding="utf-8") == "2\n"
     export_value = srun_log.read_text(encoding="utf-8")
+    assert "HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY" in export_value
     assert "HEARTWOOD_HOME" not in export_value
     assert "HEARTWOOD_MODEL_CACHE" not in export_value
     assert "HEARTWOOD_TEST_SECRET" not in export_value

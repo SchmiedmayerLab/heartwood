@@ -244,6 +244,9 @@ test("keeps grouped action review usable on a tablet viewport", async ({
 }) => {
   await page.setViewportSize({ width: 768, height: 1024 });
   await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "Set up Heartwood" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
 
   const approval = page.getByRole("region", {

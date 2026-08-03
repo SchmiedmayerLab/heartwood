@@ -1,0 +1,1 @@
+{"action":{"confirmation_mode":"always-confirm","schema_version":"heartwood.action-settings.v1"},"connections":[],"models":{"profiles":[],"schema_version":"heartwood.model-settings.v1"},"platform_id":"generic","policy":{"platform_id":"generic","policy_id":"fixture","schema_version":"heartwood.policy-profile.v1"},"schema_version":"heartwood.project-config.v1"}

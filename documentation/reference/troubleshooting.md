@@ -304,6 +304,25 @@ If Heartwood reports that a command was interrupted after acceptance, replay the
 Then continue in a new session; the interrupted session remains read-only so an uncertain action cannot be repeated.
 Do not edit or remove files below the session's `.commands/` directory or its recovery journal.
 
+## Audit Verification and Checkpoints
+
+Run the full session check before transferring evidence:
+
+```bash
+heartwood --session-id session-main audit verify
+```
+
+If verification fails, stop mutating that session and preserve the complete project state for authorized review.
+Do not edit an audit line, remove a recovery journal, or recreate a missing hash.
+
+A checkpoint output, signer registry, trusted public key, signer credential, and local fallback key must be outside the Heartwood project.
+Run `heartwood audit signer list` to confirm that a deployment registry is available and that the expected profile is active.
+For the explicit offline fallback, keep `heartwood signer serve-local` running and confirm that its registry endpoint, profile, key fingerprint, and owner-only token still agree.
+Use a new output directory, a valid retention date on or after checkpoint creation, and storage that supports native process-shared locks.
+Verify a restored bundle with the active deployment profile or an independently retained public key before relying on it.
+
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete workflow and the limits of the signed retention declaration.
+
 ## Collect Safe Diagnostics
 
 Share the Heartwood version, `heartwood doctor --json`, platform, image tag or digest, failing `HW-*` code, and a minimal synthetic reproduction.

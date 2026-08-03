@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import stat
 import subprocess
@@ -50,6 +51,7 @@ from heartwood.core_adapter import (
     pending_action_group,
 )
 from heartwood.core_adapter._service import _audit_payload
+from heartwood.core_adapter._state import _writer_owner_summary
 from heartwood.schemas import AuditEvent, PolicyProfile
 from heartwood.session import (
     CommandKind,
@@ -60,12 +62,67 @@ from heartwood.session import (
     compute_session_event_hash,
 )
 
+_COMPATIBILITY_FIXTURES = (
+    Path(__file__).resolve().parents[3] / "packages" / "persistence" / "tests" / "fixtures"
+)
+
 
 def test_empty_replay_does_not_create_session_state(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
     assert service.replay_events() == ()
+    assert service.store.verified_head() == (0, None)
     assert not service.store.session_dir.exists()
+
+
+def test_checked_in_session_and_audit_compatibility_fixture_replays(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path / "sessions", "session-1")
+    store.session_dir.mkdir(mode=0o700, parents=True)
+    store.events_path.write_text(
+        (_COMPATIBILITY_FIXTURES / "session-event-v1.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    expected_audit = (_COMPATIBILITY_FIXTURES / "audit-event-v1.json").read_text(encoding="utf-8")
+    store.audit_path.write_text(expected_audit, encoding="utf-8")
+
+    events = store.replay_events()
+    audit_export, verification = store.verified_audit_export()
+
+    assert len(events) == 1
+    assert events[0].event_id == "session-1-event-000000"
+    assert audit_export == expected_audit
+    assert verification.event_count == 1
+
+
+def test_checked_in_session_recovery_envelopes_remain_compatible(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path / "sessions", "session-1")
+    store.acquire_writer()
+    store.commands_dir.mkdir(mode=0o700)
+    command_path = store.commands_dir / (hashlib.sha256(b"command-1").hexdigest() + ".json")
+    command_path.write_text(
+        (_COMPATIBILITY_FIXTURES / "session-command-receipt-v1.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    store.pending_commit_path.write_text(
+        (_COMPATIBILITY_FIXTURES / "session-commit-v1.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    assert store.command_record("command-1") is not None
+    assert store.recover_pending_commit()
+    assert len(store.replay_events()) == 1
+    store.release_writer()
+
+
+def test_checked_in_session_writer_compatibility_fixture_loads(tmp_path: Path) -> None:
+    store = FileSessionStore(tmp_path / "sessions", "session-1")
+    store.session_dir.mkdir(mode=0o700, parents=True)
+    store.writer_metadata_path.write_text(
+        (_COMPATIBILITY_FIXTURES / "session-writer-v1.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    assert _writer_owner_summary(store.writer_metadata_path) == (" (pid 1000 on synthetic-host)")
 
 
 def test_reserved_audit_event_payloads_fail_closed() -> None:
@@ -980,6 +1037,34 @@ def test_replay_rejects_interrupted_audit_first_append(tmp_path: Path) -> None:
 
     with pytest.raises(AuditIntegrityError, match="different lengths"):
         service.replay_events()
+
+
+def test_audit_export_reverifies_paired_state_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    original_record = service._record_event
+
+    def tamper_after_export_event(
+        kind: EventKind,
+        payload: dict[str, JsonValue],
+    ) -> SessionEvent:
+        event = original_record(kind, payload)
+        if kind == EventKind.AUDIT_EXPORT_RECORDED:
+            lines = service.store.events_path.read_text(encoding="utf-8").splitlines()
+            changed = json.loads(lines[0])
+            changed["payload"]["command_id"] = "tampered-command"
+            lines[0] = json.dumps(changed)
+            service.store.events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return event
+
+    monkeypatch.setattr(service, "_record_event", tamper_after_export_event)
+
+    with pytest.raises(AuditIntegrityError, match="session event hash mismatch"):
+        service.handle(_command(CommandKind.AUDIT_EXPORT))
+
+    assert not service.store.audit_export_path.exists()
 
 
 def test_file_store_rejects_session_ids_outside_the_workspace(tmp_path: Path) -> None:

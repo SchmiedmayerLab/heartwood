@@ -65,4 +65,9 @@ It records task counts and statuses instead of task titles or notes, usage total
 Exact action arguments, commands, affected paths, file content, diffs, tool output, and failure text remain in private session state and are not copied into the audit export.
 Operational identifiers, decisions, classifications, counts, and timestamps may still be sensitive in context.
 
+Run `heartwood audit verify` to fully verify the paired session and audit history without creating a new export.
+Use `heartwood audit export --output PATH` when a reviewed copy is needed outside private project state.
+
 An audit record supports review and reproducibility; it is not proof that a scientific result is correct or that a deployment meets a regulatory requirement.
+A normal export is not an authoritative records artifact because the project owner can replace or delete it.
+Platform operators can create an externally retained, signed artifact by following [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).

@@ -8,14 +8,13 @@
 
 from __future__ import annotations
 
-import json
-import os
 import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from heartwood.persistence import LockedJsonlStore, fsync_directory
 from heartwood.skills import (
     LocalSkillVerifier,
     SkillManifest,
@@ -135,6 +134,7 @@ class SkillManager:
                 require_verified_tier=False,
             ).load_manifest(temporary)
             temporary.replace(destination)
+            fsync_directory(self.installed_dir)
         except (OSError, SkillVerificationError) as error:
             msg = f"unable to install Skill {manifest.name}: {error}"
             raise SkillSettingsError(msg) from error
@@ -201,15 +201,7 @@ class SkillManager:
             occurred_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             decision="approved" if approved else "denied",
         )
-        self.audit_path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(
-            self.audit_path,
-            os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "a", encoding="utf-8") as file:
-            file.write(json.dumps(record.model_dump(mode="json"), sort_keys=True) + "\n")
+        LockedJsonlStore(self.audit_path).append(record.model_dump(mode="json"))
 
 
 def _validate_install_name(name: str) -> None:

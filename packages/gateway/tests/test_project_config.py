@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -19,6 +20,7 @@ import pytest
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway import (
     ActionSettings,
+    AuditCheckpointSettings,
     LocalModelSelection,
     ModelConnection,
     ModelProfile,
@@ -53,6 +55,7 @@ def test_project_config_round_trip_uses_one_toml_file(tmp_path: Path) -> None:
         platform_id="generic",
         model_source="heartwood",
         policy=select_platform_adapter({}).default_policy_profile(),
+        audit_settings=AuditCheckpointSettings(signer_profile="stanford-records"),
         model_settings=ModelSettings(
             active_profile="heartwood",
             profiles=(profile,),
@@ -67,6 +70,7 @@ def test_project_config_round_trip_uses_one_toml_file(tmp_path: Path) -> None:
         persisted = tomllib.load(file)
     assert persisted["model_source"] == "heartwood"
     assert persisted["models"]["active_profile"] == "heartwood"
+    assert persisted["audit"] == {"signer_profile": "stanford-records"}
     assert not (project.state_root / "models.json").exists()
     assert not (project.state_root / "actions.json").exists()
 
@@ -79,6 +83,22 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
     assert store.load() == default
     assert not project.state_root.exists()
     assert not store.configured
+
+
+def test_checked_in_project_config_compatibility_fixture_loads(tmp_path: Path) -> None:
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "persistence"
+        / "tests"
+        / "fixtures"
+        / "project-config-v1.json"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+
+    config = project_config_from_mapping(payload, project=ProjectContext(tmp_path))
+
+    assert config.schema_version == "heartwood.project-config.v1"
+    assert config.platform_id == "generic"
 
 
 def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path) -> None:
@@ -195,6 +215,22 @@ def test_project_config_selects_model_source_and_settings_atomically(tmp_path: P
     assert configured.model_source == "provider_connection"
     assert configured.model_settings == settings
     assert store.load() == configured
+
+
+def test_project_config_selects_only_a_signer_profile_identifier(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    store = ProjectConfigStore(project, _default_config(project))
+
+    configured = store.select_checkpoint_signer("stanford-records")
+
+    assert configured.audit_settings.signer_profile == "stanford-records"
+    persisted = tomllib.loads(project.config_path.read_text(encoding="utf-8"))
+    assert persisted["audit"] == {"signer_profile": "stanford-records"}
+    assert set(persisted["audit"]) == {"signer_profile"}
+    assert store.select_checkpoint_signer(None).audit_settings == AuditCheckpointSettings()
+
+    with pytest.raises(ProjectConfigError, match="lowercase identifier"):
+        store.select_checkpoint_signer("Not Approved")
 
 
 def test_project_config_selects_local_model_and_profile_atomically(tmp_path: Path) -> None:

@@ -103,6 +103,17 @@ Review Skill source and declared tools, install only through an approved path, a
 
 The audit log is hash-chained and export is scrubbed, but operational metadata can still be sensitive.
 Store, retain, share, and delete audit artifacts under the same reviewed records policy as the surrounding project.
+Normal project exports remain replaceable by the project owner.
+Where authoritative evidence is required, create a signed checkpoint outside the project and verify it against a public key obtained through a separate trusted channel.
+The signature authenticates the supplied checkpoint statement and audit content; it does not enforce retention, establish institutional approval, or prove that no events were removed before checkpoint creation.
+
+Managed deployments keep the checkpoint signer registry, trusted public keys, service credentials, and private signing keys outside every agent project.
+Project state can select only a profile already approved by that registry.
+Heartwood verifies a remote signature and its pinned signer identity before publishing a checkpoint.
+A production signing service must independently authorize the requested deployment and retention claims, use a principal unavailable to agent tools, and keep KMS/HSM credentials outside the Heartwood process.
+An owner-only bearer-token file remains accessible to other processes running as that owner unless the platform supplies a stronger sandbox.
+The bundled local signer is an authenticated loopback-only development and offline fallback; its owner-only file permissions protect against other operating-system users but not compromise of the same user account.
+See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
 ## Recommended Controls
 
@@ -112,6 +123,7 @@ Store, retain, share, and delete audit artifacts under the same reviewed records
 - deny network egress except reviewed model and package endpoints;
 - mount controlled inputs read-only when feasible;
 - keep provider secrets in a keyring, mounted secret, or managed identity;
+- keep production checkpoint keys in an independently authorized KMS/HSM-backed signer service;
 - use **Review Every Action** until a deployment-specific risk policy is reviewed;
 - pin release artifacts, images, model revisions, and Skill versions;
 - collect content-minimized operational logs outside project outputs;

@@ -50,7 +50,7 @@ rejected_path="${project}/heartwood-rejected-output.txt"
 exact_name="$(basename -- "${exact_path}")"
 rejected_name="$(basename -- "${rejected_path}")"
 events_path="${workspace}/${session_id}/events.jsonl"
-audit_path="${state_root}/audit-export.jsonl"
+audit_path="${project}/heartwood-audit-export.jsonl"
 
 if [[ ! -x "${heartwood_python}" ]]; then
   echo "Heartwood Python is unavailable: ${heartwood_python}" >&2
@@ -77,7 +77,8 @@ rm -f \
   "${rejected_path}" \
   "${transcript}" \
   "${replay}" \
-  "${report}"
+  "${report}" \
+  "${audit_path}"
 cp "${runtime_root}/fixtures/synthetic/omop-like/"*.csv "${project}/input/"
 cd "${project}"
 

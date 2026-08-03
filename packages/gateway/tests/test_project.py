@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, get_ident
 
 import pytest
 
 from heartwood.gateway import ProjectContext, ProjectStateError
+from heartwood.persistence import native_file_lock, write_private_text_atomic
 
 
 def test_project_context_initializes_private_state_layout(tmp_path: Path) -> None:
@@ -21,7 +26,18 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
     project.initialize()
 
     assert json.loads(project.state_path.read_text(encoding="utf-8")) == {
-        "schema_version": "heartwood.project-state.v1"
+        "formats": {
+            "audit_event": "heartwood.audit-event.v1",
+            "openhands_state": "heartwood.openhands-state.v1",
+            "project_config": "heartwood.project-config.v1",
+            "session_command_receipt": "heartwood.session-command-receipt.v1",
+            "session_commit": "heartwood.session-commit.v1",
+            "session_event": "heartwood.session-event.v1",
+            "session_metadata": "heartwood.session-metadata.v1",
+            "session_writer": "heartwood.session-writer.v1",
+            "skill_metadata": "heartwood.skill-metadata.v1",
+        },
+        "schema_version": "heartwood.project-state.v2",
     }
     assert project.config_path == tmp_path / ".heartwood" / "config.toml"
     for directory in (
@@ -37,6 +53,56 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
         assert directory.stat().st_mode & 0o777 == 0o700
     assert (project.state_root / ".gitignore").read_text(encoding="utf-8") == "*\n"
     assert project.state_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_project_context_serializes_concurrent_initialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = ProjectContext(tmp_path)
+    first_write_started = Event()
+    release_first_write = Event()
+    competing_lock_attempted = Event()
+    first_thread: list[int] = []
+    original_write = write_private_text_atomic
+
+    def pause_first_write(path: Path, content: str, *, secure_parent: bool = True) -> None:
+        # The state lock keeps the second initializer out of this branch.
+        if path.name == ".gitignore" and not first_thread:
+            first_thread.append(get_ident())
+            first_write_started.set()
+            assert release_first_write.wait(timeout=5)
+        original_write(path, content, secure_parent=secure_parent)
+
+    @contextmanager
+    def observe_lock(
+        path: Path,
+        *,
+        timeout: float = -1,
+        secure_parent: bool = True,
+    ) -> Iterator[None]:
+        if first_write_started.is_set() and get_ident() != first_thread[0]:
+            competing_lock_attempted.set()
+        with native_file_lock(path, timeout=timeout, secure_parent=secure_parent):
+            yield
+
+    monkeypatch.setattr(
+        "heartwood.gateway._project.write_private_text_atomic",
+        pause_first_write,
+    )
+    monkeypatch.setattr("heartwood.gateway._project.native_file_lock", observe_lock)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(project.initialize)
+        assert first_write_started.wait(timeout=5)
+        second = executor.submit(project.initialize)
+        assert competing_lock_attempted.wait(timeout=5)
+        assert not second.done()
+        release_first_write.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    assert project.state_exists()
 
 
 def test_project_state_is_hidden_from_git_status(tmp_path: Path) -> None:
@@ -87,6 +153,54 @@ def test_project_context_rejects_invalid_internal_ignore_rule(tmp_path: Path) ->
 
     with pytest.raises(ProjectStateError, match="Git ignore rule is invalid"):
         project.initialize()
+
+
+def test_project_context_migrates_supported_state_only_during_initialization(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    legacy = '{"schema_version":"heartwood.project-state.v1"}\n'
+    project.state_path.write_text(legacy, encoding="utf-8")
+
+    assert project.state_exists()
+    assert project.state_path.read_text(encoding="utf-8") == legacy
+
+    project.initialize()
+
+    state = json.loads(project.state_path.read_text(encoding="utf-8"))
+    assert state["schema_version"] == "heartwood.project-state.v2"
+    assert state["formats"]["openhands_state"] == "heartwood.openhands-state.v1"
+
+
+def test_project_context_preserves_state_when_migration_fails(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    unsupported = '{"schema_version":"heartwood.project-state.v0","private":"value"}\n'
+    project.state_path.write_text(unsupported, encoding="utf-8")
+
+    with pytest.raises(ProjectStateError) as captured:
+        project.initialize()
+
+    assert "private" not in str(captured.value)
+    assert "value" not in str(captured.value)
+    assert project.state_path.read_text(encoding="utf-8") == unsupported
+
+
+def test_project_context_does_not_relabel_incompatible_current_formats(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    state = json.loads(project.state_path.read_text(encoding="utf-8"))
+    state["formats"]["session_event"] = "heartwood.session-event.v2"
+    incompatible = json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n"
+    project.state_path.write_text(incompatible, encoding="utf-8")
+
+    with pytest.raises(ProjectStateError, match=r"unsupported \.heartwood state schema"):
+        project.initialize()
+
+    assert project.state_path.read_text(encoding="utf-8") == incompatible
 
 
 @pytest.mark.parametrize("state_contents", ["{", '{"schema_version": "unknown"}'])

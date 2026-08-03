@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 
@@ -48,6 +49,10 @@ from heartwood.gateway import (
     DEFAULT_SESSION_ID,
     MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
+    AuditCheckpointError,
+    AuditIntegrityError,
+    CheckpointSignerError,
+    CheckpointSignerRegistry,
     CommandConflictError,
     CredentialStoreError,
     DeploymentReadiness,
@@ -55,12 +60,15 @@ from heartwood.gateway import (
     IngressConfigurationError,
     IngressPolicy,
     InterfaceKind,
+    LocalCheckpointSignerApp,
+    LocalEd25519CheckpointSigner,
     ModelArtifactError,
     ModelCatalogError,
     ModelProfile,
     ModelRepositoryError,
     ModelSettingsError,
     ModelSnapshotError,
+    NativeLockUnavailableError,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -72,10 +80,15 @@ from heartwood.gateway import (
     StartupPlan,
     WorkspaceInspectionError,
     action_mode_label,
+    checkpoint_public_key_fingerprint,
     custom_model_connection_requires_token,
     diagnostic_for,
+    discover_checkpoint_signer_registry,
+    initialize_local_checkpoint_signer,
     inspect_deployment,
+    load_checkpoint_signer_registry,
     model_source_options,
+    user_checkpoint_signer_registry_path,
 )
 from heartwood.schemas import (
     ModelArtifactsResponse,
@@ -422,6 +435,70 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_subparsers = audit.add_subparsers(dest="audit_command", metavar="<audit-command>")
     audit_export = audit_subparsers.add_parser("export", help="Export scrubbed audit JSONL.")
     audit_export.add_argument("--output", type=Path, help="Optional copy destination.")
+    audit_subparsers.add_parser("verify", help="Fully verify the current session audit history.")
+    audit_signer = audit_subparsers.add_parser(
+        "signer",
+        help="Inspect or select deployment-approved checkpoint signing.",
+    )
+    audit_signer_subparsers = audit_signer.add_subparsers(
+        dest="audit_signer_command",
+        metavar="<signer-command>",
+    )
+    audit_signer_subparsers.add_parser("list", help="List approved signer profiles.")
+    audit_signer_select = audit_signer_subparsers.add_parser(
+        "select",
+        help="Select an approved signer profile for this project.",
+    )
+    audit_signer_select.add_argument("profile_id")
+    audit_signer_subparsers.add_parser(
+        "default",
+        help="Use the deployment default signer for this project.",
+    )
+    audit_checkpoint = audit_subparsers.add_parser(
+        "checkpoint",
+        help="Create a signed authoritative audit bundle outside the project.",
+    )
+    audit_checkpoint.add_argument("--output", type=Path, required=True)
+    audit_checkpoint.add_argument("--deployment-id", required=True)
+    audit_checkpoint.add_argument("--retention-policy", required=True)
+    audit_checkpoint.add_argument(
+        "--retain-until",
+        required=True,
+        help="Retention end date in YYYY-MM-DD format.",
+    )
+    audit_checkpoint_verify = audit_subparsers.add_parser(
+        "verify-checkpoint",
+        help="Verify a signed audit bundle with a trusted public key.",
+    )
+    audit_checkpoint_verify.add_argument("bundle", type=Path)
+    audit_checkpoint_verify.add_argument(
+        "--public-key",
+        type=Path,
+        help="Advanced: independently trusted key; defaults to the active signer profile.",
+    )
+
+    signer = subparsers.add_parser(
+        "signer",
+        help="Manage the explicit local checkpoint signer fallback.",
+    )
+    signer_subparsers = signer.add_subparsers(dest="signer_command", metavar="<signer-command>")
+    signer_init = signer_subparsers.add_parser(
+        "init-local",
+        help="Create local development signer material outside the project.",
+    )
+    signer_init.add_argument("--directory", type=Path)
+    signer_init.add_argument("--profile", default="local-development")
+    signer_init.add_argument("--key-version", default="v1")
+    signer_init.add_argument("--port", type=int, default=8771)
+    signer_serve = signer_subparsers.add_parser(
+        "serve-local",
+        help="Run an initialized signer on the loopback interface.",
+    )
+    signer_serve.add_argument("--registry", type=Path)
+    signer_serve.add_argument("--profile")
+    signer_serve.add_argument("--private-key", type=Path)
+    signer_serve.add_argument("--host", choices=("127.0.0.1", "::1"))
+    signer_serve.add_argument("--port", type=int)
 
     gateway = subparsers.add_parser("gateway", help="Advanced gateway operations.")
     gateway_subparsers = gateway.add_subparsers(dest="gateway_command", metavar="<gateway-command>")
@@ -480,11 +557,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run ``heartwood`` and return a process exit code."""
     try:
         return _main(argv)
-    except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
+    except (
+        CommandConflictError,
+        NativeLockUnavailableError,
+        SessionOwnershipError,
+        SessionRecoveryError,
+    ) as error:
         print(f"Session unavailable: {error}", file=sys.stderr)
         return 75
     except WorkspaceInspectionError as error:
         print(f"Project files unavailable: {error}", file=sys.stderr)
+        return 64
+    except (AuditCheckpointError, AuditIntegrityError, CheckpointSignerError) as error:
+        print(f"Audit operation failed: {error}", file=sys.stderr)
+        return 65
+    except ProjectStateError as error:
+        print(f"Project unavailable: {error}", file=sys.stderr)
         return 64
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
@@ -495,7 +583,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     project = ProjectContext.current()
-    if args.port < 1 or args.port > 65_535:
+    if args.port is not None and (args.port < 1 or args.port > 65_535):
         parser.error("--port must be between 1 and 65535")
     if args.plain and args.interface != "terminal":
         parser.error("--plain can be used only with --interface terminal")
@@ -539,6 +627,28 @@ def _main(argv: Sequence[str] | None = None) -> int:
         if args.startup_timeout < 1 or args.port < 1:
             parser.error("--startup-timeout and --port must be positive")
         return run_launch(_launch_options(project, args))
+    if args.command == "signer" and args.signer_command == "init-local":
+        return _handle_local_signer_init(
+            project=project,
+            directory=args.directory,
+            profile_id=args.profile,
+            key_version=args.key_version,
+            port=args.port,
+        )
+    if args.command == "signer" and args.signer_command == "serve-local":
+        registry = (
+            discover_checkpoint_signer_registry(os.environ)
+            if args.registry is None
+            else load_checkpoint_signer_registry(args.registry)
+        )
+        return _handle_local_signer_serve(
+            project=project,
+            registry=registry,
+            profile_id=args.profile,
+            private_key=args.private_key,
+            host=args.host,
+            port=args.port,
+        )
     configured_gateway: SessionGateway | None = None
     if args.command is None:
         startup_gateway, startup = _run_with_progress(
@@ -659,6 +769,25 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return _handle_replay(gateway, session_id=args.session_id)
         if args.command == "audit" and args.audit_command == "export":
             return _handle_audit_export(gateway, session_id=args.session_id, output=args.output)
+        if args.command == "audit" and args.audit_command == "verify":
+            return _handle_audit_verify(gateway, session_id=args.session_id)
+        if args.command == "audit" and args.audit_command == "signer":
+            return _handle_audit_signer(gateway, command=args.audit_signer_command, args=args)
+        if args.command == "audit" and args.audit_command == "checkpoint":
+            return _handle_audit_checkpoint(
+                gateway,
+                session_id=args.session_id,
+                output=args.output,
+                deployment_id=args.deployment_id,
+                retention_policy_id=args.retention_policy,
+                retain_until=args.retain_until,
+            )
+        if args.command == "audit" and args.audit_command == "verify-checkpoint":
+            return _handle_audit_checkpoint_verification(
+                gateway,
+                bundle=args.bundle,
+                public_key=args.public_key,
+            )
         parser.print_help()
         return 0
     finally:
@@ -1824,10 +1953,245 @@ def _handle_audit_export(
     events = gateway.handle(_command(session_id=session_id, kind=CommandKind.AUDIT_EXPORT)).events
     export_path = Path(str(events[-1].payload["path"]))
     if output is not None:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(export_path, output)
+        output = gateway.copy_audit_export(session_id, output)
     print(f"Audit export: {output or export_path}")
     return 0
+
+
+def _handle_audit_verify(gateway: SessionGateway, *, session_id: str) -> int:
+    verification = gateway.verify_audit(session_id)
+    print(
+        "\n".join(
+            (
+                "Audit history verified",
+                f"Events: {verification.event_count}",
+                f"Terminal hash: {verification.terminal_event_hash or 'none'}",
+                f"Export digest: {verification.content_sha256}",
+            )
+        )
+    )
+    return 0
+
+
+def _handle_audit_signer(
+    gateway: SessionGateway,
+    *,
+    command: str | None,
+    args: argparse.Namespace,
+) -> int:
+    if command == "select":
+        profile = gateway.select_checkpoint_signer(args.profile_id)
+        print(f"Checkpoint signer selected: {profile.profile_id}")
+        return 0
+    if command == "default":
+        profile = gateway.select_checkpoint_signer(None)
+        print(f"Checkpoint signer: {profile.profile_id} (deployment default)")
+        return 0
+    profiles = gateway.checkpoint_signers()
+    if not profiles:
+        print("No deployment checkpoint signer registry is installed.")
+        print("Production checkpoints remain unavailable until an operator configures one.")
+        return 1
+    active = gateway.active_checkpoint_signer().profile_id
+    default = gateway.default_checkpoint_signer().profile_id
+    print("Checkpoint signers")
+    for profile in profiles:
+        markers = []
+        if profile.profile_id == active:
+            markers.append("active")
+        if profile.profile_id == default:
+            markers.append("deployment default")
+        suffix = f" ({', '.join(markers)})" if markers else ""
+        print(f"  {profile.profile_id}{suffix}: {profile.mode}, {profile.algorithm}")
+    return 0
+
+
+def _handle_audit_checkpoint(
+    gateway: SessionGateway,
+    *,
+    session_id: str,
+    output: Path,
+    deployment_id: str,
+    retention_policy_id: str,
+    retain_until: str,
+) -> int:
+    verification = gateway.create_audit_checkpoint(
+        session_id=session_id,
+        output=output,
+        deployment_id=deployment_id,
+        retention_policy_id=retention_policy_id,
+        retain_until=retain_until,
+    )
+    statement = verification.checkpoint.statement
+    signature = verification.checkpoint.signature
+    print(
+        "\n".join(
+            (
+                f"Audit checkpoint: {output.expanduser().resolve()}",
+                f"Events: {statement.audit_event_count}",
+                f"Signer: {signature.signer_id}",
+                f"Signing key: {signature.key_id} ({signature.key_version})",
+                f"Retention: {statement.retention.policy_id} through "
+                f"{statement.retention.retain_until}",
+            )
+        )
+    )
+    return 0
+
+
+def _handle_audit_checkpoint_verification(
+    gateway: SessionGateway,
+    *,
+    bundle: Path,
+    public_key: Path | None,
+) -> int:
+    verification = gateway.verify_audit_checkpoint(bundle=bundle, public_key=public_key)
+    statement = verification.checkpoint.statement
+    print(
+        "\n".join(
+            (
+                "Audit checkpoint verified",
+                f"Deployment: {statement.deployment_id}",
+                f"Session: {statement.session_id}",
+                f"Events: {statement.audit_event_count}",
+                f"Retention: {statement.retention.policy_id} through "
+                f"{statement.retention.retain_until}",
+            )
+        )
+    )
+    return 0
+
+
+def _handle_local_signer_init(
+    *,
+    project: ProjectContext,
+    directory: Path | None,
+    profile_id: str,
+    key_version: str,
+    port: int,
+) -> int:
+    root = (
+        user_checkpoint_signer_registry_path(os.environ).parent
+        if directory is None
+        else directory.expanduser()
+    )
+    _require_deployment_owned_cli_path(project, root, label="local signer directory")
+    setup = initialize_local_checkpoint_signer(
+        directory=root,
+        profile_id=profile_id,
+        endpoint=f"http://127.0.0.1:{port}/v1/checkpoints/sign",
+        key_version=key_version,
+    )
+    print(
+        "\n".join(
+            (
+                "Local checkpoint signer initialized",
+                f"Registry: {setup.registry}",
+                f"Profile: {setup.profile_id}",
+                "",
+                "Start it with:",
+                f"heartwood signer serve-local --registry {setup.registry} "
+                f"--profile {setup.profile_id}",
+                "",
+                f"Then select it in a project with: heartwood audit signer select "
+                f"{setup.profile_id}",
+            )
+        )
+    )
+    return 0
+
+
+def _handle_local_signer_serve(
+    *,
+    project: ProjectContext,
+    registry: CheckpointSignerRegistry,
+    profile_id: str | None,
+    private_key: Path | None,
+    host: str | None,
+    port: int | None,
+) -> int:
+    if registry.source is not None:
+        _require_deployment_owned_cli_path(
+            project,
+            registry.source,
+            label="checkpoint signer registry",
+        )
+    profile = registry.profile(profile_id)
+    if profile.mode != "development":
+        raise CheckpointSignerError("serve-local requires a development signer profile")
+    _require_deployment_owned_cli_path(
+        project,
+        profile.trusted_public_key,
+        label="trusted checkpoint public key",
+    )
+    if profile.authorization_token_file is not None:
+        _require_deployment_owned_cli_path(
+            project,
+            profile.authorization_token_file,
+            label="checkpoint signer authorization token",
+        )
+    configured_endpoint = urlsplit(profile.endpoint)
+    configured_host = configured_endpoint.hostname
+    configured_port = configured_endpoint.port
+    if configured_host is None or configured_port is None:
+        raise CheckpointSignerError("local signer registry endpoint must include a host and port")
+    selected_host = configured_host if host is None else host
+    selected_port = configured_port if port is None else port
+    if selected_host not in {"127.0.0.1", "::1"}:
+        raise CheckpointSignerError("local signer must bind a loopback host")
+    host_url = f"[{selected_host}]" if ":" in selected_host else selected_host
+    expected_endpoint = f"http://{host_url}:{selected_port}/v1/checkpoints/sign"
+    if configured_endpoint != urlsplit(expected_endpoint):
+        raise CheckpointSignerError(
+            "local signer host and port do not match the deployment registry"
+        )
+    if private_key is None:
+        if registry.source is None:
+            raise CheckpointSignerError(
+                "local signer private key must be provided when the registry has no source"
+            )
+        private_key = registry.source.parent / "local-checkpoint-private.pem"
+    resolved_private_key = _require_deployment_owned_cli_path(
+        project,
+        private_key,
+        label="local signer private key",
+    )
+    signer = LocalEd25519CheckpointSigner(
+        private_key=resolved_private_key,
+        signer_id=profile.signer_id,
+        key_id=profile.key_id,
+        key_version=profile.key_version,
+    )
+    if checkpoint_public_key_fingerprint(signer.public_key) != profile.public_key_sha256:
+        raise CheckpointSignerError("local signer private key does not match the registry")
+    token = profile.authorization_token()
+    if token is None:  # pragma: no cover - registry validation enforces this
+        raise CheckpointSignerError("local signer authorization token is unavailable")
+    print(f"Local checkpoint signer: {expected_endpoint}")
+    print("Keep this process running while creating checkpoints.")
+    uvicorn.run(
+        LocalCheckpointSignerApp(signer, authorization_token=token),
+        host=selected_host,
+        port=selected_port,
+        log_level="warning",
+        access_log=False,
+        proxy_headers=False,
+    )
+    return 0
+
+
+def _require_deployment_owned_cli_path(
+    project: ProjectContext,
+    path: Path,
+    *,
+    label: str,
+) -> Path:
+    expanded = path.expanduser()
+    resolved = expanded if expanded.is_absolute() else (Path.cwd() / expanded)
+    resolved = resolved.resolve()
+    if resolved == project.root or project.root in resolved.parents:
+        raise CheckpointSignerError(f"{label} must be outside the Heartwood project")
+    return resolved
 
 
 def _handle_serve(

@@ -16,6 +16,13 @@ from typing import Final, Literal, cast
 
 from pydantic import ValidationError
 
+from heartwood.persistence import (
+    PERSISTENCE_MIGRATIONS,
+    SKILL_METADATA_KIND,
+    DurableFileError,
+    MigrationError,
+    read_private_text,
+)
 from heartwood.schemas import ApprovalRecord, JsonValue, SkillMetadata
 
 _DEFAULT_ALLOWED_TOOLS: Final[tuple[str, ...]] = (
@@ -134,13 +141,24 @@ def load_skill_manifest(skill_root: Path) -> SkillManifest:
         msg = "SKILL.md metadata is invalid"
         raise SkillVerificationError(msg) from error
     try:
-        metadata_json = json.loads(metadata_file.read_text(encoding="utf-8"))
+        metadata_text = read_private_text(metadata_file)
+    except (DurableFileError, OSError) as error:
+        msg = "metadata.json must be a regular UTF-8 file"
+        raise SkillVerificationError(msg) from error
+    try:
+        metadata_json = json.loads(metadata_text)
     except json.JSONDecodeError as error:
         msg = "metadata.json is invalid JSON"
         raise SkillVerificationError(msg) from error
     try:
-        file_metadata = SkillMetadata.model_validate(metadata_json)
-    except ValidationError as error:
+        if not isinstance(metadata_json, dict):
+            raise SkillVerificationError("metadata.json must contain an object")
+        migrated_metadata = PERSISTENCE_MIGRATIONS.migrate(
+            SKILL_METADATA_KIND,
+            metadata_json,
+        ).payload
+        file_metadata = SkillMetadata.model_validate(migrated_metadata)
+    except (MigrationError, ValidationError) as error:
         msg = "metadata.json is invalid"
         raise SkillVerificationError(msg) from error
     if skill_metadata.model_dump(mode="json", by_alias=True) != file_metadata.model_dump(
@@ -196,7 +214,10 @@ def build_skill_approval_record(
 
 
 def _read_skill_frontmatter(path: Path) -> dict[str, JsonValue]:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_private_text(path)
+    except (DurableFileError, OSError) as error:
+        raise SkillVerificationError("SKILL.md must be a regular UTF-8 file") from error
     lines = text.splitlines()
     start = 0
     if not lines or lines[start].strip() != "---":

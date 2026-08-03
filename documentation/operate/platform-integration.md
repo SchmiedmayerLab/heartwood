@@ -85,6 +85,17 @@ Declare image targets in `images/platforms.toml`, parameterize the shared `image
 Keep model weights and credentials out of image layers.
 Publish the manifest media type and architectures accepted by the platform, not a generic index when the platform cannot consume it.
 
+## Configure Checkpoint Signing
+
+When the platform retains authoritative audit checkpoints, install one deployment-owned signer registry at `/etc/heartwood/checkpoint-signers.toml` or set `HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` to an absolute operator-controlled path.
+For containers, mount the registry and trusted public keys read-only and inject any bearer token as a separate runtime secret file.
+For native or shared-computing installations without `/etc` access, the launcher can reference a read-only installation-level registry outside every researcher project.
+
+Publish a production profile as the registry default and expose only profiles users are permitted to select.
+Keep KMS/HSM credentials and private keys in the isolated signer service.
+Do not bake tokens, private keys, or project-specific signer choices into an image.
+See [Audit Checkpoints and Retention](audit-checkpoints.md) for the registry contract and validation workflow.
+
 ## Validate Conformance
 
 Add adapter protocol tests, capability serialization tests, ingress adversarial tests, read-only startup tests, project persistence tests, model-policy tests, credential-boundary tests, and interface tests for every advertised surface.

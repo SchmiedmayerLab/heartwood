@@ -70,6 +70,21 @@ After an interrupted append, the next writer verifies the journal, hash links, a
 Malformed or inconsistent recovery state fails closed.
 After process loss, a persisted OpenHands `RUNNING` state is reported as an unknown outcome and cannot be resumed or repeated automatically.
 
+## Persisted Schema Compatibility
+
+Every current independently persisted Heartwood envelope declares a schema version.
+Supported legacy inputs are migrated before typed validation.
+The project state marker records the current versions for project configuration, session events and metadata, command receipts, commit recovery, writer ownership, audit events, Skill metadata, and OpenHands state.
+A shared migration registry provides one deterministic, forward-only path for each supported older version without mutating its input.
+
+Project-state migration runs under the initialization lock and replaces metadata atomically.
+Domain loaders apply the same registry before typed validation, so migration routing cannot bypass the record owner.
+Unknown versions, migration cycles, nondeterministic transforms, malformed records, and unsupported fields fail closed without including persisted content in error messages.
+
+OpenHands persistence records the exact SDK version and Heartwood content-minimization policy that wrote the state.
+Heartwood validates that marker before reading or rewriting conversation events.
+An SDK change therefore requires an explicit, tested migration instead of silently adopting possibly incompatible state.
+
 ## Action Decisions
 
 OpenHands can supply several proposed tool calls through one confirmation callback.
@@ -87,12 +102,22 @@ Unknown outcomes fail closed and are never converted into a successful result by
 Audit records are chained so replay and export can detect modification, reordering, or missing records within the available chain.
 Each content-minimized audit record also authenticates the corresponding complete session event by hash; replay requires matching counts, sequence, type, time, chain link, and event hash.
 The recovery journal repairs a verified interrupted two-file append before replay, while tampered or unexplained mismatches fail closed.
-The chain alone cannot prove that an intact suffix was not deleted; deployments that require truncation detection must checkpoint the terminal hash or event count in independently retained storage.
+Standalone JSON Lines appenders serialize writers with a native lock and use a durable journal to recover an absent, partial, or completely written final record without duplication.
+Normal append validates the chain head needed for the next record; replay, verification, export, and checkpoint operations verify the complete available history.
 The export path is itself recorded as an event.
+
+A deployment can create a canonical checkpoint outside the project through the provider-neutral `CheckpointSigner` contract.
+The signed payload binds the audit digest, event count, terminal hash, session, deployment identifier, creation time, retention declaration, signer identity, key identity, key version, algorithm, and public-key fingerprint.
+Managed deployments resolve an approved HTTPS signer and independently trusted public key from one deployment-owned registry; project state stores only the selected profile identifier.
+The explicit development and offline fallback uses the same contract through an authenticated loopback service with an owner-only Ed25519 key.
+Verification requires the active deployment profile or a public key obtained through an independent trust path and rejects noncanonical or unexpected bundle content.
+The chain and signature cannot prove that an intact suffix was not deleted before checkpoint creation.
+The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
 
 Exact action arguments, commands, affected paths, file content, patches, tool output, and failure text stay out of the content-minimized audit payload.
 The log still cannot make every operational identifier, decision, classification, count, or timestamp non-sensitive.
 Deployments must define retention, access, export, and deletion policy.
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the operator contract.
 
 ## Long Conversations
 

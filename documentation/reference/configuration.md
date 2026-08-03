@@ -13,7 +13,7 @@ Normal users do not set a Heartwood home, workspace, state root, model root, or 
 
 | Path | Contents |
 |---|---|
-| `.heartwood/config.toml` | Non-secret platform, model, action, policy, and Heartwood-managed model selection |
+| `.heartwood/config.toml` | Non-secret platform, model, action, policy, audit-signer profile, and Heartwood-managed model selection |
 | `.heartwood/state.json` | State-schema marker |
 | `.heartwood/sessions/` | Session metadata, events, audit chains, exports, and OpenHands persistence |
 | `.heartwood/models/` | Downloaded or imported model artifacts and provenance |
@@ -25,6 +25,9 @@ Normal users do not set a Heartwood home, workspace, state root, model root, or 
 
 Heartwood creates the state root and children with private filesystem permissions and rejects symbolic-link substitutions.
 The internal `.gitignore` excludes every state file from the surrounding Git repository.
+The state marker records the current versions of each independently persisted Heartwood envelope.
+Heartwood applies only registered deterministic forward migrations, under a process-shared native lock, and atomically replaces migrated metadata.
+Unknown versions and malformed records fail closed rather than being rewritten heuristically.
 
 ## Configuration Ownership
 
@@ -33,6 +36,18 @@ Writes are validated, atomic, and protected by a project-scoped configuration lo
 
 The file may contain endpoint URLs, model identifiers, credential binding names, policy settings, and artifact provenance.
 It must never contain raw credential values.
+
+### Audit Signer Selection
+
+The optional project audit setting contains only a profile approved by the active deployment registry:
+
+```toml
+[audit]
+signer_profile = "stanford-records"
+```
+
+Use `heartwood audit signer list`, `select`, and `default` instead of editing this value directly.
+Signer endpoints, trusted keys, authorization tokens, and private keys are never project configuration.
 
 ## Credential Binding Names
 
@@ -56,6 +71,10 @@ Run `heartwood models forget openai-subscription` or use **Sign out** in browser
 Environment variables remain valid at platform boundaries for detection, provider-secret injection, Jupyter routing, scheduler identity, GPU visibility, and packaged runtime wiring.
 They are operator inputs rather than the normal researcher project-selection mechanism.
 
+`HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` is an operator-only override for one absolute deployment registry path when the standard system location is unavailable.
+Heartwood otherwise checks `/etc/heartwood/checkpoint-signers.toml` and then the explicit workstation fallback at `~/.config/heartwood/checkpoint-signers.toml`.
+Registry scopes are not merged.
+
 Common examples include platform markers, `GOOGLE_PROJECT`, `CLUSTER_NAME`, Slurm variables, CUDA visibility, and provider credential bindings.
 Do not add these to shell history or documentation with real secret values.
 
@@ -65,3 +84,11 @@ Configuration updates are serialized across concurrent Heartwood processes.
 Each active session also has an enforced writer lease.
 Stop the process that owns a session before continuing it from another interface, or use separate session identifiers for simultaneous work.
 Do not delete internal lock, command-receipt, or recovery-journal files.
+
+## Audit Artifacts
+
+Session audit logs and generated exports remain private project state.
+An authoritative checkpoint, deployment signer registry, signer credential, private signing key, and independently trusted public key must resolve outside the project.
+Use deployment records storage for checkpoint retention; `.heartwood/` is not an authoritative archive.
+
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for signing, verification, and key-management responsibilities.
