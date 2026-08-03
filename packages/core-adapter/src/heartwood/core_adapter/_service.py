@@ -571,6 +571,8 @@ class SessionService:
                             "arguments": tool_call.arguments,
                             "affected_paths": list(tool_call.affected_paths),
                             "project_path": tool_call.project_path,
+                            "specialist_label": tool_call.specialist_label,
+                            "specialist_capability": tool_call.specialist_capability,
                             **source_payload,
                         },
                     )

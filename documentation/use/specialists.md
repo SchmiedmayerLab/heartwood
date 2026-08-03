@@ -9,6 +9,7 @@ SPDX-License-Identifier: MIT
 Research specialists give the parent agent a focused second pass for one part of a research task.
 They run through OpenHands, use the active model connection, and return their result to the parent conversation.
 Heartwood runs one specialist at a time and keeps the lifecycle, lineage, usage, and final result in the same session used by every interface.
+Each delegation is a fresh bounded review; ask the parent agent to start another review when the evidence changes.
 
 ## Available Reviews
 
@@ -60,7 +61,7 @@ Each role has an explicit model-step limit and usage budget, inherits the active
 ## Current Tool Boundary
 
 The catalog shows **Analysis Implementer** as unavailable.
-Tool-enabled child agents require restart-safe child action review and cancellation, which the supported public OpenHands task interface does not currently provide.
+Tool-enabled child agents require gateway-visible action review and restart-safe recovery, which the supported public OpenHands task interface does not currently provide.
 Heartwood keeps that role visible in the catalog, but does not register it as an executable OpenHands specialist or give project tools to any available specialist.
 
 Audit exports record minimized specialist lifecycle and usage evidence without delegated instructions or returned prose.

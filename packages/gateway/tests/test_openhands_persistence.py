@@ -15,7 +15,9 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+from openhands.sdk.event import ObservationEvent
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
+from openhands.tools.task import TaskObservation
 
 import heartwood.gateway._openhands_persistence as openhands_persistence
 from heartwood.gateway._openhands_persistence import (
@@ -116,6 +118,37 @@ def test_markerless_state_is_typed_and_sensitive_errors_are_minimized(tmp_path: 
     assert json.loads((root / _MARKER).read_text(encoding="utf-8"))["adopted_from"] == (
         "unversioned"
     )
+
+
+def test_failed_specialist_observation_is_minimized_before_persistence(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "openhands"
+    store = ContentMinimizedLocalFileStore(str(root))
+    event = ObservationEvent(
+        id="specialist-error",
+        source="environment",
+        tool_name="task",
+        tool_call_id="task-call",
+        action_id="task-action",
+        observation=TaskObservation.from_text(
+            text="participant-secret at /private/project/input.csv",
+            task_id="task_00000001",
+            subagent="data-quality-reviewer",
+            status="error",
+            is_error=True,
+        ),
+    )
+
+    store.write(
+        "events/event-00000-12345678.json",
+        event.model_dump_json(exclude_none=True),
+    )
+
+    persisted = (root / "events" / "event-00000-12345678.json").read_text(encoding="utf-8")
+    assert "participant-secret" not in persisted
+    assert "/private/project" not in persisted
+    assert "The agent could not complete the requested action" in persisted
 
 
 def test_store_rejects_sdk_mismatch_before_reading_conversation_state(tmp_path: Path) -> None:

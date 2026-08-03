@@ -423,8 +423,10 @@ describe("GatewayClient", () => {
     const action = syntheticAction({
       details: {
         kind: "task",
+        capability: "advisory",
         description: "Review the cohort summary",
         prompt: "Check the generated result.",
+        roleLabel: "Research Reviewer",
         subagentType: "research-reviewer",
         resume: null,
       },

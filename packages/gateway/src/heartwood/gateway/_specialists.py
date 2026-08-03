@@ -248,6 +248,10 @@ def _validate_openhands_boundary(
         raise SpecialistCatalogError(
             f"specialist {definition.name} must inherit the parent model route"
         )
+    if definition.condenser is not None:
+        raise SpecialistCatalogError(
+            f"specialist {definition.name} must inherit the default model condenser"
+        )
     if definition.permission_mode != "always_confirm":
         raise SpecialistCatalogError(f"specialist {definition.name} must use always_confirm")
     if definition.max_iteration_per_run is None:
@@ -268,7 +272,7 @@ def _validate_openhands_boundary(
         capability == SpecialistCapability.PROJECT_ACTIONS
         and availability == SpecialistAvailability.AVAILABLE
     ):
-        # Upstream child interruption and event visibility remain incomplete:
+        # Upstream child-action visibility and restart recovery remain incomplete:
         # https://github.com/OpenHands/software-agent-sdk/issues/4107
         # https://github.com/OpenHands/software-agent-sdk/issues/3907
         raise SpecialistCatalogError(

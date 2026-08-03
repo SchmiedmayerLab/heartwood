@@ -148,6 +148,10 @@ def test_catalog_rejects_unverified_skill(tmp_path: Path) -> None:
             "profile_store_dir: /tmp/unreviewed-profiles\n",
             "cannot select an external model profile store",
         ),
+        (
+            "condenser:\n  kind: NoOpCondenser\n",
+            "must inherit the default model condenser",
+        ),
     ],
 )
 def test_catalog_rejects_external_execution_and_model_configuration(

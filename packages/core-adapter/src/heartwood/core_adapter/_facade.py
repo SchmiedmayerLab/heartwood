@@ -153,6 +153,8 @@ class ProposedToolCall:
     kind: Literal["terminal", "file-editor", "task", "other"] = "other"
     affected_paths: tuple[str, ...] = ()
     project_path: str | None = None
+    specialist_label: str | None = None
+    specialist_capability: Literal["advisory", "project-actions"] | None = None
 
 
 @dataclass(frozen=True, slots=True)

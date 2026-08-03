@@ -96,17 +96,22 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         return ()
     action_label = "action" if len(group.actions) == 1 else "actions"
     items = [(f"Review {len(group.actions)} {action_label} as one complete set: pending")]
-    items.extend(
-        f"{index}. {action.summary or action.tool_name}"
-        f"\n{action_tool_label(action.tool_name)} · "
-        f"{action_risk_label(action.risk)}"
-        + (
-            f"\nArguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}"
-            if action.arguments
-            else ""
-        )
-        for index, action in enumerate(group.actions, 1)
-    )
+    for index, action in enumerate(group.actions, 1):
+        lines = [
+            f"{index}. {action.summary or action.tool_name}",
+            f"{action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}",
+        ]
+        if action.details.kind == "task":
+            role = action.details.role_label or action.details.subagent_type
+            if role:
+                lines.append(f"Specialist: {role}")
+            if action.details.capability:
+                lines.append(f"Capability: {action.details.capability.replace('-', ' ').title()}")
+            if action.details.prompt:
+                lines.append(f"Objective: {action.details.prompt}")
+        if action.arguments:
+            lines.append(f"Arguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}")
+        items.append("\n".join(lines))
     return tuple(items)
 
 
@@ -119,7 +124,9 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         elif details.kind == "file-editor":
             label = f"{details.operation} {details.path or 'path unavailable'}"
         elif details.kind == "task":
-            label = details.description or details.subagent_type or action.summary
+            label = (
+                details.role_label or details.description or details.subagent_type or action.summary
+            )
         else:
             label = action.summary
         outcome = (

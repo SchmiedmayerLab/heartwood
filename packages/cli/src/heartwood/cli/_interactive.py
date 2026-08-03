@@ -416,6 +416,20 @@ def format_projection_lines(
             risk_label = action_risk_label(action.risk)
             summary = terminal_safe_text(action.summary) or tool_label
             lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
+            if action.details.kind == "task":
+                role = action.details.role_label or action.details.subagent_type
+                if role:
+                    lines.append(f"     Specialist: {terminal_safe_text(role)}")
+                if action.details.capability:
+                    lines.append(
+                        "     Capability: "
+                        + terminal_safe_text(action.details.capability.replace("-", " ").title())
+                    )
+                if action.details.prompt:
+                    lines.append(
+                        "     Objective: "
+                        + terminal_safe_text(action.details.prompt, preserve_newlines=True)
+                    )
             if argument_lines := format_action_arguments(action.arguments):
                 lines.append("     Arguments:")
                 lines.extend(f"       {line}" for line in argument_lines)
@@ -515,7 +529,9 @@ def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...
         path = terminal_safe_text(details.path or "path unavailable")
         heading = f"  [{state}] {details.operation} {path}"
     elif details.kind == "task":
-        specialist = details.subagent_type or details.description or action.tool_name
+        specialist = (
+            details.role_label or details.subagent_type or details.description or action.tool_name
+        )
         heading = f"  [{state}] specialist {terminal_safe_text(specialist)}"
     else:
         heading = f"  [{state}] {terminal_safe_text(action.summary)}"

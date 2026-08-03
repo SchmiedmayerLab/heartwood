@@ -83,6 +83,7 @@ The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
+The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
 Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
@@ -103,7 +104,7 @@ Heartwood projects OpenHands Task lifecycle, lineage, result, failure, and combi
 It does not add a scheduler, child-agent loop, conversation store, or role-specific interface reducer.
 
 The catalog includes a project-action implementation role but does not register it.
-The pinned public OpenHands task interface does not provide the restart-safe child-action approval and cancellation contract Heartwood requires, so a tool-capable child fails closed instead of receiving project tools.
+The pinned public OpenHands task interface does not expose nested child actions for gateway-owned review or restore their lineage after a restart, so a tool-capable child fails closed instead of receiving project tools.
 
 The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
 The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.

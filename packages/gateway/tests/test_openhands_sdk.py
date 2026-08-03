@@ -22,7 +22,7 @@ from typing import Literal, cast
 
 import pytest
 from litellm.types.utils import Delta, StreamingChoices
-from openhands.sdk import Conversation, LLMStreamChunk, Tool
+from openhands.sdk import LLM, Agent, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.agent import base as agent_base
 from openhands.sdk.conversation import (
     BaseConversation,
@@ -67,7 +67,7 @@ from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import ToolDefinition
 from openhands.sdk.tool.builtins.finish import FinishAction, FinishObservation, FinishTool
 from openhands.sdk.tool.schema import Action, Observation
-from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
+from openhands.tools import TaskTrackerTool, TerminalTool
 from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
@@ -103,6 +103,7 @@ from heartwood.gateway import (
     SessionProjection,
 )
 from heartwood.gateway._openhands_failures import classified_error_code
+from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._openhands_sdk import (
     ConversationFactory,
     OpenHandsSdkError,
@@ -126,6 +127,7 @@ from heartwood.gateway._openhands_sdk import (
     _usage,
     _usage_source_event_id,
 )
+from heartwood.gateway._specialist_task import HeartwoodSpecialistToolSet
 from heartwood.gateway._specialists import (
     SpecialistCatalog,
     SpecialistCatalogError,
@@ -275,6 +277,69 @@ def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
         backend._register_specialized_agents()
 
 
+def test_foreign_registered_agent_cannot_cross_the_specialist_allowlist(
+    tmp_path: Path,
+) -> None:
+    specialist_name = f"foreign-tool-agent-{uuid.uuid4().hex}"
+    factory_calls: list[str] = []
+
+    def foreign_factory(llm: LLM) -> Agent:
+        factory_calls.append(specialist_name)
+        return OpenHandsAgentSettings(
+            llm=llm,
+            tools=[Tool(name=TerminalTool.name)],
+        ).create_agent()
+
+    assert register_agent_if_absent(
+        name=specialist_name,
+        factory_func=foreign_factory,
+        description="Foreign tool-enabled agent.",
+    )
+    llm = TestLLM.from_messages(
+        [
+            _task_message(
+                "foreign-task-call",
+                description="Use foreign agent",
+                prompt="Run an unapproved task.",
+                specialist_id=specialist_name,
+            )
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="foreign-specialist",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool()],
+        ),
+    )
+
+    backend._register_specialized_agents()
+    backend.submit_turn(session_id="session-1", prompt="Use the foreign specialist")
+    deadline = time.monotonic() + 10
+    while backend._run_active() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    events = backend.reconcile(
+        session_id="session-1",
+        known_source_event_ids=frozenset(),
+    )
+
+    assert not backend._run_active()
+    assert backend.pending_action_group(session_id="session-1") is None
+    assert factory_calls == []
+    assert any(
+        isinstance(event, BackendConfirmationResolutionEvent) and not event.approved
+        for event in events
+    )
+    backend.close()
+
+
 def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
     context = _agent_context([])
 
@@ -361,7 +426,7 @@ def test_openhands_agent_and_conversation_options_are_explicit() -> None:
         ),
     )
 
-    assert settings.enable_sub_agents is True
+    assert settings.enable_sub_agents is False
     assert settings.enable_switch_llm_tool is False
     assert settings.tool_concurrency_limit == 1
     assert settings.mcp_config == {}
@@ -2411,17 +2476,7 @@ def test_backend_rejects_conversation_access_while_close_is_in_progress(
 def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
     tmp_path: Path,
 ) -> None:
-    specialist_name = "heartwood-test-research-planner"
-    child_llm = TestLLM.from_messages([_assistant_message("Validated analysis plan.")])
-    register_agent_if_absent(
-        name=specialist_name,
-        factory_func=lambda _parent_llm: OpenHandsAgentSettings(
-            llm=child_llm,
-            tools=[],
-            enable_switch_llm_tool=False,
-        ).create_agent(),
-        description="Tool-free research planning specialist used for conformance.",
-    )
+    specialist_name = "research-planner"
     parent_llm = TestLLM.from_messages(
         [
             Message(
@@ -2439,17 +2494,25 @@ def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
                     )
                 ],
             ),
+            _assistant_message("Validated analysis plan."),
             _assistant_message("The sequential plan is ready."),
         ]
     )
-    backend = _backend(
-        tmp_path,
-        _conversation_factory(
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="specialist-lineage",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
             tmp_path,
             parent_llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
         ),
     )
+    backend._register_specialized_agents()
     backend.submit_turn(session_id="session-1", prompt="Develop an analysis plan")
     group = _wait_for_pending_group(backend)
     continued = backend.resolve_confirmation(
@@ -2542,7 +2605,7 @@ def test_packaged_advisory_specialists_return_output_to_the_parent_agent(
         conversation_factory=_conversation_factory(
             tmp_path,
             llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
         ),
     )
     backend._register_specialized_agents()
@@ -2607,7 +2670,7 @@ def test_parent_cancels_specialist_delegation_before_the_child_starts(
         conversation_factory=_conversation_factory(
             tmp_path,
             llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
         ),
     )
     backend._register_specialized_agents()
@@ -2630,7 +2693,7 @@ def test_parent_cancels_specialist_delegation_before_the_child_starts(
     backend.close()
 
 
-def test_specialist_task_resumes_sequentially_with_the_same_lineage(
+def test_specialist_resume_fails_closed_until_lineage_is_restart_durable(
     tmp_path: Path,
 ) -> None:
     llm = TestLLM.from_messages(
@@ -2649,8 +2712,6 @@ def test_specialist_task_resumes_sequentially_with_the_same_lineage(
                 specialist_id="cohort-feature-reviewer",
                 resume="task_00000001",
             ),
-            _assistant_message("The revised rule resolves the index-date ambiguity."),
-            _assistant_message("The resumed cohort review is complete."),
         ]
     )
     backend = OpenHandsSdkBackend(
@@ -2664,37 +2725,47 @@ def test_specialist_task_resumes_sequentially_with_the_same_lineage(
         conversation_factory=_conversation_factory(
             tmp_path,
             llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
         ),
     )
     backend._register_specialized_agents()
     backend.submit_turn(session_id="session-1", prompt="Review the cohort")
     first_group = _wait_for_pending_group(backend)
-    backend.resolve_confirmation(
+    continued = backend.resolve_confirmation(
         session_id="session-1",
         action_group_id=first_group.group_id,
         approved=True,
     )
-    second_group = _wait_for_pending_group(backend)
-    second_events = backend.resolve_confirmation(
-        session_id="session-1",
-        action_group_id=second_group.group_id,
-        approved=True,
+    deadline = time.monotonic() + 10
+    while backend._run_active() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    events = (
+        *continued,
+        *backend.reconcile(
+            session_id="session-1",
+            known_source_event_ids=frozenset(),
+        ),
     )
-    events = (*second_events, *_wait_for_lifecycle(backend, BackendLifecycle.FINISHED))
 
-    completed = [
-        event.subagent
-        for event in events
-        if isinstance(event, BackendSubagentEvent)
-        and event.subagent.status == BackendSubagentStatus.COMPLETED
-    ]
-    assert completed
-    assert {item.agent_name for item in completed} == {"cohort-feature-reviewer"}
-    assert {item.task_id for item in completed} == {"task_00000001"}
+    assert not backend._run_active()
+    assert backend.pending_action_group(session_id="session-1") is None
+    assert llm.call_count == 2
     assert any(
-        isinstance(event, BackendAgentMessageEvent)
-        and event.message == "The resumed cohort review is complete."
+        isinstance(event, BackendConfirmationResolutionEvent)
+        and event.tool_call.tool_call_id == "resumed-review-call"
+        and not event.approved
+        for event in events
+    )
+    assert any(
+        isinstance(event, BackendSubagentEvent)
+        and event.subagent.task_id == "task_00000001"
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+        for event in events
+    )
+    assert all(
+        not isinstance(event, BackendSubagentEvent)
+        or event.subagent.invocation_id != "resumed-review-call"
+        or event.subagent.status != BackendSubagentStatus.COMPLETED
         for event in events
     )
     backend.close()
@@ -2711,7 +2782,7 @@ def test_specialist_failure_is_projected_to_the_parent(
                 prompt="Review the supplied synthetic data-quality evidence.",
                 specialist_id="data-quality-reviewer",
             ),
-            RuntimeError("synthetic specialist failure"),
+            RuntimeError(f"synthetic specialist failure at {tmp_path / 'private.csv'}"),
             _assistant_message("The specialist could not complete the review."),
         ]
     )
@@ -2726,7 +2797,7 @@ def test_specialist_failure_is_projected_to_the_parent(
         conversation_factory=_conversation_factory(
             tmp_path,
             llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
         ),
     )
     backend._register_specialized_agents()
@@ -2746,6 +2817,11 @@ def test_specialist_failure_is_projected_to_the_parent(
         for event in events
     )
     assert "synthetic specialist failure" not in repr(events)
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "openhands").rglob("*.json")
+    )
+    assert "synthetic specialist failure" not in persisted
+    assert "private.csv" not in persisted
     backend.close()
 
 
@@ -2787,7 +2863,7 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         conversation_factory=_conversation_factory(
             tmp_path,
             first_llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
             conversation_id=conversation_id,
             persistence_dir=persistence_dir,
         ),
@@ -2815,7 +2891,7 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         conversation_factory=_conversation_factory(
             tmp_path,
             restored_llm,
-            tools=[Tool(name=TaskToolSet.name)],
+            tools=[_specialist_tool()],
             conversation_id=conversation_id,
             persistence_dir=persistence_dir,
         ),
@@ -3234,17 +3310,25 @@ def _conversation_factory(
         callback: Callable[[OpenHandsEvent], None],
         token_callback: Callable[[LLMStreamChunk], None],
     ) -> BaseConversation:
+        resolved_persistence_dir = persistence_dir or tmp_path / "openhands"
+        resolved_conversation_id = conversation_id or uuid.uuid4()
         settings = OpenHandsAgentSettings(
             llm=llm,
             tools=tools,
             enable_switch_llm_tool=False,
             tool_concurrency_limit=1,
         )
-        conversation = Conversation(
+        conversation = LocalConversation(
             agent=settings.create_agent(),
             workspace=workspace or tmp_path / "workspace",
-            persistence_dir=persistence_dir or tmp_path / "openhands",
-            conversation_id=conversation_id or uuid.uuid4(),
+            persistence_dir=resolved_persistence_dir,
+            conversation_id=resolved_conversation_id,
+            file_store=ContentMinimizedLocalFileStore(
+                LocalConversation.get_persistence_dir(
+                    resolved_persistence_dir,
+                    resolved_conversation_id,
+                )
+            ),
             callbacks=[callback],
             token_callbacks=[token_callback],
             visualizer=None,
@@ -3524,6 +3608,22 @@ def _specialist_catalog() -> SpecialistCatalog:
     return load_specialist_catalog(
         _repository_root() / "agents" / "verified",
         _repository_root() / "skills" / "verified",
+    )
+
+
+def _specialist_tool() -> Tool:
+    return Tool(
+        name=HeartwoodSpecialistToolSet.name,
+        params={
+            "specialists": [
+                {
+                    "specialist_id": role.specialist_id,
+                    "label": role.label,
+                    "description": role.definition.description,
+                }
+                for role in _specialist_catalog().available_roles
+            ]
+        },
     )
 
 

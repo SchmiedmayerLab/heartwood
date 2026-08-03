@@ -565,6 +565,7 @@ const actionHeading = (action: ProjectionActionRecord) => {
   }
   if (action.details.kind === "task") {
     return (
+      action.details.roleLabel ??
       action.details.description ??
       action.details.subagentType ??
       action.summary
@@ -763,19 +764,38 @@ const ApprovalRequest = ({
               actionPresentation,
             );
             const tool = actionToolLabel(control.toolName, actionPresentation);
+            const specialist =
+              control.details.kind === "task" ? control.details : null;
             return (
               <li key={control.toolCallId}>
                 <span className="approval-action-index" aria-hidden="true">
                   {index + 1}
                 </span>
                 <div className="approval-action-content">
-                  <strong>{displaySafeText(control.summary || tool)}</strong>
+                  <strong>
+                    {displaySafeText(
+                      specialist?.roleLabel ??
+                        (control.summary.length > 0 ? control.summary : tool),
+                    )}
+                  </strong>
                   <div className="approval-action-meta">
                     <span>{tool}</span>
+                    {specialist?.capability ?
+                      <span>
+                        {specialist.capability === "advisory" ?
+                          "Advisory review"
+                        : "Project actions"}
+                      </span>
+                    : null}
                     <Badge className={risk.className} variant="outline">
                       {risk.label}
                     </Badge>
                   </div>
+                  {specialist?.prompt ?
+                    <p className="approval-action-objective">
+                      {displaySafeText(specialist.prompt)}
+                    </p>
+                  : null}
                   {Object.keys(control.arguments).length > 0 ?
                     <details className="approval-details">
                       <summary>Review Exact Arguments</summary>

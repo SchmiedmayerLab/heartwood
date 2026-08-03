@@ -268,39 +268,12 @@ class LocalModelHandler(BaseHTTPRequestHandler):
         )
         message: dict[str, object]
         finish_reason: str
-        specialist_response = next(
-            (
-                response
-                for marker, response in (
-                    (
-                        "you are a research-analysis planning specialist",
-                        "SPECIALIST REVIEW COMPLETE: Define the cohort, verify denominators, "
-                        "run aggregate quality checks, and record assumptions.",
-                    ),
-                    (
-                        "you are a biomedical research data-quality reviewer",
-                        "SPECIALIST REVIEW COMPLETE: Verify missingness, duplicate records, "
-                        "temporal consistency, and aggregate denominators.",
-                    ),
-                    (
-                        "you are a biomedical cohort and feature-definition reviewer",
-                        "SPECIALIST REVIEW COMPLETE: Verify index dates, observation windows, "
-                        "eligibility, and outcome leakage.",
-                    ),
-                    (
-                        "you are a statistical methods reviewer",
-                        "SPECIALIST REVIEW COMPLETE: Verify the estimand, split strategy, "
-                        "uncertainty, and held-out evaluation.",
-                    ),
-                    (
-                        "you are a biomedical research reproducibility reviewer",
-                        "SPECIALIST REVIEW COMPLETE: Record revisions, parameters, seeds, "
-                        "commands, artifacts, and validation results.",
-                    ),
-                )
-                if marker in serialized_messages
-            ),
-            None,
+        specialist_response = (
+            "SPECIALIST REVIEW COMPLETE: Verify the supplied assumptions, evidence, "
+            "validation steps, and reproducibility requirements."
+            if "do not claim to inspect files, execute code, access a network, or modify "
+            "project state" in serialized_messages
+            else None
         )
         if specialist_response is not None:
             message = {"role": "assistant", "content": specialist_response}

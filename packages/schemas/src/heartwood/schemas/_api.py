@@ -13,7 +13,6 @@ from copy import deepcopy
 from typing import Annotated, Literal, NotRequired, TypedDict, cast
 
 from pydantic import (
-    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -877,30 +876,10 @@ class SpecialistRoleResponse(_ApiResponse):
     max_budget_usd: Annotated[float, Field(gt=0)]
 
 
-def _validate_specialist_execution_boundary(
-    role: SpecialistRoleResponse,
-) -> SpecialistRoleResponse:
-    """Keep interface-safe specialist responses inside the executable boundary."""
-    if role["capability"] == "advisory" and role["tools"]:
-        raise ValueError("advisory specialists cannot expose tools")
-    if role["capability"] == "project-actions" and role["availability"] == "available":
-        raise ValueError("project-actions specialists cannot be available")
-    if role["availability"] == "available" and role["unavailable_reason"] is not None:
-        raise ValueError("available specialists cannot have an unavailable reason")
-    if role["availability"] == "unavailable" and not role["unavailable_reason"]:
-        raise ValueError("unavailable specialists require a reason")
-    return role
-
-
 class SpecialistSettingsResponse(_ApiResponse):
     """Validated research-specialist catalog shared by every interface."""
 
-    specialists: list[
-        Annotated[
-            SpecialistRoleResponse,
-            AfterValidator(_validate_specialist_execution_boundary),
-        ]
-    ]
+    specialists: list[SpecialistRoleResponse]
 
 
 type ApiResponse = (

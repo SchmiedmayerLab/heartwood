@@ -1274,6 +1274,13 @@ summary:focus-visible {
   font-size: 0.64rem;
 }
 
+.approval-action-objective {
+  margin: 0;
+  color: #4f493d;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
 .risk-low {
   border-color: #92c7af;
   background: #edf8f2;

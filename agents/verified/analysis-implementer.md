@@ -17,7 +17,7 @@ heartwood:
   label: Analysis Implementer
   capability: project-actions
   availability: unavailable
-  unavailable_reason: Tool-enabled specialists require restart-safe child approval and cancellation support from OpenHands.
+  unavailable_reason: Tool-enabled specialists require visible child action review and restart-safe recovery from OpenHands.
   order: 60
 ---
 

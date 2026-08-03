@@ -2126,6 +2126,21 @@ describe("App", () => {
     });
   });
 
+  it("shows catalog-owned specialist identity and objective during approval", async () => {
+    render(
+      <App
+        client={new SpecialistPendingClient()}
+        initialSessionId="session-test"
+      />,
+    );
+
+    expect(await screen.findByText("Research Planner")).toBeVisible();
+    expect(screen.getByText("Advisory review")).toBeVisible();
+    expect(
+      screen.getByText("Review the supplied synthetic analysis plan."),
+    ).toBeVisible();
+  });
+
   it("disables grouped decisions that the projection does not allow", async () => {
     const client = new FakeClient();
     client.projections.set(
@@ -3131,7 +3146,7 @@ describe("App", () => {
     expect(screen.getByText("Data Quality Reviewer")).toBeVisible();
     fireEvent.click(screen.getByText("Additional roles"));
     expect(screen.getByText("Analysis Implementer")).toBeVisible();
-    expect(screen.getByText(/restart-safe child approval/u)).toBeVisible();
+    expect(screen.getByText(/visible child action review/u)).toBeVisible();
   });
 });
 
@@ -3196,6 +3211,42 @@ class BatchPendingClient extends PendingClient {
       events: syntheticEvents(),
       projection,
     });
+  }
+}
+
+class SpecialistPendingClient extends PendingClient {
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    this.replayCalls += 1;
+    const action = syntheticAction({
+      toolName: "task",
+      summary: "Review the analysis plan",
+      arguments: {
+        description: "Review the analysis plan",
+        prompt: "Review the supplied synthetic analysis plan.",
+        subagent_type: "research-planner",
+      },
+      details: {
+        kind: "task",
+        capability: "advisory",
+        description: "Review the analysis plan",
+        prompt: "Review the supplied synthetic analysis plan.",
+        roleLabel: "Research Planner",
+        subagentType: "research-planner",
+        resume: null,
+      },
+    });
+    const projection = syntheticProjection({
+      sessionId,
+      actions: [action],
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [action],
+        decision: null,
+        decisionScope: "all",
+      },
+    });
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({ events: syntheticEvents(), projection });
   }
 }
 
@@ -3626,7 +3677,7 @@ const specialistSettings = (): SpecialistSettings => ({
       capability: "project-actions",
       availability: "unavailable",
       unavailable_reason:
-        "Tool-enabled specialists require restart-safe child approval and cancellation support from OpenHands.",
+        "Tool-enabled specialists require visible child action review and restart-safe recovery from OpenHands.",
       model_route: "inherit",
       tools: ["terminal", "heartwood_project_file_editor"],
       skills: ["omop-cohort-summary"],

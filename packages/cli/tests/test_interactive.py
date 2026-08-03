@@ -1066,6 +1066,39 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "Review 2 actions as one OpenHands action set:" in filtered
 
 
+def test_line_formatter_renders_catalog_specialist_approval_details() -> None:
+    action = _approval_action(
+        "task-1",
+        tool_name="task",
+        summary="Review the analysis plan",
+    ).model_copy(
+        update={
+            "details": ProjectionTaskActionDetails(
+                description="Review the analysis plan",
+                prompt="Review the supplied synthetic analysis plan.",
+                subagent_type="research-planner",
+                role_label="Research Planner",
+                capability="advisory",
+            )
+        }
+    )
+    projection = SessionProjection(
+        session_id="terminal-specialist-approval",
+        event_count=1,
+        revision=0,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-specialist",
+            actions=(action,),
+        ),
+    )
+
+    rendered = "\n".join(format_projection_lines(projection))
+
+    assert "Specialist: Research Planner" in rendered
+    assert "Capability: Advisory" in rendered
+    assert "Objective: Review the supplied synthetic analysis plan." in rendered
+
+
 def test_line_formatter_renders_gateway_owned_suggestions_without_internal_ids() -> None:
     projection = SessionProjection(
         session_id="terminal-suggestions",

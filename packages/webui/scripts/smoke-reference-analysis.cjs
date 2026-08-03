@@ -187,8 +187,11 @@ async function main() {
 
     await runApprovedTask(page, task, {
       approvalSummaries: [
-        "review the synthetic cohort plan",
+        "Research Planner",
         "build the aggregate synthetic target-condition cohort",
+      ],
+      approvalObjectives: [
+        "Plan the supplied synthetic target-condition cohort workflow. Identify aggregate quality checks and evidence needed before project actions. Do not inspect files or use tools.",
       ],
       captureApproval: true,
       finalMessage:
@@ -410,6 +413,12 @@ async function runApprovedTask(page, task, taskSpec) {
       .last();
     await expect(approval).toBeVisible({ timeout: 60_000 });
     await expect(approval.getByText(summary, { exact: true })).toBeVisible();
+    const objective = taskSpec.approvalObjectives?.[index];
+    if (objective) {
+      await expect(
+        approval.getByText(objective, { exact: true }),
+      ).toBeVisible();
+    }
     if (
       taskSpec.captureApproval === true &&
       index === approvalSummaries.length - 1

@@ -824,6 +824,8 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
                     "tool_name": "task",
                     "kind": "task",
                     "risk": "low",
+                    "specialist_label": "Research Planner",
+                    "specialist_capability": "advisory",
                     "arguments": {
                         "description": "Do not use this parent-action fallback",
                         "subagent_type": "research-planner",
@@ -839,6 +841,8 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
                     "tool_name": "task",
                     "kind": "task",
                     "risk": "low",
+                    "specialist_label": "Research Planner",
+                    "specialist_capability": "advisory",
                     "arguments": {
                         "description": "Review the synthetic analysis plan",
                         "subagent_type": "research-planner",
@@ -868,6 +872,7 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
                     "tool_name": "task",
                     "exit_code": 0,
                     "summary": "Plan review completed",
+                    "result": "Verify denominators and record assumptions.",
                 },
             ),
         ),
@@ -878,7 +883,68 @@ def test_projection_enriches_specialist_presentation_without_client_reducers() -
     assert specialist.role_label == "Research Planner"
     assert specialist.status_label == "Complete"
     assert specialist.task_summary == "Review the synthetic analysis plan"
-    assert specialist.result_summary == "Plan review completed"
+    assert specialist.result_summary == "Verify denominators and record assumptions."
+    details = projection.actions[1].details
+    assert details.kind == "task"
+    assert details.role_label == "Research Planner"
+    assert details.capability == "advisory"
+
+
+def test_projection_derives_rejected_specialist_state_from_the_action_decision() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "task-call-1",
+                    "action_id": "action-1",
+                    "tool_name": "task",
+                    "kind": "task",
+                    "risk": "medium",
+                    "specialist_label": "Research Planner",
+                    "specialist_capability": "advisory",
+                    "arguments": {
+                        "description": "Review the plan",
+                        "prompt": "Review the supplied synthetic analysis plan.",
+                        "subagent_type": "research-planner",
+                    },
+                },
+            ),
+            _event(
+                1,
+                EventKind.SUBAGENT_UPDATED,
+                {
+                    "subagent": {
+                        "invocation_id": "task-call-1",
+                        "task_id": None,
+                        "agent_name": "research-planner",
+                        "role_label": "Research Planner",
+                        "status": "proposed",
+                        "parent_session_id": "session-1",
+                        "parent_action_id": "action-1",
+                    }
+                },
+            ),
+            _confirmation_event(2, "group-1", "task-call-1", "task"),
+            _event(
+                3,
+                EventKind.CONFIRMATION_RESOLVED,
+                {
+                    "group_id": "group-1",
+                    "tool_call_id": "task-call-1",
+                    "decision": "denied",
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    specialist = projection.subagents[0]
+    assert specialist.status == "rejected"
+    assert specialist.status_label == "Not Run"
+    assert specialist.task_summary == "Review the plan"
+    assert specialist.result_summary is None
 
 
 def test_projection_uses_parent_action_as_specialist_presentation_fallback() -> None:

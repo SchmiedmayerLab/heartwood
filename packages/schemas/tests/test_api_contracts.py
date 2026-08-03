@@ -90,17 +90,13 @@ def test_api_contract_schema_contains_requests_and_responses() -> None:
     ("field", "unsafe_value"),
     [
         ("model_route", "external-model"),
-        ("tools", ["terminal"]),
-        ("capability", "project-actions"),
-        ("availability", "unavailable"),
-        ("unavailable_reason", "Not unavailable."),
         ("permission_mode", "bypass"),
         ("presentation_summary", ""),
         ("max_iterations", 0),
         ("max_budget_usd", 0.0),
     ],
 )
-def test_specialist_response_rejects_unsafe_contract_drift(
+def test_specialist_response_rejects_structural_contract_drift(
     field: str,
     unsafe_value: object,
 ) -> None:

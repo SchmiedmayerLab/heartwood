@@ -62,7 +62,7 @@ from openhands.sdk.settings import (
 from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
 from openhands.sdk.tool.schema import Observation
-from openhands.tools import TaskToolSet, TaskTrackerTool, TerminalTool
+from openhands.tools import TaskTrackerTool, TerminalTool
 from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
@@ -109,6 +109,10 @@ from heartwood.gateway._openhands_models import (
     request_endpoint_for_model,
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.gateway._specialist_task import (
+    HeartwoodSpecialistToolSet,
+    SpecialistToolRole,
+)
 from heartwood.gateway._specialists import (
     SpecialistCatalog,
     SpecialistCatalogError,
@@ -632,23 +636,25 @@ class OpenHandsSdkBackend:
             )
         else:
             llm = LLM(**options)
+        tools = [
+            Tool(
+                name=TerminalTool.name,
+                params=_terminal_tool_params(
+                    self.profile,
+                    self._credential_environment_names,
+                ),
+            ),
+            Tool(
+                name=PROJECT_FILE_EDITOR_SPEC,
+                params={"project_root": str(self.workspace)},
+            ),
+            Tool(name=TaskTrackerTool.name),
+        ]
+        if specialist_tool := self._specialist_tool():
+            tools.append(specialist_tool)
         settings = _agent_settings(
             llm=llm,
-            tools=[
-                Tool(
-                    name=TerminalTool.name,
-                    params=_terminal_tool_params(
-                        self.profile,
-                        self._credential_environment_names,
-                    ),
-                ),
-                Tool(
-                    name=PROJECT_FILE_EDITOR_SPEC,
-                    params={"project_root": str(self.workspace)},
-                ),
-                Tool(name=TaskTrackerTool.name),
-                Tool(name=TaskToolSet.name),
-            ],
+            tools=tools,
             context=_agent_context(skills),
             condenser=_context_condenser_settings(self.profile),
         )
@@ -675,6 +681,24 @@ class OpenHandsSdkBackend:
         conversation.set_security_analyzer(analyzer)
         conversation.set_confirmation_policy(confirmation_policy)
         return conversation
+
+    def _specialist_tool(self) -> Tool | None:
+        if self.specialist_catalog is None:
+            return None
+        specialists: list[SpecialistToolRole] = [
+            {
+                "specialist_id": role.specialist_id,
+                "label": role.label,
+                "description": role.definition.description,
+            }
+            for role in self.specialist_catalog.available_roles
+        ]
+        if not specialists:
+            return None
+        return Tool(
+            name=HeartwoodSpecialistToolSet.name,
+            params={"specialists": specialists},
+        )
 
     def _register_specialized_agents(self) -> None:
         if self.specialist_catalog is None:
@@ -703,11 +727,38 @@ class OpenHandsSdkBackend:
 
     def _specialist_role_label(self, specialist_id: str) -> str:
         if self.specialist_catalog is None:
-            return _specialist_fallback_label(specialist_id)
+            return "Unavailable Specialist"
         try:
             return self.specialist_catalog.role(specialist_id).label
         except SpecialistCatalogError:
-            return _specialist_fallback_label(specialist_id)
+            return "Unavailable Specialist"
+
+    def _specialist_action_is_supported(self, action: TaskAction) -> bool:
+        if action.resume is not None or self.specialist_catalog is None:
+            return False
+        try:
+            role = self.specialist_catalog.role(action.subagent_type)
+        except SpecialistCatalogError:
+            return False
+        return role in self.specialist_catalog.available_roles
+
+    def _reject_unsupported_specialist_actions(
+        self,
+        conversation: BaseConversation,
+    ) -> bool:
+        state = _conversation_state(conversation)
+        unmatched = ConversationState.get_unmatched_actions(state.active_branch())
+        if not any(
+            isinstance(event.action, TaskAction)
+            and not self._specialist_action_is_supported(event.action)
+            for event in unmatched
+        ):
+            return False
+        conversation.reject_pending_actions(
+            "Heartwood rejected a specialist request outside the available catalog."
+        )
+        state.rebuild_view()
+        return True
 
     def _handle_sdk_event(self, event: Event) -> None:
         """Leave durable translation to the persisted OpenHands state.
@@ -883,6 +934,20 @@ class OpenHandsSdkBackend:
             if self._run_cancelled.is_set():
                 self._clear_pending_action_view_repair()
                 return frozenset(published_source_event_ids)
+            if self._reject_unsupported_specialist_actions(conversation):
+                events = self._reconcile_conversation(
+                    conversation,
+                    session_id=session_id,
+                    known_source_event_ids=frozenset(published_source_event_ids),
+                )
+                if events:
+                    await asyncio.to_thread(self._event_sink, events)
+                    published_source_event_ids.update(
+                        event.source_event_id
+                        for event in events
+                        if event.source_event_id is not None
+                    )
+                return frozenset(published_source_event_ids)
             if not self._complete_pending_action_view_repair(conversation):
                 return frozenset(published_source_event_ids)
 
@@ -1033,15 +1098,30 @@ class OpenHandsSdkBackend:
     ) -> PendingActionGroup | None:
         return pending_action_group(
             tuple(
-                _tool_call(
-                    event,
-                    analyzed_risk=_analyzed_risk(self._security_analyzer, event),
-                    workspace=self.workspace,
-                )
+                self._proposed_tool_call(event)
                 for event in ConversationState.get_unmatched_actions(
                     _conversation_state(conversation).active_branch()
                 )
             )
+        )
+
+    def _proposed_tool_call(self, event: ActionEvent) -> ProposedToolCall:
+        specialist_label = None
+        specialist_capability: Literal["advisory", "project-actions"] | None = None
+        if isinstance(event.action, TaskAction) and self.specialist_catalog is not None:
+            try:
+                role = self.specialist_catalog.role(event.action.subagent_type)
+            except SpecialistCatalogError:
+                pass
+            else:
+                specialist_label = role.label
+                specialist_capability = role.capability.value
+        return _tool_call(
+            event,
+            analyzed_risk=_analyzed_risk(self._security_analyzer, event),
+            workspace=self.workspace,
+            specialist_label=specialist_label,
+            specialist_capability=specialist_capability,
         )
 
     def _interrupted_outcome_error(
@@ -1090,14 +1170,7 @@ class OpenHandsSdkBackend:
                 continue
             if action.id not in groups:
                 group = pending_action_group(
-                    tuple(
-                        _tool_call(
-                            pending,
-                            analyzed_risk=_analyzed_risk(self._security_analyzer, pending),
-                            workspace=self.workspace,
-                        )
-                        for pending in pending_actions
-                    )
+                    tuple(self._proposed_tool_call(pending) for pending in pending_actions)
                 )
                 if group is not None:
                     groups.update(dict.fromkeys((pending.id for pending in pending_actions), group))
@@ -1105,15 +1178,7 @@ class OpenHandsSdkBackend:
         for action in pending_actions:
             if action.id in groups:
                 continue
-            group = pending_action_group(
-                (
-                    _tool_call(
-                        action,
-                        analyzed_risk=_analyzed_risk(self._security_analyzer, action),
-                        workspace=self.workspace,
-                    ),
-                )
-            )
+            group = pending_action_group((self._proposed_tool_call(action),))
             if group is not None:
                 groups[action.id] = group
         return actions_by_id, groups
@@ -1174,11 +1239,7 @@ class OpenHandsSdkBackend:
                     if message
                     else ()
                 )
-            tool_call = _tool_call(
-                event,
-                analyzed_risk=_analyzed_risk(self._security_analyzer, event),
-                workspace=self.workspace,
-            )
+            tool_call = self._proposed_tool_call(event)
             translated: list[BackendEvent] = [
                 BackendToolCallEvent(
                     tool_call=tool_call,
@@ -1395,11 +1456,7 @@ class OpenHandsSdkBackend:
                 )
             events.extend(
                 BackendConfirmationRequestEvent(
-                    tool_call=_tool_call(
-                        action,
-                        analyzed_risk=_analyzed_risk(self._security_analyzer, action),
-                        workspace=self.workspace,
-                    ),
+                    tool_call=self._proposed_tool_call(action),
                     action_group_id=unmatched_group.group_id,
                     source_event_id=f"openhands:{action.id}:confirmation",
                 )
@@ -1432,6 +1489,8 @@ def _tool_call(
     *,
     analyzed_risk: str | None = None,
     workspace: Path | None = None,
+    specialist_label: str | None = None,
+    specialist_capability: Literal["advisory", "project-actions"] | None = None,
 ) -> ProposedToolCall:
     tool_name = event.tool_name or "unknown-tool"
     risk_value = analyzed_risk or event.security_risk.value.lower()
@@ -1447,6 +1506,8 @@ def _tool_call(
         kind=_tool_kind(event),
         affected_paths=_affected_paths(event, project_path=project_path),
         project_path=project_path,
+        specialist_label=specialist_label,
+        specialist_capability=specialist_capability,
     )
 
 
@@ -1763,7 +1824,7 @@ def _agent_settings(
         tools=tools,
         agent_context=context,
         condenser=condenser,
-        enable_sub_agents=True,
+        enable_sub_agents=False,
         enable_switch_llm_tool=False,
         tool_concurrency_limit=1,
         mcp_config={},
@@ -1852,9 +1913,3 @@ def _configure_upstream_defaults(env: Mapping[str, str] | None) -> None:
         ("OPENHANDS_SUPPRESS_BANNER", "1"),
     ):
         os.environ.setdefault(name, configured.get(name, default))
-
-
-def _specialist_fallback_label(specialist_id: str) -> str:
-    words = specialist_id.replace("_", "-").split("-")
-    label = " ".join(word.capitalize() for word in words if word)
-    return label or "Specialist"
