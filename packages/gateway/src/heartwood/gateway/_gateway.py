@@ -71,6 +71,7 @@ from heartwood.gateway._local_model_contract import (
 )
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
+    LocalModelCatalogSource,
     LocalModelChoice,
     LocalModelRuntime,
     ModelRepositoryError,
@@ -115,6 +116,11 @@ from heartwood.gateway._model_snapshots import (
     automatic_model_tier,
     download_model_snapshot,
     load_model_snapshot_catalog,
+)
+from heartwood.gateway._model_transfer import (
+    ModelTransferError,
+    ModelTransferManager,
+    inspect_model_bundle,
 )
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
@@ -165,6 +171,8 @@ from heartwood.schemas import (
     ModelDownloadResponse,
     ModelRepositoryPlanResponse,
     ModelSettingsResponse,
+    ModelTransferPlanResponse,
+    ModelTransferResponse,
     ModelValidationResponse,
     PlatformCapabilitiesResponse,
     PolicyProfile,
@@ -463,9 +471,14 @@ class SessionGateway:
             selected_choice = self._downloadable_local_model_choices.get(
                 selected_local_model.artifact_id
             )
-            if selected_choice is None and selected_local_model.catalog_source == "user-selected":
+            if selected_local_model.catalog_source == "transferred" or (
+                selected_choice is None and selected_local_model.catalog_source == "user-selected"
+            ):
                 selected_choice = _selected_local_model_choice(selected_local_model)
-                self._downloadable_local_model_choices[selected_choice.model_id] = selected_choice
+                if selected_local_model.catalog_source == "user-selected":
+                    self._downloadable_local_model_choices[selected_choice.model_id] = (
+                        selected_choice
+                    )
             if selected_choice is not None:
                 self._local_model_choices[selected_choice.model_id] = selected_choice
         self._repository_plans: dict[tuple[str, str], LocalModelChoice] = {}
@@ -478,6 +491,10 @@ class SessionGateway:
             snapshot_catalog=self.snapshot_catalog,
             cache_dir=self.model_cache_dir,
             on_ready=self._select_downloaded_local_model,
+        )
+        self.model_transfer_manager = ModelTransferManager(
+            models_dir=self.model_cache_dir,
+            on_import_ready=self._select_transferred_local_model,
         )
         bundled_skills_dir = repository_root / "skills" / "verified"
         self.installed_skills_dir = self.project.skills_dir
@@ -1514,6 +1531,9 @@ class SessionGateway:
                 "snapshots": snapshot_catalog["snapshots"],
                 "models": choices,
                 "downloads": [status.safe_dict() for status in statuses.values()],
+                "transfers": [
+                    transfer.safe_dict() for transfer in self.model_transfer_manager.statuses()
+                ],
                 "gpu_environment": {
                     "platform_id": gpu_environment.platform_id,
                     "capacities": [
@@ -1716,7 +1736,7 @@ class SessionGateway:
         runtime_profile = "llama-cpp-cpu" if choice.runtime == "llama-cpp" else "vllm-cuda"
         try:
             self._select_downloaded_local_model(choice.model_id, imported.path, runtime_profile)
-        except BaseException:
+        except Exception:
             self._local_model_choices.pop(choice.model_id, None)
             self._downloadable_local_model_choices.pop(choice.model_id, None)
             self.config_store.restore(previous_config)
@@ -1740,6 +1760,79 @@ class SessionGateway:
                 "path": str(imported.path),
                 "status": "ready",
             },
+        )
+
+    def inspect_local_model_bundle(self, path: Path) -> ModelTransferPlanResponse:
+        """Inspect one portable model bundle without changing project state."""
+        plan = inspect_model_bundle(path)
+        choice = self._trusted_transferred_model_choice(plan.model)
+        warnings = self._model_transfer_warnings(choice)
+        return api_response(
+            ModelTransferPlanResponse,
+            {
+                "bundle_path": str(plan.bundle_path),
+                "bundle_size_bytes": plan.bundle_size_bytes,
+                "manifest_sha256": plan.manifest_sha256,
+                "file_count": len(plan.manifest.files),
+                "runtime_profile": plan.manifest.runtime_profile,
+                "model": self._local_model_choice_dict(choice),
+                "warnings": list(warnings),
+            },
+        )
+
+    def export_local_model(self, path: Path) -> ModelTransferResponse:
+        """Start a verified export of the selected Heartwood-managed model."""
+        self.project.initialize()
+        selected = self.config_store.load().local_model
+        if selected is None:
+            raise ModelTransferError(
+                "select or download a Heartwood-managed model before exporting a bundle"
+            )
+        choice = self._local_model_choices.get(selected.artifact_id)
+        if choice is None:
+            choice = _selected_local_model_choice(selected)
+        transfer = self.model_transfer_manager.start_export(
+            choice=choice,
+            model_path=selected.resolved_path(self.project),
+            bundle_path=path,
+            warnings=self._model_transfer_warnings(choice),
+        )
+        return api_response(ModelTransferResponse, transfer.safe_dict())
+
+    def import_local_model_bundle(
+        self,
+        path: Path,
+        *,
+        approved: bool,
+        manifest_sha256: str,
+    ) -> ModelTransferResponse:
+        """Start an atomic model-bundle import after explicit review."""
+        self.project.initialize()
+        plan = inspect_model_bundle(path)
+        if plan.manifest_sha256 != manifest_sha256:
+            raise ModelTransferError(
+                "model bundle manifest changed after review; inspect the bundle again"
+            )
+        choice = self._trusted_transferred_model_choice(plan.model)
+        transfer = self.model_transfer_manager.start_import(
+            plan=plan,
+            approved=approved,
+            warnings=self._model_transfer_warnings(choice),
+        )
+        return api_response(ModelTransferResponse, transfer.safe_dict())
+
+    def cancel_model_transfer(self, transfer_id: str) -> ModelTransferResponse:
+        """Request cancellation of one active model transfer."""
+        return api_response(
+            ModelTransferResponse,
+            self.model_transfer_manager.cancel(transfer_id).safe_dict(),
+        )
+
+    def model_transfer_status(self, transfer_id: str) -> ModelTransferResponse:
+        """Return one shared model-transfer status snapshot."""
+        return api_response(
+            ModelTransferResponse,
+            self.model_transfer_manager.status(transfer_id).safe_dict(),
         )
 
     def skill_settings(self) -> SkillSettingsResponse:
@@ -2415,12 +2508,21 @@ class SessionGateway:
         path: Path,
         runtime_profile: str,
     ) -> None:
-        execution_model = "heartwood-managed-model"
         choice = self._downloadable_local_model_choices.get(model_id)
         if choice is None:
             raise ModelRepositoryError(
                 f"Heartwood-managed model metadata is unavailable: {model_id}"
             )
+        self._select_local_model(choice, path, runtime_profile)
+
+    def _select_local_model(
+        self,
+        choice: LocalModelChoice,
+        path: Path,
+        runtime_profile: str,
+    ) -> None:
+        """Select one verified local model through the shared project contract."""
+        execution_model = "heartwood-managed-model"
         if choice.context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
             return
         input_capacity, output_budget = managed_model_token_budgets(choice.context_window)
@@ -2439,7 +2541,7 @@ class SessionGateway:
         platform_id = self.config_store.load().platform_id
         platform_qualification = choice.qualification_for(platform_id)
         self.config_store.select_local_model(
-            artifact_id=model_id,
+            artifact_id=choice.model_id,
             path=path,
             runtime=_runtime_kind(runtime_profile),
             model_id=execution_model,
@@ -2484,6 +2586,72 @@ class SessionGateway:
             settings=settings,
         )
         self._reset_services()
+
+    @_serialized_state
+    def _select_transferred_local_model(
+        self,
+        choice: LocalModelChoice,
+        path: Path,
+        runtime_profile: str,
+    ) -> None:
+        """Register and select one bundle model through the normal managed-model path."""
+        choice = self._trusted_transferred_model_choice(choice)
+        previous_choice = self._local_model_choices.get(choice.model_id)
+        previous_config = self.config_store.load() if self.config_store.configured else None
+        self._local_model_choices[choice.model_id] = choice
+        try:
+            self._select_local_model(choice, path, runtime_profile)
+        except Exception:
+            if previous_choice is None:
+                self._local_model_choices.pop(choice.model_id, None)
+            else:
+                self._local_model_choices[choice.model_id] = previous_choice
+            self.config_store.restore(previous_config)
+            raise
+
+    def _trusted_transferred_model_choice(self, choice: LocalModelChoice) -> LocalModelChoice:
+        """Reject identity collisions and never trust bundle-supplied qualification."""
+        choice.validate()
+        existing = self._local_model_choices.get(choice.model_id)
+        if existing is not None and _model_transfer_identity(choice) != _model_transfer_identity(
+            existing
+        ):
+            raise ModelTransferError(
+                f"model bundle metadata conflicts with the configured catalog: {choice.model_id}"
+            )
+        trusted = self._downloadable_local_model_choices.get(choice.model_id)
+        if trusted is not None and _model_transfer_identity(choice) == _model_transfer_identity(
+            trusted
+        ):
+            return replace(trusted, catalog_source="transferred")
+        return replace(
+            choice,
+            qualification="unvalidated",
+            validated_platforms=(),
+            qualification_test=None,
+            qualification_date=None,
+            qualification_evidence=None,
+        )
+
+    def _model_transfer_warnings(self, choice: LocalModelChoice) -> tuple[str, ...]:
+        """Return shared import/export guidance for one transfer model."""
+        warnings = [
+            "Verify the upstream license and use an institution-approved transfer channel; "
+            "bundle checksums provide integrity, not transfer authorization."
+        ]
+        platform_id = self.config_store.load().platform_id
+        if choice.qualification_for(platform_id) != "qualified":
+            warnings.append(
+                "This exact model configuration has not completed Heartwood qualification "
+                f"for {platform_id}."
+            )
+        if not self._local_runtime_installed(choice.runtime):
+            runtime = "NVIDIA vLLM" if choice.runtime == "vllm" else "portable CPU"
+            warnings.append(
+                f"The {runtime} runtime is not installed in this deployment; import is allowed, "
+                "but launch will remain unavailable until a compatible runtime is provided."
+            )
+        return tuple(warnings)
 
     def _custom_local_model_choice(
         self,
@@ -2703,13 +2871,19 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         runtime = (
             "llama-cpp" if (selection.source_path or "").casefold().endswith(".gguf") else "vllm"
         )
+    source_description = (
+        "Transferred model with verified Heartwood bundle provenance; capability and platform "
+        "qualification remain specific to the recorded configuration."
+        if selection.catalog_source == "transferred"
+        else (
+            "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
+            "license, or suitability."
+        )
+    )
     choice = LocalModelChoice(
         model_id=selection.artifact_id,
         label=selection.display_name,
-        purpose=(
-            "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
-            "license, or suitability."
-        ),
+        purpose=source_description,
         runtime=cast(LocalModelRuntime, runtime),
         source_repository=selection.source_repository,
         source_revision=selection.source_revision,
@@ -2718,7 +2892,7 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         size_bytes=selection.size_bytes,
         minimum_free_bytes=selection.minimum_free_bytes,
         license_posture=selection.license_posture,
-        catalog_source="user-selected",
+        catalog_source=cast(LocalModelCatalogSource, selection.catalog_source),
         artifact_sha256=selection.artifact_sha256,
         context_window=selection.context_window,
         minimum_resource_envelope=selection.minimum_resource_envelope,
@@ -2742,9 +2916,35 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         ignore_patterns=selection.ignore_patterns,
         validated_platforms=selection.validated_platforms,
         qualification_test=selection.qualification_test,
+        qualification_date=selection.qualification_date,
+        qualification_evidence=selection.qualification_evidence,
     )
     choice.validate()
     return choice
+
+
+def _model_transfer_identity(choice: LocalModelChoice) -> tuple[object, ...]:
+    """Return fields that determine transferred weights and runtime behavior."""
+    return (
+        choice.model_id,
+        choice.runtime,
+        choice.source_repository,
+        choice.source_revision,
+        choice.source_path,
+        choice.size_bytes,
+        choice.license_id,
+        choice.license_posture,
+        choice.model_type,
+        choice.context_window,
+        choice.artifact_sha256,
+        choice.precision,
+        choice.maximum_context_window,
+        choice.tool_call_parser,
+        choice.tensor_parallel_size,
+        choice.download_policy,
+        choice.allow_patterns,
+        choice.ignore_patterns,
+    )
 
 
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:

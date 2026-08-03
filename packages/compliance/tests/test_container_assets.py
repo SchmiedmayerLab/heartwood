@@ -231,7 +231,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "FROM heartwood-image-metadata AS runtime-image" in dockerfile
     assert dockerfile.index("uv sync --locked") < dockerfile.index("ARG HEARTWOOD_REVISION=unknown")
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.3.0-beta.1"' in bake
+    assert 'default = "0.3.0-beta.2"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
     assert bake.count('HEARTWOOD_REVISION = "${GIT_SHA}"') == 2
     generic_build = workflow.split("      - name: Build and stage image by digest\n", maxsplit=1)[
@@ -1099,14 +1099,18 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
     assert "HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project" in smoke
     assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
-    assert "coding-agent model must be outside the disposable test project" in coding_agent
+    assert "coding-agent model must be outside disposable project data" in coding_agent
+    assert '"${model_path}" == "${state_root}/models/"*' in coding_agent
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
     assert 'audit_path="${project}/heartwood-audit-export.jsonl"' in coding_agent
     assert 'audit_path="${state_root}/' not in coding_agent
     assert "Checking direct model inference" in coding_agent
     assert "verify_coding_agent_e2e.py" in coding_agent
-    assert "/tmp/heartwood-model-cache/.heartwood/models:/models:ro" in capable_workflow
+    assert "/tmp/heartwood-model-transfer:/transfer:ro" in capable_workflow
+    assert (
+        "/workspace/.heartwood/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+    ) in capable_workflow
     assert "models refresh heartwood" in smoke
     assert "models connect heartwood heartwood-managed-runtime" in smoke
     assert "models add inactive-smoke" in smoke
@@ -1494,6 +1498,11 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "qwen25-7b-instruct-q4_k_m" in capable_workflow
     assert "capable_model_e2e.sh" in capable_workflow
     assert "--network none --read-only" in capable_workflow
+    assert "heartwood models export" in capable_workflow
+    assert "heartwood models inspect-bundle" in capable_workflow
+    assert "heartwood models import" in capable_workflow
+    assert "heartwood runtime start --dry-run" in capable_workflow
+    assert "HEARTWOOD_PRESERVE_PROJECT_MODEL_STATE=1" in capable_workflow
     assert capable_workflow.count("uid=10001,gid=10001,mode=0700") == 2
     assert compose.count("uid=10001,gid=10001,mode=0700") == 2
     assert "not 1 <= len(terminal_executions) <= 3" in qualification

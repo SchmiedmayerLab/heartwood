@@ -94,6 +94,9 @@ export type {
   ModelSelectionRequest,
   ModelSource,
   ModelSourceRequest,
+  ModelTransferExportRequest,
+  ModelTransferImportRequest,
+  ModelTransferInspectRequest,
   SessionCreateRequest,
   SessionRenameRequest,
   SkillInspectRequest,
@@ -142,6 +145,8 @@ export type ModelRepositoryPlan = Api.ModelRepositoryPlanResponse;
 export type LocalModelImportResult = Api.LocalModelImportResponse;
 export type ModelSnapshot = Api.ModelSnapshotResponse;
 export type ModelArtifacts = Api.ModelArtifactsResponse;
+export type ModelTransfer = Api.ModelTransferResponse;
+export type ModelTransferPlan = Api.ModelTransferPlanResponse;
 export type SkillSummary = Api.SkillSummaryResponse;
 export type SkillSettings = Api.SkillSettingsResponse;
 export type SpecialistRole = Api.SpecialistRoleResponse;

@@ -44,6 +44,7 @@ session.platform_capabilities()
 
 Configure the model through `heartwood` or the browser first when possible.
 The notebook API also exposes the shared connection catalog and model-selection methods for programmatic workflows.
+It can inspect, export, import, monitor, and cancel the same verified model transfers as the terminal and browser; use the reviewed sequence in [Move a Model Into an Offline Environment](../models/offline.md).
 
 ## Submit a Task
 

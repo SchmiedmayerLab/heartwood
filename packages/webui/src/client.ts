@@ -31,6 +31,11 @@ import type {
   ModelSource,
   ModelSourceRequest,
   ModelSettings,
+  ModelTransfer,
+  ModelTransferExportRequest,
+  ModelTransferImportRequest,
+  ModelTransferInspectRequest,
+  ModelTransferPlan,
   ModelValidation,
   ProjectReadiness,
   SessionCreateRequest,
@@ -130,6 +135,14 @@ export interface HeartwoodClient {
   importLocalModel(
     request: LocalModelImportRequest,
   ): Promise<LocalModelImportResult>;
+  inspectModelBundle(
+    request: ModelTransferInspectRequest,
+  ): Promise<ModelTransferPlan>;
+  exportLocalModel(request: ModelTransferExportRequest): Promise<ModelTransfer>;
+  importModelBundle(
+    request: ModelTransferImportRequest,
+  ): Promise<ModelTransfer>;
+  cancelModelTransfer(transferId: string): Promise<ModelTransfer>;
   getSkillSettings(): Promise<SkillSettings>;
   getSpecialistSettings(): Promise<SpecialistSettings>;
   inspectSkill(source: string): Promise<SkillSummary>;
@@ -488,6 +501,53 @@ export class GatewayClient implements HeartwoodClient {
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }),
+    );
+  }
+
+  async inspectModelBundle(
+    request: ModelTransferInspectRequest,
+  ): Promise<ModelTransferPlan> {
+    return parseJsonResponse<ModelTransferPlan>(
+      await fetch(this.url("/settings/models/transfers/inspect"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async exportLocalModel(
+    request: ModelTransferExportRequest,
+  ): Promise<ModelTransfer> {
+    return parseJsonResponse<ModelTransfer>(
+      await fetch(this.url("/settings/models/transfers/exports"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async importModelBundle(
+    request: ModelTransferImportRequest,
+  ): Promise<ModelTransfer> {
+    return parseJsonResponse<ModelTransfer>(
+      await fetch(this.url("/settings/models/transfers/imports"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async cancelModelTransfer(transferId: string): Promise<ModelTransfer> {
+    return parseJsonResponse<ModelTransfer>(
+      await fetch(
+        this.url(
+          `/settings/models/transfers/${encodeURIComponent(transferId)}`,
+        ),
+        { method: "DELETE" },
+      ),
     );
   }
 

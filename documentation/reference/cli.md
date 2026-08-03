@@ -53,10 +53,18 @@ Use `--model-source openai-subscription` for ChatGPT account access; the first s
 | `heartwood models managed` | Show qualified recommendations, not-tested configurations, and user-selected models Heartwood can run |
 | `heartwood models inspect OWNER/MODEL` | Inspect a public Hugging Face repository without downloading weights |
 | `heartwood models download MODEL` | Download and select a recommendation or `OWNER/MODEL` repository |
-| `heartwood models import PATH ...` | Copy and select an existing GGUF or vLLM snapshot with provenance |
+| `heartwood models export PATH` | Verify and export the selected model as a portable bundle without replacing an existing file |
+| `heartwood models inspect-bundle PATH` | Verify bundle structure and display model, source, license, runtime, size, and warnings without importing |
+| `heartwood models import BUNDLE` | Review, verify, atomically import, and select a portable bundle |
+| `heartwood models import PATH --source ...` | Copy and select a raw GGUF or vLLM snapshot with explicit provenance |
 
 `models add`, `models select`, and `models remove` manage advanced non-secret LiteLLM-compatible profiles.
 Use guided setup for normal provider and managed connections.
+
+Bundle imports ask for explicit license approval.
+Use `--approve-license` only in automation that already presented and approved the same bundle plan.
+Export, inspection, import, progress, cancellation, and final selection use the same gateway contract in the terminal, browser, and notebook bridge.
+See [Move a Model Into an Offline Environment](../models/offline.md) for the complete connected-to-offline workflow.
 
 `heartwood models forget openai-subscription` signs out of ChatGPT for the current operating-system user.
 The selected non-secret model profile remains in the project until another connection is selected.

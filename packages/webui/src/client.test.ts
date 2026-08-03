@@ -745,6 +745,7 @@ describe("GatewayClient", () => {
       snapshots: [],
       models: [],
       downloads: [],
+      transfers: [],
     };
     const download = {
       model_id: "reviewed-model",
@@ -775,6 +776,72 @@ describe("GatewayClient", () => {
         body: JSON.stringify({ model_id: "reviewed-model" }),
         method: "POST",
       }),
+    );
+  });
+
+  it("inspects, starts, and cancels verified model transfers", async () => {
+    const plan = { bundle_path: "/transfer/model.zip" };
+    const exportTransfer = {
+      transfer_id: "export-1",
+      kind: "export",
+      status: "running",
+    };
+    const importTransfer = {
+      transfer_id: "import-1",
+      kind: "import",
+      status: "running",
+    };
+    const cancelled = { ...importTransfer, status: "cancelled" };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(plan)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(exportTransfer)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(importTransfer)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(cancelled)));
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+
+    await client.inspectModelBundle({ path: "/transfer/model.zip" });
+    await client.exportLocalModel({ path: "/transfer/export.zip" });
+    await client.importModelBundle({
+      approved: true,
+      manifest_sha256: "a".repeat(64),
+      path: "/transfer/model.zip",
+    });
+    await client.cancelModelTransfer("import-1");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models/transfers/inspect",
+      expect.objectContaining({
+        body: JSON.stringify({ path: "/transfer/model.zip" }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/proxy/8767/settings/models/transfers/exports",
+      expect.objectContaining({
+        body: JSON.stringify({ path: "/transfer/export.zip" }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      "/proxy/8767/settings/models/transfers/imports",
+      expect.objectContaining({
+        body: JSON.stringify({
+          approved: true,
+          manifest_sha256: "a".repeat(64),
+          path: "/transfer/model.zip",
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/proxy/8767/settings/models/transfers/import-1",
+      { method: "DELETE" },
     );
   });
 

@@ -1612,6 +1612,69 @@ def test_cli_imports_a_local_model_and_forgets_provider_credentials(
     assert (project / ".heartwood" / "models").is_dir()
 
 
+def test_cli_exports_inspects_and_imports_a_verified_model_bundle(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_project = tmp_path / "connected-analysis"
+    offline_project = tmp_path / "offline-analysis"
+    source = tmp_path / "model.gguf"
+    source.write_bytes(b"GGUFsynthetic-model")
+    bundle = tmp_path / "approved-transfer" / "research-model.zip"
+    bundle.parent.mkdir()
+    _install_deterministic_gateway(monkeypatch)
+
+    assert (
+        _run(
+            connected_project,
+            monkeypatch,
+            [
+                "models",
+                "import",
+                str(source),
+                "--source",
+                "example/research-model",
+                "--revision",
+                "2" * 40,
+                "--license",
+                "Apache-2.0",
+            ],
+        )
+        == 0
+    )
+    assert _run(connected_project, monkeypatch, ["models", "export", str(bundle)]) == 0
+    assert _run(offline_project, monkeypatch, ["models", "inspect-bundle", str(bundle)]) == 0
+    assert (
+        _run(
+            offline_project,
+            monkeypatch,
+            ["models", "import", str(bundle), "--approve-license"],
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert "Model bundle is ready" in captured.out
+    assert "Heartwood model bundle" in captured.out
+    assert "Repository: example/research-model" in captured.out
+    assert "License: Apache-2.0" in captured.out
+    assert "Run `heartwood` to use it" in captured.out
+    assert "Large models can take several minutes" in captured.err
+    assert bundle.is_file()
+    selected = (
+        RealSessionGateway(
+            project=ProjectContext(offline_project),
+            env={},
+            backend_id="deterministic",
+        )
+        .config_store.load()
+        .local_model
+    )
+    assert selected is not None
+    assert selected.catalog_source == "transferred"
+
+
 def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

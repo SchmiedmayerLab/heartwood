@@ -26,6 +26,7 @@ from heartwood.gateway import (
     ModelSnapshotCatalog,
     download_model_artifact,
     load_model_artifact_catalog,
+    verify_model_artifact,
 )
 
 
@@ -64,6 +65,23 @@ def test_artifact_download_verifies_size_and_checksum(tmp_path: Path) -> None:
     )
 
     assert path.read_bytes() == content
+
+
+def test_artifact_verification_honors_a_cooperative_checkpoint(tmp_path: Path) -> None:
+    content = b"reviewed-model-artifact"
+    path = tmp_path / "model.gguf"
+    path.write_bytes(content)
+
+    def cancel() -> None:
+        raise RuntimeError("verification cancelled")
+
+    with pytest.raises(RuntimeError, match="verification cancelled"):
+        verify_model_artifact(
+            path,
+            expected_size_bytes=len(content),
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+            checkpoint=cancel,
+        )
 
 
 def test_recommended_artifact_requires_dated_platform_qualification() -> None:

@@ -36,7 +36,7 @@ from heartwood.gateway._model_snapshots import (
 )
 
 type LocalModelRuntime = Literal["llama-cpp", "vllm"]
-type LocalModelCatalogSource = Literal["catalog", "user-selected"]
+type LocalModelCatalogSource = Literal["catalog", "transferred", "user-selected"]
 
 _SPLIT_GGUF = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.IGNORECASE)
 _SAFETENSORS_WEIGHTS = re.compile(

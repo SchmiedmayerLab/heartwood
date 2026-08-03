@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Literal, cast
 
@@ -54,6 +55,7 @@ from heartwood.notebook import (
     render_widgets,
 )
 from heartwood.notebook._widgets import WidgetSpec, _section_html
+from heartwood.schemas import ModelTransferResponse
 from heartwood.session import JsonValue, SessionCommand
 
 
@@ -448,6 +450,60 @@ def test_notebook_imports_a_local_model_and_releases_gateway(tmp_path: Path) -> 
     imported_path = Path(imported["path"])
     assert imported_path.is_file()
     assert gateway.config_store.load().local_model is not None
+
+
+def test_notebook_uses_the_shared_verified_model_transfer_contract(tmp_path: Path) -> None:
+    source_root = tmp_path / "connected-project"
+    source_root.mkdir()
+    source_project = ProjectContext(source_root)
+    source = tmp_path / "model.gguf"
+    source.write_bytes(b"GGUFsynthetic-model")
+    connected = NotebookSession(
+        project=source_project,
+        gateway=SessionGateway(project=source_project, env={}, backend_id="deterministic"),
+    )
+    connected.import_local_model(
+        source,
+        source_repository="example/research-model-gguf",
+        source_revision="a" * 40,
+        license_posture="Apache-2.0",
+    )
+    bundle = tmp_path / "approved-transfer" / "model.zip"
+    bundle.parent.mkdir()
+
+    exported = connected.export_local_model(bundle)
+    exported = _wait_for_model_transfer(connected, exported["transfer_id"])
+
+    assert exported["status"] == "ready"
+    assert bundle.is_file()
+
+    offline_root = tmp_path / "offline-project"
+    offline_root.mkdir()
+    offline_project = ProjectContext(offline_root)
+    offline = NotebookSession(
+        project=offline_project,
+        gateway=SessionGateway(project=offline_project, env={}, backend_id="deterministic"),
+    )
+    plan = offline.inspect_model_bundle(bundle)
+    with pytest.raises(ValueError, match="explicit approval"):
+        offline.import_model_bundle(
+            bundle,
+            approved=False,
+            manifest_sha256=plan["manifest_sha256"],
+        )
+    imported = offline.import_model_bundle(
+        bundle,
+        approved=True,
+        manifest_sha256=plan["manifest_sha256"],
+    )
+    imported = _wait_for_model_transfer(offline, imported["transfer_id"])
+
+    assert plan["model"]["source_revision"] == "a" * 40
+    assert imported["status"] == "ready"
+    selected = offline.gateway.config_store.load().local_model
+    assert selected is not None
+    assert selected.catalog_source == "transferred"
+    assert offline.model_artifacts()["transfers"][0]["status"] == "ready"
 
 
 def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Path) -> None:
@@ -978,3 +1034,15 @@ def _deterministic_session(workspace: Path, session_id: str) -> NotebookSession:
         backend_id="deterministic",
     )
     return NotebookSession(project=project, session_id=session_id, gateway=gateway)
+
+
+def _wait_for_model_transfer(
+    session: NotebookSession,
+    transfer_id: str,
+) -> ModelTransferResponse:
+    deadline = time.monotonic() + 2
+    status = session.model_transfer_status(transfer_id)
+    while status["status"] in {"running", "cancelling"} and time.monotonic() < deadline:
+        time.sleep(0.01)
+        status = session.model_transfer_status(transfer_id)
+    return status

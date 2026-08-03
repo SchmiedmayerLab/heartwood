@@ -796,6 +796,11 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       snapshots: [],
       models: [],
       downloads: [],
+      transfers: [],
+      gpu_environment: {
+        platform_id: "generic",
+        capacities: [],
+      },
     }),
   );
   await page.route("**/settings/models/source", async (route) => {

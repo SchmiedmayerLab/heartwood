@@ -35,7 +35,7 @@ nav = [
         { "Hosted and Managed Models" = "models/connections.md" },
         { "Choose a Heartwood-Managed Model" = "models/choose-managed.md" },
         { "Run a Model With Heartwood" = "models/run-with-heartwood.md" },
-        { "Work Without Internet Access" = "models/offline.md" },
+        { "Move a Model Offline" = "models/offline.md" },
     ] },
     { "Platforms" = [
         { "Choose a Platform" = "platforms/index.md" },

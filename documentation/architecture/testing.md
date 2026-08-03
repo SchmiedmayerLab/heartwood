@@ -34,6 +34,10 @@ The shared coding-agent acceptance test performs direct model inference and then
 It emits a machine-readable qualification record containing the exact runtime, model revision, GPU, driver, context, tensor parallelism, server parser, and agent tool mode.
 The CPU capable-model job and GPU qualification wrapper use this same acceptance contract instead of maintaining separate agent scenarios.
 
+The CPU capable-model job obtains its model through the complete portable-transfer contract.
+It downloads and verifies the pinned model in a connected project, exports a bundle, mounts only that bundle into an empty project with `--network none`, imports and selects it after explicit license approval, verifies the normal launcher plan, and then runs the shared coding-agent acceptance task against the imported copy.
+Deterministic tests additionally cover reproducible bundle bytes, GGUF and vLLM snapshots, untrusted qualification claims, path and symbolic-link attacks, tampered and incomplete payloads, incompatible runtime metadata, insufficient or modified destinations, cancellation cleanup, interrupted retries, duplicate imports, process restart, and the absence of a repository download path for transferred models.
+
 OpenHands SDK conformance tests use the real conversation persistence layer and deterministic `TestLLM`.
 They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state fails closed as an unknown outcome, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
 Workspace contract tests qualify the pinned OpenHands Git change and diff APIs, non-Git typed-action fallback, canonical path handling, nested private-state exclusion, traversal and symlink rejection, special and binary files, UTF-8 boundaries, limits, audit scrubbing, and cross-interface transport.

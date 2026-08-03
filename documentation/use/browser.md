@@ -41,6 +41,11 @@ Stop the launching command with `Ctrl-C`, then run `heartwood --interface web` a
 Heartwood starts and supervises the selected model before reopening the page.
 Hosted and Stanford AI API Gateway connections do not require this restart.
 
+For an offline destination, expand **Move a model between environments** in model settings.
+The browser can create or inspect a verified Heartwood model bundle at a path visible to the gateway, display license and platform warnings, and report import or export progress with cancellation.
+It uses the same project-local selection as the terminal; it does not upload or download the bundle through the browser.
+Follow [Move a Model Into an Offline Environment](../models/offline.md) for the complete transfer boundary.
+
 ## Work With a Session
 
 The first browser conversation is the same **Main session** used by the terminal and notebook defaults. Choose a named session explicitly when you want a separate conversation.

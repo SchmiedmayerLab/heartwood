@@ -46,7 +46,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.1 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 

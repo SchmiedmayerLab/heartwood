@@ -41,6 +41,8 @@ from heartwood.schemas import (
     ModelDownloadResponse,
     ModelRepositoryPlanResponse,
     ModelSettingsResponse,
+    ModelTransferPlanResponse,
+    ModelTransferResponse,
     ModelValidationResponse,
     PlatformCapabilitiesResponse,
     ProjectReadinessResponse,
@@ -316,6 +318,36 @@ class NotebookSession:
             license_posture=license_posture,
             context_window=context_window,
         )
+
+    def inspect_model_bundle(self, path: Path) -> ModelTransferPlanResponse:
+        """Inspect one portable model bundle without changing project state."""
+        return self.gateway.inspect_local_model_bundle(path)
+
+    def export_local_model(self, path: Path) -> ModelTransferResponse:
+        """Start a verified export of the selected model."""
+        return self.gateway.export_local_model(path)
+
+    def import_model_bundle(
+        self,
+        path: Path,
+        *,
+        approved: bool,
+        manifest_sha256: str,
+    ) -> ModelTransferResponse:
+        """Start an atomic bundle import after explicit license review."""
+        return self.gateway.import_local_model_bundle(
+            path,
+            approved=approved,
+            manifest_sha256=manifest_sha256,
+        )
+
+    def model_transfer_status(self, transfer_id: str) -> ModelTransferResponse:
+        """Return current byte progress for one model transfer."""
+        return self.gateway.model_transfer_status(transfer_id)
+
+    def cancel_model_transfer(self, transfer_id: str) -> ModelTransferResponse:
+        """Request cooperative cancellation of one active model transfer."""
+        return self.gateway.cancel_model_transfer(transfer_id)
 
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared action-confirmation settings."""

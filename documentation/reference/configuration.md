@@ -16,7 +16,7 @@ Normal users do not set a Heartwood home, workspace, state root, model root, or 
 | `.heartwood/config.toml` | Non-secret platform, model, action, policy, audit-signer profile, and Heartwood-managed model selection |
 | `.heartwood/state.json` | State-schema marker |
 | `.heartwood/sessions/` | Session metadata, events, audit chains, exports, and OpenHands persistence |
-| `.heartwood/models/` | Downloaded or imported model artifacts and provenance |
+| `.heartwood/models/` | Downloaded or verified bundle-imported model artifacts and provenance |
 | `.heartwood/skills/` | Explicitly installed project Skills |
 | `.heartwood/audit/` | Project-level audit artifacts |
 | `.heartwood/runtime/` | Runtime process and readiness state |

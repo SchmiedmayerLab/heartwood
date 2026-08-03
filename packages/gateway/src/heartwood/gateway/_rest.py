@@ -32,6 +32,7 @@ from heartwood.gateway._model_settings import (
     ModelSettingsError,
     model_profile_from_mapping,
 )
+from heartwood.gateway._model_transfer import ModelTransferError
 from heartwood.gateway._project_config import ProjectConfigError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
@@ -51,6 +52,9 @@ from heartwood.schemas import (
     ModelRepositoryRequest,
     ModelSelectionRequest,
     ModelSourceRequest,
+    ModelTransferExportRequest,
+    ModelTransferImportRequest,
+    ModelTransferInspectRequest,
     SessionCreateRequest,
     SessionRenameRequest,
     SkillInspectRequest,
@@ -228,6 +232,47 @@ class RestGateway:
             return self._handle_custom_model_download(body=request.body)
         if parts == ("settings", "models", "imports") and request.method == "POST":
             return self._handle_local_model_import(body=request.body)
+        if parts == ("settings", "models", "transfers", "inspect") and request.method == "POST":
+            inspect_payload = _request_body(ModelTransferInspectRequest, request.body)
+            if isinstance(inspect_payload, RestResponse):
+                return inspect_payload
+            try:
+                plan = self.gateway.inspect_local_model_bundle(Path(inspect_payload.path))
+            except (ModelTransferError, OSError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(plan))
+        if parts == ("settings", "models", "transfers", "exports") and request.method == "POST":
+            export_payload = _request_body(ModelTransferExportRequest, request.body)
+            if isinstance(export_payload, RestResponse):
+                return export_payload
+            try:
+                transfer = self.gateway.export_local_model(Path(export_payload.path))
+            except (ModelRepositoryError, ModelTransferError, ProjectConfigError, OSError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=202, body=_json_object(transfer))
+        if parts == ("settings", "models", "transfers", "imports") and request.method == "POST":
+            import_payload = _request_body(ModelTransferImportRequest, request.body)
+            if isinstance(import_payload, RestResponse):
+                return import_payload
+            try:
+                transfer = self.gateway.import_local_model_bundle(
+                    Path(import_payload.path),
+                    approved=import_payload.approved,
+                    manifest_sha256=import_payload.manifest_sha256,
+                )
+            except (ModelRepositoryError, ModelTransferError, ProjectConfigError, OSError) as error:
+                return _error(422, error)
+            return RestResponse(status_code=202, body=_json_object(transfer))
+        if (
+            len(parts) == 4
+            and parts[:3] == ("settings", "models", "transfers")
+            and request.method == "DELETE"
+        ):
+            try:
+                transfer = self.gateway.cancel_model_transfer(parts[3])
+            except ModelTransferError as error:
+                return _error(404, error)
+            return RestResponse(status_code=200, body=_json_object(transfer))
         if parts == ("settings", "models", "validation") and request.method == "GET":
             profile_id = parse_qs(parsed.query).get("profile_id", [None])[0]
             try:

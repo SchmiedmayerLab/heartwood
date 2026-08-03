@@ -24,6 +24,9 @@ export type HeartwoodApiContract =
   | ModelRepositoryRequest
   | ModelSelectionRequest
   | ModelSourceRequest
+  | ModelTransferExportRequest
+  | ModelTransferImportRequest
+  | ModelTransferInspectRequest
   | SessionCreateRequest
   | SessionRenameRequest
   | SkillInspectRequest
@@ -40,6 +43,8 @@ export type ApiResponse =
   | ModelDownloadResponse
   | ModelRepositoryPlanResponse
   | ModelSettingsResponse
+  | ModelTransferPlanResponse
+  | ModelTransferResponse
   | ModelValidationResponse
   | PlatformCapabilitiesResponse
   | ProjectReadinessResponse
@@ -169,7 +174,7 @@ export interface LocalModelChoiceResponse {
   artifact_sha256: string | null;
   availability_reason: string;
   available: boolean;
-  catalog_source: "catalog" | "user-selected";
+  catalog_source: "catalog" | "transferred" | "user-selected";
   context_window: number;
   download_policy: string | null;
   ignore_patterns: string[];
@@ -218,6 +223,7 @@ export interface ModelArtifactsResponse {
   schema_version: "heartwood.local-model-catalog.v2";
   snapshot_schema_version: "heartwood.model-snapshot-catalog.v3";
   snapshots: ModelSnapshotResponse[];
+  transfers: ModelTransferResponse[];
 }
 /**
  * Pinned single-file local model metadata.
@@ -312,6 +318,29 @@ export interface ModelSnapshotResponse {
   tier: LocalModelTier;
   tool_call_parser: ToolCallParser;
   validated_platforms: string[];
+}
+/**
+ * Background model export or import status.
+ */
+export interface ModelTransferResponse {
+  bundle_path: string;
+  bytes_processed: number;
+  bytes_total: number;
+  error: string | null;
+  kind: "export" | "import";
+  label: string;
+  model_id: string;
+  phase:
+    | "preparing"
+    | "verifying"
+    | "exporting"
+    | "importing"
+    | "selecting"
+    | "complete";
+  result_path: string | null;
+  status: "cancelled" | "cancelling" | "error" | "ready" | "running";
+  transfer_id: string;
+  warnings: string[];
 }
 /**
  * Discovered models for one connection.
@@ -442,6 +471,18 @@ export interface ModelSourceOptionResponse {
   label: string;
   selected: boolean;
   source_id: ModelSource;
+}
+/**
+ * Content-safe bundle metadata shown before import approval.
+ */
+export interface ModelTransferPlanResponse {
+  bundle_path: string;
+  bundle_size_bytes: number;
+  file_count: number;
+  manifest_sha256: string;
+  model: LocalModelChoiceResponse;
+  runtime_profile: "llama-cpp-cpu" | "vllm-cuda";
+  warnings: string[];
 }
 /**
  * Selected model, credential, confirmation, and policy validation.
@@ -796,6 +837,26 @@ export interface ModelSelectionRequest {
  */
 export interface ModelSourceRequest {
   source_id: ModelSource;
+}
+/**
+ * Export the selected Heartwood-managed model to one new bundle path.
+ */
+export interface ModelTransferExportRequest {
+  path: string;
+}
+/**
+ * Import one inspected bundle after explicit license review.
+ */
+export interface ModelTransferImportRequest {
+  approved: boolean;
+  manifest_sha256: string;
+  path: string;
+}
+/**
+ * Inspect one portable Heartwood model bundle without importing it.
+ */
+export interface ModelTransferInspectRequest {
+  path: string;
 }
 /**
  * Create one session with an optional title.
