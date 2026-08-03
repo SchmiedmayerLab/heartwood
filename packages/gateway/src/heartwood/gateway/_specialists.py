@@ -268,6 +268,9 @@ def _validate_openhands_boundary(
         capability == SpecialistCapability.PROJECT_ACTIONS
         and availability == SpecialistAvailability.AVAILABLE
     ):
+        # Upstream child interruption and event visibility remain incomplete:
+        # https://github.com/OpenHands/software-agent-sdk/issues/4107
+        # https://github.com/OpenHands/software-agent-sdk/issues/3907
         raise SpecialistCatalogError(
             f"project-actions specialist {definition.name} must remain unavailable until "
             "child actions are recoverable"

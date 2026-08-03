@@ -112,6 +112,7 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
         },
         "tool_labels": {
             "file_editor": "File Change",
+            "task": "Specialist Review",
             "terminal": "Terminal Command",
         },
         "unknown_risk_label": "Not Classified",
