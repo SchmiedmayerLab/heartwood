@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from heartwood.schemas import (
     ApprovalRecord,
     AuditCheckpoint,
+    AuditCheckpointSignature,
     AuditCheckpointStatement,
     AuditEvent,
     AuditRetention,
@@ -33,8 +34,10 @@ from heartwood.schemas import (
 def test_schema_inventory_is_versioned() -> None:
     expected = {
         "approval-record.v1",
+        "audit-checkpoint-sign-request.v1",
+        "audit-checkpoint-signature.v1",
         "audit-checkpoint-statement.v1",
-        "audit-checkpoint.v1",
+        "audit-checkpoint.v2",
         "audit-event.v1",
         "audit-retention.v1",
         "confirmation-request.v1",
@@ -155,11 +158,15 @@ def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> 
             retain_until="2033-08-02",
         ),
     )
-    checkpoint = AuditCheckpoint(
-        statement=statement,
-        signing_key_id=f"sha256:{'c' * 64}",
-        signature=base64.b64encode(bytes(64)).decode("ascii"),
+    signature = AuditCheckpointSignature(
+        algorithm="ed25519",
+        signer_id="carina-records",
+        key_id="audit-signing",
+        key_version="2026-08",
+        public_key_sha256=f"sha256:{'c' * 64}",
+        value=base64.b64encode(bytes(64)).decode("ascii"),
     )
+    checkpoint = AuditCheckpoint(statement=statement, signature=signature)
 
     assert checkpoint.statement == statement
 
@@ -169,7 +176,7 @@ def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> 
         AuditCheckpointStatement.model_validate(invalid)
 
     invalid_checkpoint = checkpoint.model_dump(mode="json")
-    invalid_checkpoint["signature"] = "not-base64!"
+    invalid_checkpoint["signature"]["value"] = "not-base64!"
     with pytest.raises(ValidationError, match="canonical Base64"):
         AuditCheckpoint.model_validate(invalid_checkpoint)
 
@@ -187,8 +194,13 @@ def test_audit_checkpoint_requires_consistent_chain_and_retention_metadata() -> 
         with pytest.raises(ValidationError, match=message):
             AuditCheckpointStatement.model_validate(invalid_created_at)
 
-    invalid_checkpoint["signature"] = base64.b64encode(bytes(32)).decode("ascii")
-    with pytest.raises(ValidationError, match="canonical Ed25519"):
+    invalid_checkpoint["signature"]["value"] = base64.b64encode(bytes(32)).decode("ascii")
+    with pytest.raises(ValidationError, match="Ed25519 signature must contain 64 bytes"):
+        AuditCheckpoint.model_validate(invalid_checkpoint)
+
+    invalid_checkpoint = checkpoint.model_dump(mode="json")
+    invalid_checkpoint["signature"]["key_version"] = "version\u0000"
+    with pytest.raises(ValidationError, match="string_pattern_mismatch"):
         AuditCheckpoint.model_validate(invalid_checkpoint)
 
 

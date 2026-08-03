@@ -1557,6 +1557,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "heartwood-persistence" },
     { name = "heartwood-schemas" },
+    { name = "tomli-w" },
 ]
 
 [package.metadata]
@@ -1564,6 +1565,7 @@ requires-dist = [
     { name = "cryptography", specifier = "==49.0.0" },
     { name = "heartwood-persistence", editable = "packages/persistence" },
     { name = "heartwood-schemas", editable = "packages/schemas" },
+    { name = "tomli-w", specifier = "==1.2.0" },
 ]
 
 [[package]]

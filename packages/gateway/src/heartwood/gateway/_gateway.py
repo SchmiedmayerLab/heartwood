@@ -24,7 +24,11 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.audit import (
     AuditCheckpointVerification,
     AuditVerification,
+    CheckpointSigner,
+    CheckpointSignerProfile,
+    CheckpointSignerRegistry,
     create_audit_checkpoint,
+    discover_checkpoint_signer_registry,
     verify_audit_checkpoint,
 )
 from heartwood.core_adapter import (
@@ -373,6 +377,9 @@ class SessionGateway:
         model_catalog_service: ModelCatalogService | None = None,
         model_repository: HuggingFaceModelRepository | None = None,
         credential_store: CredentialStore | None = None,
+        checkpoint_signer_registry: CheckpointSignerRegistry | None = None,
+        checkpoint_signer_factory: Callable[[CheckpointSignerProfile], CheckpointSigner]
+        | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         backend_id: str = "auto",
@@ -381,6 +388,9 @@ class SessionGateway:
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
+        self._checkpoint_signer_registry_override = checkpoint_signer_registry
+        self._checkpoint_signer_registry_cache: CheckpointSignerRegistry | None = None
+        self._checkpoint_signer_factory = checkpoint_signer_factory
         self._state_lock: AbstractContextManager[object] = RLock()
         self._stream_lock = RLock()
         self._stream_epoch = uuid4().hex
@@ -679,13 +689,17 @@ class SessionGateway:
         deployment_id: str,
         retention_policy_id: str,
         retain_until: str,
-        signing_key: Path,
     ) -> AuditCheckpointVerification:
         """Generate and sign an authoritative export outside the agent project."""
         resolved_output = self._deployment_owned_path(output, label="checkpoint output")
-        resolved_key = self._deployment_owned_path(signing_key, label="signing key")
         if resolved_output.exists() or resolved_output.is_symlink():
             raise ProjectStateError("audit checkpoint output already exists")
+        profile = self.active_checkpoint_signer()
+        signer = (
+            profile.signer()
+            if self._checkpoint_signer_factory is None
+            else profile.validating_signer(self._checkpoint_signer_factory(profile))
+        )
         self.handle(
             SessionCommand(
                 command_id=f"audit-checkpoint-{uuid4().hex}",
@@ -706,19 +720,66 @@ class SessionGateway:
             deployment_id=deployment_id,
             retention_policy_id=retention_policy_id,
             retain_until=retain_until,
-            signing_key=resolved_key,
+            signer=signer,
         )
+
+    def checkpoint_signers(self) -> tuple[CheckpointSignerProfile, ...]:
+        """Return deployment-approved signer profiles without resolving credentials."""
+        return self._checkpoint_signer_registry().profiles
+
+    def active_checkpoint_signer(self) -> CheckpointSignerProfile:
+        """Resolve the project selection or deployment-owned default profile."""
+        selected = self.config_store.load().audit_settings.signer_profile
+        return self._checkpoint_signer_registry().profile(selected)
+
+    def select_checkpoint_signer(self, profile_id: str | None) -> CheckpointSignerProfile:
+        """Persist a project selection after deployment-registry validation."""
+        registry = self._checkpoint_signer_registry()
+        profile = registry.profile(profile_id)
+        self.config_store.select_checkpoint_signer(profile_id)
+        return profile
 
     def verify_audit_checkpoint(
         self,
         *,
         bundle: Path,
-        public_key: Path,
+        public_key: Path | None = None,
     ) -> AuditCheckpointVerification:
         """Verify an authoritative export with a deployment-owned public key."""
         resolved_bundle = self._deployment_owned_path(bundle, label="checkpoint bundle")
-        resolved_key = self._deployment_owned_path(public_key, label="trusted public key")
-        return verify_audit_checkpoint(bundle=resolved_bundle, public_key=resolved_key)
+        profile = self.active_checkpoint_signer() if public_key is None else None
+        key = profile.trusted_public_key if profile is not None else public_key
+        if key is None:  # pragma: no cover - branch is constrained above
+            raise ProjectStateError("trusted public key is unavailable")
+        resolved_key = self._deployment_owned_path(key, label="trusted public key")
+        verification = verify_audit_checkpoint(
+            bundle=resolved_bundle,
+            public_key=resolved_key,
+        )
+        if profile is not None:
+            profile.validate_signature(verification.checkpoint.signature)
+        return verification
+
+    def _checkpoint_signer_registry(self) -> CheckpointSignerRegistry:
+        if self._checkpoint_signer_registry_cache is not None:
+            return self._checkpoint_signer_registry_cache
+        registry = self._checkpoint_signer_registry_override or discover_checkpoint_signer_registry(
+            self.env
+        )
+        if registry.source is not None:
+            self._deployment_owned_path(registry.source, label="signer registry")
+        for profile in registry.profiles:
+            self._deployment_owned_path(
+                profile.trusted_public_key,
+                label="trusted public key",
+            )
+            if profile.authorization_token_file is not None:
+                self._deployment_owned_path(
+                    profile.authorization_token_file,
+                    label="signer authorization token",
+                )
+        self._checkpoint_signer_registry_cache = registry
+        return registry
 
     def _deployment_owned_path(self, path: Path, *, label: str) -> Path:
         resolved = self._resolve_audit_path(path, label=label)

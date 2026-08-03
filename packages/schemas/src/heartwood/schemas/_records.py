@@ -30,9 +30,12 @@ __all__ = [
     "ActionConfirmationMode",
     "ApprovalRecord",
     "AuditCheckpoint",
+    "AuditCheckpointSignRequest",
+    "AuditCheckpointSignature",
     "AuditCheckpointStatement",
     "AuditEvent",
     "AuditRetention",
+    "CheckpointSignatureAlgorithm",
     "ConfirmationRequest",
     "DetectorEvidence",
     "EgressAttestationRecord",
@@ -46,6 +49,7 @@ __all__ = [
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
 type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
+type CheckpointSignatureAlgorithm = Literal["ed25519", "ecdsa-p256-sha256"]
 type Decision = Literal["allow", "deny"]
 
 
@@ -181,25 +185,52 @@ class AuditCheckpointStatement(_HeartwoodRecord):
         return self
 
 
-class AuditCheckpoint(_HeartwoodRecord):
-    """Signed deployment checkpoint for one authoritative audit export."""
+class AuditCheckpointSignature(_HeartwoodRecord):
+    """Provider-neutral signature and immutable signing-key identity."""
 
-    schema_version: Literal["heartwood.audit-checkpoint.v1"] = "heartwood.audit-checkpoint.v1"
-    statement: AuditCheckpointStatement
-    signature_algorithm: Literal["ed25519"] = "ed25519"
-    signing_key_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    signature: str = Field(min_length=1)
+    schema_version: Literal["heartwood.audit-checkpoint-signature.v1"] = (
+        "heartwood.audit-checkpoint-signature.v1"
+    )
+    algorithm: CheckpointSignatureAlgorithm
+    signer_id: str = Field(pattern=_SAFE_IDENTIFIER_PATTERN)
+    key_id: str = Field(pattern=r"^[\x21-\x7e]{1,512}$")
+    key_version: str = Field(pattern=r"^[\x21-\x7e]{1,512}$")
+    public_key_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    value: str = Field(min_length=1)
 
-    @field_validator("signature")
+    @field_validator("value")
     @classmethod
     def _validate_signature(cls, value: str) -> str:
         try:
             decoded = base64.b64decode(value, validate=True)
         except binascii.Error as error:
             raise ValueError("signature must be canonical Base64") from error
-        if len(decoded) != 64 or base64.b64encode(decoded).decode("ascii") != value:
-            raise ValueError("signature must be a canonical Ed25519 signature")
+        if not decoded or len(decoded) > 1024 or base64.b64encode(decoded).decode("ascii") != value:
+            raise ValueError("signature must be bounded canonical Base64")
         return value
+
+    @model_validator(mode="after")
+    def _validate_algorithm_encoding(self) -> AuditCheckpointSignature:
+        if self.algorithm == "ed25519" and len(base64.b64decode(self.value)) != 64:
+            raise ValueError("Ed25519 signature must contain 64 bytes")
+        return self
+
+
+class AuditCheckpointSignRequest(_HeartwoodRecord):
+    """Canonical statement submitted to an isolated checkpoint signer."""
+
+    schema_version: Literal["heartwood.audit-checkpoint-sign-request.v1"] = (
+        "heartwood.audit-checkpoint-sign-request.v1"
+    )
+    statement: AuditCheckpointStatement
+
+
+class AuditCheckpoint(_HeartwoodRecord):
+    """Signed deployment checkpoint for one authoritative audit export."""
+
+    schema_version: Literal["heartwood.audit-checkpoint.v2"] = "heartwood.audit-checkpoint.v2"
+    statement: AuditCheckpointStatement
+    signature: AuditCheckpointSignature
 
 
 class DetectorEvidence(_HeartwoodRecord):
@@ -302,8 +333,10 @@ class ApprovalRecord(_HeartwoodRecord):
 
 _SCHEMA_MODELS: Mapping[str, type[_HeartwoodRecord]] = {
     "approval-record.v1": ApprovalRecord,
+    "audit-checkpoint-sign-request.v1": AuditCheckpointSignRequest,
+    "audit-checkpoint-signature.v1": AuditCheckpointSignature,
     "audit-checkpoint-statement.v1": AuditCheckpointStatement,
-    "audit-checkpoint.v1": AuditCheckpoint,
+    "audit-checkpoint.v2": AuditCheckpoint,
     "audit-event.v1": AuditEvent,
     "audit-retention.v1": AuditRetention,
     "confirmation-request.v1": ConfirmationRequest,

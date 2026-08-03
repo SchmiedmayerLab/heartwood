@@ -16,7 +16,7 @@ SPDX-License-Identifier: MIT
 : A structured way for software components to communicate.
 
 **Audit checkpoint**
-: A canonical audit export with metadata signed by a deployment-owned Ed25519 key and bound to its deployment identifier, session, creation time, and retention declaration.
+: A canonical audit export whose metadata and signer identity are authenticated by a deployment-approved public-key signature and bound to its deployment identifier, session, creation time, and retention declaration.
 
 **Audit export**
 : A scrubbed JSON Lines representation of the tamper-evident session audit chain.
@@ -49,7 +49,7 @@ SPDX-License-Identifier: MIT
 : An OAuth flow in which one interface displays a short-lived code that the user enters on a separate provider sign-in page.
 
 **Ed25519**
-: A public-key signature algorithm Heartwood uses to authenticate deployment-owned audit checkpoints.
+: A public-key signature algorithm supported by Heartwood checkpoint signers and used by the explicit local fallback.
 
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
@@ -57,17 +57,23 @@ SPDX-License-Identifier: MIT
 **Graphics processing unit (GPU)**
 : Specialized compute hardware used to accelerate model inference.
 
-**Hugging Face**
-: A model repository service used by Heartwood to inspect public metadata and download supported model artifacts.
+**Hardware security module (HSM)**
+: A protected hardware or managed service boundary that performs cryptographic operations without exporting private keys.
 
 **Heartwood-managed model**
 : A model whose files and inference runtime Heartwood manages on the compute environment where Heartwood is running, such as a workstation container, Terra runtime, or Carina allocation.
+
+**Hugging Face**
+: A model repository service used by Heartwood to inspect public metadata and download supported model artifacts.
 
 **Ingress**
 : The validated network route through which a browser or API client reaches the Heartwood gateway, such as direct loopback, a Jupyter proxy, or an explicitly trusted platform proxy.
 
 **JSON Lines**
 : A text format that stores one JSON value on each line so records can be appended and processed incrementally.
+
+**Key management service (KMS)**
+: A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.

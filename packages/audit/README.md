@@ -13,6 +13,7 @@ SPDX-License-Identifier: MIT
 Hash-chained audit logging for Heartwood sessions.
 
 The package persists versioned `AuditEvent` records as recoverable JSON Lines, computes deterministic event hashes, scrubs sensitive payload fields, and fully verifies logs before replay or export.
-It also creates and verifies canonical Ed25519-signed checkpoints for deployment-owned retention outside an agent project.
+It also creates and verifies canonical checkpoints through a provider-neutral signer contract for deployment-owned retention outside an agent project.
+Managed deployments can use an authenticated remote KMS/HSM-backed service, while development and offline environments can explicitly run the isolated loopback signer.
 
 Domain callers remain responsible for emitting only the minimum operational metadata needed for review.

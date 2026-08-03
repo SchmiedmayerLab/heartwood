@@ -14,12 +14,17 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
@@ -40,7 +45,12 @@ from heartwood.cli._interactive import (
     InteractiveSession,
 )
 from heartwood.gateway import (
+    CheckpointSigner,
+    CheckpointSignerProfile,
+    CheckpointSignerRegistry,
     CredentialStore,
+    LocalCheckpointSignerApp,
+    LocalEd25519CheckpointSigner,
     LocalModelChoice,
     LocalModelDownloadPlan,
     ModelArtifact,
@@ -56,6 +66,8 @@ from heartwood.gateway import (
     SessionLifecycle,
     SessionProjection,
     SubscriptionDeviceLogin,
+    checkpoint_public_key_fingerprint,
+    load_checkpoint_signer_registry,
     project_session,
 )
 from heartwood.gateway import (
@@ -124,6 +136,8 @@ def _install_deterministic_gateway(
     env: dict[str, str] | None = None,
     model_repository: object | None = None,
     subscription_provider: object | None = None,
+    checkpoint_signer_registry: CheckpointSignerRegistry | None = None,
+    checkpoint_signer_factory: Callable[[CheckpointSignerProfile], CheckpointSigner] | None = None,
 ) -> None:
     def factory(**kwargs: object) -> RealSessionGateway:
         project = kwargs.get("project")
@@ -135,6 +149,8 @@ def _install_deterministic_gateway(
             model_catalog_service=model_catalog_service,
             model_repository=cast(Any, model_repository),
             subscription_provider=cast(Any, subscription_provider),
+            checkpoint_signer_registry=checkpoint_signer_registry,
+            checkpoint_signer_factory=checkpoint_signer_factory,
         )
 
     monkeypatch.setattr("heartwood.cli.SessionGateway", factory)
@@ -1763,7 +1779,12 @@ def test_audit_verify_checkpoint_and_verification_are_operator_workflows(
     deployment = tmp_path / "deployment"
     private_key, public_key = _audit_key_pair(deployment)
     bundle = deployment / "review-checkpoint"
-    _install_deterministic_gateway(monkeypatch)
+    registry, signer_factory = _audit_signer_registry(private_key, public_key)
+    _install_deterministic_gateway(
+        monkeypatch,
+        checkpoint_signer_registry=registry,
+        checkpoint_signer_factory=signer_factory,
+    )
 
     assert (
         _run(
@@ -1782,8 +1803,6 @@ def test_audit_verify_checkpoint_and_verification_are_operator_workflows(
                 "research-audit-7y",
                 "--retain-until",
                 "2033-08-02",
-                "--signing-key",
-                str(private_key),
             ],
         )
         == 0
@@ -1818,7 +1837,6 @@ def test_audit_checkpoint_reports_project_boundary_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "analysis"
-    private_key, _public_key = _audit_key_pair(tmp_path / "deployment")
     _install_deterministic_gateway(monkeypatch)
 
     result = _run(
@@ -1835,8 +1853,6 @@ def test_audit_checkpoint_reports_project_boundary_without_traceback(
             "research-audit-7y",
             "--retain-until",
             "2033-08-02",
-            "--signing-key",
-            str(private_key),
         ],
     )
 
@@ -1844,6 +1860,98 @@ def test_audit_checkpoint_reports_project_boundary_without_traceback(
     captured = capsys.readouterr()
     assert "must be outside the Heartwood project" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argument(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "signer",
+                "init-local",
+            ],
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "Local checkpoint signer initialized" in output
+    assert "--private-key" not in output
+    assert not (project / ".heartwood").exists()
+
+    observed: dict[str, object] = {}
+
+    def run_server(app: object, **kwargs: object) -> None:
+        observed["app"] = app
+        observed.update(kwargs)
+
+    monkeypatch.setattr("heartwood.cli.uvicorn.run", run_server)
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "signer",
+                "serve-local",
+            ],
+        )
+        == 0
+    )
+    assert isinstance(observed["app"], LocalCheckpointSignerApp)
+    assert observed["host"] == "127.0.0.1"
+    assert observed["port"] == 8771
+    assert observed["access_log"] is False
+
+
+def test_audit_signer_selection_persists_only_the_deployment_profile(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "analysis"
+    operator = tmp_path / "operator"
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "signer",
+                "init-local",
+                "--directory",
+                str(operator),
+                "--profile",
+                "offline-development",
+            ],
+        )
+        == 0
+    )
+    registry = load_checkpoint_signer_registry(operator / "checkpoint-signers.toml")
+    _install_deterministic_gateway(
+        monkeypatch,
+        checkpoint_signer_registry=registry,
+    )
+    capsys.readouterr()
+
+    assert _run(project, monkeypatch, ["audit", "signer", "list"]) == 0
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            ["audit", "signer", "select", "offline-development"],
+        )
+        == 0
+    )
+
+    persisted = tomllib.loads((project / ".heartwood" / "config.toml").read_text(encoding="utf-8"))
+    assert persisted["audit"] == {"signer_profile": "offline-development"}
+    assert "offline-development" in capsys.readouterr().out
 
 
 def test_cli_reports_active_browser_session_without_traceback(
@@ -2115,6 +2223,41 @@ def _audit_key_pair(root: Path) -> tuple[Path, Path]:
         )
     )
     return private_path, public_path
+
+
+def _audit_signer_registry(
+    private_key: Path,
+    public_key: Path,
+) -> tuple[
+    CheckpointSignerRegistry,
+    Callable[[CheckpointSignerProfile], CheckpointSigner],
+]:
+    loaded = serialization.load_pem_public_key(public_key.read_bytes())
+    assert isinstance(loaded, Ed25519PublicKey)
+    profile = CheckpointSignerProfile(
+        profile_id="records",
+        mode="production",
+        endpoint="https://signer.example.invalid/v1/checkpoints/sign",
+        signer_id="test-deployment",
+        key_id="audit-signing",
+        key_version="v1",
+        algorithm="ed25519",
+        public_key_sha256=checkpoint_public_key_fingerprint(loaded),
+        trusted_public_key=public_key,
+    )
+
+    def signer_factory(selected: CheckpointSignerProfile) -> CheckpointSigner:
+        return LocalEd25519CheckpointSigner(
+            private_key=private_key,
+            signer_id=selected.signer_id,
+            key_id=selected.key_id,
+            key_version=selected.key_version,
+        )
+
+    return (
+        CheckpointSignerRegistry(profiles=(profile,), default_profile=profile.profile_id),
+        signer_factory,
+    )
 
 
 def _community_skill(tmp_path: Path) -> Path:

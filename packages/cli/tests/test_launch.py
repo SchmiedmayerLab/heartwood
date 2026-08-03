@@ -204,6 +204,7 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
             "HEARTWOOD_PLATFORM": "carina",
             "PATH": "/usr/bin",
             "HOME": "/home/researcher",
+            "HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY": "/etc/heartwood/signers.toml",
             "OPENAI_API_KEY": "secret",
         },
     )
@@ -218,7 +219,9 @@ def test_carina_plan_preserves_project_and_exports_no_credentials(
     assert "--cpus-per-task=16" in plan.allocation_command
     assert f"--chdir={tmp_path}" in plan.allocation_command
     export = next(item for item in plan.allocation_command if item.startswith("--export="))
-    assert export == "--export=PATH,HOME,HEARTWOOD_PLATFORM=carina"
+    assert export == (
+        "--export=PATH,HOME,HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY,HEARTWOOD_PLATFORM=carina"
+    )
     assert "OPENAI_API_KEY" not in export
     assert "--workspace" not in plan.allocation_command
     assert "--model-root" not in plan.allocation_command

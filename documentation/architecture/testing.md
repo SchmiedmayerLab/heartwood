@@ -44,7 +44,7 @@ Gateway transport tests bound request bodies, reject malformed text, keep API fa
 
 Persistence compatibility fixtures cover every current project, configuration, session, audit, Skill, and OpenHands envelope.
 Each fixture must pass the deterministic migration registry and its owning typed loader.
-Audit checkpoint tests cover content minimization, canonical encoding, signing-key constraints, concurrent publication, interrupted publication, wrong-key and content tampering, retention validation, and independently trusted verification.
+Audit checkpoint tests cover content minimization, canonical encoding, deployment-registry precedence, project isolation, signer authentication, endpoint and file constraints, pinned signer identity, remote-response verification, local-service boundaries, concurrent publication, interrupted publication, wrong-key and content tampering, retention validation, and independently trusted verification.
 
 Native packaging CI uses deterministic dependency-tool substitutes to verify failure paths and reproducibility, then installs the release archive in an empty Ubuntu 24.04 AMD64 container and runs the real CPU inference and browser paths.
 Actual Terra and Carina qualification still requires the exact published artifact and synthetic task on those platforms because public CI cannot provision their managed workspaces.

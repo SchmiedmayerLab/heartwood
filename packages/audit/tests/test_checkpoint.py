@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -25,10 +25,15 @@ from heartwood.audit import (
     CHECKPOINT_FILENAME,
     AuditCheckpointError,
     AuditLog,
+    CheckpointSignerError,
+    LocalEd25519CheckpointSigner,
+    checkpoint_public_key_fingerprint,
+    checkpoint_signature_payload_bytes,
     create_audit_checkpoint,
     verify_audit_checkpoint,
 )
 from heartwood.persistence import write_private_json_atomic
+from heartwood.schemas import AuditCheckpointSignature, AuditCheckpointStatement
 
 _CREATED_AT = "2026-08-02T12:00:00Z"
 
@@ -47,7 +52,7 @@ def test_checkpoint_round_trip_binds_origin_retention_and_verified_export(
         deployment_id="carina-research",
         retention_policy_id="research-audit-7y",
         retain_until="2033-08-02",
-        signing_key=private_key,
+        signer=_signer(private_key),
         created_at=_CREATED_AT,
     )
     verified = verify_audit_checkpoint(bundle=bundle, public_key=public_key)
@@ -65,6 +70,33 @@ def test_checkpoint_round_trip_binds_origin_retention_and_verified_export(
     assert created.checkpoint.statement.audit_content_sha256 == created.audit.content_sha256
 
 
+def test_checkpoint_round_trip_supports_a_kms_compatible_p256_signer(tmp_path: Path) -> None:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key = tmp_path / "kms-public.pem"
+    public_key.write_bytes(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    public_key.chmod(0o644)
+    bundle = tmp_path / "deployment" / "p256-checkpoint"
+
+    created = create_audit_checkpoint(
+        audit_content=_audit_content(tmp_path),
+        session_id="session-1",
+        output=bundle,
+        deployment_id="managed-research",
+        retention_policy_id="research-audit-7y",
+        retain_until="2033-08-02",
+        signer=_P256Signer(private_key),
+        created_at=_CREATED_AT,
+    )
+
+    assert created.checkpoint.signature.algorithm == "ecdsa-p256-sha256"
+    assert verify_audit_checkpoint(bundle=bundle, public_key=public_key) == created
+
+
 def test_checkpoint_excludes_sensitive_audit_content(tmp_path: Path) -> None:
     private_key, _public_key = _write_key_pair(tmp_path)
     bundle = tmp_path / "checkpoint"
@@ -75,7 +107,7 @@ def test_checkpoint_excludes_sensitive_audit_content(tmp_path: Path) -> None:
         deployment_id="terra-research",
         retention_policy_id="research-audit-7y",
         retain_until="2033-08-02",
-        signing_key=private_key,
+        signer=_signer(private_key),
         created_at=_CREATED_AT,
     )
 
@@ -101,7 +133,7 @@ def test_checkpoint_verification_rejects_tampering(tmp_path: Path, target: str) 
         path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
     else:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["signature"] = base64.b64encode(bytes(64)).decode("ascii")
+        payload["signature"]["value"] = base64.b64encode(bytes(64)).decode("ascii")
         path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 
     with pytest.raises(AuditCheckpointError):
@@ -139,7 +171,7 @@ def test_checkpoint_verification_rejects_non_base64_signature(tmp_path: Path) ->
     bundle, public_key = _checkpoint_bundle(tmp_path)
     checkpoint_path = bundle / CHECKPOINT_FILENAME
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    checkpoint["signature"] = "not-base64!"
+    checkpoint["signature"]["value"] = "not-base64!"
     checkpoint_path.write_text(
         json.dumps(checkpoint, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
@@ -153,17 +185,8 @@ def test_checkpoint_requires_private_key_permissions(tmp_path: Path) -> None:
     private_key, _public_key = _write_key_pair(tmp_path)
     private_key.chmod(0o640)
 
-    with pytest.raises(AuditCheckpointError, match="owner-only"):
-        create_audit_checkpoint(
-            audit_content=_audit_content(tmp_path),
-            session_id="session-1",
-            output=tmp_path / "checkpoint",
-            deployment_id="generic-research",
-            retention_policy_id="research-audit-7y",
-            retain_until="2033-08-02",
-            signing_key=private_key,
-            created_at=_CREATED_AT,
-        )
+    with pytest.raises(CheckpointSignerError, match="owner-only"):
+        _signer(private_key)
 
 
 def test_checkpoint_rejects_symlink_key_and_existing_output(tmp_path: Path) -> None:
@@ -171,17 +194,8 @@ def test_checkpoint_rejects_symlink_key_and_existing_output(tmp_path: Path) -> N
     key_link = tmp_path / "key-link.pem"
     key_link.symlink_to(private_key)
 
-    with pytest.raises(AuditCheckpointError, match="regular file"):
-        create_audit_checkpoint(
-            audit_content=_audit_content(tmp_path),
-            session_id="session-1",
-            output=tmp_path / "checkpoint",
-            deployment_id="generic-research",
-            retention_policy_id="research-audit-7y",
-            retain_until="2033-08-02",
-            signing_key=key_link,
-            created_at=_CREATED_AT,
-        )
+    with pytest.raises(CheckpointSignerError, match="regular file"):
+        _signer(key_link)
 
     output = tmp_path / "existing"
     output.mkdir()
@@ -193,7 +207,7 @@ def test_checkpoint_rejects_symlink_key_and_existing_output(tmp_path: Path) -> N
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2033-08-02",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
@@ -210,37 +224,19 @@ def test_checkpoint_rejects_invalid_input_identity_and_key_material(tmp_path: Pa
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2033-08-02",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
     missing_key = tmp_path / "missing.pem"
-    with pytest.raises(AuditCheckpointError, match="signing key is unavailable"):
-        create_audit_checkpoint(
-            audit_content=audit_content,
-            session_id="session-1",
-            output=tmp_path / "missing-key",
-            deployment_id="generic-research",
-            retention_policy_id="research-audit-7y",
-            retain_until="2033-08-02",
-            signing_key=missing_key,
-            created_at=_CREATED_AT,
-        )
+    with pytest.raises(CheckpointSignerError, match="key is unavailable"):
+        _signer(missing_key)
 
     ec_private, ec_public = _write_ec_key_pair(tmp_path / "ec")
-    with pytest.raises(AuditCheckpointError, match="must use Ed25519"):
-        create_audit_checkpoint(
-            audit_content=audit_content,
-            session_id="session-1",
-            output=tmp_path / "ec-key",
-            deployment_id="generic-research",
-            retention_policy_id="research-audit-7y",
-            retain_until="2033-08-02",
-            signing_key=ec_private,
-            created_at=_CREATED_AT,
-        )
-    bundle, _ = _checkpoint_bundle(tmp_path / "ed25519")
-    with pytest.raises(AuditCheckpointError, match="must use Ed25519"):
+    with pytest.raises(CheckpointSignerError, match="must use Ed25519"):
+        _signer(ec_private)
+    bundle, public_key = _checkpoint_bundle(tmp_path / "ed25519")
+    with pytest.raises(AuditCheckpointError, match="does not match"):
         verify_audit_checkpoint(bundle=bundle, public_key=ec_public)
     with pytest.raises(AuditCheckpointError, match="failed full verification"):
         create_audit_checkpoint(
@@ -250,26 +246,21 @@ def test_checkpoint_rejects_invalid_input_identity_and_key_material(tmp_path: Pa
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2033-08-02",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
     invalid_key = tmp_path / "invalid.pem"
     invalid_key.write_text("not a private key\n", encoding="utf-8")
     invalid_key.chmod(0o600)
-    with pytest.raises(AuditCheckpointError, match="trusted audit public key"):
+    with pytest.raises(AuditCheckpointError, match="trusted checkpoint public key"):
         verify_audit_checkpoint(bundle=bundle, public_key=invalid_key)
-    with pytest.raises(AuditCheckpointError, match="valid unencrypted PEM"):
-        create_audit_checkpoint(
-            audit_content=audit_content,
-            session_id="session-1",
-            output=tmp_path / "invalid-key",
-            deployment_id="generic-research",
-            retention_policy_id="research-audit-7y",
-            retain_until="2033-08-02",
-            signing_key=invalid_key,
-            created_at=_CREATED_AT,
-        )
+    with pytest.raises(CheckpointSignerError, match="valid unencrypted PEM"):
+        _signer(invalid_key)
+
+    public_key.chmod(0o666)
+    with pytest.raises(AuditCheckpointError, match="not be writable by other users"):
+        verify_audit_checkpoint(bundle=bundle, public_key=public_key)
 
 
 def test_checkpoint_rejects_invalid_retention_and_unexpected_files(tmp_path: Path) -> None:
@@ -282,7 +273,7 @@ def test_checkpoint_rejects_invalid_retention_and_unexpected_files(tmp_path: Pat
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2026-08-01",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
@@ -306,7 +297,7 @@ def test_checkpoint_rejects_unsafe_output_parents_and_bundle_paths(tmp_path: Pat
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2033-08-02",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
@@ -320,7 +311,7 @@ def test_checkpoint_rejects_unsafe_output_parents_and_bundle_paths(tmp_path: Pat
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2033-08-02",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
@@ -368,7 +359,7 @@ def test_interrupted_checkpoint_publish_leaves_no_partial_bundle(
             deployment_id="generic-research",
             retention_policy_id="research-audit-7y",
             retain_until="2033-08-02",
-            signing_key=private_key,
+            signer=_signer(private_key),
             created_at=_CREATED_AT,
         )
 
@@ -390,7 +381,7 @@ def test_concurrent_checkpoint_publish_has_one_verified_winner(tmp_path: Path) -
                 deployment_id="generic-research",
                 retention_policy_id="research-audit-7y",
                 retain_until="2033-08-02",
-                signing_key=private_key,
+                signer=_signer(private_key),
                 created_at=_CREATED_AT,
             )
         except AuditCheckpointError as error:
@@ -431,7 +422,7 @@ def _checkpoint_bundle(tmp_path: Path) -> tuple[Path, Path]:
         deployment_id="generic-research",
         retention_policy_id="research-audit-7y",
         retain_until="2033-08-02",
-        signing_key=private_key,
+        signer=_signer(private_key),
         created_at=_CREATED_AT,
     )
     return bundle, public_key
@@ -458,6 +449,35 @@ def _write_key_pair(root: Path) -> tuple[Path, Path]:
     )
     public_path.chmod(0o644)
     return private_path, public_path
+
+
+def _signer(private_key: Path) -> LocalEd25519CheckpointSigner:
+    return LocalEd25519CheckpointSigner(
+        private_key=private_key,
+        signer_id="test-deployment",
+        key_id="audit-signing",
+        key_version="v1",
+    )
+
+
+class _P256Signer:
+    def __init__(self, private_key: ec.EllipticCurvePrivateKey) -> None:
+        self.private_key = private_key
+
+    def sign(self, statement: AuditCheckpointStatement) -> AuditCheckpointSignature:
+        unsigned = AuditCheckpointSignature(
+            algorithm="ecdsa-p256-sha256",
+            signer_id="managed-records",
+            key_id="kms/heartwood-audit",
+            key_version="4",
+            public_key_sha256=checkpoint_public_key_fingerprint(self.private_key.public_key()),
+            value=base64.b64encode(b"unsigned").decode("ascii"),
+        )
+        value = self.private_key.sign(
+            checkpoint_signature_payload_bytes(statement=statement, signature=unsigned),
+            ec.ECDSA(hashes.SHA256()),
+        )
+        return unsigned.model_copy(update={"value": base64.b64encode(value).decode("ascii")})
 
 
 def _write_ec_key_pair(root: Path) -> tuple[Path, Path]:

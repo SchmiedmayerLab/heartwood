@@ -103,13 +103,19 @@ They exclude private project state and return a nonzero status for unavailable, 
 |---|---|
 | `heartwood runtime start` | Inspect and start the selected Heartwood-managed runtime, optionally requesting Slurm compute |
 | `heartwood gateway serve` | Serve the gateway and packaged browser files without unified setup/runtime orchestration |
+| `heartwood audit signer list` | List signer profiles approved by the deployment |
+| `heartwood audit signer select PROFILE` | Select an approved signer profile for the current project |
+| `heartwood audit signer default` | Return the project to the deployment default signer |
 | `heartwood audit checkpoint ...` | Create a signed, canonical audit bundle outside the project |
-| `heartwood audit verify-checkpoint BUNDLE --public-key KEY` | Verify a checkpoint against an independently trusted Ed25519 public key |
+| `heartwood audit verify-checkpoint BUNDLE [--public-key KEY]` | Verify a checkpoint against the active profile or an independently trusted public key |
+| `heartwood signer init-local` | Initialize the explicit development and offline signer fallback outside the project |
+| `heartwood signer serve-local` | Run the initialized signer as an authenticated loopback service |
 
 These commands support deployment automation and diagnostics.
 Researchers should normally use `heartwood` with `--interface` when needed.
 
-Checkpoint creation requires an output directory, deployment identifier, retention-policy identifier, retention end date, and owner-only Ed25519 private key.
+Checkpoint creation requires an approved signer profile, output directory, deployment identifier, retention-policy identifier, and retention end date.
+Private signing keys are never command arguments or project state.
 It never replaces an existing output.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete operator workflow and trust boundary.
 

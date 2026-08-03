@@ -106,8 +106,11 @@ Standalone JSON Lines appenders serialize writers with a native lock and use a d
 Normal append validates the chain head needed for the next record; replay, verification, export, and checkpoint operations verify the complete available history.
 The export path is itself recorded as an event.
 
-A deployment can create a canonical checkpoint outside the project that signs the audit digest, event count, terminal hash, session, deployment identifier, creation time, and retention declaration with Ed25519.
-Verification requires a public key obtained through an independent trust path and rejects noncanonical or unexpected bundle content.
+A deployment can create a canonical checkpoint outside the project through the provider-neutral `CheckpointSigner` contract.
+The signed payload binds the audit digest, event count, terminal hash, session, deployment identifier, creation time, retention declaration, signer identity, key identity, key version, algorithm, and public-key fingerprint.
+Managed deployments resolve an approved HTTPS signer and independently trusted public key from one deployment-owned registry; project state stores only the selected profile identifier.
+The explicit development and offline fallback uses the same contract through an authenticated loopback service with an owner-only Ed25519 key.
+Verification requires the active deployment profile or a public key obtained through an independent trust path and rejects noncanonical or unexpected bundle content.
 The chain and signature cannot prove that an intact suffix was not deleted before checkpoint creation.
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
 

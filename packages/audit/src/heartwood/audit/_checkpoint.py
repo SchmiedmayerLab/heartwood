@@ -8,24 +8,13 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
-import hashlib
 import json
-import os
 import shutil
-import stat
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
 from pydantic import ValidationError
 
 from heartwood.audit._log import (
@@ -34,11 +23,16 @@ from heartwood.audit._log import (
     canonical_audit_jsonl,
     verify_audit_jsonl,
 )
+from heartwood.audit._signer import (
+    CheckpointSigner,
+    CheckpointSignerError,
+    load_checkpoint_public_key,
+    verify_checkpoint_signature,
+)
 from heartwood.persistence import (
     DurableFileError,
     fsync_directory,
     native_file_lock,
-    read_private_bytes,
     read_private_text,
     write_private_json_atomic,
     write_private_text_atomic,
@@ -52,8 +46,6 @@ from heartwood.schemas import (
 
 AUDIT_FILENAME = "audit.jsonl"
 CHECKPOINT_FILENAME = "checkpoint.json"
-_CHECKPOINT_DOMAIN = b"heartwood.audit-checkpoint.v1\x00"
-_MAXIMUM_KEY_FILE_BYTES = 64 * 1024
 
 
 class AuditCheckpointError(ValueError):
@@ -76,7 +68,7 @@ def create_audit_checkpoint(
     deployment_id: str,
     retention_policy_id: str,
     retain_until: str,
-    signing_key: Path,
+    signer: CheckpointSigner,
     created_at: str | None = None,
 ) -> AuditCheckpointVerification:
     """Create one atomically published, signed audit bundle."""
@@ -88,7 +80,6 @@ def create_audit_checkpoint(
         raise AuditCheckpointError("audit checkpoint session does not match its export")
 
     canonical = canonical_audit_jsonl(events)
-    private_key = _load_private_key(signing_key)
     try:
         statement = AuditCheckpointStatement(
             deployment_id=deployment_id,
@@ -105,12 +96,11 @@ def create_audit_checkpoint(
         )
     except ValidationError as error:
         raise AuditCheckpointError("audit checkpoint metadata is invalid") from error
-    signature = private_key.sign(_statement_bytes(statement))
-    checkpoint = AuditCheckpoint(
-        statement=statement,
-        signing_key_id=_key_id(private_key.public_key()),
-        signature=base64.b64encode(signature).decode("ascii"),
-    )
+    try:
+        signature = signer.sign(statement)
+    except CheckpointSignerError as error:
+        raise AuditCheckpointError(str(error)) from error
+    checkpoint = AuditCheckpoint(statement=statement, signature=signature)
     _publish_bundle(output, audit_content=canonical, checkpoint=checkpoint)
     return AuditCheckpointVerification(checkpoint=checkpoint, audit=verification)
 
@@ -146,17 +136,15 @@ def verify_audit_checkpoint(
         raise AuditCheckpointError("checkpointed audit export is not canonical")
     _verify_statement(checkpoint.statement, events=events, verification=verification)
 
-    trusted_key = _load_public_key(public_key)
-    if checkpoint.signing_key_id != _key_id(trusted_key):
-        raise AuditCheckpointError("audit checkpoint signing key does not match the trusted key")
     try:
-        signature = base64.b64decode(checkpoint.signature, validate=True)
-    except binascii.Error as error:
-        raise AuditCheckpointError("audit checkpoint signature is invalid") from error
-    try:
-        trusted_key.verify(signature, _statement_bytes(checkpoint.statement))
-    except (InvalidSignature, ValueError) as error:
-        raise AuditCheckpointError("audit checkpoint signature is invalid") from error
+        trusted_key = load_checkpoint_public_key(public_key)
+        verify_checkpoint_signature(
+            statement=checkpoint.statement,
+            signature=checkpoint.signature,
+            public_key=trusted_key,
+        )
+    except CheckpointSignerError as error:
+        raise AuditCheckpointError(str(error)) from error
     return AuditCheckpointVerification(checkpoint=checkpoint, audit=verification)
 
 
@@ -233,64 +221,6 @@ def _bundle_paths(bundle: Path) -> tuple[Path, Path]:
     if entries != expected:
         raise AuditCheckpointError("audit checkpoint bundle contains unexpected files")
     return bundle / AUDIT_FILENAME, bundle / CHECKPOINT_FILENAME
-
-
-def _load_private_key(path: Path) -> Ed25519PrivateKey:
-    metadata = _key_metadata(path, private=True)
-    if metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-        raise AuditCheckpointError("audit signing key permissions must be owner-only")
-    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
-        raise AuditCheckpointError("audit signing key must be owned by the current user")
-    try:
-        key = serialization.load_pem_private_key(read_private_bytes(path), password=None)
-    except (DurableFileError, OSError, TypeError, ValueError) as error:
-        raise AuditCheckpointError(
-            "audit signing key is not a valid unencrypted PEM key"
-        ) from error
-    if not isinstance(key, Ed25519PrivateKey):
-        raise AuditCheckpointError("audit signing key must use Ed25519")
-    return key
-
-
-def _load_public_key(path: Path) -> Ed25519PublicKey:
-    _key_metadata(path, private=False)
-    try:
-        key = serialization.load_pem_public_key(read_private_bytes(path))
-    except (DurableFileError, OSError, ValueError) as error:
-        raise AuditCheckpointError("trusted audit public key is not a valid PEM key") from error
-    if not isinstance(key, Ed25519PublicKey):
-        raise AuditCheckpointError("trusted audit public key must use Ed25519")
-    return key
-
-
-def _key_metadata(path: Path, *, private: bool) -> os.stat_result:
-    try:
-        metadata = path.lstat()
-    except OSError as error:
-        label = "signing key" if private else "public key"
-        raise AuditCheckpointError(f"audit {label} is unavailable") from error
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAXIMUM_KEY_FILE_BYTES:
-        label = "signing key" if private else "public key"
-        raise AuditCheckpointError(f"audit {label} must be a bounded regular file")
-    return metadata
-
-
-def _key_id(key: Ed25519PublicKey) -> str:
-    raw = key.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
-
-
-def _statement_bytes(statement: AuditCheckpointStatement) -> bytes:
-    payload = json.dumps(
-        statement.model_dump(mode="json"),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return _CHECKPOINT_DOMAIN + payload
 
 
 def _canonical_checkpoint(checkpoint: AuditCheckpoint) -> str:

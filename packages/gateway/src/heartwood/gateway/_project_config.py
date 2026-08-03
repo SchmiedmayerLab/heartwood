@@ -63,6 +63,7 @@ _CONFIG_SCHEMA_VERSION = PROJECT_CONFIG_VERSION
 _SAFE_SOURCE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _TOP_LEVEL_FIELDS = {
     "action",
+    "audit",
     "connections",
     "local_model",
     "models",
@@ -75,6 +76,18 @@ _TOP_LEVEL_FIELDS = {
 
 class ProjectConfigError(ValueError):
     """Raised when project configuration is missing, malformed, or unsafe."""
+
+
+@dataclass(frozen=True, slots=True)
+class AuditCheckpointSettings:
+    """Non-secret project selection from deployment-approved signer profiles."""
+
+    signer_profile: str | None = None
+
+    def validate(self) -> None:
+        """Validate the optional deployment profile selection."""
+        if self.signer_profile is not None and _SAFE_SOURCE.fullmatch(self.signer_profile) is None:
+            raise ProjectConfigError("audit signer_profile must be a lowercase identifier")
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +293,7 @@ class ProjectConfig:
     policy: PolicyProfile
     model_source: str | None = None
     action_settings: ActionSettings = field(default_factory=ActionSettings)
+    audit_settings: AuditCheckpointSettings = field(default_factory=AuditCheckpointSettings)
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     additional_connections: tuple[ModelConnection, ...] = ()
     local_model: LocalModelSelection | None = None
@@ -297,6 +311,7 @@ class ProjectConfig:
             raise ProjectConfigError("model_source must be a lowercase identifier")
         try:
             self.action_settings.validate()
+            self.audit_settings.validate()
             self.model_settings.validate()
             for connection in self.additional_connections:
                 connection.validate()
@@ -329,6 +344,12 @@ class ProjectConfig:
         """Return configuration with a validated action-settings replacement."""
         settings.validate()
         return replace(self, action_settings=settings)
+
+    def with_audit_signer(self, profile_id: str | None) -> ProjectConfig:
+        """Return configuration selecting one deployment-approved signer profile."""
+        settings = AuditCheckpointSettings(signer_profile=profile_id)
+        settings.validate()
+        return replace(self, audit_settings=settings)
 
     def with_model_selection(
         self,
@@ -511,6 +532,10 @@ class ProjectConfigStore:
         """Persist model settings and their canonical source in one atomic write."""
         return self.update(lambda current: current.with_model_selection(source, settings))
 
+    def select_checkpoint_signer(self, profile_id: str | None) -> ProjectConfig:
+        """Persist only the selected deployment signer profile id."""
+        return self.update(lambda current: current.with_audit_signer(profile_id))
+
 
 class ProjectModelSettingsStore:
     """Expose the model-settings section through the existing store contract."""
@@ -580,6 +605,7 @@ def project_config_from_mapping(value: object, *, project: ProjectContext) -> Pr
     model_source = _optional_string(value.get("model_source"), "model_source")
     try:
         action_settings = action_settings_from_mapping(value.get("action"))
+        audit_settings = _audit_settings_from_mapping(value.get("audit"))
         model_settings = model_settings_from_mapping(value.get("models"))
         policy = PolicyProfile.model_validate(value.get("policy"))
         connections = model_connections_from_mapping(
@@ -598,6 +624,7 @@ def project_config_from_mapping(value: object, *, project: ProjectContext) -> Pr
         platform_id=platform_id,
         model_source=model_source,
         action_settings=action_settings,
+        audit_settings=audit_settings,
         model_settings=model_settings,
         additional_connections=additional,
         policy=policy,
@@ -625,6 +652,8 @@ def _config_mapping(config: ProjectConfig) -> dict[str, object]:
     }
     if config.model_source is not None:
         result["model_source"] = config.model_source
+    if config.audit_settings.signer_profile is not None:
+        result["audit"] = {"signer_profile": config.audit_settings.signer_profile}
     if config.model_settings.active_profile is not None:
         models = result["models"]
         if not isinstance(models, dict):  # pragma: no cover - local invariant
@@ -633,6 +662,18 @@ def _config_mapping(config: ProjectConfig) -> dict[str, object]:
     if config.local_model is not None:
         result["local_model"] = _without_none(asdict(config.local_model))
     return result
+
+
+def _audit_settings_from_mapping(value: object) -> AuditCheckpointSettings:
+    if value is None:
+        return AuditCheckpointSettings()
+    if not isinstance(value, dict) or set(value) != {"signer_profile"}:
+        raise ProjectConfigError("audit configuration must contain only signer_profile")
+    settings = AuditCheckpointSettings(
+        signer_profile=_optional_string(value.get("signer_profile"), "signer_profile")
+    )
+    settings.validate()
+    return settings
 
 
 def _local_model_from_mapping(value: object) -> LocalModelSelection:

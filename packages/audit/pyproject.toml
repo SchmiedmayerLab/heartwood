@@ -16,6 +16,7 @@ dependencies = [
     "cryptography==49.0.0",
     "heartwood-persistence",
     "heartwood-schemas",
+    "tomli-w==1.2.0",
 ]
 
 [build-system]
