@@ -26,6 +26,11 @@ _SEMVER_PATTERN = (
 )
 _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 
+type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
+type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
+type CheckpointSignatureAlgorithm = Literal["ed25519", "ecdsa-p256-sha256"]
+type Decision = Literal["allow", "deny"]
+
 __all__ = [
     "ActionConfirmationMode",
     "ApprovalRecord",
@@ -46,11 +51,6 @@ __all__ = [
     "schema_for",
     "schema_names",
 ]
-
-type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
-type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
-type CheckpointSignatureAlgorithm = Literal["ed25519", "ecdsa-p256-sha256"]
-type Decision = Literal["allow", "deny"]
 
 
 class _HeartwoodRecord(BaseModel):
