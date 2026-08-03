@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
 
 from heartwood.gateway import ProjectContext, ProjectStateError
-from heartwood.persistence import write_private_text_atomic
+from heartwood.persistence import native_file_lock, write_private_text_atomic
 
 
 def test_project_context_initializes_private_state_layout(tmp_path: Path) -> None:
@@ -60,10 +62,9 @@ def test_project_context_serializes_concurrent_initialization(
     project = ProjectContext(tmp_path)
     first_write_started = Event()
     release_first_write = Event()
-    competing_validation_started = Event()
+    competing_lock_attempted = Event()
     first_thread: list[int] = []
     original_write = write_private_text_atomic
-    original_validate = ProjectContext._validate_state_root
 
     def pause_first_write(path: Path, content: str, *, secure_parent: bool = True) -> None:
         # The state lock keeps the second initializer out of this branch.
@@ -73,22 +74,29 @@ def test_project_context_serializes_concurrent_initialization(
             assert release_first_write.wait(timeout=5)
         original_write(path, content, secure_parent=secure_parent)
 
-    def observe_competing_validation(context: ProjectContext) -> None:
+    @contextmanager
+    def observe_lock(
+        path: Path,
+        *,
+        timeout: float = -1,
+        secure_parent: bool = True,
+    ) -> Iterator[None]:
         if first_write_started.is_set() and get_ident() != first_thread[0]:
-            competing_validation_started.set()
-        original_validate(context)
+            competing_lock_attempted.set()
+        with native_file_lock(path, timeout=timeout, secure_parent=secure_parent):
+            yield
 
     monkeypatch.setattr(
         "heartwood.gateway._project.write_private_text_atomic",
         pause_first_write,
     )
-    monkeypatch.setattr(ProjectContext, "_validate_state_root", observe_competing_validation)
+    monkeypatch.setattr("heartwood.gateway._project.native_file_lock", observe_lock)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         first = executor.submit(project.initialize)
         assert first_write_started.wait(timeout=5)
         second = executor.submit(project.initialize)
-        assert competing_validation_started.wait(timeout=5)
+        assert competing_lock_attempted.wait(timeout=5)
         assert not second.done()
         release_first_write.set()
         first.result(timeout=5)
