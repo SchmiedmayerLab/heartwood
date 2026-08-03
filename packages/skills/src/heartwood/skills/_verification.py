@@ -141,8 +141,13 @@ def load_skill_manifest(skill_root: Path) -> SkillManifest:
         msg = "SKILL.md metadata is invalid"
         raise SkillVerificationError(msg) from error
     try:
-        metadata_json = json.loads(read_private_text(metadata_file))
-    except (DurableFileError, OSError, json.JSONDecodeError) as error:
+        metadata_text = read_private_text(metadata_file)
+    except (DurableFileError, OSError) as error:
+        msg = "metadata.json must be a regular UTF-8 file"
+        raise SkillVerificationError(msg) from error
+    try:
+        metadata_json = json.loads(metadata_text)
+    except json.JSONDecodeError as error:
         msg = "metadata.json is invalid JSON"
         raise SkillVerificationError(msg) from error
     try:

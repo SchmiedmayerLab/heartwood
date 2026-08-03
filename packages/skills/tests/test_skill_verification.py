@@ -213,7 +213,9 @@ def test_verifier_rejects_unsupported_or_linked_metadata(tmp_path: Path) -> None
     outside.write_bytes(linked_metadata.read_bytes())
     linked_metadata.unlink()
     linked_metadata.symlink_to(outside)
-    with pytest.raises(SkillVerificationError, match=r"metadata\.json is invalid JSON"):
+    with pytest.raises(
+        SkillVerificationError, match=r"metadata\.json must be a regular UTF-8 file"
+    ):
         load_skill_manifest(linked_root)
 
 

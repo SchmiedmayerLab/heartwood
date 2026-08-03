@@ -108,7 +108,7 @@ class AuditLog:
             events = tuple(_audit_event(record) for record in records)
             if events:
                 _verify_tail(events)
-                if any(event.session_id != session_id for event in events[-2:]):
+                if any(event.session_id != session_id for event in events):
                     raise AuditIntegrityError("audit append session does not match existing log")
             event = prepare_audit_event(
                 session_id=session_id,

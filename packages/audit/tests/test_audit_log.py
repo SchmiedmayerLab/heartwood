@@ -19,6 +19,8 @@ from filelock import FileLock
 from heartwood.audit import (
     AuditIntegrityError,
     AuditLog,
+    canonical_audit_jsonl,
+    prepare_audit_event,
     verify_audit_events,
     verify_audit_jsonl,
 )
@@ -107,6 +109,39 @@ def test_audit_append_rejects_session_change_and_corrupt_tail(tmp_path: Path) ->
             session_id="session-1",
             event_type="session.paused",
             occurred_at="2026-01-01T00:00:01Z",
+        )
+
+
+def test_audit_append_rejects_an_earlier_session_change(tmp_path: Path) -> None:
+    path = tmp_path / "audit.jsonl"
+    first = prepare_audit_event(
+        session_id="other-session",
+        sequence=0,
+        previous_event_hash=None,
+        event_type="command.received",
+        occurred_at="2026-01-01T00:00:00Z",
+    )
+    second = prepare_audit_event(
+        session_id="session-1",
+        sequence=1,
+        previous_event_hash=first.event_hash,
+        event_type="session.paused",
+        occurred_at="2026-01-01T00:00:01Z",
+    )
+    third = prepare_audit_event(
+        session_id="session-1",
+        sequence=2,
+        previous_event_hash=second.event_hash,
+        event_type="session.resumed",
+        occurred_at="2026-01-01T00:00:02Z",
+    )
+    path.write_text(canonical_audit_jsonl((first, second, third)), encoding="utf-8")
+
+    with pytest.raises(AuditIntegrityError, match="session does not match"):
+        AuditLog(path).append(
+            session_id="session-1",
+            event_type="command.received",
+            occurred_at="2026-01-01T00:00:03Z",
         )
 
 
