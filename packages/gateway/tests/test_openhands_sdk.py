@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from functools import cache
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -212,7 +213,7 @@ def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    with pytest.raises(SpecialistCatalogError, match="cannot use tools"):
+    with pytest.raises(SpecialistCatalogError, match="must remain unavailable"):
         load_specialist_catalog(agents_dir, _repository_root() / "skills" / "verified")
 
 
@@ -2554,10 +2555,11 @@ def test_packaged_advisory_specialists_return_output_to_the_parent_agent(
     )
     events = (*continued, *_wait_for_lifecycle(backend, BackendLifecycle.FINISHED))
 
+    expected_label = _specialist_catalog().role(specialist_id).label
     assert any(
         isinstance(event, BackendSubagentEvent)
         and event.subagent.agent_name == specialist_id
-        and event.subagent.role_label == _specialist_catalog().role(specialist_id).label
+        and event.subagent.role_label == expected_label
         and event.subagent.status == BackendSubagentStatus.COMPLETED
         for event in events
     )
@@ -2825,10 +2827,11 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     )
 
     assert restored_llm.call_count == 0
+    expected_label = _specialist_catalog().role("cohort-feature-reviewer").label
     assert any(
         isinstance(event, BackendSubagentEvent)
         and event.subagent.agent_name == "cohort-feature-reviewer"
-        and event.subagent.role_label == "Cohort and Feature Reviewer"
+        and event.subagent.role_label == expected_label
         and event.subagent.status == BackendSubagentStatus.COMPLETED
         for event in replayed
     )
@@ -3516,6 +3519,7 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+@cache
 def _specialist_catalog() -> SpecialistCatalog:
     return load_specialist_catalog(
         _repository_root() / "agents" / "verified",

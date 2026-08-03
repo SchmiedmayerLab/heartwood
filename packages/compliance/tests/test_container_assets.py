@@ -1115,6 +1115,11 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert 'self.path != "/v1/models"' in model_stub
     assert "models validate heartwood" in smoke
     assert ' --prompt "' in smoke
+    assert smoke.count('heartwood --session-id "${session_id}" allow') == 2
+    assert "Research Planner: Complete" in smoke
+    assert 'tool_names.count("task") != 1' in smoke
+    assert 'tool_names.count("terminal") != 3' in smoke
+    assert "specialist prompt or result leaked into the audit export" in smoke
     assert " chat " not in smoke
     assert " detect " not in smoke
     assert "call-heartwood-reference-analysis" not in smoke
@@ -1177,6 +1182,40 @@ def test_local_model_stub_preserves_explicit_action_risk() -> None:
     assert "<parameter=command>printf heartwood-openhands-action</parameter>" in prompt_call
     assert "<parameter=security_risk>LOW</parameter>" in prompt_call
     assert prompt_call.endswith("</function>")
+
+
+def test_local_model_stub_scopes_specialist_results_to_the_current_task() -> None:
+    path = _repo_root() / "images/generic/scripts/local_model_stub.py"
+    spec = importlib.util.spec_from_file_location("heartwood_local_model_stub_task", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    messages: list[object] = [
+        {"role": "user", "content": "Build the first target-condition cohort."},
+        {
+            "role": "tool",
+            "content": "SPECIALIST REVIEW COMPLETE: verify the first cohort.",
+        },
+        {"role": "assistant", "content": "The first cohort is complete."},
+        {"role": "user", "content": "Build the second target-condition cohort."},
+    ]
+
+    task_message, tool_results = module._current_task_context(messages)
+
+    assert task_message == messages[-1]
+    assert tool_results == []
+    assert module._has_specialist_result(tool_results) is False
+
+    messages.append(
+        {
+            "role": "tool",
+            "content": "SPECIALIST REVIEW COMPLETE: verify the second cohort.",
+        }
+    )
+    _, tool_results = module._current_task_context(messages)
+
+    assert module._has_specialist_result(tool_results) is True
 
 
 def test_local_model_stub_streams_typed_tool_calls_and_final_text() -> None:

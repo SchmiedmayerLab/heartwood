@@ -43,6 +43,51 @@ def _message_text(message: dict[str, object]) -> str:
     return ""
 
 
+def _current_task_context(
+    messages: list[object],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Return the latest researcher task and only its subsequent tool results."""
+    researcher_messages = [
+        message
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "user"
+    ]
+    latest_researcher_message = researcher_messages[-1] if researcher_messages else {}
+    task_message = next(
+        (
+            message
+            for message in reversed(researcher_messages)
+            if not _message_text(message).lower().lstrip().startswith("execution result of [")
+        ),
+        {},
+    )
+    task_index = max(
+        (index for index, message in enumerate(messages) if message is task_message),
+        default=-1,
+    )
+    native_tool_results = [
+        message
+        for index, message in enumerate(messages)
+        if index > task_index and isinstance(message, dict) and message.get("role") == "tool"
+    ]
+    prompt_tool_results = (
+        [latest_researcher_message]
+        if _message_text(latest_researcher_message)
+        .lower()
+        .lstrip()
+        .startswith("execution result of [")
+        else []
+    )
+    return task_message, [*native_tool_results, *prompt_tool_results]
+
+
+def _has_specialist_result(tool_results: list[dict[str, object]]) -> bool:
+    """Return whether the current task received a specialist result."""
+    return any(
+        "specialist review complete:" in json.dumps(result).lower() for result in tool_results
+    )
+
+
 def _terminal_call(
     call_id: str,
     command: str,
@@ -202,40 +247,9 @@ class LocalModelHandler(BaseHTTPRequestHandler):
         serialized_messages = json.dumps(messages).lower()
         native_tool_mode = bool(payload.get("tools"))
         prompt_tool_mode = "<function=example_function_name>" in serialized_messages
-        researcher_messages = [
-            message
-            for message in messages
-            if isinstance(message, dict) and message.get("role") == "user"
-        ]
-        latest_researcher_message = researcher_messages[-1] if researcher_messages else {}
-        task_message = next(
-            (
-                message
-                for message in reversed(researcher_messages)
-                if not _message_text(message).lower().lstrip().startswith("execution result of [")
-            ),
-            {},
-        )
+        task_message, tool_results = _current_task_context(messages)
         serialized_task_message = json.dumps(task_message).lower()
-        task_index = max(
-            (index for index, message in enumerate(messages) if message is task_message),
-            default=-1,
-        )
-        native_tool_results = [
-            message
-            for index, message in enumerate(messages)
-            if index > task_index and isinstance(message, dict) and message.get("role") == "tool"
-        ]
-        prompt_tool_results = (
-            [latest_researcher_message]
-            if _message_text(latest_researcher_message)
-            .lower()
-            .lstrip()
-            .startswith("execution result of [")
-            else []
-        )
-        tool_results = [*native_tool_results, *prompt_tool_results]
-        has_specialist_result = "specialist review complete:" in serialized_messages
+        has_specialist_result = _has_specialist_result(tool_results)
         has_execution_result = any(
             "specialist review complete:" not in json.dumps(result).lower()
             for result in tool_results

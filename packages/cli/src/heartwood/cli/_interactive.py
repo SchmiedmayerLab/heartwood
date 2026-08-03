@@ -621,9 +621,7 @@ def format_specialist_settings(settings: SpecialistSettingsResponse) -> str:
                     + ", ".join(terminal_safe_text(skill) for skill in role["skills"])
                 )
             if availability == "available":
-                lines.append(
-                    f"    Advisory · up to {role['max_iterations']} steps · uses active model"
-                )
+                lines.append(f"    {terminal_safe_text(role['presentation_summary'])}")
             elif role["unavailable_reason"]:
                 lines.append(
                     "    "

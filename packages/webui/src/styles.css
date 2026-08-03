@@ -1718,7 +1718,9 @@ summary:focus-visible {
 }
 
 .specialist-row.unavailable {
-  opacity: 0.78;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid #98a39d;
+  background: #f7f8f7;
 }
 
 .specialist-skills {

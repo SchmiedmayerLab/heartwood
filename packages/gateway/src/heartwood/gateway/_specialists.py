@@ -63,12 +63,24 @@ class SpecialistRole:
         """Return the OpenHands registration identifier."""
         return self.definition.name
 
+    @property
+    def presentation_summary(self) -> str:
+        """Return the gateway-owned summary shared by every interface."""
+        capability = (
+            "Advisory" if self.capability == SpecialistCapability.ADVISORY else "Project actions"
+        )
+        return (
+            f"{capability} · Uses the active model · "
+            f"Up to {self.definition.max_iteration_per_run} steps"
+        )
+
     def safe_dict(self) -> dict[str, object]:
         """Return deterministic non-secret catalog metadata for interfaces."""
         return {
             "specialist_id": self.specialist_id,
             "label": self.label,
             "description": self.definition.description,
+            "presentation_summary": self.presentation_summary,
             "capability": self.capability.value,
             "availability": self.availability.value,
             "unavailable_reason": self.unavailable_reason,
@@ -252,6 +264,14 @@ def _validate_openhands_boundary(
         )
     if capability == SpecialistCapability.ADVISORY and definition.tools:
         raise SpecialistCatalogError(f"advisory specialist {definition.name} cannot declare tools")
+    if (
+        capability == SpecialistCapability.PROJECT_ACTIONS
+        and availability == SpecialistAvailability.AVAILABLE
+    ):
+        raise SpecialistCatalogError(
+            f"project-actions specialist {definition.name} must remain unavailable until "
+            "child actions are recoverable"
+        )
     if capability == SpecialistCapability.PROJECT_ACTIONS and not definition.tools:
         raise SpecialistCatalogError(
             f"project-actions specialist {definition.name} must declare tools"

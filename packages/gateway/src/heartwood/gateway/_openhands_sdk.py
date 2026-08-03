@@ -1452,7 +1452,7 @@ def _tool_call(
 
 def _tool_summary(event: ActionEvent, *, tool_name: str) -> str:
     action = event.action
-    if isinstance(action, TaskAction) and action.description:
+    if isinstance(action, TaskAction) and action.description is not None:
         description = action.description.strip()
         if description:
             return description

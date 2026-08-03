@@ -3591,6 +3591,7 @@ const specialistSettings = (): SpecialistSettings => ({
       specialist_id: "research-planner",
       label: "Research Planner",
       description: "Develops a sequential analysis plan.",
+      presentation_summary: "Advisory · Uses the active model · Up to 12 steps",
       capability: "advisory",
       availability: "available",
       unavailable_reason: null,
@@ -3605,6 +3606,7 @@ const specialistSettings = (): SpecialistSettings => ({
       specialist_id: "data-quality-reviewer",
       label: "Data Quality Reviewer",
       description: "Reviews supplied evidence for data-quality concerns.",
+      presentation_summary: "Advisory · Uses the active model · Up to 12 steps",
       capability: "advisory",
       availability: "available",
       unavailable_reason: null,
@@ -3619,6 +3621,8 @@ const specialistSettings = (): SpecialistSettings => ({
       specialist_id: "analysis-implementer",
       label: "Analysis Implementer",
       description: "Implements bounded research-analysis changes.",
+      presentation_summary:
+        "Project actions · Uses the active model · Up to 40 steps",
       capability: "project-actions",
       availability: "unavailable",
       unavailable_reason:

@@ -43,12 +43,26 @@ def test_bundled_specialist_catalog_is_ordered_and_bounded() -> None:
         assert role.definition.tools == []
         assert role.definition.max_iteration_per_run is not None
         assert role.definition.max_budget_per_run is not None
+        assert role.presentation_summary.startswith("Advisory · Uses the active model")
 
     implementer = catalog.role("analysis-implementer")
     assert implementer.availability == SpecialistAvailability.UNAVAILABLE
     assert implementer.capability == SpecialistCapability.PROJECT_ACTIONS
     assert implementer.definition.tools == ["terminal", "heartwood_project_file_editor"]
     assert implementer.unavailable_reason
+
+
+def test_catalog_rejects_unknown_specialist_id() -> None:
+    with pytest.raises(SpecialistCatalogError, match="unknown specialist"):
+        _catalog().role("unknown-reviewer")
+
+
+def test_catalog_rejects_an_empty_directory(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+
+    with pytest.raises(SpecialistCatalogError, match="catalog is empty"):
+        load_specialist_catalog(agents_dir, _skills_dir())
 
 
 @pytest.mark.parametrize(
@@ -80,26 +94,25 @@ def test_specialist_factory_injects_only_verified_skills(
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "message"),
+    ("old", "new", "message"),
     [
-        ("model", "openai/unreviewed", "inherit the parent model route"),
-        ("permission_mode", "never_confirm", "must use always_confirm"),
+        ("model: inherit", "model: openai/unreviewed", "inherit the parent model route"),
+        (
+            "permission_mode: always_confirm",
+            "permission_mode: never_confirm",
+            "must use always_confirm",
+        ),
     ],
 )
 def test_catalog_rejects_role_boundary_widening(
-    field: str,
-    value: str,
+    old: str,
+    new: str,
     message: str,
     tmp_path: Path,
 ) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
-    source = _valid_definition().replace(f"{field}: inherit", f"{field}: {value}")
-    if field == "permission_mode":
-        source = _valid_definition().replace(
-            "permission_mode: always_confirm",
-            f"permission_mode: {value}",
-        )
+    source = _valid_definition().replace(old, new)
     (agents_dir / "bounded-reviewer.md").write_text(source, encoding="utf-8")
 
     with pytest.raises(SpecialistCatalogError, match=message):
@@ -154,6 +167,104 @@ def test_catalog_rejects_external_execution_and_model_configuration(
         load_specialist_catalog(agents_dir, _skills_dir())
 
 
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            "description: Reviews supplied synthetic evidence.",
+            "description: ''",
+            "requires a description",
+        ),
+        (
+            "max_iteration_per_run: 4\n",
+            "",
+            "requires an iteration limit",
+        ),
+        (
+            "max_budget_per_run: 0.5\n",
+            "",
+            "requires a usage budget",
+        ),
+        (
+            "heartwood:\n",
+            "heartwood: invalid\nignored:\n",
+            "requires heartwood catalog metadata",
+        ),
+        (
+            "label: Bounded Reviewer",
+            "label: ''",
+            "requires a non-empty label",
+        ),
+        (
+            "capability: advisory",
+            "capability: 7",
+            "capability must be one of",
+        ),
+        (
+            "capability: advisory",
+            "capability: unsupported",
+            "capability must be one of",
+        ),
+        (
+            "order: 1",
+            "order: -1",
+            "requires a non-negative integer order",
+        ),
+        (
+            "availability: available",
+            "availability: unavailable",
+            "must explain why it is unavailable",
+        ),
+        (
+            "availability: available\n",
+            "availability: available\n  unavailable_reason: Not needed.\n",
+            "cannot declare an unavailable reason",
+        ),
+        (
+            "availability: available\n",
+            "availability: unavailable\n  unavailable_reason: Tools are disabled.\n",
+            "must declare the blocked tool capability",
+        ),
+        (
+            "capability: advisory",
+            "capability: project-actions",
+            "must remain unavailable",
+        ),
+    ],
+)
+def test_catalog_rejects_incomplete_or_invalid_role_metadata(
+    old: str,
+    new: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    source = _valid_definition().replace(old, new)
+    (agents_dir / "bounded-reviewer.md").write_text(source, encoding="utf-8")
+
+    with pytest.raises(SpecialistCatalogError, match=message):
+        load_specialist_catalog(agents_dir, _skills_dir())
+
+
+def test_catalog_rejects_duplicate_role_labels(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "bounded-reviewer.md").write_text(_valid_definition(), encoding="utf-8")
+    second = (
+        _valid_definition()
+        .replace("bounded-reviewer", "second-reviewer")
+        .replace(
+            "order: 1",
+            "order: 2",
+        )
+    )
+    (agents_dir / "second-reviewer.md").write_text(second, encoding="utf-8")
+
+    with pytest.raises(SpecialistCatalogError, match="labels must be unique"):
+        load_specialist_catalog(agents_dir, _skills_dir())
+
+
 def test_catalog_does_not_silently_skip_malformed_openhands_definition(
     tmp_path: Path,
 ) -> None:
@@ -185,8 +296,9 @@ def test_unavailable_specialist_cannot_be_instantiated() -> None:
             "advisory specialist bounded-reviewer cannot declare tools",
         ),
         (
-            "capability: advisory",
-            "capability: project-actions",
+            "capability: advisory\n  availability: available",
+            "capability: project-actions\n  availability: unavailable\n"
+            "  unavailable_reason: Tool execution is disabled.",
             "project-actions specialist bounded-reviewer must declare tools",
         ),
     ],

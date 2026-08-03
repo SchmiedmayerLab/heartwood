@@ -109,7 +109,7 @@ SPDX-License-Identifier: MIT
 : A versioned instruction package with declared tools, metadata, and workflow guidance available to the OpenHands agent.
 
 **Research specialist**
-: A bounded OpenHands child agent that performs one focused planning or review task for the parent agent using inherited model and policy settings.
+: A bounded OpenHands child agent that performs one focused planning or review task for the parent agent within inherited or narrower project, credential, model, network, policy, and confirmation boundaries.
 
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.

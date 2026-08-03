@@ -57,7 +57,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Inspect task progress, model-call totals, and sequential specialist status below the conversation.
 - Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
-- Open **Specialists** to inspect the bounded reviewers available to the parent agent.
+- Open **Specialists** to inspect the bounded research specialists available to the parent agent.
 - Select the current **Action review** value in the session header to change when Heartwood pauses.
 - Open **Settings** to change the selected model or action-review mode.
 - Export the audit record from the session controls.

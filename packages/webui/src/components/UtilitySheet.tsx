@@ -330,7 +330,7 @@ const SpecialistsContent = ({ specialistSettings }: UtilitySheetProps) => {
       <SheetHeader>
         <SheetTitle>Research specialists</SheetTitle>
         <SheetDescription>
-          Bounded reviewers the agent can use for focused research tasks
+          Bounded research specialists the agent can use for focused tasks
         </SheetDescription>
       </SheetHeader>
       <section className="panel-section specialist-list">
@@ -341,10 +341,7 @@ const SpecialistsContent = ({ specialistSettings }: UtilitySheetProps) => {
               <div>
                 <strong>{role.label}</strong>
                 <span>{role.description}</span>
-                <small>
-                  Advisory · Uses the active model · Up to {role.max_iterations}{" "}
-                  steps
-                </small>
+                <small>{role.presentation_summary}</small>
               </div>
               {role.skills.length ?
                 <div className="specialist-skills" aria-label="Verified Skills">

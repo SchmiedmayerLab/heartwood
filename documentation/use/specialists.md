@@ -61,7 +61,7 @@ Each role has an explicit model-step limit and usage budget, inherits the active
 
 The catalog shows **Analysis Implementer** as unavailable.
 Tool-enabled child agents require restart-safe child action review and cancellation, which the supported public OpenHands task interface does not currently provide.
-Heartwood therefore does not register that role or give project tools to any available specialist.
+Heartwood keeps that role visible in the catalog, but does not register it as an executable OpenHands specialist or give project tools to any available specialist.
 
 Audit exports record minimized specialist lifecycle and usage evidence without delegated instructions or returned prose.
 The full session projection retains the information needed to review and replay the parent workflow.

@@ -95,6 +95,13 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByRole("heading", { name: "Research specialists" }),
   ).toBeVisible();
   await expect(page.getByText("Research Planner")).toBeVisible();
+  await page.getByText("Additional roles").click();
+  await expect(page.getByText("Analysis Implementer")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Tool-enabled specialists require restart-safe child review.",
+    ),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Close" }).click();
 
   await page.getByRole("button", { name: "Skills" }).click();
@@ -1033,6 +1040,8 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           specialist_id: "research-planner",
           label: "Research Planner",
           description: "Develops a concise, sequential analysis plan.",
+          presentation_summary:
+            "Advisory · Uses the active model · Up to 12 steps",
           capability: "advisory",
           availability: "available",
           unavailable_reason: null,
@@ -1042,6 +1051,23 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           permission_mode: "always_confirm",
           max_iterations: 12,
           max_budget_usd: 1,
+        },
+        {
+          specialist_id: "analysis-implementer",
+          label: "Analysis Implementer",
+          description: "Implements bounded research-analysis changes.",
+          presentation_summary:
+            "Project actions · Uses the active model · Up to 40 steps",
+          capability: "project-actions",
+          availability: "unavailable",
+          unavailable_reason:
+            "Tool-enabled specialists require restart-safe child review.",
+          model_route: "inherit",
+          tools: ["terminal", "heartwood_project_file_editor"],
+          skills: ["omop-cohort-summary"],
+          permission_mode: "always_confirm",
+          max_iterations: 40,
+          max_budget_usd: 2,
         },
       ],
     }),

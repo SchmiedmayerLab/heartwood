@@ -578,6 +578,7 @@ export interface SpecialistRoleResponse {
   max_iterations: number;
   model_route: "inherit";
   permission_mode: "always_confirm";
+  presentation_summary: string;
   skills: string[];
   specialist_id: string;
   tools: string[];
