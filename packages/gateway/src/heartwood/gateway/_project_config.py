@@ -262,14 +262,16 @@ class LocalModelSelection:
             )
         ):
             raise ProjectConfigError(
-                "user-selected Heartwood-managed model provenance is incomplete"
+                "transferred or user-selected Heartwood-managed model provenance is incomplete"
             )
         if (
             self.catalog_source in {"transferred", "user-selected"}
             and self.source_path is not None
             and self.artifact_sha256 is None
         ):
-            raise ProjectConfigError("user-selected GGUF model integrity metadata is incomplete")
+            raise ProjectConfigError(
+                "transferred or user-selected GGUF model integrity metadata is incomplete"
+            )
         configured = Path(self.path)
         if configured.is_absolute():
             raise ProjectConfigError("Heartwood-managed model path must be relative to the project")

@@ -1101,6 +1101,9 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
     assert "coding-agent model must be outside disposable project data" in coding_agent
     assert '"${model_path}" == "${state_root}/models/"*' in coding_agent
+    assert "for state_directory in audit cache logs runtime sessions" in coding_agent
+    assert 'find "${state_root}/${state_directory}"' in coding_agent
+    assert 'rm -rf "${state_root}/sessions"' not in coding_agent
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
     assert 'audit_path="${project}/heartwood-audit-export.jsonl"' in coding_agent

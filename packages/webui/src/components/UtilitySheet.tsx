@@ -1056,6 +1056,21 @@ const formatDuration = (seconds: number): string => {
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 };
 
+const latestModelTransfer = (
+  transfers: ModelTransfer[],
+  kind: ModelTransfer["kind"],
+): ModelTransfer | undefined =>
+  transfers.reduce<ModelTransfer | undefined>(
+    (latest, transfer) =>
+      (
+        transfer.kind === kind &&
+        (latest === undefined || transfer.sequence > latest.sequence)
+      ) ?
+        transfer
+      : latest,
+    undefined,
+  );
+
 const ModelTransferSetup = ({
   artifacts,
   onCancel,
@@ -1084,11 +1099,13 @@ const ModelTransferSetup = ({
   const transfers = artifacts?.transfers ?? [];
   const selected = artifacts?.models.find((model) => model.selected) ?? null;
   const exportTransfer =
-    transfers.find((transfer) => transfer.transfer_id === exportTransferId) ??
-    transfers.filter((transfer) => transfer.kind === "export").at(-1);
+    exportTransferId === null ?
+      latestModelTransfer(transfers, "export")
+    : transfers.find((transfer) => transfer.transfer_id === exportTransferId);
   const importTransfer =
-    transfers.find((transfer) => transfer.transfer_id === importTransferId) ??
-    transfers.filter((transfer) => transfer.kind === "import").at(-1);
+    importTransferId === null ?
+      latestModelTransfer(transfers, "import")
+    : transfers.find((transfer) => transfer.transfer_id === importTransferId);
 
   const inspect = async () => {
     if (!importPath.trim()) return;
@@ -1285,10 +1302,12 @@ const ModelTransferStatus = ({
     return <small role="status">Model transfer cancelled.</small>;
   }
   if (transfer.status === "ready") {
+    const label = transfer.kind === "export" ? "Bundle ready" : "Model ready";
     return (
       <small role="status">
-        {transfer.kind === "export" ? "Bundle ready" : "Model ready"}:{" "}
-        {transfer.result_path}
+        {transfer.result_path ?
+          `${label}: ${transfer.result_path}`
+        : `${label}.`}
       </small>
     );
   }

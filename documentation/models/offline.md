@@ -146,7 +146,9 @@ docker run --rm -it \
 ```
 
 The mounted host directory remains the durable project and appears as `/workspace` in the container.
-Docker's `none` network also isolates the container from the host, so this recipe does not provide a browser route.
+Docker's `none` network removes external network interfaces while retaining container-local loopback.
+The explicit bind mount still gives the container access to the current host directory, so this is a network-access boundary rather than full host isolation.
+Because the container has no externally reachable network route, this recipe does not provide a browser route.
 An offline browser deployment requires an authenticated or loopback-only inbound route and a separately enforced outbound network boundary.
 
 ## Recover From an Interrupted Transfer

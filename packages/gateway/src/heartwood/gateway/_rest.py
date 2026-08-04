@@ -238,7 +238,7 @@ class RestGateway:
                 return inspect_payload
             try:
                 plan = self.gateway.inspect_local_model_bundle(Path(inspect_payload.path))
-            except (ModelTransferError, OSError) as error:
+            except (ModelRepositoryError, ModelTransferError, OSError) as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(plan))
         if parts == ("settings", "models", "transfers", "exports") and request.method == "POST":

@@ -1040,9 +1040,10 @@ def _wait_for_model_transfer(
     session: NotebookSession,
     transfer_id: str,
 ) -> ModelTransferResponse:
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + 5
     status = session.model_transfer_status(transfer_id)
     while status["status"] in {"running", "cancelling"} and time.monotonic() < deadline:
         time.sleep(0.01)
         status = session.model_transfer_status(transfer_id)
+    assert status["status"] not in {"running", "cancelling"}, "transfer did not settle in time"
     return status

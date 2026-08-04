@@ -71,13 +71,11 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 export OPENHANDS_SUPPRESS_BANNER=1
 
 if [[ "${HEARTWOOD_PRESERVE_PROJECT_MODEL_STATE:-0}" == "1" ]]; then
-  rm -rf \
-    "${project}/input" \
-    "${state_root}/audit" \
-    "${state_root}/cache" \
-    "${state_root}/logs" \
-    "${state_root}/runtime" \
-    "${state_root}/sessions"
+  rm -rf "${project}/input"
+  for state_directory in audit cache logs runtime sessions; do
+    find "${state_root}/${state_directory}" \
+      -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+  done
 else
   rm -rf "${project}/input" "${state_root}"
 fi

@@ -112,7 +112,7 @@ heartwood models inspect OWNER/MODEL
 
 Choose a Qualified configuration, confirm enough free disk, and download again.
 For a Heartwood bundle, run `heartwood models inspect-bundle PATH` and then `heartwood models import PATH`.
-For raw GGUF or safetensors files, use `heartwood models import` with the immutable source revision and license record.
+For raw GGUF or [safetensors](glossary.md) files, use `heartwood models import` with the immutable source revision and license record.
 
 ### A Model Bundle Cannot Be Imported
 

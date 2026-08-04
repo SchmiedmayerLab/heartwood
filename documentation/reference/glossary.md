@@ -120,6 +120,9 @@ SPDX-License-Identifier: MIT
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 
+**safetensors**
+: A tensor-storage format designed to load model weights without executing serialized code.
+
 **SHA-256**
 : A cryptographic hash function Heartwood uses to verify that model files and other artifacts have not changed.
 
@@ -134,3 +137,6 @@ SPDX-License-Identifier: MIT
 
 **vLLM**
 : A GPU-oriented inference server used by supported Heartwood NVIDIA deployments.
+
+**ZIP64**
+: An extension of the ZIP archive format that supports files and archives larger than the original ZIP size limits.

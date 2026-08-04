@@ -965,6 +965,7 @@ class FakeClient implements HeartwoodClient {
       bytes_processed: 2 * 1024 * 1024 * 1024,
       bytes_total: 2 * 1024 * 1024 * 1024,
       bundle_path: bundlePath,
+      sequence: kind === "export" ? 1 : 2,
       result_path:
         kind === "export" ? bundlePath : (
           "/project/.heartwood/models/transferred-model"
@@ -2841,6 +2842,37 @@ describe("App", () => {
         bytes_processed: 1024 * 1024 * 1024,
         bytes_total: 2 * 1024 * 1024 * 1024,
         bundle_path: "/transfer/model.zip",
+        sequence: 2,
+        result_path: null,
+        warnings: [],
+        error: null,
+      },
+      {
+        transfer_id: "export-older",
+        kind: "export",
+        status: "ready",
+        phase: "complete",
+        model_id: "transferred-model",
+        label: "Older transfer",
+        bytes_processed: 1,
+        bytes_total: 1,
+        bundle_path: "/transfer/older.zip",
+        sequence: 1,
+        result_path: "/transfer/older.zip",
+        warnings: [],
+        error: null,
+      },
+      {
+        transfer_id: "import-ready-without-path",
+        kind: "import",
+        status: "ready",
+        phase: "complete",
+        model_id: "transferred-model",
+        label: "Transferred research model",
+        bytes_processed: 1,
+        bytes_total: 1,
+        bundle_path: "/transfer/imported.zip",
+        sequence: 3,
         result_path: null,
         warnings: [],
         error: null,
@@ -2863,6 +2895,10 @@ describe("App", () => {
       }),
     ).toHaveValue(1024 * 1024 * 1024);
     expect(within(transferPanel).getByText(/Exporting · 50%/)).toBeVisible();
+    expect(within(transferPanel).getByText("Model ready.")).toHaveAttribute(
+      "role",
+      "status",
+    );
     fireEvent.click(
       within(transferPanel).getByRole("button", { name: "Cancel" }),
     );

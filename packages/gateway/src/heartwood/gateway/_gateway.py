@@ -2612,6 +2612,10 @@ class SessionGateway:
     def _trusted_transferred_model_choice(self, choice: LocalModelChoice) -> LocalModelChoice:
         """Reject identity collisions and never trust bundle-supplied qualification."""
         choice.validate()
+        try:
+            managed_model_token_budgets(choice.context_window)
+        except ValueError as error:
+            raise ModelRepositoryError(str(error)) from error
         existing = self._local_model_choices.get(choice.model_id)
         if existing is not None and _model_transfer_identity(choice) != _model_transfer_identity(
             existing
@@ -2927,23 +2931,36 @@ def _model_transfer_identity(choice: LocalModelChoice) -> tuple[object, ...]:
     """Return fields that determine transferred weights and runtime behavior."""
     return (
         choice.model_id,
+        choice.label,
+        choice.purpose,
         choice.runtime,
         choice.source_repository,
         choice.source_revision,
         choice.source_path,
         choice.size_bytes,
+        choice.minimum_free_bytes,
         choice.license_id,
         choice.license_posture,
         choice.model_type,
         choice.context_window,
         choice.artifact_sha256,
+        choice.minimum_resource_envelope,
+        choice.recommended_resource_envelope,
         choice.precision,
+        choice.tier,
+        choice.minimum_gpu_count,
+        choice.minimum_gpu_memory_bytes,
+        choice.recommended_ram_bytes,
+        choice.recommended_disk_bytes,
         choice.maximum_context_window,
         choice.tool_call_parser,
         choice.tensor_parallel_size,
+        choice.startup_seconds_min,
+        choice.startup_seconds_max,
         choice.download_policy,
         choice.allow_patterns,
         choice.ignore_patterns,
+        choice.recommended_cpu_count,
     )
 
 

@@ -824,6 +824,7 @@ class ModelTransferResponse(_ApiResponse):
     bytes_processed: int
     bytes_total: int
     bundle_path: str
+    sequence: int
     result_path: str | None
     warnings: list[str]
     error: str | None

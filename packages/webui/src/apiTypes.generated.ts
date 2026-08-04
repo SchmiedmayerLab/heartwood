@@ -338,6 +338,7 @@ export interface ModelTransferResponse {
     | "selecting"
     | "complete";
   result_path: string | null;
+  sequence: number;
   status: "cancelled" | "cancelling" | "error" | "ready" | "running";
   transfer_id: string;
   warnings: string[];

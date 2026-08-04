@@ -81,6 +81,7 @@ jobs:
             --env HEARTWOOD_LOCAL_MODEL_PATH=/workspace/.heartwood/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
             heartwood-capable:local \
             bash -euc '
+              set -o pipefail
               heartwood models inspect-bundle /transfer/qwen25-7b-instruct.heartwood-model.zip
               heartwood models import /transfer/qwen25-7b-instruct.heartwood-model.zip --approve-license
               heartwood runtime start --dry-run | tee /workspace/heartwood-launch-plan.txt

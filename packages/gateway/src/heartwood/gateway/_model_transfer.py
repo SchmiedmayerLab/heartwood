@@ -28,7 +28,6 @@ from heartwood.gateway._model_snapshots import verify_model_snapshot
 from heartwood.persistence import fsync_directory, native_file_lock
 
 _BUNDLE_MANIFEST = "heartwood-model-bundle.json"
-_BUNDLE_SCHEMA = "heartwood.model-bundle.v1"
 _PAYLOAD_ROOT = PurePosixPath("model")
 _CHUNK_SIZE = 1024 * 1024
 _MAX_MANIFEST_BYTES = 1024 * 1024
@@ -210,6 +209,7 @@ class ModelTransfer:
     bytes_processed: int
     bytes_total: int
     bundle_path: str
+    sequence: int = 0
     result_path: str | None = None
     warnings: tuple[str, ...] = ()
     error: str | None = None
@@ -228,6 +228,7 @@ class ModelTransferManager:
         self._transfers: dict[str, ModelTransfer] = {}
         self._cancellations: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self._next_sequence = 0
 
     def start_export(
         self,
@@ -298,7 +299,7 @@ class ModelTransferManager:
     def statuses(self) -> tuple[ModelTransfer, ...]:
         """Return stable snapshots of current transfer operations."""
         with self._lock:
-            return tuple(self._transfers.values())
+            return tuple(sorted(self._transfers.values(), key=lambda transfer: transfer.sequence))
 
     def status(self, transfer_id: str) -> ModelTransfer:
         """Return one transfer or reject an unknown identifier."""
@@ -331,6 +332,8 @@ class ModelTransferManager:
             current = self._transfers.get(transfer.transfer_id)
             if current is not None and current.status in {"running", "cancelling"}:
                 return current
+            self._next_sequence += 1
+            transfer = replace(transfer, sequence=self._next_sequence)
             cancel = threading.Event()
             self._transfers[transfer.transfer_id] = transfer
             self._cancellations[transfer.transfer_id] = cancel
@@ -521,7 +524,6 @@ def export_model_bundle(
     output = _resolve_output_path(bundle_path)
     if output.exists() or output.is_symlink():
         raise ModelTransferError(f"model bundle output already exists: {output}")
-    output.parent.mkdir(parents=True, exist_ok=True)
     files = _verified_source_files(choice, model_path, cancel=cancel)
     manifest = ModelBundleManifest(
         runtime_profile="llama-cpp-cpu" if choice.runtime == "llama-cpp" else "vllm-cuda",
@@ -529,6 +531,7 @@ def export_model_bundle(
         files=tuple(record for record, _path in files),
         total_size_bytes=sum(record.size_bytes for record, _path in files),
     )
+    manifest_bytes = manifest.canonical_bytes()
     temporary = output.with_name(f".{output.name}.heartwood-partial")
     lock_path = output.with_name(f".{output.name}.heartwood-lock")
     with native_file_lock(lock_path, secure_parent=False):
@@ -541,8 +544,8 @@ def export_model_bundle(
                 descriptor = -1
                 with ZipFile(file, "w", compression=ZIP_STORED, allowZip64=True) as archive:
                     archive.writestr(
-                        _zip_info(_BUNDLE_MANIFEST, len(manifest.canonical_bytes())),
-                        manifest.canonical_bytes(),
+                        _zip_info(_BUNDLE_MANIFEST, len(manifest_bytes)),
+                        manifest_bytes,
                     )
                     processed = 0
                     for record, source in files:
