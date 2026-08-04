@@ -14,7 +14,7 @@ license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "anthropic==0.120.2",
-    "filelock==3.32.0",
+    "filelock==3.32.2",
     "heartwood-adapters",
     "heartwood-audit",
     "heartwood-core-adapter",
