@@ -1499,6 +1499,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     )
     assert "run_capable_model" not in smoke
     assert "qwen25-7b-instruct-q4_k_m" in capable_workflow
+    assert "runs-on: blacksmith-8vcpu-ubuntu-2404" in capable_workflow
+    assert "minimum_kib=$((24 * 1024 * 1024))" in capable_workflow
     assert "capable_model_e2e.sh" in capable_workflow
     assert "--network none --read-only" in capable_workflow
     assert "heartwood models export" in capable_workflow
