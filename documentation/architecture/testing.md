@@ -58,7 +58,7 @@ Pull-request validation and main-branch validation both call the shared capable-
 Every pull request includes capable-model acceptance in the required `Release Candidate Ready` aggregate so changes cannot bypass the real model, OpenHands, approval, replay, and audit contract.
 Registry writes, multi-platform manifest assembly, and moving-tag promotion remain main-only; pull requests build the same image stages and validate the promotion scripts without receiving package-write access.
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
-Compute-intensive container builds run on architecture-matched Blacksmith runners and reuse bounded GitHub Actions BuildKit caches; short policy and documentation checks remain on standard GitHub runners.
+Compute-intensive container builds and capable-model acceptance run on appropriately sized Blacksmith runners and reuse bounded GitHub Actions BuildKit caches; short policy and documentation checks remain on standard GitHub runners.
 
 ## Synthetic Data Rule
 
