@@ -1104,6 +1104,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "for state_directory in audit cache logs runtime sessions" in coding_agent
     assert 'find "${state_root}/${state_directory}"' in coding_agent
     assert 'rm -rf "${state_root}/sessions"' not in coding_agent
+    assert 'export HEARTWOOD_LOCAL_RUNTIME_ACTIVE="1"' in capable
+    assert "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID" in capable
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
     assert 'audit_path="${project}/heartwood-audit-export.jsonl"' in coding_agent
