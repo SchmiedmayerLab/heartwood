@@ -1505,6 +1505,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "minimum_kib=$((24 * 1024 * 1024))" in capable_workflow
     assert "capable_model_e2e.sh" in capable_workflow
     assert "--network none --read-only" in capable_workflow
+    assert "docker run --rm --platform linux/amd64 --network none" in capable_workflow
     assert "heartwood models export" in capable_workflow
     assert "heartwood models inspect-bundle" in capable_workflow
     assert "heartwood models import" in capable_workflow
@@ -1516,6 +1517,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "not 1 <= len(tool_executions) <= 3" in qualification
     assert "&& cat cohort-summary.json" in coding_agent
     assert 'f"http://127.0.0.1:{port}/health"' in capable_model
+    assert '"${runtime_artifact_id}" == ".."' in capable_model
+    assert '"${runtime_artifact_id}" == */*' in capable_model
     assert "llama.cpp runtime log (last 200 lines)" in capable_model
     assert "artifact_path.read_text" in qualification
     assert "--jinja" in _read("images/generic/scripts/start_local_runtime.sh")

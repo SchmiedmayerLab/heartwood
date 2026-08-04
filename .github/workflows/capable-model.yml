@@ -67,7 +67,7 @@ jobs:
           heartwood models download qwen25-7b-instruct-q4_k_m
       - name: Export verified portable model bundle
         run: >-
-          docker run --rm --platform linux/amd64
+          docker run --rm --platform linux/amd64 --network none
           --workdir /workspace
           --volume /tmp/heartwood-connected-project:/workspace
           --volume /tmp/heartwood-model-transfer:/transfer

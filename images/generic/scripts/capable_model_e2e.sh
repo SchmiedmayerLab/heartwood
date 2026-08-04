@@ -17,6 +17,11 @@ runtime_artifact_id="${HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID:-}"
 if [[ -z "${runtime_artifact_id}" ]]; then
   runtime_artifact_id="$(basename -- "$(dirname -- "${model_path}")")"
 fi
+if [[ -z "${runtime_artifact_id}" || "${runtime_artifact_id}" == "." || \
+  "${runtime_artifact_id}" == ".." || "${runtime_artifact_id}" == */* ]]; then
+  echo "capable-model runtime artifact id is invalid for: ${model_path}" >&2
+  exit 64
+fi
 
 if [[ ! -f "${model_path}" ]]; then
   echo "capable-model artifact is unavailable: ${model_path}" >&2
