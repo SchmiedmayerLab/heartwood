@@ -62,6 +62,41 @@ The offline path is not a bypass for unsigned directories.
 An operator can still install a complete local directory through the explicit advanced path.
 Heartwood labels that content **Local and unreviewed**, copies it without following links, and binds approval to the exact complete-tree digest.
 
+## Catalog Publication
+
+The Skill repository produces deterministic Agent Skill targets.
+A separately administered deployment publishes those targets through a TUF repository; Heartwood never trusts a mutable Git branch, workflow artifact, archive URL, or GitHub attestation as an update channel.
+
+Publication follows this boundary:
+
+1. merge the Skill change through protected `main` after repository validation and code-owner review;
+2. run **Build Catalog Candidate** with the full merged commit;
+3. confirm that the workflow rebuilt and tested the complete catalog and produced a GitHub build-provenance attestation;
+4. import that exact candidate into a TUF signing event;
+5. publish the resulting signed metadata and content-addressed targets over HTTPS; and
+6. verify the deployed repository with a clean Python-TUF client before adding or updating a Heartwood deployment source.
+
+The candidate workflow does not sign or publish content.
+This keeps repository write access separate from the update root of trust.
+
+Use upstream [TUF-on-CI](https://github.com/theupdateframework/tuf-on-ci) workflows and signing tools instead of maintaining a Heartwood-specific signer.
+Keep root keys offline and use a signature threshold appropriate for the maintainer group.
+Store online snapshot and timestamp keys in an approved key-management or hardware-security service with GitHub OpenID Connect authorization and a protected publication environment.
+
+The initial root ceremony records role keys, thresholds, expiry windows, and repository endpoints.
+Distribute the resulting trusted root to Heartwood deployments through a channel independent of the hosted TUF repository.
+
+## Revocation and Rotation
+
+The Skill source identifies a withdrawal in `revocations.toml` by Skill name and exact complete-tree SHA-256 digest.
+Catalog generation rejects unknown names and digest mismatches, preventing a name-only withdrawal from silently applying to replacement content.
+
+After review, build a new candidate and publish newer signed targets, snapshot, and timestamp metadata.
+Heartwood applies the signed revocation during refresh and rechecks it before exposing installed content to OpenHands.
+
+Metadata and target retention must allow clients with an older trusted root to complete the TUF update sequence.
+Do not delete historical root versions required for rotation.
+
 ## Separate Decisions
 
 Repository review answers whether the package met the curated source's code, policy, and test requirements.

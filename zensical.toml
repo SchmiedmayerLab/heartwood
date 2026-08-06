@@ -69,6 +69,7 @@ nav = [
     { "Contribute" = [
         { "Contribute to Heartwood" = "contribute/index.md" },
         { "Development Guide" = "contribute/development.md" },
+        { "Contribute Research Skills" = "contribute/skills.md" },
         { "Documentation Guide" = "contribute/documentation.md" },
         { "Release Guide" = "contribute/releases.md" },
     ] },
