@@ -43,6 +43,9 @@ import {
 } from "@stanfordspezi/spezi-web-design-system/components/Tabs";
 import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
 import {
+  Archive,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Building2,
   Check,
   Cloud,
@@ -77,6 +80,11 @@ import type {
   ModelRepositoryRequest,
   ModelSource,
   ModelSettings,
+  ModelTransfer,
+  ModelTransferExportRequest,
+  ModelTransferImportRequest,
+  ModelTransferInspectRequest,
+  ModelTransferPlan,
   ModelValidation,
   ProjectReadiness,
   SessionProjection,
@@ -115,12 +123,22 @@ interface UtilitySheetProps {
   ) => Promise<SubscriptionDeviceLogin>;
   onDownload: (modelId: string) => void;
   onDownloadCustom: (request: CustomLocalModelDownloadRequest) => Promise<void>;
+  onCancelModelTransfer: (transferId: string) => Promise<ModelTransfer>;
+  onExportLocalModel: (
+    request: ModelTransferExportRequest,
+  ) => Promise<ModelTransfer>;
   onExportAudit: () => void;
   onInspectSkill: () => void;
+  onInspectModelBundle: (
+    request: ModelTransferInspectRequest,
+  ) => Promise<ModelTransferPlan>;
   onInspectModelRepository: (
     request: ModelRepositoryRequest,
   ) => Promise<ModelRepositoryPlan>;
   onImportLocalModel: (request: LocalModelImportRequest) => Promise<void>;
+  onImportModelBundle: (
+    request: ModelTransferImportRequest,
+  ) => Promise<ModelTransfer>;
   onInitializeProject: () => Promise<void>;
   onInstallSkill: () => void;
   onProfileDraft: (profile: ModelProfileDraft) => void;
@@ -389,13 +407,17 @@ const SettingsContent = (props: UtilitySheetProps) => {
     projectReadiness,
     settings,
     validation,
+    onCancelModelTransfer,
     onConnectModel,
     onConfigureModelSource,
     onDownload,
     onDownloadCustom,
     onDiscoverModels,
+    onExportLocalModel,
     onForgetCredential,
+    onInspectModelBundle,
     onInspectModelRepository,
+    onImportModelBundle,
     onImportLocalModel,
     onInitializeProject,
     onPollSubscriptionLogin,
@@ -673,6 +695,14 @@ const SettingsContent = (props: UtilitySheetProps) => {
               </div>
             </details>
           : null}
+
+          <ModelTransferSetup
+            artifacts={artifacts}
+            onCancel={onCancelModelTransfer}
+            onExport={onExportLocalModel}
+            onImport={onImportModelBundle}
+            onInspect={onInspectModelBundle}
+          />
 
           <CustomLocalModelSetup
             downloads={artifacts?.downloads ?? []}
@@ -1025,6 +1055,290 @@ const formatDuration = (seconds: number): string => {
   const minutes = Math.ceil(seconds / 60);
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 };
+
+const latestModelTransfer = (
+  transfers: ModelTransfer[],
+  kind: ModelTransfer["kind"],
+): ModelTransfer | undefined =>
+  transfers.reduce<ModelTransfer | undefined>(
+    (latest, transfer) =>
+      (
+        transfer.kind === kind &&
+        (latest === undefined || transfer.sequence > latest.sequence)
+      ) ?
+        transfer
+      : latest,
+    undefined,
+  );
+
+const ModelTransferSetup = ({
+  artifacts,
+  onCancel,
+  onExport,
+  onImport,
+  onInspect,
+}: {
+  artifacts: ModelArtifacts | null;
+  onCancel: (transferId: string) => Promise<ModelTransfer>;
+  onExport: (request: ModelTransferExportRequest) => Promise<ModelTransfer>;
+  onImport: (request: ModelTransferImportRequest) => Promise<ModelTransfer>;
+  onInspect: (
+    request: ModelTransferInspectRequest,
+  ) => Promise<ModelTransferPlan>;
+}) => {
+  const [exportPath, setExportPath] = useState("");
+  const [importPath, setImportPath] = useState("");
+  const [plan, setPlan] = useState<ModelTransferPlan | null>(null);
+  const [approved, setApproved] = useState(false);
+  const [operation, setOperation] = useState<
+    "cancel" | "export" | "import" | "inspect" | null
+  >(null);
+  const [exportTransferId, setExportTransferId] = useState<string | null>(null);
+  const [importTransferId, setImportTransferId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const transfers = artifacts?.transfers ?? [];
+  const selected = artifacts?.models.find((model) => model.selected) ?? null;
+  const exportTransfer =
+    exportTransferId === null ?
+      latestModelTransfer(transfers, "export")
+    : transfers.find((transfer) => transfer.transfer_id === exportTransferId);
+  const importTransfer =
+    importTransferId === null ?
+      latestModelTransfer(transfers, "import")
+    : transfers.find((transfer) => transfer.transfer_id === importTransferId);
+
+  const inspect = async () => {
+    if (!importPath.trim()) return;
+    setOperation("inspect");
+    setError(null);
+    setPlan(null);
+    setApproved(false);
+    try {
+      setPlan(await onInspect({ path: importPath.trim() }));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setOperation(null);
+    }
+  };
+
+  const exportModel = async () => {
+    if (!exportPath.trim()) return;
+    setOperation("export");
+    setError(null);
+    try {
+      const transfer = await onExport({ path: exportPath.trim() });
+      setExportTransferId(transfer.transfer_id);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setOperation(null);
+    }
+  };
+
+  const importModel = async () => {
+    if (!plan || !approved) return;
+    setOperation("import");
+    setError(null);
+    try {
+      const transfer = await onImport({
+        approved: true,
+        manifest_sha256: plan.manifest_sha256,
+        path: plan.bundle_path,
+      });
+      setImportTransferId(transfer.transfer_id);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setOperation(null);
+    }
+  };
+
+  const cancel = async (transferId: string) => {
+    setOperation("cancel");
+    setError(null);
+    try {
+      await onCancel(transferId);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setOperation(null);
+    }
+  };
+
+  return (
+    <details className="advanced-section local-model-transfer">
+      <summary>Move a model between environments</summary>
+      <div className="advanced-section-content local-model-form">
+        <p className="panel-empty">
+          Create a verified bundle in a connected environment, transfer it
+          through an approved channel, then inspect and import it without a
+          network connection.
+        </p>
+        <section className="model-transfer-section">
+          <h4>Export the selected model</h4>
+          <small>
+            {selected ?
+              `${selected.label} is selected for this project.`
+            : "Select or download a model before exporting it."}
+          </small>
+          <label>
+            New bundle path
+            <Input
+              placeholder="/approved-transfer/heartwood-model.zip"
+              value={exportPath}
+              onChange={(event) => setExportPath(event.target.value)}
+            />
+          </label>
+          <Button
+            disabled={
+              !selected ||
+              !exportPath.trim() ||
+              operation !== null ||
+              transferIsActive(exportTransfer)
+            }
+            isPending={operation === "export"}
+            variant="outline"
+            onClick={() => void exportModel()}
+          >
+            <ArrowUpFromLine size={15} />
+            Create bundle
+          </Button>
+          <ModelTransferStatus
+            transfer={exportTransfer}
+            onCancel={(transferId) => void cancel(transferId)}
+          />
+        </section>
+        <section className="model-transfer-section">
+          <h4>Import a transferred bundle</h4>
+          <label>
+            Bundle path
+            <Input
+              placeholder="/approved-transfer/heartwood-model.zip"
+              value={importPath}
+              onChange={(event) => {
+                setImportPath(event.target.value);
+                setPlan(null);
+                setApproved(false);
+                setError(null);
+              }}
+            />
+          </label>
+          <Button
+            disabled={!importPath.trim() || operation !== null}
+            isPending={operation === "inspect"}
+            variant="outline"
+            onClick={() => void inspect()}
+          >
+            <Archive size={15} />
+            Inspect bundle
+          </Button>
+          {plan ?
+            <div className="local-model-plan" role="status">
+              <strong>{plan.model.label}</strong>
+              <span>
+                {formatBytes(plan.model.size_bytes)} · {plan.file_count} files ·{" "}
+                {localComputeLabel(plan.model.runtime)}
+              </span>
+              <small>Repository: {plan.model.source_repository}</small>
+              <small>Revision: {plan.model.source_revision}</small>
+              <small>License: {plan.model.license_posture}</small>
+              {plan.warnings.length ?
+                <ul className="model-transfer-warnings">
+                  {plan.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              : null}
+              <label className="checkbox-control">
+                <Checkbox
+                  aria-label="Approve the model bundle import"
+                  checked={approved}
+                  onCheckedChange={(checked) => setApproved(checked === true)}
+                />
+                I reviewed the model license and transfer source
+              </label>
+              <Button
+                disabled={
+                  !approved ||
+                  operation !== null ||
+                  transferIsActive(importTransfer)
+                }
+                isPending={operation === "import"}
+                onClick={() => void importModel()}
+              >
+                <ArrowDownToLine size={15} />
+                Import model
+              </Button>
+            </div>
+          : null}
+          <ModelTransferStatus
+            transfer={importTransfer}
+            onCancel={(transferId) => void cancel(transferId)}
+          />
+        </section>
+        {error ?
+          <small role="alert">{error}</small>
+        : null}
+      </div>
+    </details>
+  );
+};
+
+const ModelTransferStatus = ({
+  transfer,
+  onCancel,
+}: {
+  transfer: ModelTransfer | undefined;
+  onCancel: (transferId: string) => void;
+}) => {
+  if (!transfer) return null;
+  if (transfer.status === "error") {
+    return (
+      <small role="alert">{transfer.error ?? "Model transfer failed"}</small>
+    );
+  }
+  if (transfer.status === "cancelled") {
+    return <small role="status">Model transfer cancelled.</small>;
+  }
+  if (transfer.status === "ready") {
+    const label = transfer.kind === "export" ? "Bundle ready" : "Model ready";
+    return (
+      <small role="status">
+        {transfer.result_path ?
+          `${label}: ${transfer.result_path}`
+        : `${label}.`}
+      </small>
+    );
+  }
+  const total = Math.max(transfer.bytes_total, 1);
+  const processed = Math.min(transfer.bytes_processed, total);
+  return (
+    <div className="download-progress" role="status">
+      <Progress
+        aria-label={`${transfer.kind === "export" ? "Export" : "Import"} progress for ${transfer.label}`}
+        max={total}
+        value={processed}
+      />
+      <small>
+        {transfer.phase.charAt(0).toUpperCase() + transfer.phase.slice(1)} ·{" "}
+        {Math.round((processed / total) * 100)}% · {formatBytes(processed)} of{" "}
+        {formatBytes(total)}
+      </small>
+      <Button
+        disabled={transfer.status === "cancelling"}
+        size="sm"
+        variant="outline"
+        onClick={() => onCancel(transfer.transfer_id)}
+      >
+        {transfer.status === "cancelling" ? "Stopping…" : "Cancel"}
+      </Button>
+    </div>
+  );
+};
+
+const transferIsActive = (transfer: ModelTransfer | undefined): boolean =>
+  transfer?.status === "running" || transfer?.status === "cancelling";
 
 const CustomLocalModelSetup = ({
   downloads,

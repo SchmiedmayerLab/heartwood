@@ -19,23 +19,24 @@ if [[ ! -e "${model_path}" ]]; then
 fi
 mkdir -p "${project}"
 project="$(cd "${project}" && pwd -P)"
+state_root="${project}/.heartwood"
 if [[ -d "${model_path}" ]]; then
   model_path="$(cd "${model_path}" && pwd -P)"
 else
   model_path="$(cd "$(dirname "${model_path}")" && pwd -P)/$(basename "${model_path}")"
 fi
-case "${model_path}" in
-  "${project}"/*)
-    echo "coding-agent model must be outside the disposable test project" >&2
-    exit 64
-    ;;
-esac
+if [[ "${model_path}" == "${project}"/* ]] && ! {
+  [[ "${HEARTWOOD_PRESERVE_PROJECT_MODEL_STATE:-0}" == "1" ]] &&
+    [[ "${model_path}" == "${state_root}/models/"* ]]
+}; then
+  echo "coding-agent model must be outside disposable project data" >&2
+  exit 64
+fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(cd "${script_dir}/../../.." && pwd)}"
 heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
 heartwood_cli="${HEARTWOOD_CLI:-$(dirname -- "${heartwood_python}")/heartwood}"
-state_root="${project}/.heartwood"
 workspace="${state_root}/sessions"
 session_id="${HEARTWOOD_SESSION_ID:-session-capable-model}"
 transcript="${HEARTWOOD_TRANSCRIPT:-${project}/heartwood-transcript.txt}"
@@ -69,7 +70,15 @@ export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 export OPENHANDS_SUPPRESS_BANNER=1
 
-rm -rf "${project}/input" "${state_root}"
+if [[ "${HEARTWOOD_PRESERVE_PROJECT_MODEL_STATE:-0}" == "1" ]]; then
+  rm -rf "${project}/input"
+  for state_directory in audit cache logs runtime sessions; do
+    find "${state_root}/${state_directory}" \
+      -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+  done
+else
+  rm -rf "${project}/input" "${state_root}"
+fi
 mkdir -p "${project}/input"
 rm -f \
   "${cohort_path}" \

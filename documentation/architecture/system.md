@@ -55,6 +55,21 @@ The gateway also owns researcher-facing setup choices, model-connection categori
 Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
 Technical identifiers remain in the typed projection for diagnosis and correlation, while presentation adapters keep them out of the primary workflow.
 
+### Model Artifact Lifecycle
+
+The gateway owns one local-model choice contract for catalog recommendations, inspected Hugging Face repositories, raw imports, downloads, and transferred bundles.
+Every successful path converges on the same project-local selection, resource planner, integrity verifier, and runtime launcher.
+
+Downloads resolve repository metadata to an immutable revision before writing project state.
+A portable transfer first verifies the selected model, records the exact payload and runtime configuration in a canonical manifest, and writes a reproducible uncompressed ZIP64 bundle.
+Import validates archive structure, path safety, sizes, and every SHA-256 digest before atomically publishing private files under `.heartwood/models/`.
+Existing destinations are reverified on retries, and incomplete staging is never selected.
+
+The shared transfer manager owns byte progress, lifecycle, warnings, cancellation, and results for the terminal, browser, and notebook adapters.
+An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
+Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
+Transferred models remain outside the repository-download registry, so an offline restart cannot silently turn an imported artifact into a network request.
+
 ### Workspace Inspection
 
 The gateway owns one bounded read-only workspace service for project trees, UTF-8 text files, changed paths, and per-file diffs.

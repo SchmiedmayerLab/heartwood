@@ -44,6 +44,11 @@ from heartwood.schemas._api import (
     ModelSnapshotResponse,
     ModelSourceOptionResponse,
     ModelSourceRequest,
+    ModelTransferExportRequest,
+    ModelTransferImportRequest,
+    ModelTransferInspectRequest,
+    ModelTransferPlanResponse,
+    ModelTransferResponse,
     ModelValidationResponse,
     PlatformCapabilitiesResponse,
     PolicyDecisionResponse,
@@ -144,6 +149,11 @@ __all__ = [
     "ModelSnapshotResponse",
     "ModelSourceOptionResponse",
     "ModelSourceRequest",
+    "ModelTransferExportRequest",
+    "ModelTransferImportRequest",
+    "ModelTransferInspectRequest",
+    "ModelTransferPlanResponse",
+    "ModelTransferResponse",
     "ModelValidationResponse",
     "PlatformCapabilitiesResponse",
     "PolicyDecisionResponse",
@@ -179,4 +189,4 @@ __all__ = [
     "schema_names",
 ]
 
-__version__ = "0.3.0-beta.1"
+__version__ = "0.3.0-beta.2"

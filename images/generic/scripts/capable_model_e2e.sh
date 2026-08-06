@@ -13,6 +13,15 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 runtime_root="$(cd "${script_dir}/../../.." && pwd)"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${project}/llama-server.log}"
 runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+runtime_artifact_id="${HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID:-}"
+if [[ -z "${runtime_artifact_id}" ]]; then
+  runtime_artifact_id="$(basename -- "$(dirname -- "${model_path}")")"
+fi
+if [[ -z "${runtime_artifact_id}" || "${runtime_artifact_id}" == "." || \
+  "${runtime_artifact_id}" == ".." || "${runtime_artifact_id}" == */* ]]; then
+  echo "capable-model runtime artifact id is invalid for: ${model_path}" >&2
+  exit 64
+fi
 
 if [[ ! -f "${model_path}" ]]; then
   echo "capable-model artifact is unavailable: ${model_path}" >&2
@@ -26,6 +35,8 @@ export HEARTWOOD_LOCAL_MODEL_CONTEXT="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 export HEARTWOOD_LOCAL_MODEL_THREADS="${HEARTWOOD_LOCAL_MODEL_THREADS:-8}"
 export HEARTWOOD_LOCAL_RUNTIME_PORT="${runtime_port}"
 export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
+export HEARTWOOD_LOCAL_RUNTIME_ACTIVE="1"
+export HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID="${runtime_artifact_id}"
 
 bash "${runtime_root}/images/generic/scripts/start_local_runtime.sh" >"${runtime_log}" 2>&1 &
 runtime_pid="$!"

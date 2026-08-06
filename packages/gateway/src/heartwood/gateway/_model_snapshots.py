@@ -734,8 +734,12 @@ def _discard_partial_snapshot(staging: Path, resume_record_path: Path) -> None:
     resume_record_path.unlink(missing_ok=True)
 
 
-def verify_model_snapshot(root: Path) -> None:
-    """Reject unlisted, missing, linked, duplicated, or modified snapshot files."""
+def verify_model_snapshot(
+    root: Path,
+    *,
+    checkpoint: Callable[[], None] | None = None,
+) -> dict[str, str]:
+    """Reject invalid snapshot files and return their verified SHA-256 digests."""
     manifest = root / "SHA256SUMS"
     if root.is_symlink() or not root.is_dir() or not manifest.is_file() or manifest.is_symlink():
         raise ValueError("model root must contain a regular SHA256SUMS manifest")
@@ -778,13 +782,18 @@ def verify_model_snapshot(root: Path) -> None:
         raise ValueError(f"model snapshot does not match SHA256SUMS coverage ({detail})")
 
     for relative_name, expected_digest in expected.items():
+        if checkpoint is not None:
+            checkpoint()
         hasher = hashlib.sha256()
         descriptor = os.open(root / relative_name, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(descriptor, "rb") as file:
             while chunk := file.read(1024 * 1024):
+                if checkpoint is not None:
+                    checkpoint()
                 hasher.update(chunk)
         if hasher.hexdigest() != expected_digest:
             raise ValueError(f"SHA-256 mismatch: {relative_name}")
+    return expected
 
 
 def write_model_snapshot_manifest(root: Path) -> None:

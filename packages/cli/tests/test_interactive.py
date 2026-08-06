@@ -85,6 +85,16 @@ async def _wait_for_tui(
         await pilot.pause(0.05)
 
 
+def _action_mode_screen_is_ready(app: HeartwoodTerminalApp) -> bool:
+    screen = app.screen
+    if not isinstance(screen, ActionModeScreen):
+        return False
+    return any(
+        isinstance(option, OptionList) and option.has_focus
+        for option in screen.query("#action-mode-options")
+    )
+
+
 def _test_action_settings() -> ActionSettingsResponse:
     return {
         "schema_version": "heartwood.action-settings.v1",
@@ -940,7 +950,7 @@ def test_textual_gateway_reads_run_outside_the_event_loop(tmp_path: Path) -> Non
             app.action_show_permissions()
             await _wait_for_tui(
                 pilot,
-                lambda: isinstance(app.screen, ActionModeScreen),
+                lambda: _action_mode_screen_is_ready(app),
                 description="the action review mode screen",
             )
 
@@ -1242,7 +1252,7 @@ def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
             await pilot.press("enter")
             await _wait_for_tui(
                 pilot,
-                lambda: isinstance(app.screen, ActionModeScreen),
+                lambda: _action_mode_screen_is_ready(app),
                 description="the action review mode screen",
             )
 

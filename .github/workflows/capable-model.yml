@@ -16,13 +16,22 @@ permissions:
 jobs:
   acceptance:
     name: Capable Model OpenHands Acceptance (linux/amd64)
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Verify capable-model runner memory
+        run: |
+          minimum_kib=$((24 * 1024 * 1024))
+          total_kib="$(awk '$1 == "MemTotal:" { print $2 }' /proc/meminfo)"
+          if [[ -z "${total_kib}" ]] || (( total_kib < minimum_kib )); then
+            printf 'Capable-model acceptance requires at least 24 GiB RAM; runner reports %s KiB.\n' \
+              "${total_kib:-unknown}" >&2
+            exit 1
+          fi
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build no-weight runtime image
@@ -41,34 +50,53 @@ jobs:
             runtime.tags=heartwood-capable:local
             runtime.cache-from=type=gha,scope=runtime-amd64
             runtime.cache-to=type=gha,scope=runtime-amd64,mode=min
-      - name: Prepare isolated model and project storage
+      - name: Prepare connected, transfer, and air-gapped storage
         run: |
-          sudo mkdir -p /tmp/heartwood-model-cache
+          sudo mkdir -p /tmp/heartwood-connected-project
+          sudo mkdir -p /tmp/heartwood-model-transfer
           sudo mkdir -p /tmp/heartwood-project
-          sudo chown 10001:10001 /tmp/heartwood-model-cache
+          sudo chown 10001:10001 /tmp/heartwood-connected-project
+          sudo chown 10001:10001 /tmp/heartwood-model-transfer
           sudo chown 10001:10001 /tmp/heartwood-project
       - name: Download and verify reviewed agent model
         run: >-
           docker run --rm --platform linux/amd64
-          --workdir /model-cache
-          --volume /tmp/heartwood-model-cache:/model-cache
+          --workdir /workspace
+          --volume /tmp/heartwood-connected-project:/workspace
           heartwood-capable:local
           heartwood models download qwen25-7b-instruct-q4_k_m
-      - name: Run mounted capable model without network
+      - name: Export verified portable model bundle
         run: >-
-          docker run --rm --platform linux/amd64 --network none --read-only
-          --volume /tmp/heartwood-project:/workspace
-          --tmpfs /tmp:rw,nosuid,nodev,size=4g
-          --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
-          --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
-          --cap-drop ALL
-          --security-opt no-new-privileges:true
-          --pids-limit 512
-          --volume /tmp/heartwood-model-cache/.heartwood/models:/models:ro
-          --env HEARTWOOD_CAPABLE_PROJECT=/workspace
-          --env HEARTWOOD_LOCAL_MODEL_PATH=/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+          docker run --rm --platform linux/amd64 --network none
+          --workdir /workspace
+          --volume /tmp/heartwood-connected-project:/workspace
+          --volume /tmp/heartwood-model-transfer:/transfer
           heartwood-capable:local
-          bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
+          heartwood models export /transfer/qwen25-7b-instruct.heartwood-model.zip
+      - name: Import and qualify transferred model without network
+        run: |
+          docker run --rm --platform linux/amd64 --network none --read-only \
+            --workdir /workspace \
+            --volume /tmp/heartwood-project:/workspace \
+            --volume /tmp/heartwood-model-transfer:/transfer:ro \
+            --tmpfs /tmp:rw,nosuid,nodev,size=4g \
+            --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 512 \
+            --env HEARTWOOD_CAPABLE_PROJECT=/workspace \
+            --env HEARTWOOD_PRESERVE_PROJECT_MODEL_STATE=1 \
+            --env HEARTWOOD_LOCAL_MODEL_PATH=/workspace/.heartwood/models/qwen25-7b-instruct-q4_k_m/Qwen2.5-7B-Instruct-Q4_K_M.gguf \
+            heartwood-capable:local \
+            bash -euc '
+              set -o pipefail
+              heartwood models inspect-bundle /transfer/qwen25-7b-instruct.heartwood-model.zip
+              heartwood models import /transfer/qwen25-7b-instruct.heartwood-model.zip --approve-license
+              heartwood runtime start --dry-run | tee /workspace/heartwood-launch-plan.txt
+              grep -F "Model status: selected for this project" /workspace/heartwood-launch-plan.txt
+              exec bash /opt/heartwood/images/generic/scripts/capable_model_e2e.sh
+            '
       - name: Prepare coding-agent qualification evidence
         if: always()
         run: |
@@ -82,6 +110,7 @@ jobs:
           name: capable-model-qualification-${{ github.sha }}
           path: |
             /tmp/heartwood-project/heartwood-qualification.json
+            /tmp/heartwood-project/heartwood-launch-plan.txt
             /tmp/heartwood-project/heartwood-replay.txt
             /tmp/heartwood-project/heartwood-transcript.txt
           if-no-files-found: warn

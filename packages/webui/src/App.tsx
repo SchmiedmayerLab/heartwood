@@ -55,6 +55,7 @@ import type {
   ModelProfileDraft,
   ModelSource,
   ModelSettings,
+  ModelTransfer,
   ModelValidation,
   ProjectReadiness,
   ProjectionApprovalGroup,
@@ -284,6 +285,22 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     );
   }, [refreshProjectState]);
 
+  const updateModelTransfer = useCallback((transfer: ModelTransfer) => {
+    setModelArtifacts((current) =>
+      current === null ? current : (
+        {
+          ...current,
+          transfers: [
+            ...current.transfers.filter(
+              (item) => item.transfer_id !== transfer.transfer_id,
+            ),
+            transfer,
+          ],
+        }
+      ),
+    );
+  }, []);
+
   useEffect(() => {
     let active = true;
     const generation = selectionGeneration.current;
@@ -411,13 +428,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     };
   }, [refreshProjectState]);
 
-  const modelDownloadActive =
-    modelArtifacts?.downloads.some(
-      (download) => download.status === "downloading",
-    ) ?? false;
+  const modelOperationActive =
+    modelArtifacts === null ? false : modelOperationsActive(modelArtifacts);
 
   useEffect(() => {
-    if (!modelDownloadActive) {
+    if (!modelOperationActive) {
       const recoveredError = modelPollingError.current;
       modelPollingError.current = null;
       if (recoveredError !== null) {
@@ -437,7 +452,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           setError((current) => (current === recoveredError ? null : current));
         }
         setModelArtifacts(artifacts);
-        if (artifacts.downloads.some((item) => item.status === "downloading")) {
+        if (modelOperationsActive(artifacts)) {
           timer = window.setTimeout(() => void poll(), 500);
         } else {
           void refreshProjectState().catch((caught: unknown) =>
@@ -458,7 +473,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       active = false;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [modelDownloadActive, refreshProjectState, resolvedClient]);
+  }, [modelOperationActive, refreshProjectState, resolvedClient]);
 
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === sessionId) ?? null,
@@ -1084,7 +1099,21 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             await resolvedClient.downloadCustomLocalModel(request);
             setModelArtifacts(await resolvedClient.getModelArtifacts());
           }}
+          onCancelModelTransfer={async (transferId) => {
+            const transfer =
+              await resolvedClient.cancelModelTransfer(transferId);
+            updateModelTransfer(transfer);
+            return transfer;
+          }}
+          onExportLocalModel={async (request) => {
+            const transfer = await resolvedClient.exportLocalModel(request);
+            updateModelTransfer(transfer);
+            return transfer;
+          }}
           onExportAudit={() => void exportAudit()}
+          onInspectModelBundle={(request) =>
+            resolvedClient.inspectModelBundle(request)
+          }
           onInspectModelRepository={(request) =>
             resolvedClient.inspectModelRepository(request)
           }
@@ -1099,6 +1128,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             setModelArtifacts(artifacts);
             setStartupPlan(startup);
             setProjectReadiness(startup.readiness);
+          }}
+          onImportModelBundle={async (request) => {
+            const transfer = await resolvedClient.importModelBundle(request);
+            updateModelTransfer(transfer);
+            return transfer;
           }}
           onInitializeProject={async () => {
             const startup = await resolvedClient.initializeProject();
@@ -1292,6 +1326,13 @@ const selectProjection = (
   }
   return { projection: current, retiredEpoch: null };
 };
+
+const modelOperationsActive = (artifacts: ModelArtifacts): boolean =>
+  artifacts.downloads.some((download) => download.status === "downloading") ||
+  artifacts.transfers.some(
+    (transfer) =>
+      transfer.status === "running" || transfer.status === "cancelling",
+  );
 
 const modelValidationKey = (
   profile: ModelProfile,

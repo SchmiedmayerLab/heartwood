@@ -50,6 +50,11 @@ import type {
   ModelRepositoryRequest,
   ModelSource,
   ModelSettings,
+  ModelTransfer,
+  ModelTransferExportRequest,
+  ModelTransferImportRequest,
+  ModelTransferInspectRequest,
+  ModelTransferPlan,
   ModelValidation,
   ProjectReadiness,
   SessionCommand,
@@ -278,9 +283,13 @@ class FakeClient implements HeartwoodClient {
   currentActions = actions();
   currentReadiness = projectReadiness();
   currentDownloads: ModelDownload[] = [];
+  currentTransfers: ModelTransfer[] = [];
   downloadedArtifact: string | null = null;
   customDownloadRequest: CustomLocalModelDownloadRequest | null = null;
   localImportRequest: LocalModelImportRequest | null = null;
+  modelBundleInspectRequest: ModelTransferInspectRequest | null = null;
+  modelBundleExportRequest: ModelTransferExportRequest | null = null;
+  modelBundleImportRequest: ModelTransferImportRequest | null = null;
   inspectedRepository: ModelRepositoryRequest | null = null;
   repositoryError: Error | null = null;
   customModel: LocalModelChoice | null = null;
@@ -629,6 +638,66 @@ class FakeClient implements HeartwoodClient {
     });
   }
 
+  inspectModelBundle(
+    request: ModelTransferInspectRequest,
+  ): Promise<ModelTransferPlan> {
+    this.modelBundleInspectRequest = request;
+    return Promise.resolve({
+      bundle_path: request.path,
+      bundle_size_bytes: 2 * 1024 * 1024 * 1024,
+      manifest_sha256: "3".repeat(64),
+      file_count: 4,
+      runtime_profile: "llama-cpp-cpu",
+      model: localModelChoice({
+        model_id: "transferred-model",
+        label: "Transferred research model",
+        purpose: "Transferred model",
+        source_repository: "example/transferred-model",
+        source_revision: "2".repeat(40),
+        size_bytes: 2 * 1024 * 1024 * 1024,
+        minimum_free_bytes: 2 * 1024 * 1024 * 1024,
+        license_id: "Apache-2.0",
+        license_posture: "Apache-2.0",
+        catalog_source: "transferred",
+        selected: false,
+      }),
+      warnings: ["Use an institution-approved transfer channel."],
+    });
+  }
+
+  exportLocalModel(
+    request: ModelTransferExportRequest,
+  ): Promise<ModelTransfer> {
+    this.modelBundleExportRequest = request;
+    const transfer = this.modelTransfer("export", request.path);
+    this.currentTransfers = [transfer];
+    return Promise.resolve(transfer);
+  }
+
+  importModelBundle(
+    request: ModelTransferImportRequest,
+  ): Promise<ModelTransfer> {
+    this.modelBundleImportRequest = request;
+    const transfer = this.modelTransfer("import", request.path);
+    this.currentTransfers = [
+      ...this.currentTransfers.filter((item) => item.kind !== "import"),
+      transfer,
+    ];
+    return Promise.resolve(transfer);
+  }
+
+  cancelModelTransfer(transferId: string): Promise<ModelTransfer> {
+    const current = this.currentTransfers.find(
+      (transfer) => transfer.transfer_id === transferId,
+    );
+    if (!current) return Promise.reject(new Error("Unknown model transfer"));
+    const cancelled: ModelTransfer = { ...current, status: "cancelled" };
+    this.currentTransfers = this.currentTransfers.map((transfer) =>
+      transfer.transfer_id === transferId ? cancelled : transfer,
+    );
+    return Promise.resolve(cancelled);
+  }
+
   forgetCredential(connectionId: string): Promise<CredentialSettings> {
     const connection = this.currentSettings.connections.find(
       (candidate) => candidate.connection_id === connectionId,
@@ -874,11 +943,36 @@ class FakeClient implements HeartwoodClient {
         ...(this.customModel === null ? [] : [this.customModel]),
       ],
       downloads: this.currentDownloads,
+      transfers: this.currentTransfers,
       gpu_environment: {
         platform_id: "generic",
         capacities: [],
       },
     });
+  }
+
+  private modelTransfer(
+    kind: ModelTransfer["kind"],
+    bundlePath: string,
+  ): ModelTransfer {
+    return {
+      transfer_id: `${kind}-transfer`,
+      kind,
+      status: "ready",
+      phase: "complete",
+      model_id: "transferred-model",
+      label: "Transferred research model",
+      bytes_processed: 2 * 1024 * 1024 * 1024,
+      bytes_total: 2 * 1024 * 1024 * 1024,
+      bundle_path: bundlePath,
+      sequence: kind === "export" ? 1 : 2,
+      result_path:
+        kind === "export" ? bundlePath : (
+          "/project/.heartwood/models/transferred-model"
+        ),
+      warnings: [],
+      error: null,
+    };
   }
 
   inspectModelRepository(
@@ -1377,7 +1471,7 @@ describe("App", () => {
     expect(
       screen.queryByText("Delayed result from the first session"),
     ).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Task")).toBeEnabled();
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
   });
 
   it("keeps the active session connected when it is selected again", async () => {
@@ -1402,7 +1496,7 @@ describe("App", () => {
     expect(
       screen.getByRole("heading", { name: "Synthetic analysis" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Task")).toBeEnabled();
+    await waitFor(() => expect(screen.getByLabelText("Task")).toBeEnabled());
   });
 
   it("ignores a retired stream after selecting another session", async () => {
@@ -2658,6 +2752,159 @@ describe("App", () => {
     );
     expect(
       await screen.findByText("Model imported and selected"),
+    ).toHaveAttribute("role", "status");
+  });
+
+  it("exports and imports a verified model bundle through one reviewed flow", async () => {
+    const client = new FakeClient();
+    client.currentSettings = {
+      ...client.currentSettings,
+      model_source: "heartwood",
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(
+      await screen.findByText("Move a model between environments"),
+    );
+    const transferPanel = screen
+      .getByText("Move a model between environments")
+      .closest<HTMLElement>(".local-model-transfer");
+    expect(transferPanel).not.toBeNull();
+    if (!transferPanel) throw new Error("model transfer panel is unavailable");
+
+    fireEvent.change(within(transferPanel).getByLabelText("New bundle path"), {
+      target: { value: "/transfer/exported-model.zip" },
+    });
+    fireEvent.click(
+      within(transferPanel).getByRole("button", { name: "Create bundle" }),
+    );
+    await waitFor(() =>
+      expect(client.modelBundleExportRequest).toEqual({
+        path: "/transfer/exported-model.zip",
+      }),
+    );
+    expect(
+      within(transferPanel).getByText(
+        "Bundle ready: /transfer/exported-model.zip",
+      ),
+    ).toHaveAttribute("role", "status");
+
+    fireEvent.change(within(transferPanel).getByLabelText("Bundle path"), {
+      target: { value: "/transfer/imported-model.zip" },
+    });
+    fireEvent.click(
+      within(transferPanel).getByRole("button", { name: "Inspect bundle" }),
+    );
+    expect(
+      await within(transferPanel).findByText("Transferred research model"),
+    ).toBeVisible();
+    expect(
+      within(transferPanel).getByText("License: Apache-2.0"),
+    ).toBeVisible();
+    expect(
+      within(transferPanel).getByText(
+        "Use an institution-approved transfer channel.",
+      ),
+    ).toBeVisible();
+    fireEvent.click(
+      within(transferPanel).getByRole("checkbox", {
+        name: "Approve the model bundle import",
+      }),
+    );
+    fireEvent.click(
+      within(transferPanel).getByRole("button", { name: "Import model" }),
+    );
+
+    await waitFor(() =>
+      expect(client.modelBundleImportRequest).toEqual({
+        approved: true,
+        manifest_sha256: "3".repeat(64),
+        path: "/transfer/imported-model.zip",
+      }),
+    );
+    expect(
+      within(transferPanel).getByText(
+        "Model ready: /project/.heartwood/models/transferred-model",
+      ),
+    ).toHaveAttribute("role", "status");
+  });
+
+  it("shows shared model transfer progress and cancellation", async () => {
+    const client = new FakeClient();
+    client.currentTransfers = [
+      {
+        transfer_id: "export-active",
+        kind: "export",
+        status: "running",
+        phase: "exporting",
+        model_id: "transferred-model",
+        label: "Transferred research model",
+        bytes_processed: 1024 * 1024 * 1024,
+        bytes_total: 2 * 1024 * 1024 * 1024,
+        bundle_path: "/transfer/model.zip",
+        sequence: 2,
+        result_path: null,
+        warnings: [],
+        error: null,
+      },
+      {
+        transfer_id: "export-older",
+        kind: "export",
+        status: "ready",
+        phase: "complete",
+        model_id: "transferred-model",
+        label: "Older transfer",
+        bytes_processed: 1,
+        bytes_total: 1,
+        bundle_path: "/transfer/older.zip",
+        sequence: 1,
+        result_path: "/transfer/older.zip",
+        warnings: [],
+        error: null,
+      },
+      {
+        transfer_id: "import-ready-without-path",
+        kind: "import",
+        status: "ready",
+        phase: "complete",
+        model_id: "transferred-model",
+        label: "Transferred research model",
+        bytes_processed: 1,
+        bytes_total: 1,
+        bundle_path: "/transfer/imported.zip",
+        sequence: 3,
+        result_path: null,
+        warnings: [],
+        error: null,
+      },
+    ];
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(
+      await screen.findByText("Move a model between environments"),
+    );
+    const transferPanel = screen
+      .getByText("Move a model between environments")
+      .closest<HTMLElement>(".local-model-transfer");
+    expect(transferPanel).not.toBeNull();
+    if (!transferPanel) throw new Error("model transfer panel is unavailable");
+
+    expect(
+      within(transferPanel).getByRole("progressbar", {
+        name: "Export progress for Transferred research model",
+      }),
+    ).toHaveValue(1024 * 1024 * 1024);
+    expect(within(transferPanel).getByText(/Exporting · 50%/)).toBeVisible();
+    expect(within(transferPanel).getByText("Model ready.")).toHaveAttribute(
+      "role",
+      "status",
+    );
+    fireEvent.click(
+      within(transferPanel).getByRole("button", { name: "Cancel" }),
+    );
+
+    expect(
+      await within(transferPanel).findByText("Model transfer cancelled."),
     ).toHaveAttribute("role", "status");
   });
 

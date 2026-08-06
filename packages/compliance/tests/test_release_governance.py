@@ -388,7 +388,7 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "runner: ubuntu-24.04" in gpu
     assert "runner: blacksmith-16vcpu-ubuntu-2404" in gpu
-    assert "blacksmith" not in capable
+    assert "runs-on: blacksmith-8vcpu-ubuntu-2404" in capable
     assert "uses: docker/bake-action@v7" in capable
     assert "uses: docker/bake-action@v7" in gpu
     assert "cache-from=type=gha" not in gpu
@@ -396,7 +396,7 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
 
 
-def test_blacksmith_runners_are_reserved_for_terra_gpu_image_builds() -> None:
+def test_blacksmith_runners_are_reserved_for_high_memory_validation() -> None:
     workflow_root = Path(".github/workflows")
     blacksmith_workflows = {
         path.name
@@ -405,14 +405,19 @@ def test_blacksmith_runners_are_reserved_for_terra_gpu_image_builds() -> None:
     }
 
     assert blacksmith_workflows == {
+        "capable-model.yml",
         "gpu-container-image.yml",
         "gpu-container-pr-validation.yml",
         "gpu-container-pr.yml",
     }
-    for workflow_name in blacksmith_workflows:
+    gpu_workflows = blacksmith_workflows - {"capable-model.yml"}
+    for workflow_name in gpu_workflows:
         workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
         assert workflow.count("blacksmith-16vcpu-ubuntu-2404") == 1
-    for workflow_name in blacksmith_workflows - {"gpu-container-pr.yml"}:
+    capable = (workflow_root / "capable-model.yml").read_text(encoding="utf-8")
+    assert capable.count("blacksmith-8vcpu-ubuntu-2404") == 1
+    assert "minimum_kib=$((24 * 1024 * 1024))" in capable
+    for workflow_name in gpu_workflows - {"gpu-container-pr.yml"}:
         workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
         assert "target: runtime-gpu-nvidia\n            runner: ubuntu-24.04" in workflow
         assert (

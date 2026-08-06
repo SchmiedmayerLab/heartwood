@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
 import uvicorn
@@ -69,6 +70,7 @@ from heartwood.gateway import (
     ModelRepositoryError,
     ModelSettingsError,
     ModelSnapshotError,
+    ModelTransferError,
     NativeLockUnavailableError,
     ProjectConfig,
     ProjectConfigStore,
@@ -96,6 +98,8 @@ from heartwood.schemas import (
     ModelCatalogResponse,
     ModelRepositoryPlanResponse,
     ModelSettingsResponse,
+    ModelTransferPlanResponse,
+    ModelTransferResponse,
     ModelValidationResponse,
     SkillSettingsResponse,
     SkillSummaryResponse,
@@ -113,7 +117,7 @@ from heartwood.session import (
 
 __all__ = ["__version__", "main"]
 
-__version__ = "0.3.0-beta.1"
+__version__ = "0.3.0-beta.2"
 
 _PROG = "heartwood"
 
@@ -372,22 +376,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Advanced: repository branch, tag, or commit for an owner/model identifier.",
     )
     import_model = model_subparsers.add_parser(
-        "import", help="Import an existing GGUF file or vLLM model directory."
+        "import", help="Import a Heartwood bundle or an existing model artifact."
     )
     import_model.add_argument("path", type=Path, help="Existing model file or directory.")
     import_model.add_argument(
         "--source",
-        required=True,
         help="Upstream Hugging Face owner/model identifier.",
     )
     import_model.add_argument(
         "--revision",
-        required=True,
         help="Immutable upstream commit hash.",
     )
     import_model.add_argument(
         "--license",
-        required=True,
         dest="license_posture",
         help="Upstream license identifier or review note.",
     )
@@ -397,6 +398,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default=32_768,
         help="Maximum model context supported by this artifact.",
     )
+    import_model.add_argument(
+        "--approve-license",
+        action="store_true",
+        help="Confirm the displayed bundle license without an interactive prompt.",
+    )
+    export_model = model_subparsers.add_parser(
+        "export", help="Export the selected model as a verified portable bundle."
+    )
+    export_model.add_argument("path", type=Path, help="New bundle output path.")
+    inspect_bundle = model_subparsers.add_parser(
+        "inspect-bundle", help="Inspect a portable model bundle without importing it."
+    )
+    inspect_bundle.add_argument("path", type=Path, help="Existing model bundle path.")
 
     skills = subparsers.add_parser("skills", help="Inspect bundled Skills and extensions.")
     skill_subparsers = skills.add_subparsers(dest="skills_command", metavar="<skills-command>")
@@ -1437,13 +1451,53 @@ def _handle_models(
             print()
             print(_format_model_validation(gateway.validate_model_profile()))
             return 0
+        if command == "inspect-bundle":
+            print(_format_model_transfer_plan(gateway.inspect_local_model_bundle(args.path)))
+            return 0
+        if command == "export":
+            transfer = gateway.export_local_model(args.path)
+            completed = _wait_for_model_transfer(gateway, transfer)
+            print(f"Model bundle is ready: {completed['result_path']}")
+            print("Transfer the bundle through an approved channel, then import it in Heartwood.")
+            return 0
         if command == "import":
+            raw_fields = (args.source, args.revision, args.license_posture)
+            if not any(raw_fields):
+                plan = gateway.inspect_local_model_bundle(args.path)
+                print(_format_model_transfer_plan(plan))
+                if not args.approve_license:
+                    try:
+                        approved = input(
+                            "Import this model and accept the displayed license? [y/N]: "
+                        )
+                    except EOFError as error:
+                        raise ModelTransferError(
+                            "model bundle import approval was cancelled"
+                        ) from error
+                    if approved.strip().lower() not in {"y", "yes"}:
+                        raise ModelTransferError("model bundle import was not approved")
+                transfer = gateway.import_local_model_bundle(
+                    args.path,
+                    approved=True,
+                    manifest_sha256=plan["manifest_sha256"],
+                )
+                completed = _wait_for_model_transfer(gateway, transfer)
+                print(f"{completed['label']} is ready in this project.")
+                print(f"Location: {completed['result_path']}")
+                print("Run `heartwood` to use it.")
+                return 0
+            if not all(raw_fields):
+                parser.error(
+                    "raw model imports require --source, --revision, and --license together"
+                )
+            if args.approve_license:
+                parser.error("--approve-license applies only to Heartwood model bundles")
             imported = _run_with_progress(
                 lambda: gateway.import_local_model(
                     args.path,
-                    source_repository=args.source,
-                    source_revision=args.revision,
-                    license_posture=args.license_posture,
+                    source_repository=cast(str, args.source),
+                    source_revision=cast(str, args.revision),
+                    license_posture=cast(str, args.license_posture),
                     context_window=args.context_window,
                 ),
                 activity=_MODEL_PREPARATION_ACTIVITY,
@@ -1511,6 +1565,7 @@ def _handle_models(
         ModelRepositoryError,
         ModelSettingsError,
         ModelSnapshotError,
+        ModelTransferError,
     ) as error:
         parser.error(str(error))
     parser.parse_args(["models", "--help"])
@@ -1668,6 +1723,28 @@ def _format_model_repository(inspection: ModelRepositoryPlanResponse) -> str:
             "review capability, license, or suitability.",
         )
     )
+    return "\n".join(lines)
+
+
+def _format_model_transfer_plan(plan: ModelTransferPlanResponse) -> str:
+    model = plan["model"]
+    runtime = "NVIDIA GPU" if model["runtime"] == "vllm" else "CPU"
+    lines = [
+        "Heartwood model bundle",
+        "",
+        f"Model: {model['label']}",
+        f"Repository: {model['source_repository']}",
+        f"Revision: {model['source_revision']}",
+        f"License: {model['license_posture']}",
+        f"Runtime: {runtime}",
+        f"Model files: {_format_transfer_bytes(model['size_bytes'])}",
+        "Bundle: "
+        f"{_format_transfer_bytes(plan['bundle_size_bytes'])} in {plan['file_count']} files",
+        f"Context capacity: up to {model['context_window']:,} tokens",
+    ]
+    if plan["warnings"]:
+        lines.extend(("", "Review before import:"))
+        lines.extend(f"  - {warning}" for warning in plan["warnings"])
     return "\n".join(lines)
 
 
@@ -1847,6 +1924,82 @@ def _submit_and_wait(session: InteractiveSession, line: str) -> InteractionResul
         error=result.error,
         replace_transcript=result.replace_transcript,
     )
+
+
+def _wait_for_model_transfer(
+    gateway: SessionGateway,
+    initial: ModelTransferResponse,
+) -> ModelTransferResponse:
+    """Wait for one shared transfer while rendering byte progress and cancellation."""
+    transfer_id = initial["transfer_id"]
+    current = initial
+    animated = sys.stderr.isatty() and "NO_COLOR" not in os.environ
+    started = time.monotonic()
+    last_report = started
+    cancelled = False
+    if not animated:
+        print(
+            f"{current['phase'].capitalize()} model transfer "
+            f"({_format_transfer_bytes(current['bytes_total'])}). "
+            "Large models can take several minutes; progress will update here.",
+            file=sys.stderr,
+            flush=True,
+        )
+    try:
+        while current["status"] in {"running", "cancelling"}:
+            total = max(current["bytes_total"], 1)
+            processed = min(current["bytes_processed"], total)
+            percentage = int((processed / total) * 100)
+            phase = current["phase"].replace("-", " ").capitalize()
+            elapsed = int(time.monotonic() - started)
+            if animated:
+                print(
+                    f"\r\033[2K{phase} model... {percentage}% "
+                    f"({_format_transfer_bytes(processed)} of "
+                    f"{_format_transfer_bytes(total)}, {elapsed}s elapsed)",
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            elif time.monotonic() - last_report >= 15:
+                print(
+                    f"{phase} model: {percentage}% "
+                    f"({_format_transfer_bytes(processed)} of {_format_transfer_bytes(total)}, "
+                    f"{elapsed}s elapsed).",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                last_report = time.monotonic()
+            time.sleep(0.2)
+            current = gateway.model_transfer_status(transfer_id)
+    except KeyboardInterrupt:
+        cancelled = True
+        current = gateway.cancel_model_transfer(transfer_id)
+        if animated:
+            print("\r\033[2KStopping model transfer safely...", end="", file=sys.stderr)
+        else:
+            print("Stopping model transfer safely...", file=sys.stderr)
+        while current["status"] in {"running", "cancelling"}:
+            time.sleep(0.2)
+            current = gateway.model_transfer_status(transfer_id)
+    finally:
+        if animated:
+            print("\r\033[2K", end="", file=sys.stderr, flush=True)
+    if current["status"] == "ready":
+        return current
+    if current["status"] == "cancelled" or cancelled:
+        raise ModelTransferError("model transfer was cancelled")
+    raise ModelTransferError(current["error"] or "model transfer failed")
+
+
+def _format_transfer_bytes(value: int) -> str:
+    if value < 1024:
+        return f"{value} B"
+    if value < 1024**2:
+        return f"{value / 1024:.1f} KiB"
+    if value < 1024**3:
+        return f"{value / 1024**2:.1f} MiB"
+    return f"{value / 1024**3:.2f} GiB"
 
 
 def _run_with_progress[Result](

@@ -59,6 +59,11 @@ __all__ = [
     "ModelSnapshotResponse",
     "ModelSourceOptionResponse",
     "ModelSourceRequest",
+    "ModelTransferExportRequest",
+    "ModelTransferImportRequest",
+    "ModelTransferInspectRequest",
+    "ModelTransferPlanResponse",
+    "ModelTransferResponse",
     "ModelValidationResponse",
     "PlatformCapabilitiesResponse",
     "PolicyDecisionResponse",
@@ -168,6 +173,25 @@ class LocalModelImportRequest(ApiRequest):
     revision: str = Field(min_length=1)
     license: str = Field(min_length=1)
     context_window: int | None = Field(default=None, ge=2_048)
+
+
+class ModelTransferInspectRequest(ApiRequest):
+    """Inspect one portable Heartwood model bundle without importing it."""
+
+    path: str = Field(min_length=1)
+
+
+class ModelTransferExportRequest(ApiRequest):
+    """Export the selected Heartwood-managed model to one new bundle path."""
+
+    path: str = Field(min_length=1)
+
+
+class ModelTransferImportRequest(ModelTransferInspectRequest):
+    """Import one inspected bundle after explicit license review."""
+
+    approved: bool
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ModelSourceRequest(ApiRequest):
@@ -722,7 +746,7 @@ class LocalModelChoiceResponse(_ApiResponse):
     minimum_free_bytes: int
     license_id: str
     license_posture: str
-    catalog_source: Literal["catalog", "user-selected"]
+    catalog_source: Literal["catalog", "transferred", "user-selected"]
     model_type: str | None
     context_window: int
     maximum_context_window: int
@@ -788,6 +812,36 @@ class LocalModelImportResponse(_ApiResponse):
     status: Literal["ready"]
 
 
+class ModelTransferResponse(_ApiResponse):
+    """Background model export or import status."""
+
+    transfer_id: str
+    kind: Literal["export", "import"]
+    status: Literal["cancelled", "cancelling", "error", "ready", "running"]
+    phase: Literal["preparing", "verifying", "exporting", "importing", "selecting", "complete"]
+    model_id: str
+    label: str
+    bytes_processed: int
+    bytes_total: int
+    bundle_path: str
+    sequence: int
+    result_path: str | None
+    warnings: list[str]
+    error: str | None
+
+
+class ModelTransferPlanResponse(_ApiResponse):
+    """Content-safe bundle metadata shown before import approval."""
+
+    bundle_path: str
+    bundle_size_bytes: int
+    manifest_sha256: str
+    file_count: int
+    runtime_profile: Literal["llama-cpp-cpu", "vllm-cuda"]
+    model: LocalModelChoiceResponse
+    warnings: list[str]
+
+
 class ModelSnapshotResponse(_ApiResponse):
     """Pinned multi-file local model metadata."""
 
@@ -836,6 +890,7 @@ class ModelArtifactsResponse(_ApiResponse):
     snapshots: list[ModelSnapshotResponse]
     models: list[LocalModelChoiceResponse]
     downloads: list[ModelDownloadResponse]
+    transfers: list[ModelTransferResponse]
     gpu_environment: GpuEnvironmentResponse
 
 
@@ -892,6 +947,8 @@ type ApiResponse = (
     | ModelDownloadResponse
     | ModelRepositoryPlanResponse
     | ModelSettingsResponse
+    | ModelTransferPlanResponse
+    | ModelTransferResponse
     | ModelValidationResponse
     | PlatformCapabilitiesResponse
     | ProjectReadinessResponse
@@ -920,6 +977,9 @@ type PublicApiContract = (
     | ModelRepositoryRequest
     | ModelSelectionRequest
     | ModelSourceRequest
+    | ModelTransferExportRequest
+    | ModelTransferImportRequest
+    | ModelTransferInspectRequest
     | SessionCreateRequest
     | SessionRenameRequest
     | SkillInspectRequest

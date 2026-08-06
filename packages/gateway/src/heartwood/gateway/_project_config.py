@@ -139,7 +139,7 @@ class LocalModelSelection:
             raise ProjectConfigError("Heartwood-managed model identifiers must not be empty")
         if self.runtime not in {"auto", "llama-cpp", "vllm"}:
             raise ProjectConfigError(f"unsupported Heartwood-managed model runtime: {self.runtime}")
-        if self.catalog_source not in {"catalog", "user-selected"}:
+        if self.catalog_source not in {"catalog", "transferred", "user-selected"}:
             raise ProjectConfigError("unsupported Heartwood-managed model catalog source")
         if self.tier not in {"standard", "powerful", "maximum"}:
             raise ProjectConfigError("unsupported Heartwood-managed model tier")
@@ -248,7 +248,7 @@ class LocalModelSelection:
             raise ProjectConfigError(
                 "Heartwood-managed model artifact_sha256 must be a SHA-256 digest"
             )
-        if self.catalog_source == "user-selected" and any(
+        if self.catalog_source in {"transferred", "user-selected"} and any(
             value is None
             for value in (
                 self.display_name,
@@ -262,14 +262,16 @@ class LocalModelSelection:
             )
         ):
             raise ProjectConfigError(
-                "user-selected Heartwood-managed model provenance is incomplete"
+                "transferred or user-selected Heartwood-managed model provenance is incomplete"
             )
         if (
-            self.catalog_source == "user-selected"
+            self.catalog_source in {"transferred", "user-selected"}
             and self.source_path is not None
             and self.artifact_sha256 is None
         ):
-            raise ProjectConfigError("user-selected GGUF model integrity metadata is incomplete")
+            raise ProjectConfigError(
+                "transferred or user-selected GGUF model integrity metadata is incomplete"
+            )
         configured = Path(self.path)
         if configured.is_absolute():
             raise ProjectConfigError("Heartwood-managed model path must be relative to the project")

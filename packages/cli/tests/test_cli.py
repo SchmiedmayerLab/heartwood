@@ -32,12 +32,14 @@ from heartwood.cli import (
     __version__,
     _consume_prompt,
     _float_payload,
+    _format_transfer_bytes,
     _handle_replay,
     _mapping_payload,
     _run_with_progress,
     _submit_and_wait,
     _submit_with_progress,
     _supports_full_screen_terminal,
+    _wait_for_model_transfer,
     main,
 )
 from heartwood.cli._interactive import (
@@ -56,6 +58,7 @@ from heartwood.gateway import (
     ModelArtifact,
     ModelCatalogService,
     ModelConnection,
+    ModelTransferError,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -75,6 +78,7 @@ from heartwood.gateway import (
 )
 from heartwood.schemas import (
     ModelRepositoryPlanResponse,
+    ModelTransferResponse,
     ModelValidationResponse,
     api_response,
 )
@@ -173,6 +177,33 @@ def _local_catalog(*, fail: bool = False) -> ModelCatalogService:
             32_768,
             True,
         ),
+    )
+
+
+def _model_transfer_response(
+    *,
+    status: Literal["cancelled", "cancelling", "error", "ready", "running"],
+    phase: Literal["preparing", "verifying", "exporting", "importing", "selecting", "complete"],
+    processed: int,
+    error: str | None = None,
+) -> ModelTransferResponse:
+    return api_response(
+        ModelTransferResponse,
+        {
+            "transfer_id": "transfer-test",
+            "kind": "export",
+            "status": status,
+            "phase": phase,
+            "model_id": "synthetic-model",
+            "label": "Synthetic model",
+            "bytes_processed": processed,
+            "bytes_total": 1024,
+            "bundle_path": "/transfer/model.zip",
+            "sequence": 1,
+            "result_path": "/transfer/model.zip" if status == "ready" else None,
+            "warnings": [],
+            "error": error,
+        },
     )
 
 
@@ -1610,6 +1641,189 @@ def test_cli_imports_a_local_model_and_forgets_provider_credentials(
     assert "Forgot the saved credential for openai" in captured.out
     assert "Preparing and verifying the model" in captured.err
     assert (project / ".heartwood" / "models").is_dir()
+
+
+def test_cli_exports_inspects_and_imports_a_verified_model_bundle(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected_project = tmp_path / "connected-analysis"
+    offline_project = tmp_path / "offline-analysis"
+    source = tmp_path / "model.gguf"
+    source.write_bytes(b"GGUFsynthetic-model")
+    bundle = tmp_path / "approved-transfer" / "research-model.zip"
+    bundle.parent.mkdir()
+    _install_deterministic_gateway(monkeypatch)
+
+    assert (
+        _run(
+            connected_project,
+            monkeypatch,
+            [
+                "models",
+                "import",
+                str(source),
+                "--source",
+                "example/research-model",
+                "--revision",
+                "2" * 40,
+                "--license",
+                "Apache-2.0",
+            ],
+        )
+        == 0
+    )
+    assert _run(connected_project, monkeypatch, ["models", "export", str(bundle)]) == 0
+    assert _run(offline_project, monkeypatch, ["models", "inspect-bundle", str(bundle)]) == 0
+    monkeypatch.setattr("builtins.input", lambda _prompt: "no")
+    with pytest.raises(SystemExit) as declined:
+        _run(tmp_path / "declined-analysis", monkeypatch, ["models", "import", str(bundle)])
+    assert declined.value.code == 2
+
+    def input_closed(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", input_closed)
+    with pytest.raises(SystemExit) as closed:
+        _run(tmp_path / "closed-input-analysis", monkeypatch, ["models", "import", str(bundle)])
+    assert closed.value.code == 2
+
+    with pytest.raises(SystemExit) as incomplete_raw:
+        _run(
+            tmp_path / "incomplete-raw-analysis",
+            monkeypatch,
+            ["models", "import", str(source), "--source", "example/research-model"],
+        )
+    assert incomplete_raw.value.code == 2
+    with pytest.raises(SystemExit) as mixed_approval:
+        _run(
+            tmp_path / "mixed-approval-analysis",
+            monkeypatch,
+            [
+                "models",
+                "import",
+                str(source),
+                "--source",
+                "example/research-model",
+                "--revision",
+                "2" * 40,
+                "--license",
+                "Apache-2.0",
+                "--approve-license",
+            ],
+        )
+    assert mixed_approval.value.code == 2
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "yes")
+    assert (
+        _run(
+            offline_project,
+            monkeypatch,
+            ["models", "import", str(bundle)],
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert "Model bundle is ready" in captured.out
+    assert "Heartwood model bundle" in captured.out
+    assert "Repository: example/research-model" in captured.out
+    assert "License: Apache-2.0" in captured.out
+    assert "Run `heartwood` to use it" in captured.out
+    assert "Large models can take several minutes" in captured.err
+    assert bundle.is_file()
+    selected = (
+        RealSessionGateway(
+            project=ProjectContext(offline_project),
+            env={},
+            backend_id="deterministic",
+        )
+        .config_store.load()
+        .local_model
+    )
+    assert selected is not None
+    assert selected.catalog_source == "transferred"
+
+
+def test_cli_model_transfer_progress_handles_terminal_cancel_and_failure(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready = _model_transfer_response(status="ready", phase="complete", processed=1024)
+
+    class TransferGateway:
+        def __init__(self, statuses: list[ModelTransferResponse]) -> None:
+            self.statuses = statuses
+            self.cancelled = False
+
+        def model_transfer_status(self, _transfer_id: str) -> ModelTransferResponse:
+            return self.statuses.pop(0)
+
+        def cancel_model_transfer(self, _transfer_id: str) -> ModelTransferResponse:
+            self.cancelled = True
+            return _model_transfer_response(status="cancelling", phase="exporting", processed=512)
+
+    animated_gateway = TransferGateway([ready])
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    assert (
+        _wait_for_model_transfer(
+            cast(RealSessionGateway, animated_gateway),
+            _model_transfer_response(status="running", phase="exporting", processed=512),
+        )["status"]
+        == "ready"
+    )
+    assert "Exporting model..." in capsys.readouterr().err
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+    timestamps = iter((0.0, 16.0, 16.0, 16.0))
+    monkeypatch.setattr(time, "monotonic", lambda: next(timestamps, 16.0))
+    periodic_gateway = TransferGateway([ready])
+    assert (
+        _wait_for_model_transfer(
+            cast(RealSessionGateway, periodic_gateway),
+            _model_transfer_response(status="running", phase="importing", processed=512),
+        )["status"]
+        == "ready"
+    )
+    assert "Importing model: 50%" in capsys.readouterr().err
+
+    calls = 0
+
+    def interrupt_once(_seconds: float) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", interrupt_once)
+    cancelled_gateway = TransferGateway(
+        [_model_transfer_response(status="cancelled", phase="exporting", processed=512)]
+    )
+    with pytest.raises(ModelTransferError, match="cancelled"):
+        _wait_for_model_transfer(
+            cast(RealSessionGateway, cancelled_gateway),
+            _model_transfer_response(status="running", phase="exporting", processed=0),
+        )
+    assert cancelled_gateway.cancelled is True
+
+    with pytest.raises(ModelTransferError, match="synthetic transfer failure"):
+        _wait_for_model_transfer(
+            cast(RealSessionGateway, TransferGateway([])),
+            _model_transfer_response(
+                status="error",
+                phase="importing",
+                processed=0,
+                error="synthetic transfer failure",
+            ),
+        )
+
+    assert _format_transfer_bytes(128) == "128 B"
+    assert _format_transfer_bytes(2 * 1024) == "2.0 KiB"
+    assert _format_transfer_bytes(2 * 1024**2) == "2.0 MiB"
+    assert _format_transfer_bytes(2 * 1024**3) == "2.00 GiB"
 
 
 def test_cli_plans_and_downloads_hugging_face_identifier_without_runtime_flags(

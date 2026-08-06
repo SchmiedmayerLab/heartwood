@@ -529,6 +529,7 @@ def verify_model_artifact(
     *,
     expected_size_bytes: int,
     expected_sha256: str,
+    checkpoint: Callable[[], None] | None = None,
 ) -> None:
     """Verify one selected model file against its persisted integrity metadata."""
     if expected_size_bytes <= 0:
@@ -545,7 +546,12 @@ def verify_model_artifact(
         raise ModelArtifactError(msg)
     digest = hashlib.sha256()
     with path.open("rb") as file:
-        for block in iter(lambda: file.read(1024 * 1024), b""):
+        while True:
+            if checkpoint is not None:
+                checkpoint()
+            block = file.read(1024 * 1024)
+            if not block:
+                break
             digest.update(block)
     if digest.hexdigest() != expected_sha256:
         msg = "downloaded model artifact checksum does not match its pinned manifest"

@@ -111,7 +111,18 @@ heartwood models inspect OWNER/MODEL
 ```
 
 Choose a Qualified configuration, confirm enough free disk, and download again.
-For an offline transfer, use `heartwood models import` with an immutable revision and license record.
+For a Heartwood bundle, run `heartwood models inspect-bundle PATH` and then `heartwood models import PATH`.
+For raw GGUF or [safetensors](glossary.md) files, use `heartwood models import` with the immutable source revision and license record.
+
+### A Model Bundle Cannot Be Imported
+
+Run `heartwood models inspect-bundle PATH` from the destination project and keep the complete error message.
+Do not edit the archive or its manifest.
+
+For a checksum, size, or file-list mismatch, obtain a new bundle from the connected source project.
+For an interrupted import, rerun the unchanged command; Heartwood discards incomplete private staging before retrying.
+For an existing model mismatch, use a clean project or investigate why `.heartwood/models/` changed.
+For a runtime warning, install a compatible Heartwood release or choose a model supported by the destination compute.
 
 ## Agent Runtime
 

@@ -101,6 +101,11 @@ Architecture, quantization, context, concurrency, runtime, and tool parser all m
 
 ## Import Existing Model Files
 
+Use a [verified Heartwood model bundle](offline.md) when another Heartwood project created the artifact for an offline destination.
+That path carries the complete selected file list, runtime configuration, and digests without requiring provenance flags to be entered again.
+
+Use the raw import below only for reviewed model files that do not have a Heartwood bundle.
+
 For model files transferred through an approved process:
 
 ```bash
