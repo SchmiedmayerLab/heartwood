@@ -2709,12 +2709,7 @@ def _community_skill(tmp_path: Path) -> Path:
     repository_root = Path(__file__).resolve().parents[3]
     source = tmp_path / "source" / "community-summary"
     shutil.copytree(
-        repository_root
-        / "vendor"
-        / "heartwood-skills"
-        / "skills"
-        / "verified"
-        / "aggregate-export",
+        repository_root / "vendor" / "heartwood-skills" / "skills" / "aggregate-export",
         source,
     )
     skill_file = source / "SKILL.md"

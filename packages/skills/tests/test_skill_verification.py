@@ -21,7 +21,7 @@ from heartwood.skills import (
 )
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-_SKILLS_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills" / "skills" / "verified"
+_SKILLS_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills" / "skills"
 
 
 def _write_skill(

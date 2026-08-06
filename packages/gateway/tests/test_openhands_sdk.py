@@ -3651,7 +3651,7 @@ def _repository_root() -> Path:
 
 
 def _verified_skills_root() -> Path:
-    return _repository_root() / "vendor" / "heartwood-skills" / "skills" / "verified"
+    return _repository_root() / "vendor" / "heartwood-skills" / "skills"
 
 
 @cache

@@ -13,6 +13,12 @@ Heartwood starts with a small set of reviewed Skills included in every release.
 Your research environment may also offer additional reviewed Skills from a signed catalog.
 Anything you install is active only for the current project.
 
+| Source | What the user sees |
+|---|---|
+| Heartwood release | **Bundled** Skills maintained with Heartwood |
+| Deployment catalog | **Available** Skills published as signed immutable packages by Heartwood or another configured operator |
+| Current project | **Local and unreviewed** packages added explicitly by a maintainer |
+
 ## See What Is Available
 
 ```bash

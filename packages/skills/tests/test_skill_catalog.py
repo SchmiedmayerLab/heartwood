@@ -46,7 +46,7 @@ from heartwood.skills._catalog import _LocalRepositoryFetcher
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _CURATED_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills"
-_SKILLS_ROOT = _CURATED_ROOT / "skills" / "verified"
+_SKILLS_ROOT = _CURATED_ROOT / "skills"
 _SOURCE_REPOSITORY = "https://github.com/SchmiedmayerLab/heartwood-skills"
 _SOURCE_REVISION = "feae115add2e858937c5093b4c519355231444e0"
 

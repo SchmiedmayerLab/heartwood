@@ -13,6 +13,18 @@ Heartwood owns installation, project policy, OpenHands activation, interfaces, a
 Use the Skill repository for a reusable research workflow.
 Use the main Heartwood repository for changes to the runtime, model providers, action policy, project state, interfaces, or deployment behavior.
 
+## Choose the Source Path
+
+| Source | Use it when | Review and trust boundary |
+|---|---|---|
+| Curated Heartwood repository | The workflow should be maintained and shipped with Heartwood | The complete package is committed under `skills/<skill-name>/`, reviewed through a protected pull request, and bundled from a pinned repository revision; catalog publication is separate and signed |
+| External signed catalog | Another project or deployment owns the workflow | The source operator publishes complete immutable Agent Skill archives through a compatible TUF repository configured by the deployment |
+| Project-local package | A maintainer needs to evaluate or use a project-specific workflow | The complete directory remains local to the project and is always labeled **Local and unreviewed** |
+
+An existing Skill does not need to be copied into `heartwood-skills` if its owner can provide a compatible signed catalog.
+To propose it for the curated repository, include the complete package and preserve its license and attribution.
+Heartwood does not accept a mutable repository, marketplace, branch, or archive link as a catalog entry because review and installation must cover one exact package tree.
+
 ## Propose a Bounded Workflow
 
 Open a Skill proposal before implementing a substantial workflow.
@@ -29,15 +41,18 @@ Do not include credentials, participant-level data, model weights, private platf
 
 ## Build the Complete Package
 
-Each Skill has one directory under `skills/verified/`:
+Each curated Skill has one directory directly under `skills/`:
 
 ```text
-skills/verified/example-skill/
+skills/example-skill/
 ├── SKILL.md
 ├── scripts/
 ├── references/
 └── assets/
 ```
+
+The directory layout does not encode review or publication state.
+A pull request proposes content, a protected merge establishes the curated source revision, and signed publication makes an immutable candidate available to configured deployments.
 
 Only `SKILL.md` is required by the Agent Skills format.
 Add supporting directories only when the workflow needs them:

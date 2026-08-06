@@ -25,6 +25,10 @@ Release creation additionally verifies that the pinned revision is published on 
 Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
 Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.
 
+Curated packages live directly under `skills/<skill-name>/`; directory names do not encode review or publication state.
+Other operators may publish their own compatible signed catalogs without moving content into `heartwood-skills`.
+Every catalog target contains the complete immutable Agent Skill package, rather than a mutable Git, marketplace, branch, or archive reference, so inspection, approval, verification, replay, and revocation refer to the same bytes.
+
 OpenHands also provides installed-Skill and marketplace APIs for its general-purpose runtime.
 Heartwood does not use those APIs as a second installation registry because they do not carry deployment TUF roots, exact-digest controlled-data approvals, signed revocation state, or project-scoped audit evidence.
 Heartwood instead verifies and activates a Skill once in its gateway-owned project store, then passes only the verified active directories to the public OpenHands loader.

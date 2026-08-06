@@ -575,7 +575,6 @@ def test_notebook_uses_the_shared_skill_lifecycle(tmp_path: Path) -> None:
         / "vendor"
         / "heartwood-skills"
         / "skills"
-        / "verified"
         / "aggregate-export"
     )
     shutil.copytree(bundled, source)

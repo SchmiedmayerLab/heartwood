@@ -505,7 +505,7 @@ class SessionGateway:
             models_dir=self.model_cache_dir,
             on_import_ready=self._select_transferred_local_model,
         )
-        bundled_skills_dir = repository_root / "vendor" / "heartwood-skills" / "skills" / "verified"
+        bundled_skills_dir = repository_root / "vendor" / "heartwood-skills" / "skills"
         if skill_source_registry is None:
             try:
                 skill_source_registry, _ = configured_skill_source_registry(self.env)

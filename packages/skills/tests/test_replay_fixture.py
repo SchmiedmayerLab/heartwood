@@ -13,7 +13,7 @@ from pathlib import Path
 from heartwood.skills import LocalSkillVerifier, load_replay_fixture
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-_SKILLS_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills" / "skills" / "verified"
+_SKILLS_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills" / "skills"
 
 
 def test_synthetic_omop_replay_fixture_matches_verified_skills() -> None:

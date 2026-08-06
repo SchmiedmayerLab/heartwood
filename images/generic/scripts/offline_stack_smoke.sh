@@ -117,7 +117,6 @@ repository, knowledge, agent = load_skills_from_dir(
     / "vendor"
     / "heartwood-skills"
     / "skills"
-    / "verified"
 )
 names = set(repository) | set(knowledge) | set(agent)
 expected = {"aggregate-export", "baseline-model", "omop-cohort-summary"}

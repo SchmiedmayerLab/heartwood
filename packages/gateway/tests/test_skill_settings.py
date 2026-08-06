@@ -708,7 +708,7 @@ def _local_skill(tmp_path: Path) -> Path:
 
 
 def _skills_root() -> Path:
-    return _repo_root() / "vendor" / "heartwood-skills" / "skills" / "verified"
+    return _repo_root() / "vendor" / "heartwood-skills" / "skills"
 
 
 def _repo_root() -> Path:

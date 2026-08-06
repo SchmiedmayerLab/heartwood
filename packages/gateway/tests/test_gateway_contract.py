@@ -3017,9 +3017,7 @@ def test_gateway_confines_local_skill_sources_to_the_project(tmp_path: Path) -> 
     project = tmp_path / "project"
     gateway = _gateway(project)
     repository_root = Path(__file__).resolve().parents[3]
-    outside = (
-        repository_root / "vendor" / "heartwood-skills" / "skills" / "verified" / "aggregate-export"
-    )
+    outside = repository_root / "vendor" / "heartwood-skills" / "skills" / "aggregate-export"
 
     with pytest.raises(SkillSettingsError, match="inside the project"):
         gateway.inspect_local_skill(outside)

@@ -23,7 +23,7 @@ trap cleanup EXIT
 mkdir -p "${output_dir}" "${workspace}/heartwood"
 git archive --format=tar HEAD | tar -xf - -C "${workspace}/heartwood"
 skill_revision="$(git rev-parse HEAD:vendor/heartwood-skills)"
-if [[ ! -f vendor/heartwood-skills/skills/verified/aggregate-export/SKILL.md ]]; then
+if [[ ! -f vendor/heartwood-skills/skills/aggregate-export/SKILL.md ]]; then
   echo "heartwood-skills submodule is not initialized" >&2
   exit 69
 fi
