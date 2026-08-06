@@ -21,6 +21,7 @@ from heartwood.skills import (
     SkillCatalogSnapshot,
     SkillSourceProfile,
     SkillSourceRegistry,
+    SkillStoreError,
 )
 
 _SOURCE_REVISION = "feae115add2e858937c5093b4c519355231444e0"
@@ -277,6 +278,153 @@ def test_manager_enforces_platform_and_deployment_owned_controlled_data_approval
             expected_tree_sha256=entry.tree_sha256,
             approved=True,
         )
+
+
+def test_manager_rejects_unknown_mismatched_missing_and_unapproved_catalog_entries(
+    tmp_path: Path,
+) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+
+    with pytest.raises(SkillSettingsError, match="not configured"):
+        manager.refresh("missing")
+    with pytest.raises(SkillSettingsError, match="not configured"):
+        manager.inspect_catalog(entry.name, source_id="missing")
+    with pytest.raises(SkillSettingsError, match="not available"):
+        manager.inspect_catalog("missing")
+    with pytest.raises(SkillSettingsError, match="not available"):
+        manager.install_catalog(
+            "missing",
+            source_id=None,
+            expected_tree_sha256=entry.tree_sha256,
+            approved=True,
+        )
+    with pytest.raises(SkillSettingsError, match="explicit approval"):
+        manager.install_catalog(
+            entry.name,
+            source_id=None,
+            expected_tree_sha256=entry.tree_sha256,
+            approved=False,
+        )
+
+    client.snapshot = SkillCatalogSnapshot(
+        source_id="different-source",
+        offline=True,
+        entries=(entry,),
+    )
+    with pytest.raises(SkillSettingsError, match="different source identifier"):
+        manager.refresh()
+
+    no_sources = _manager(tmp_path / "no-sources")
+    with pytest.raises(SkillSettingsError, match="No signed Skill source"):
+        no_sources.inspect_catalog(entry.name)
+
+
+def test_manager_rejects_revoked_and_unapproved_local_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    revoked = entry.model_copy(update={"revoked": True, "revocation_reason": "Security review"})
+    catalog_manager = _manager(
+        tmp_path / "catalog",
+        client=_CatalogClient(_snapshot(revoked), archive),
+    )
+    with pytest.raises(SkillSettingsError, match="has been revoked"):
+        catalog_manager.install_catalog(
+            entry.name,
+            source_id=None,
+            expected_tree_sha256=entry.tree_sha256,
+            approved=True,
+        )
+
+    local_manager = _manager(tmp_path / "local")
+    source = _local_skill(tmp_path / "local-source")
+    summary = local_manager.inspect_local(source)
+    with pytest.raises(SkillSettingsError, match="changed after review"):
+        local_manager.install_local(
+            source,
+            expected_tree_sha256="0" * 64,
+            approved=True,
+        )
+    with pytest.raises(SkillSettingsError, match="explicit approval"):
+        local_manager.install_local(
+            source,
+            expected_tree_sha256=summary.tree_sha256,
+            approved=False,
+        )
+    with pytest.raises(SkillSettingsError, match=r"missing SKILL\.md"):
+        local_manager.inspect_local(tmp_path / "missing")
+
+    def fail_install(_source: Path) -> None:
+        raise SkillStoreError("synthetic copy failure")
+
+    monkeypatch.setattr(local_manager.store, "install_local", fail_install)
+    with pytest.raises(SkillSettingsError, match="synthetic copy failure"):
+        local_manager.install_local(
+            source,
+            expected_tree_sha256=summary.tree_sha256,
+            approved=True,
+        )
+
+
+def test_manager_fails_closed_for_missing_source_and_corrupt_installed_state(
+    tmp_path: Path,
+) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+    manager.install_catalog(
+        entry.name,
+        source_id=None,
+        expected_tree_sha256=entry.tree_sha256,
+        approved=True,
+    )
+
+    manager_without_source = SkillManager(
+        bundled_dir=_skills_root(),
+        store=manager.store,
+        source_registry=SkillSourceRegistry(),
+        cache_dir=tmp_path / "unconfigured-cache",
+        audit_path=tmp_path / "unconfigured-audit.jsonl",
+        platform_id="generic",
+    )
+    with pytest.raises(SkillSettingsError, match="no longer configured"):
+        manager_without_source.active_skill_roots()
+
+    manager.store.index_path.write_text("{", encoding="utf-8")
+    with pytest.raises(SkillSettingsError, match="index is invalid"):
+        manager_without_source.active_skill_roots()
+
+
+def test_manager_skips_non_skill_entries_and_rejects_invalid_bundled_skills(
+    tmp_path: Path,
+) -> None:
+    missing = SkillManager(
+        bundled_dir=tmp_path / "missing",
+        store=SkillArtifactStore(tmp_path / "missing-store"),
+        source_registry=SkillSourceRegistry(),
+        cache_dir=tmp_path / "missing-cache",
+        audit_path=tmp_path / "missing-audit.jsonl",
+        platform_id="generic",
+    )
+    assert missing.summaries() == ()
+
+    bundled = tmp_path / "bundled"
+    shutil.copytree(_skills_root(), bundled)
+    (bundled / "README.txt").write_text("not a Skill\n", encoding="utf-8")
+    (bundled / "aggregate-export" / "SKILL.md").write_text("invalid\n", encoding="utf-8")
+    invalid = SkillManager(
+        bundled_dir=bundled,
+        store=SkillArtifactStore(tmp_path / "invalid-store"),
+        source_registry=SkillSourceRegistry(),
+        cache_dir=tmp_path / "invalid-cache",
+        audit_path=tmp_path / "invalid-audit.jsonl",
+        platform_id="generic",
+    )
+    with pytest.raises(SkillSettingsError, match="Invalid bundled Skill"):
+        invalid.summaries()
 
 
 def _manager(

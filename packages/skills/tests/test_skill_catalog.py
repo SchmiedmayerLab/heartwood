@@ -12,6 +12,7 @@ import json
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from heartwood_skill_catalog import build_catalog
@@ -33,6 +34,7 @@ from heartwood.skills import (
     SkillCatalogClient,
     SkillCatalogError,
     SkillCatalogSnapshot,
+    SkillInstallationIndex,
     SkillSourceProfile,
     SkillStoreError,
     configured_skill_source_registry,
@@ -304,6 +306,35 @@ def test_source_registry_rejects_unsafe_remote_and_duplicate_sources(tmp_path: P
                 "controlled-data-approved-digests": ["latest"],
             }
         )
+    with pytest.raises(ValidationError, match="must be unique"):
+        SkillSourceProfile.model_validate(
+            {
+                "id": "offline",
+                "kind": "offline",
+                "trusted-root": root,
+                "repository": tmp_path,
+                "controlled-data-approved-digests": ["a" * 64, "A" * 64],
+            }
+        )
+    with pytest.raises(ValidationError, match="require metadata-url and targets-url only"):
+        SkillSourceProfile.model_validate(
+            {
+                "id": "remote",
+                "kind": "remote",
+                "trusted-root": root,
+                "metadata-url": "https://example.test/metadata",
+            }
+        )
+    with pytest.raises(ValidationError, match="require a repository path only"):
+        SkillSourceProfile.model_validate(
+            {
+                "id": "offline",
+                "kind": "offline",
+                "trusted-root": root,
+                "metadata-url": "https://example.test/metadata",
+                "targets-url": "https://example.test/targets",
+            }
+        )
     config = tmp_path / "duplicate.toml"
     config.write_text(
         f"""schema_version = "heartwood.skill-sources.v1"
@@ -322,6 +353,75 @@ repository = "{tmp_path}"
     )
     with pytest.raises(SkillCatalogError, match="invalid"):
         load_skill_source_registry(config)
+
+    malformed = tmp_path / "malformed.toml"
+    malformed.write_text("sources = {}\n", encoding="utf-8")
+    with pytest.raises(SkillCatalogError, match="sources must be an array"):
+        load_skill_source_registry(malformed)
+
+    malformed.write_text('sources = ["not-an-object"]\n', encoding="utf-8")
+    with pytest.raises(SkillCatalogError, match="must be an object"):
+        load_skill_source_registry(malformed)
+
+    malformed.write_text("sources = [\n", encoding="utf-8")
+    with pytest.raises(SkillCatalogError, match="invalid"):
+        load_skill_source_registry(malformed)
+
+
+def test_catalog_client_rejects_missing_substituted_and_revoked_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, snapshot, _ = _client(tmp_path)
+    entry = snapshot.entry("aggregate-export")
+
+    class SyntheticUpdater:
+        def __init__(self, targets: dict[str, object]) -> None:
+            self.targets = targets
+
+        def refresh(self) -> None:
+            return None
+
+        def get_targetinfo(self, name: str) -> object | None:
+            return self.targets.get(name)
+
+        def download_target(self, _target: object) -> str:
+            return str(tmp_path / "missing")
+
+    monkeypatch.setattr(client, "_updater", lambda: SyntheticUpdater({}))
+    with pytest.raises(SkillCatalogError, match=r"does not publish catalog\.json"):
+        client.refresh()
+    with pytest.raises(SkillCatalogError, match="target is missing"):
+        client.download(entry)
+
+    changed = SimpleNamespace(
+        length=entry.archive_size + 1, hashes={"sha256": entry.archive_sha256}
+    )
+    monkeypatch.setattr(
+        client,
+        "_updater",
+        lambda: SyntheticUpdater({entry.target: changed}),
+    )
+    with pytest.raises(SkillCatalogError, match="target changed"):
+        client.download(entry)
+
+    revoked = entry.model_copy(update={"revoked": True, "revocation_reason": "Security review"})
+    with pytest.raises(SkillCatalogError, match="has been revoked"):
+        client.download(revoked)
+
+
+def test_catalog_client_rejects_missing_and_oversized_trusted_roots(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    missing = _profile(repository, tmp_path / "missing-root.json")
+    with pytest.raises(SkillCatalogError, match="Trusted root is unavailable"):
+        SkillCatalogClient(missing, tmp_path / "cache").refresh()
+
+    oversized_root = tmp_path / "oversized-root.json"
+    oversized_root.write_bytes(b"x" * 512_001)
+    oversized = _profile(repository, oversized_root)
+    with pytest.raises(SkillCatalogError, match="Trusted root is too large"):
+        SkillCatalogClient(oversized, tmp_path / "oversized-cache").refresh()
 
 
 def test_content_addressed_store_installs_retries_revokes_and_deactivates(tmp_path: Path) -> None:
@@ -412,3 +512,80 @@ def test_installed_record_cannot_forge_catalog_or_controlled_data_provenance() -
         InstalledSkillRecord.model_validate(
             {**common, "source_kind": "catalog", "review": "repository-reviewed"}
         )
+    with pytest.raises(ValidationError, match="require a reason"):
+        InstalledSkillRecord.model_validate(
+            {
+                **common,
+                "source_kind": "local",
+                "review": "local-unreviewed",
+                "status": "revoked",
+            }
+        )
+    with pytest.raises(ValidationError, match="cannot declare a revocation reason"):
+        InstalledSkillRecord.model_validate(
+            {
+                **common,
+                "source_kind": "local",
+                "review": "local-unreviewed",
+                "revocation_reason": "not revoked",
+            }
+        )
+    with pytest.raises(ValidationError, match="duplicate names"):
+        SkillInstallationIndex(
+            skills=(
+                InstalledSkillRecord.model_validate(
+                    {**common, "source_kind": "local", "review": "local-unreviewed"}
+                ),
+                InstalledSkillRecord.model_validate(
+                    {**common, "source_kind": "local", "review": "local-unreviewed"}
+                ),
+            )
+        )
+
+
+def test_store_rejects_revoked_conflicting_and_corrupt_state(tmp_path: Path) -> None:
+    client, snapshot, _ = _client(tmp_path)
+    entry = snapshot.entry("aggregate-export")
+    archive = client.download(entry)
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+
+    revoked = entry.model_copy(update={"revoked": True, "revocation_reason": "Security review"})
+    with pytest.raises(SkillStoreError, match="has been revoked"):
+        store.install_catalog(revoked, archive, source_id=snapshot.source_id)
+
+    record = store.install_catalog(entry, archive, source_id=snapshot.source_id)
+    conflicting = entry.model_copy(
+        update={"policy": entry.policy.model_copy(update={"version": "1.0.1"})}
+    )
+    with pytest.raises(SkillStoreError, match="already exists"):
+        store.install_catalog(conflicting, archive, source_id=snapshot.source_id)
+
+    store.remove(record.name)
+    assert store.install_catalog(entry, archive, source_id=snapshot.source_id) == record
+
+    store.index_path.write_text("{", encoding="utf-8")
+    with pytest.raises(SkillStoreError, match="index is invalid"):
+        store.records()
+
+
+def test_store_marks_removed_and_replaced_catalog_revisions_revoked(tmp_path: Path) -> None:
+    client, snapshot, _ = _client(tmp_path)
+    entries = snapshot.entries[:2]
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+    for entry in entries:
+        store.install_catalog(entry, client.download(entry), source_id=snapshot.source_id)
+
+    replacement = entries[1].model_copy(update={"source_revision": "0" * 40})
+    store.apply_catalog_snapshot(
+        SkillCatalogSnapshot(
+            source_id=snapshot.source_id,
+            offline=True,
+            entries=(replacement,),
+        )
+    )
+
+    records = {record.name: record for record in store.records()}
+    assert records[entries[0].name].revocation_reason == "Removed from the signed Skill catalog"
+    assert records[entries[1].name].revocation_reason == (
+        "Installed revision is no longer present in the signed Skill catalog"
+    )

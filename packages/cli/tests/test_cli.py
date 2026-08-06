@@ -68,6 +68,7 @@ from heartwood.gateway import (
     RestRequest,
     SessionLifecycle,
     SessionProjection,
+    SkillSettingsError,
     SubscriptionDeviceLogin,
     checkpoint_public_key_fingerprint,
     load_checkpoint_signer_registry,
@@ -1962,6 +1963,134 @@ def test_skills_inspect_install_and_remove_use_project_local_extensions(
     assert "aggregate-export  version=1.0.0  status=active  source=bundled" in captured.out
     assert "Skill: community-summary 1.0.0" in captured.out
     assert "local installation approval is required" in captured.err
+
+
+def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary: dict[str, object] = {
+        "name": "synthetic-summary",
+        "skill_id": "example.synthetic-summary",
+        "version": "1.0.0",
+        "description": "Summarize one synthetic dataset.",
+        "source": "catalog",
+        "source_id": "official",
+        "review": "repository-reviewed",
+        "status": "available",
+        "approval_summary": "Read project files and write one derived summary.",
+        "declared_tools": ["file_editor"],
+        "requires_network": False,
+        "controlled_data_ready": False,
+        "tree_sha256": "a" * 64,
+        "source_revision": "b" * 40,
+        "archive_size": 1_024,
+        "revocation_reason": None,
+        "compatibility_reason": None,
+        "installable": True,
+    }
+    calls: list[tuple[object, ...]] = []
+
+    class SkillGateway:
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def skill_settings(self) -> dict[str, object]:
+            return {"skills": [summary]}
+
+        def refresh_skills(self, source_id: str | None) -> dict[str, object]:
+            calls.append(("refresh", source_id))
+            return self.skill_settings()
+
+        def inspect_skill(self, name: str, *, source_id: str | None) -> dict[str, object]:
+            calls.append(("inspect", name, source_id))
+            return summary
+
+        def install_skill(
+            self,
+            name: str,
+            *,
+            source_id: str | None,
+            expected_tree_sha256: str,
+            approved: bool,
+        ) -> dict[str, object]:
+            calls.append(("install", name, source_id, expected_tree_sha256, approved))
+            return self.skill_settings()
+
+    gateway = SkillGateway()
+    monkeypatch.setattr("heartwood.cli.SessionGateway", lambda **_kwargs: gateway)
+    project = tmp_path / "analysis"
+
+    assert _run(project, monkeypatch, ["skills", "refresh", "--source", "official"]) == 0
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            ["skills", "inspect", "synthetic-summary", "--source", "official"],
+        )
+        == 0
+    )
+    with pytest.raises(SystemExit) as approval:
+        _run(
+            project,
+            monkeypatch,
+            ["skills", "install", "synthetic-summary", "--source", "official"],
+        )
+    assert approval.value.code == 2
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "skills",
+                "install",
+                "synthetic-summary",
+                "--source",
+                "official",
+                "--approve",
+            ],
+        )
+        == 0
+    )
+
+    assert calls == [
+        ("refresh", "official"),
+        ("inspect", "synthetic-summary", "official"),
+        ("inspect", "synthetic-summary", "official"),
+        ("inspect", "synthetic-summary", "official"),
+        ("install", "synthetic-summary", "official", "a" * 64, True),
+    ]
+    captured = capsys.readouterr()
+    assert "Skill: synthetic-summary 1.0.0" in captured.out
+    assert "Download: 1.0 KiB" in captured.out
+    assert "installation approval is required" in captured.err
+
+
+def test_skill_commands_report_shared_gateway_failures_as_argument_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingGateway:
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def refresh_skills(self, _source_id: str | None) -> None:
+            raise SkillSettingsError("signed metadata expired")
+
+    monkeypatch.setattr("heartwood.cli.SessionGateway", lambda **_kwargs: FailingGateway())
+    with pytest.raises(SystemExit) as error:
+        _run(tmp_path / "analysis", monkeypatch, ["skills", "refresh"])
+
+    assert error.value.code == 2
+    assert "signed metadata expired" in capsys.readouterr().err
 
 
 def test_specialists_lists_the_shared_bounded_catalog(
