@@ -463,7 +463,8 @@ def test_content_addressed_store_installs_retries_revokes_and_deactivates(tmp_pa
     revoked = store.records()[0]
     assert revoked.status == "revoked"
     assert store.active_manifests() == ()
-    assert store.remove(record.name) == revoked
+    removed = store.remove(record.name)
+    assert removed == revoked
     assert store.records() == ()
     assert store.artifact_path(record).is_dir()
 

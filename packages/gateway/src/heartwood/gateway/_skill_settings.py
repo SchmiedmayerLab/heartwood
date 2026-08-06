@@ -37,9 +37,11 @@ class SkillSettingsError(ValueError):
 
 
 class _CatalogClient(Protocol):
-    def refresh(self) -> SkillCatalogSnapshot: ...
+    def refresh(self) -> SkillCatalogSnapshot:
+        raise NotImplementedError
 
-    def download(self, entry: CatalogEntry) -> Path: ...
+    def download(self, entry: CatalogEntry) -> Path:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)
