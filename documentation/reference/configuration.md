@@ -110,6 +110,8 @@ repository = "/approved-media/skills"
 ```
 
 The trusted root must arrive through an independently trusted deployment channel.
+In a managed deployment, mount the source registry and trusted root read-only to the Heartwood process and keep the root outside Heartwood's writable TUF metadata cache.
+Mount a transferred offline repository read-only when the platform permits it.
 Remote URLs must use HTTPS and cannot contain credentials, query strings, or fragments.
 Heartwood verifies signatures, metadata versions and expiry, target length and digest, catalog policy, the complete archive manifest, and the extracted Agent Skill before installation.
 
