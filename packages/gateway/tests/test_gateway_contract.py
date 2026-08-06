@@ -124,6 +124,26 @@ def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
     assert prepared == []
 
 
+def test_gateway_prepares_openhands_before_skill_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared: list[bool] = []
+    monkeypatch.setattr(
+        "heartwood.gateway._gateway.prepare_openhands_import",
+        lambda: prepared.append(True),
+    )
+
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+
+    assert prepared == [True]
+    assert gateway.skill_settings()["skills"]
+
+
 def test_persisted_projection_does_not_construct_an_agent_backend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

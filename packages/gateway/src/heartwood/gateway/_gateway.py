@@ -122,6 +122,7 @@ from heartwood.gateway._model_transfer import (
     ModelTransferManager,
     inspect_model_bundle,
 )
+from heartwood.gateway._openhands_models import prepare_openhands_import
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import (
     LocalModelSelection,
@@ -403,6 +404,7 @@ class SessionGateway:
         skill_source_registry: SkillSourceRegistry | None = None,
         backend_id: str = "auto",
     ) -> None:
+        prepare_openhands_import()
         self.project = ProjectContext.current() if project is None else project
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
