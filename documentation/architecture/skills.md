@@ -21,6 +21,7 @@ It adds a distribution and activation boundary for research environments; it doe
 
 The Heartwood release pins one exact `heartwood-skills` Git revision as a submodule.
 Packaging verifies that the initialized directory is clean and matches that gitlink, then archives that revision into native and container artifacts.
+Release creation additionally verifies that the pinned revision is published on the protected `heartwood-skills/main` branch.
 Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
 Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.
 
@@ -46,12 +47,14 @@ flowchart LR
 ```
 
 Heartwood refreshes signed metadata again during installation and compares the current tree digest with the digest presented for approval.
+For a local unreviewed Skill, it reinspects the source after approval and verifies the same digest again after the atomic copy.
 It refuses expired metadata, missing targets, substitutions, archive-manifest differences, unsafe paths, symbolic or hard links, special files, unsupported tools, undeclared network requirements, incompatible platforms, and revoked content.
 
 Installed catalog artifacts are addressed by the complete tree SHA-256 digest.
 The activation index records the source identifier, full source commit, catalog target, version, review status, and revocation status.
 One project-scoped native lock serializes source refresh, download, activation, removal, and runtime revalidation across CLI and browser processes.
 Heartwood revalidates the signed source, installed tree, and matching activation event in the verified audit chain before exposing an active catalog Skill to OpenHands.
+It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
 
 ## Offline Use
 
@@ -70,13 +73,14 @@ A separately administered deployment publishes those targets through a TUF repos
 Publication follows this boundary:
 
 1. merge the Skill change through protected `main` after repository validation and code-owner review;
-2. run **Build Catalog Candidate** with the full merged commit;
+2. run **Build Catalog Candidate** from the protected `main` branch;
 3. confirm that the workflow rebuilt and tested the complete catalog and produced a GitHub build-provenance attestation;
 4. import that exact candidate into a TUF signing event;
 5. publish the resulting signed metadata and content-addressed targets over HTTPS; and
 6. verify the deployed repository with a clean Python-TUF client before adding or updating a Heartwood deployment source.
 
-The candidate workflow does not sign or publish content.
+Repository code builds and tests the candidate without an identity token; a separate job attests the resulting files without checking out or executing repository code.
+The candidate workflow does not sign TUF metadata or publish content.
 This keeps repository write access separate from the update root of trust.
 
 Use upstream [TUF-on-CI](https://github.com/theupdateframework/tuf-on-ci) workflows and signing tools instead of maintaining a Heartwood-specific signer.

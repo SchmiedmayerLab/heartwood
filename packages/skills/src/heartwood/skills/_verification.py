@@ -24,6 +24,29 @@ class SkillVerificationError(ValueError):
     """Raised when an Agent Skill directory fails Heartwood policy verification."""
 
 
+def skill_compatibility_reason(
+    policy: SkillPolicy,
+    *,
+    declared_tools: tuple[str, ...],
+    platform_id: str | None = None,
+    allowed_tools: tuple[str, ...] = _DEFAULT_ALLOWED_TOOLS,
+    allow_network: bool = False,
+) -> str | None:
+    """Return the first deployment incompatibility for one Skill policy."""
+    if (
+        platform_id is not None
+        and "generic" not in policy.platforms
+        and platform_id not in policy.platforms
+    ):
+        return f"Not supported on the {platform_id} platform"
+    if policy.requires_network and not allow_network:
+        return "Skill requires network access, which is disabled"
+    unsupported_tools = sorted(set(declared_tools) - set(allowed_tools))
+    if unsupported_tools:
+        return f"Skill declares unsupported tools: {', '.join(unsupported_tools)}"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class SkillManifest:
     """Verified projection of one complete Agent Skill directory."""
@@ -70,6 +93,7 @@ class LocalSkillVerifier:
         review: SkillReview = "local-unreviewed",
         require_repository_review: bool = False,
         allow_network: bool = False,
+        platform_id: str | None = None,
     ) -> None:
         """Initialize a root-confined verifier and its deployment policy."""
         self.root = root.resolve()
@@ -77,6 +101,7 @@ class LocalSkillVerifier:
         self.review = review
         self.require_repository_review = require_repository_review
         self.allow_network = allow_network
+        self.platform_id = platform_id
 
     def verify(self, path: Path) -> SkillVerification:
         """Return a stable verification result for one path."""
@@ -92,19 +117,26 @@ class LocalSkillVerifier:
 
     def load_manifest(self, path: Path) -> SkillManifest:
         """Load one Skill through OpenHands and enforce Heartwood policy."""
+        manifest = self.inspect_manifest(path)
+        compatibility_reason = skill_compatibility_reason(
+            manifest.policy,
+            declared_tools=manifest.declared_tools,
+            platform_id=self.platform_id,
+            allowed_tools=self.allowed_tools,
+            allow_network=self.allow_network,
+        )
+        if compatibility_reason is not None:
+            raise SkillVerificationError(compatibility_reason)
+        return manifest
+
+    def inspect_manifest(self, path: Path) -> SkillManifest:
+        """Load one root-confined Skill without applying deployment compatibility."""
         skill_root = path.resolve()
         if not skill_root.is_relative_to(self.root):
             raise SkillVerificationError(f"Skill path escapes verification root: {path}")
         manifest = load_skill_manifest(skill_root, review=self.review)
         if self.require_repository_review and manifest.review != "repository-reviewed":
             raise SkillVerificationError("Skill has not passed repository review")
-        if manifest.requires_network and not self.allow_network:
-            raise SkillVerificationError("Skill requires network access, which is disabled")
-        unsupported_tools = sorted(set(manifest.declared_tools) - set(self.allowed_tools))
-        if unsupported_tools:
-            raise SkillVerificationError(
-                f"Skill declares unsupported tools: {', '.join(unsupported_tools)}"
-            )
         return manifest
 
 

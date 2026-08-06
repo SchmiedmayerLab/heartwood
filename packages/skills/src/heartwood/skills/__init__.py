@@ -33,6 +33,7 @@ from heartwood.skills._verification import (
     SkillVerificationError,
     build_skill_approval_record,
     load_skill_manifest,
+    skill_compatibility_reason,
 )
 
 __all__ = [
@@ -58,4 +59,5 @@ __all__ = [
     "load_replay_fixture",
     "load_skill_manifest",
     "load_skill_source_registry",
+    "skill_compatibility_reason",
 ]

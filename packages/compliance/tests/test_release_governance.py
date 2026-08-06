@@ -439,6 +439,10 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
     assert "--required-check 'Analyze (python)'" in workflow
     assert "--required-check 'Analyze (javascript-typescript)'" in workflow
     assert "python3 deploy/verify_model_sources.py --source-root ." in workflow
+    assert 'skill_revision="$(git rev-parse HEAD:vendor/heartwood-skills)"' in workflow
+    assert "fetch --no-tags --unshallow origin main" in workflow
+    assert "merge-base --is-ancestor" in workflow
+    assert "curated Skill revision is not published on heartwood-skills/main" in workflow
     assert (
         "python3 deploy/verify_model_sources.py --source-root . --allow-unavailable" in validation
     )

@@ -31,6 +31,7 @@ from heartwood.skills import (
     SkillSourceRegistry,
     SkillStoreError,
     SkillVerificationError,
+    skill_compatibility_reason,
 )
 
 
@@ -91,8 +92,14 @@ class SkillSummary:
         manifest: SkillManifest,
         *,
         source: Literal["bundled", "local-candidate"],
+        compatibility_reason: str | None = None,
     ) -> SkillSummary:
         """Build a projection from a locally verified Agent Skill tree."""
+        status: Literal["available", "active", "unsupported"]
+        if compatibility_reason is not None:
+            status = "unsupported"
+        else:
+            status = "active" if source == "bundled" else "available"
         return cls(
             name=manifest.name,
             skill_id=manifest.skill_id,
@@ -101,7 +108,7 @@ class SkillSummary:
             source=source,
             source_id="heartwood" if source == "bundled" else "local",
             review=manifest.review,
-            status="active" if source == "bundled" else "available",
+            status=status,
             approval_summary=manifest.approval_summary,
             declared_tools=manifest.declared_tools,
             requires_network=manifest.requires_network,
@@ -110,6 +117,7 @@ class SkillSummary:
             dataset_types=manifest.policy.dataset_types,
             controlled_data_ready=False,
             tree_sha256=manifest.tree_sha256,
+            compatibility_reason=compatibility_reason,
         )
 
     @classmethod
@@ -122,10 +130,14 @@ class SkillSummary:
         controlled_data_ready: bool,
     ) -> SkillSummary:
         """Build a projection from a TUF-verified catalog entry."""
-        compatible = "generic" in entry.policy.platforms or platform_id in entry.policy.platforms
+        compatibility_reason = skill_compatibility_reason(
+            entry.policy,
+            declared_tools=entry.allowed_tools,
+            platform_id=platform_id,
+        )
         if entry.revoked:
             status: Literal["available", "revoked", "unsupported"] = "revoked"
-        elif compatible:
+        elif compatibility_reason is None:
             status = "available"
         else:
             status = "unsupported"
@@ -149,9 +161,7 @@ class SkillSummary:
             source_revision=entry.source_revision,
             archive_size=entry.archive_size,
             revocation_reason=entry.revocation_reason,
-            compatibility_reason=(
-                None if compatible else f"Not supported on the {platform_id} platform"
-            ),
+            compatibility_reason=compatibility_reason,
         )
 
     @classmethod
@@ -159,8 +169,17 @@ class SkillSummary:
         cls,
         record: InstalledSkillRecord,
         manifest: SkillManifest,
+        *,
+        compatibility_reason: str | None = None,
     ) -> SkillSummary:
         """Build a projection from an activated content-addressed artifact."""
+        status: Literal["active", "revoked", "unsupported"]
+        if record.status == "revoked":
+            status = "revoked"
+        elif compatibility_reason is not None:
+            status = "unsupported"
+        else:
+            status = "active"
         return cls(
             name=record.name,
             skill_id=record.skill_id,
@@ -169,7 +188,7 @@ class SkillSummary:
             source="installed",
             source_id=record.source_id,
             review=record.review,
-            status=record.status,
+            status=status,
             approval_summary=manifest.approval_summary,
             declared_tools=manifest.declared_tools,
             requires_network=manifest.requires_network,
@@ -180,6 +199,7 @@ class SkillSummary:
             tree_sha256=record.tree_sha256,
             source_revision=record.source_revision,
             revocation_reason=record.revocation_reason,
+            compatibility_reason=compatibility_reason,
         )
 
     def safe_dict(self) -> dict[str, object]:
@@ -364,10 +384,15 @@ class SkillManager:
     def inspect_local(self, source: Path) -> SkillSummary:
         """Inspect an advanced local source without treating it as repository-reviewed."""
         try:
-            manifest = LocalSkillVerifier(source.resolve().parent).load_manifest(source)
+            manifest = LocalSkillVerifier(source.resolve().parent).inspect_manifest(source)
         except SkillVerificationError as error:
             raise SkillSettingsError(str(error)) from error
-        return SkillSummary.from_manifest(manifest, source="local-candidate")
+        compatibility_reason = self._compatibility_reason(manifest)
+        return SkillSummary.from_manifest(
+            manifest,
+            source="local-candidate",
+            compatibility_reason=compatibility_reason,
+        )
 
     def install_local(
         self,
@@ -397,6 +422,8 @@ class SkillManager:
         """Install one local Skill while holding the lifecycle lock."""
         summary = self.inspect_local(source)
         self._assert_identity_available(summary)
+        if summary.status == "unsupported":
+            raise SkillSettingsError(summary.compatibility_reason or "Skill is not supported")
         if summary.tree_sha256 != expected_tree_sha256:
             raise SkillSettingsError("Local Skill changed after review; inspect it again")
         if not approved:
@@ -404,7 +431,10 @@ class SkillManager:
             raise SkillSettingsError("Local Skill installation requires explicit approval")
         self._record_decision(summary, approved=True, actor_id=actor_id)
         try:
-            record = self.store.install_local(source)
+            record = self.store.install_local(
+                source,
+                expected_tree_sha256=expected_tree_sha256,
+            )
             manifest = self.store.manifest(record)
         except SkillStoreError as error:
             self._record_installation_result(summary, activated=False, actor_id=actor_id)
@@ -450,7 +480,14 @@ class SkillManager:
                     )
                 self._refresh_source(source_id)
             self._verify_active_installation_audit(records)
-            return self.store.active_skill_roots()
+            roots: list[Path] = []
+            for record in records:
+                if record.status != "active":
+                    continue
+                manifest = self.store.manifest(record)
+                if self._compatibility_reason(manifest) is None:
+                    roots.append(manifest.root.parent)
+            return tuple(roots)
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
 
@@ -527,22 +564,42 @@ class SkillManager:
             if not path.is_dir():
                 continue
             try:
-                manifest = verifier.load_manifest(path)
+                manifest = verifier.inspect_manifest(path)
             except SkillVerificationError as error:
                 raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
-            summaries.append(SkillSummary.from_manifest(manifest, source="bundled"))
+            summaries.append(
+                SkillSummary.from_manifest(
+                    manifest,
+                    source="bundled",
+                    compatibility_reason=self._compatibility_reason(manifest),
+                )
+            )
         return tuple(summaries)
 
     def _installed_summaries(self) -> tuple[SkillSummary, ...]:
         try:
             records = self.store.records()
             self._verify_active_installation_audit(records)
-            return tuple(
-                SkillSummary.from_installed(record, self.store.manifest(record))
-                for record in records
-            )
+            summaries: list[SkillSummary] = []
+            for record in records:
+                manifest = self.store.manifest(record)
+                summaries.append(
+                    SkillSummary.from_installed(
+                        record,
+                        manifest,
+                        compatibility_reason=self._compatibility_reason(manifest),
+                    )
+                )
+            return tuple(summaries)
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
+
+    def _compatibility_reason(self, manifest: SkillManifest) -> str | None:
+        return skill_compatibility_reason(
+            manifest.policy,
+            declared_tools=manifest.declared_tools,
+            platform_id=self.platform_id,
+        )
 
     def _verify_active_installation_audit(
         self,

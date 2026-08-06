@@ -44,7 +44,7 @@ class _Record(BaseModel):
 
 
 class SkillSourceProfile(_Record):
-    """One deployment-approved remote or offline TUF repository."""
+    """One configured remote or offline TUF repository."""
 
     source_id: str = Field(alias="id", pattern=_SOURCE_ID_PATTERN)
     kind: Literal["remote", "offline"]
@@ -147,8 +147,12 @@ class SkillCatalogSnapshot:
         return matches[0]
 
 
-def load_skill_source_registry(path: Path) -> SkillSourceRegistry:
-    """Load deployment-owned source configuration and resolve its local paths."""
+def load_skill_source_registry(
+    path: Path,
+    *,
+    allow_controlled_data_approvals: bool = False,
+) -> SkillSourceRegistry:
+    """Load source configuration and resolve its local paths."""
     config_path = path.resolve()
     try:
         payload = tomllib.loads(read_private_text(config_path))
@@ -173,9 +177,16 @@ def load_skill_source_registry(path: Path) -> SkillSourceRegistry:
     normalized_payload = dict(payload)
     normalized_payload["sources"] = normalized_sources
     try:
-        return SkillSourceRegistry.model_validate(normalized_payload)
+        registry = SkillSourceRegistry.model_validate(normalized_payload)
     except ValidationError as error:
         raise SkillCatalogError(f"Skill source registry is invalid: {path}") from error
+    if not allow_controlled_data_approvals and any(
+        source.controlled_data_approved_digests for source in registry.sources
+    ):
+        raise SkillCatalogError(
+            "controlled-data approvals require the deployment-owned system Skill registry"
+        )
+    return registry
 
 
 def configured_skill_source_registry(
@@ -191,10 +202,17 @@ def configured_skill_source_registry(
         if not path.is_absolute():
             raise SkillCatalogError("HEARTWOOD_SKILL_SOURCES_FILE must be an absolute path")
         return load_skill_source_registry(path), path.resolve()
-    candidates = (system_path, (home or Path.home()) / ".config/heartwood/skill-sources.toml")
-    for candidate in candidates:
-        if candidate.is_file():
-            return load_skill_source_registry(candidate), candidate.resolve()
+    if system_path.is_file():
+        return (
+            load_skill_source_registry(
+                system_path,
+                allow_controlled_data_approvals=True,
+            ),
+            system_path.resolve(),
+        )
+    user_path = (home or Path.home()) / ".config/heartwood/skill-sources.toml"
+    if user_path.is_file():
+        return load_skill_source_registry(user_path), user_path.resolve()
     return SkillSourceRegistry(), None
 
 

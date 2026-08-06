@@ -31,6 +31,7 @@ def _write_skill(
     tools: str = "terminal",
     requires_network: str = "false",
     entrypoint: str = "scripts/run.py",
+    platforms: str = "generic",
 ) -> Path:
     skill_root = root / name
     scripts = skill_root / "scripts"
@@ -46,7 +47,7 @@ metadata:
   heartwood.id: "heartwood.synthetic.{name}"
   heartwood.version: "1.0.0"
   heartwood.dataset-types: "synthetic-tabular"
-  heartwood.platforms: "generic"
+  heartwood.platforms: "{platforms}"
   heartwood.phi-risk: "none"
   heartwood.requires-network: "{requires_network}"
   heartwood.controlled-data: "not-approved"
@@ -111,6 +112,16 @@ def test_verifier_rejects_network_and_unsupported_tools(tmp_path: Path) -> None:
     result = LocalSkillVerifier(unsupported.parent).verify(unsupported)
     assert result.verified is False
     assert result.reason == "Skill declares unsupported tools: network-fetch"
+
+
+def test_verifier_separates_structure_from_platform_compatibility(tmp_path: Path) -> None:
+    terra = _write_skill(tmp_path, platforms="terra")
+    verifier = LocalSkillVerifier(tmp_path, platform_id="carina")
+
+    assert verifier.inspect_manifest(terra).name == terra.name
+    result = verifier.verify(terra)
+    assert result.verified is False
+    assert result.reason == "Not supported on the carina platform"
 
 
 def test_verifier_confines_paths_and_wraps_openhands_errors(tmp_path: Path) -> None:

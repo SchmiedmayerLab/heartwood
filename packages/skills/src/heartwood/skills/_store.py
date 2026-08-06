@@ -146,13 +146,20 @@ class SkillArtifactStore:
             lambda destination: extract_skill_archive(entry, archive, destination),
         )
 
-    def install_local(self, source: Path) -> InstalledSkillRecord:
+    def install_local(
+        self,
+        source: Path,
+        *,
+        expected_tree_sha256: str,
+    ) -> InstalledSkillRecord:
         """Atomically copy and activate one explicitly approved local Skill tree."""
         source_root = source.resolve()
         try:
             manifest = LocalSkillVerifier(source_root.parent).load_manifest(source_root)
         except SkillVerificationError as error:
             raise SkillStoreError(str(error)) from error
+        if manifest.tree_sha256 != expected_tree_sha256:
+            raise SkillStoreError("Local Skill changed after review; inspect it again")
         record = InstalledSkillRecord(
             name=manifest.name,
             skill_id=manifest.skill_id,
@@ -167,7 +174,7 @@ class SkillArtifactStore:
             lambda destination: copy_skill_tree(
                 source_root,
                 destination,
-                expected_tree_sha256=record.tree_sha256,
+                expected_tree_sha256=expected_tree_sha256,
             ),
         )
 

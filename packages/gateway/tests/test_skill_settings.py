@@ -18,6 +18,7 @@ from heartwood.gateway import SkillManager, SkillSettingsError
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.skills import (
     CatalogEntry,
+    InstalledSkillRecord,
     SkillArtifactStore,
     SkillCatalogError,
     SkillCatalogSnapshot,
@@ -198,6 +199,46 @@ def test_manager_installs_local_skill_without_repository_or_controlled_data_clai
         manager.summaries()
 
 
+def test_manager_rejects_local_skill_mutation_after_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _local_skill(tmp_path)
+    manager = _manager(tmp_path)
+    inspected = manager.inspect_local(source)
+    install_local = manager.store.install_local
+
+    def mutate_then_install(
+        current_source: Path,
+        *,
+        expected_tree_sha256: str,
+    ) -> InstalledSkillRecord:
+        skill_file = current_source / "SKILL.md"
+        skill_file.write_text(
+            skill_file.read_text(encoding="utf-8") + "\n",
+            encoding="utf-8",
+        )
+        return install_local(
+            current_source,
+            expected_tree_sha256=expected_tree_sha256,
+        )
+
+    monkeypatch.setattr(manager.store, "install_local", mutate_then_install)
+
+    with pytest.raises(SkillSettingsError, match="changed after review"):
+        manager.install_local(
+            source,
+            expected_tree_sha256=inspected.tree_sha256,
+            approved=True,
+        )
+
+    assert manager.store.records() == ()
+    assert [event.event_type for event in AuditLog(tmp_path / "audit.jsonl").read()] == [
+        "skill.installation-decision",
+        "skill.installation-failed",
+    ]
+
+
 def test_manager_requires_explicit_source_when_multiple_are_configured(tmp_path: Path) -> None:
     entry, archive = _catalog_skill(tmp_path)
     registry = SkillSourceRegistry(
@@ -374,6 +415,72 @@ def test_manager_enforces_platform_and_deployment_owned_controlled_data_approval
         )
 
 
+@pytest.mark.parametrize(
+    ("entry_update", "reason"),
+    [
+        ({"allowed_tools": ("network-fetch",)}, "unsupported tools: network-fetch"),
+        (
+            {"policy_requires_network": True},
+            "requires network access, which is disabled",
+        ),
+    ],
+)
+def test_manager_uses_one_compatibility_policy_for_catalog_entries(
+    tmp_path: Path,
+    entry_update: dict[str, object],
+    reason: str,
+) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    if entry_update.get("policy_requires_network") is True:
+        entry = entry.model_copy(
+            update={"policy": entry.policy.model_copy(update={"requires_network": True})}
+        )
+    else:
+        entry = entry.model_copy(update=entry_update)
+    manager = _manager(tmp_path, client=_CatalogClient(_snapshot(entry), archive))
+
+    summary = manager.inspect_catalog(entry.name)
+
+    assert summary.status == "unsupported"
+    assert summary.compatibility_reason is not None
+    assert reason in summary.compatibility_reason
+    with pytest.raises(SkillSettingsError, match=reason):
+        manager.install_catalog(
+            entry.name,
+            source_id=None,
+            expected_tree_sha256=entry.tree_sha256,
+            approved=True,
+        )
+
+
+def test_manager_rechecks_installed_skill_compatibility_for_current_platform(
+    tmp_path: Path,
+) -> None:
+    source = _local_skill(tmp_path)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8").replace(
+            'heartwood.platforms: "generic,terra"',
+            'heartwood.platforms: "terra"',
+        ),
+        encoding="utf-8",
+    )
+    terra_manager = _manager(tmp_path, platform_id="terra")
+    inspected = terra_manager.inspect_local(source)
+    terra_manager.install_local(
+        source,
+        expected_tree_sha256=inspected.tree_sha256,
+        approved=True,
+    )
+
+    carina_manager = _manager(tmp_path, platform_id="carina")
+    moved = next(summary for summary in carina_manager.summaries() if summary.source == "installed")
+
+    assert moved.status == "unsupported"
+    assert moved.compatibility_reason == "Not supported on the carina platform"
+    assert carina_manager.active_skill_roots() == ()
+
+
 def test_manager_rejects_unknown_mismatched_missing_and_unapproved_catalog_entries(
     tmp_path: Path,
 ) -> None:
@@ -451,7 +558,8 @@ def test_manager_rejects_revoked_and_unapproved_local_skills(
     with pytest.raises(SkillSettingsError, match=r"missing SKILL\.md"):
         local_manager.inspect_local(tmp_path / "missing")
 
-    def fail_install(_source: Path) -> None:
+    def fail_install(_source: Path, *, expected_tree_sha256: str) -> None:
+        assert expected_tree_sha256 == summary.tree_sha256
         raise SkillStoreError("synthetic copy failure")
 
     monkeypatch.setattr(local_manager.store, "install_local", fail_install)

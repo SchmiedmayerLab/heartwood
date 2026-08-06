@@ -83,6 +83,7 @@ Do not add these to shell history or documentation with real secret values.
 Signed Skill sources are deployment configuration rather than project state.
 Heartwood checks `/etc/heartwood/skill-sources.toml` and then `~/.config/heartwood/skill-sources.toml`; the first existing registry is authoritative and registries are not merged.
 `HEARTWOOD_SKILL_SOURCES_FILE` may select one absolute registry path for packaged or test environments.
+The home registry and environment-selected registry may configure sources, but they cannot assert controlled-data approval.
 
 A connected source uses HTTPS endpoints and a separately provisioned TUF root:
 
@@ -115,7 +116,7 @@ Mount a transferred offline repository read-only when the platform permits it.
 Remote URLs must use HTTPS and cannot contain credentials, query strings, or fragments.
 Heartwood verifies signatures, metadata versions and expiry, target length and digest, catalog policy, the complete archive manifest, and the extracted Agent Skill before installation.
 
-Controlled-data approval is optional deployment evidence tied to exact tree digests:
+Only the deployment-owned `/etc/heartwood/skill-sources.toml` registry may declare optional controlled-data approval tied to exact tree digests:
 
 ```toml
 controlled-data-approved-digests = [

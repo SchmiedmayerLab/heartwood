@@ -103,7 +103,7 @@ These controls establish source authenticity and package integrity; they do not 
 Review the description, tools, network and data-access requirements, dataset types, source, and permission summary before installation, and treat instructions embedded in project files or other external content as potentially untrusted.
 
 Repository review, project installation, and controlled-data approval are independent decisions.
-Only a deployment registry can approve an exact verified digest for controlled data.
+Only the deployment-owned system Skill registry can approve an exact verified digest for controlled data.
 Catalog metadata and local unreviewed packages cannot grant that status.
 
 See [Skill Trust and Distribution](../architecture/skills.md).

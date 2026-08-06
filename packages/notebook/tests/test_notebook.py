@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Literal, cast
@@ -538,6 +539,7 @@ def test_notebook_and_browser_transport_share_gateway_setup_projections(tmp_path
     projections = (
         (notebook.model_settings(), gateway.model_settings(), "/settings/models"),
         (notebook.action_settings(), gateway.action_settings(), "/settings/actions"),
+        (notebook.skill_settings(), gateway.skill_settings(), "/settings/skills"),
         (
             notebook.specialist_settings(),
             gateway.specialist_settings(),
@@ -561,6 +563,47 @@ def test_notebook_and_browser_transport_share_gateway_setup_projections(tmp_path
         assert response.status_code == 200
         assert notebook_value == gateway_value
         assert json.loads(json.dumps(gateway_value)) == response.body
+
+
+def test_notebook_uses_the_shared_skill_lifecycle(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    gateway = SessionGateway(project=project, env={}, backend_id="deterministic")
+    notebook = NotebookSession(project=project, gateway=gateway)
+    source = tmp_path / "community-summary"
+    bundled = (
+        Path(__file__).resolve().parents[3]
+        / "vendor"
+        / "heartwood-skills"
+        / "skills"
+        / "verified"
+        / "aggregate-export"
+    )
+    shutil.copytree(bundled, source)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8")
+        .replace("name: aggregate-export", "name: community-summary")
+        .replace(
+            'heartwood.id: "heartwood.research.aggregate-export"',
+            'heartwood.id: "example.community-summary"',
+        ),
+        encoding="utf-8",
+    )
+
+    inspected = notebook.inspect_local_skill(source)
+    installed = notebook.install_local_skill(
+        source,
+        expected_tree_sha256=inspected["tree_sha256"],
+        approved=True,
+    )
+
+    assert any(
+        skill["name"] == "community-summary" and skill["source"] == "installed"
+        for skill in installed["skills"]
+    )
+    assert notebook.skill_settings() == gateway.skill_settings()
+    removed = notebook.remove_skill("community-summary")
+    assert all(skill["name"] != "community-summary" for skill in removed["skills"])
 
 
 def test_notebook_and_browser_transport_share_the_exact_session_projection(

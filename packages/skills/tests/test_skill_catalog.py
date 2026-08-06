@@ -31,6 +31,7 @@ from tuf.api.metadata import (  # type: ignore[attr-defined]
 
 from heartwood.skills import (
     InstalledSkillRecord,
+    LocalSkillVerifier,
     SkillArtifactStore,
     SkillCatalogClient,
     SkillCatalogError,
@@ -263,6 +264,55 @@ repository = "repository"
         configured_skill_source_registry(
             {"HEARTWOOD_SKILL_SOURCES_FILE": "relative.toml"}, home=tmp_path
         )
+
+
+def test_only_system_source_registry_can_assert_controlled_data_approval(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    (repository / "metadata").mkdir(parents=True)
+    trusted_root = repository / "metadata" / "1.root.json"
+    trusted_root.write_text("{}\n", encoding="utf-8")
+    approved_digest = "a" * 64
+    config = tmp_path / "skill-sources.toml"
+    config.write_text(
+        f'''schema_version = "heartwood.skill-sources.v1"
+
+[[sources]]
+id = "official"
+kind = "offline"
+trusted-root = "{trusted_root}"
+repository = "{repository}"
+controlled-data-approved-digests = ["{approved_digest}"]
+''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SkillCatalogError, match="deployment-owned system Skill registry"):
+        load_skill_source_registry(config)
+    with pytest.raises(SkillCatalogError, match="deployment-owned system Skill registry"):
+        configured_skill_source_registry(
+            {"HEARTWOOD_SKILL_SOURCES_FILE": str(config)},
+            home=tmp_path / "home",
+            system_path=tmp_path / "missing-system",
+        )
+
+    home = tmp_path / "home"
+    user_config = home / ".config" / "heartwood" / "skill-sources.toml"
+    user_config.parent.mkdir(parents=True)
+    shutil.copyfile(config, user_config)
+    with pytest.raises(SkillCatalogError, match="deployment-owned system Skill registry"):
+        configured_skill_source_registry(
+            {},
+            home=home,
+            system_path=tmp_path / "missing-system",
+        )
+
+    registry, source_path = configured_skill_source_registry(
+        {},
+        home=tmp_path / "empty-home",
+        system_path=config,
+    )
+    assert registry.sources[0].controlled_data_approved_digests == (approved_digest,)
+    assert source_path == config
 
 
 def test_source_registry_rejects_unsafe_remote_and_duplicate_sources(tmp_path: Path) -> None:
@@ -548,10 +598,14 @@ def test_local_install_is_unreviewed_content_addressed_and_tamper_evident(tmp_pa
     source = tmp_path / "source" / "aggregate-export"
     shutil.copytree(_SKILLS_ROOT / "aggregate-export", source)
     store = SkillArtifactStore(tmp_path / "state" / "skills")
-    record = store.install_local(source)
+    tree_sha256 = LocalSkillVerifier(source.parent).load_manifest(source).tree_sha256
+    record = store.install_local(source, expected_tree_sha256=tree_sha256)
     assert record.review == "local-unreviewed"
     assert record.controlled_data_ready is False
-    assert store.install_local(source) == record
+    assert store.install_local(source, expected_tree_sha256=tree_sha256) == record
+
+    with pytest.raises(SkillStoreError, match="changed after review"):
+        store.install_local(source, expected_tree_sha256="0" * 64)
 
     (store.artifact_path(record) / "SKILL.md").write_text("tampered\n", encoding="utf-8")
     with pytest.raises(SkillStoreError, match="artifact is invalid"):
@@ -641,10 +695,12 @@ def test_store_rejects_a_second_name_for_an_active_skill_identifier(tmp_path: Pa
         encoding="utf-8",
     )
     store = SkillArtifactStore(tmp_path / "state" / "skills")
-    store.install_local(first)
+    first_digest = LocalSkillVerifier(first.parent).load_manifest(first).tree_sha256
+    second_digest = LocalSkillVerifier(second.parent).load_manifest(second).tree_sha256
+    store.install_local(first, expected_tree_sha256=first_digest)
 
     with pytest.raises(SkillStoreError, match="identifier is already active"):
-        store.install_local(second)
+        store.install_local(second, expected_tree_sha256=second_digest)
 
 
 def test_store_rejects_revoked_conflicting_and_corrupt_state(tmp_path: Path) -> None:
