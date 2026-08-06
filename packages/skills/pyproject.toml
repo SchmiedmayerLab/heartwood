@@ -6,16 +6,18 @@
 
 [project]
 name = "heartwood-skills"
-version = "0.3.0-beta.2"
+version = "0.3.0-beta.3"
 description = "Local SKILL.md verification and deterministic skill test harnesses for Heartwood."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
+    "heartwood-skill-catalog",
     "heartwood-persistence",
     "heartwood-schemas",
     "pydantic",
+    "tuf==7.0.0",
 ]
 
 [build-system]
@@ -26,5 +28,6 @@ build-backend = "hatchling.build"
 packages = ["src/heartwood"]
 
 [tool.uv.sources]
+heartwood-skill-catalog = { workspace = true }
 heartwood-persistence = { workspace = true }
 heartwood-schemas = { workspace = true }

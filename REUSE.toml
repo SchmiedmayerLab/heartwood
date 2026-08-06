@@ -13,6 +13,7 @@ version = 1
 [[annotations]]
 path = [
     "LICENSE",
+    ".gitmodules",
     ".jscpd.json",
     ".python-version",
     "uv.lock",

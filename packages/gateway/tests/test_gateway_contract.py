@@ -2822,15 +2822,52 @@ def test_rest_manages_skill_settings(
     candidate = {
         "name": "community-summary",
         "skill_id": "example.community-summary",
-        "source": "candidate",
+        "source": "catalog",
+        "source_id": "official",
+        "tree_sha256": "a" * 64,
     }
-    monkeypatch.setattr(gateway, "inspect_skill", lambda _source: candidate)
+    monkeypatch.setattr(
+        gateway,
+        "inspect_skill",
+        lambda _name, *, source_id: {**candidate, "source_id": source_id},
+    )
+
+    def install_skill(
+        _name: str,
+        *,
+        source_id: str | None,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> dict[str, object]:
+        assert source_id == "official"
+        assert expected_tree_sha256 == "a" * 64
+        return {"skills": [{**candidate, "source": "installed"}]} if approved else {}
+
     monkeypatch.setattr(
         gateway,
         "install_skill",
-        lambda _source, approved: (
-            {"skills": [{**candidate, "source": "installed"}]} if approved else {}
-        ),
+        install_skill,
+    )
+    monkeypatch.setattr(gateway, "refresh_skills", lambda _source_id: {"skills": []})
+    monkeypatch.setattr(
+        gateway,
+        "inspect_local_skill",
+        lambda _source: {**candidate, "source": "local-candidate", "source_id": "local"},
+    )
+
+    def install_local_skill(
+        _source: Path,
+        *,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> dict[str, object]:
+        assert expected_tree_sha256 == "a" * 64
+        return {"skills": [{**candidate, "source": "installed"}]} if approved else {}
+
+    monkeypatch.setattr(
+        gateway,
+        "install_local_skill",
+        install_local_skill,
     )
     monkeypatch.setattr(gateway, "remove_skill", lambda _name: {"skills": []})
 
@@ -2839,14 +2876,35 @@ def test_rest_manages_skill_settings(
         RestRequest(
             method="POST",
             path="/settings/skills/inspect",
-            body=json.dumps({"source": "/mnt/community-summary"}),
+            body=json.dumps({"name": "community-summary", "source_id": "official"}),
         )
     )
     installed = rest.handle(
         RestRequest(
             method="POST",
             path="/settings/skills/install",
-            body=json.dumps({"source": "/mnt/community-summary", "approved": True}),
+            body=json.dumps(
+                {
+                    "name": "community-summary",
+                    "source_id": "official",
+                    "expected_tree_sha256": "a" * 64,
+                    "approved": True,
+                }
+            ),
+        )
+    )
+    refreshed = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/skills/refresh",
+            body=json.dumps({"source_id": "official"}),
+        )
+    )
+    local = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/skills/local/inspect",
+            body=json.dumps({"source": "/mnt/community-summary"}),
         )
     )
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/skills/community-summary"))
@@ -2855,6 +2913,8 @@ def test_rest_manages_skill_settings(
     assert len(cast(list[object], listed.body["skills"])) == 3
     assert inspected.body["name"] == "community-summary"
     assert installed.status_code == 200
+    assert refreshed.body == {"skills": []}
+    assert local.body["source"] == "local-candidate"
     assert removed.body == {"skills": []}
 
 
@@ -2895,14 +2955,31 @@ def test_rest_skill_routes_validate_request_shapes(tmp_path: Path) -> None:
         rest.handle(RestRequest(method="POST", path="/settings/skills/inspect", body="{}")),
         rest.handle(RestRequest(method="POST", path="/settings/skills/install", body="{")),
         rest.handle(RestRequest(method="POST", path="/settings/skills/install", body="{}")),
+        rest.handle(RestRequest(method="POST", path="/settings/skills/refresh", body="{")),
+        rest.handle(RestRequest(method="POST", path="/settings/skills/local/inspect", body="{}")),
         rest.handle(
             RestRequest(
                 method="POST",
                 path="/settings/skills/install",
-                body=json.dumps({"source": "/tmp/skill", "approved": "yes"}),
+                body=json.dumps(
+                    {
+                        "name": "skill",
+                        "approved": "yes",
+                        "expected_tree_sha256": "not-a-digest",
+                    }
+                ),
             )
         ),
         rest.handle(RestRequest(method="DELETE", path="/settings/skills/missing")),
     )
 
-    assert [response.status_code for response in responses] == [400, 422, 400, 422, 422, 422]
+    assert [response.status_code for response in responses] == [
+        400,
+        422,
+        400,
+        422,
+        400,
+        422,
+        422,
+        422,
+    ]

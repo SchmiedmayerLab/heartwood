@@ -25,7 +25,6 @@ from heartwood.schemas import (
     EgressAttestationRecord,
     ModelCallDecision,
     PolicyProfile,
-    SkillMetadata,
     schema_for,
     schema_names,
 )
@@ -45,7 +44,6 @@ def test_schema_inventory_is_versioned() -> None:
         "egress-attestation-record.v1",
         "model-call-decision.v1",
         "policy-profile.v1",
-        "skill-metadata.v1",
     }
     assert set(schema_names()) == expected
     for name in expected:
@@ -220,76 +218,6 @@ def test_detector_evidence_bounds_confidence() -> None:
             confidence=1.1,
             evidence=("invalid confidence",),
         )
-
-
-def test_skill_metadata_accepts_skill_md_aliases() -> None:
-    metadata = SkillMetadata.model_validate(
-        {
-            "heartwood.dataset-types": "omop-cdm,fhir",
-            "heartwood.platforms": "generic,terra",
-            "heartwood.phi-risk": "none",
-            "heartwood.trust-tier": "verified",
-            "heartwood.requires-network": "false",
-            "heartwood.version": "0.2.0",
-            "heartwood.sig": "sigstore:synthetic-bundle",
-        }
-    )
-    assert metadata.dataset_types == ("omop-cdm", "fhir")
-    assert metadata.platforms == ("generic", "terra")
-    assert metadata.requires_network is False
-    assert metadata.version == "0.2.0"
-
-
-@pytest.mark.parametrize(
-    "version",
-    [
-        "01.2.3",
-        "1.02.3",
-        "1.2.03",
-        "1.2.3-01",
-        "1.2.3-beta.01",
-        "1.2",
-        "v1.2.3",
-    ],
-)
-def test_skill_metadata_rejects_invalid_semantic_versions(version: str) -> None:
-    with pytest.raises(ValidationError):
-        SkillMetadata.model_validate(
-            {
-                "heartwood.dataset-types": "omop-cdm",
-                "heartwood.platforms": "generic",
-                "heartwood.phi-risk": "none",
-                "heartwood.trust-tier": "community",
-                "heartwood.requires-network": "false",
-                "heartwood.version": version,
-            }
-        )
-
-
-def test_verified_skill_metadata_requires_signature() -> None:
-    with pytest.raises(ValidationError):
-        SkillMetadata.model_validate(
-            {
-                "heartwood.dataset-types": "omop-cdm",
-                "heartwood.platforms": "generic",
-                "heartwood.phi-risk": "none",
-                "heartwood.trust-tier": "verified",
-                "heartwood.requires-network": "false",
-                "heartwood.version": "0.1.0",
-            }
-        )
-
-    community = SkillMetadata.model_validate(
-        {
-            "heartwood.dataset-types": "omop-cdm",
-            "heartwood.platforms": "generic",
-            "heartwood.phi-risk": "none",
-            "heartwood.trust-tier": "community",
-            "heartwood.requires-network": "false",
-            "heartwood.version": "0.1.0",
-        }
-    )
-    assert community.signature is None
 
 
 def test_approval_record_captures_human_decision() -> None:

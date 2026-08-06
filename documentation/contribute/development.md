@@ -11,7 +11,7 @@ Heartwood is a Python workspace with a TypeScript researcher web interface, cont
 ## Set Up the Repository
 
 ```bash
-git clone https://github.com/SchmiedmayerLab/heartwood.git
+git clone --recurse-submodules https://github.com/SchmiedmayerLab/heartwood.git
 cd heartwood
 uv sync --locked --all-groups --all-extras
 npm ci --prefix packages/webui
@@ -41,7 +41,9 @@ Add a parameter, platform adapter, or validation target for a real platform diff
 | Terminal interface and runtime launch | `packages/cli` |
 | Notebook bridge | `packages/notebook` |
 | Browser interface | `packages/webui` |
-| Skills and synthetic fixtures | `skills`, `fixtures/synthetic` |
+| Skill acquisition and project activation | `packages/skills`, `packages/gateway` |
+| Pinned curated Skill source and shared catalog tooling | `vendor/heartwood-skills` from [`SchmiedmayerLab/heartwood-skills`](https://github.com/SchmiedmayerLab/heartwood-skills) |
+| Synthetic fixtures | `fixtures/synthetic`, `evals` |
 | Images, native packaging, and release logic | `images`, `deploy`, `.github/workflows` |
 | Public documentation | `documentation` |
 
@@ -58,11 +60,15 @@ npm run --prefix packages/webui contracts:check
 npm run --prefix packages/webui typecheck
 npm test --prefix packages/webui
 npm run --prefix packages/webui build
-uv run zensical build --clean --strict
+uv run --group docs zensical build --clean --strict
 ```
 
 Run focused tests while iterating, then run the complete affected suites before review.
 Container and capable-model checks have higher resource requirements and run through their documented workflows.
+
+The curated Skill source must be initialized at the exact Git revision recorded by the superproject.
+CI rejects missing, modified, or substituted submodule content.
+Changes to curated Skill packages and catalog tooling are reviewed in `heartwood-skills`; Heartwood changes then advance the pinned revision and update interface, storage, and release tests together.
 
 ## Qualify a Terra Image Before Merge
 

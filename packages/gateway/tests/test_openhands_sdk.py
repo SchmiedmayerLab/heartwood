@@ -142,7 +142,7 @@ def _disable_profile_store_probe(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_verified_skills_load_through_openhands_native_loader() -> None:
-    repository, knowledge, agent = load_skills_from_dir(_repository_root() / "skills" / "verified")
+    repository, knowledge, agent = load_skills_from_dir(_verified_skills_root())
 
     assert set(repository) | set(knowledge) | set(agent) == {
         "aggregate-export",
@@ -216,7 +216,7 @@ def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(SpecialistCatalogError, match="must remain unavailable"):
-        load_specialist_catalog(agents_dir, _repository_root() / "skills" / "verified")
+        load_specialist_catalog(agents_dir, _verified_skills_root())
 
 
 def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
@@ -264,7 +264,7 @@ def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
         conversation_key="specialist-collision",
         specialist_catalog=load_specialist_catalog(
             agents_dir,
-            _repository_root() / "skills" / "verified",
+            _verified_skills_root(),
         ),
         env={},
         conversation_factory=_finished_conversation_factory(
@@ -3603,11 +3603,15 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _verified_skills_root() -> Path:
+    return _repository_root() / "vendor" / "heartwood-skills" / "skills" / "verified"
+
+
 @cache
 def _specialist_catalog() -> SpecialistCatalog:
     return load_specialist_catalog(
         _repository_root() / "agents" / "verified",
-        _repository_root() / "skills" / "verified",
+        _verified_skills_root(),
     )
 
 

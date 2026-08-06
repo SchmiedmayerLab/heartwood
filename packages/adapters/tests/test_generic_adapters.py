@@ -15,7 +15,6 @@ import pytest
 from heartwood.adapters import (
     assert_data_source_adapter_conforms,
     assert_platform_adapter_conforms,
-    assert_registry_adapter_conforms,
 )
 from heartwood.adapters.data import DataSourceBoundaryError, LocalFilesystemDataSourceAdapter
 from heartwood.adapters.platform import (
@@ -24,7 +23,6 @@ from heartwood.adapters.platform import (
     TerraPlatformAdapter,
     select_platform_adapter,
 )
-from heartwood.adapters.registry import LocalRegistryAdapter, RegistryBoundaryError
 
 
 def test_generic_platform_adapter_conforms() -> None:
@@ -148,26 +146,3 @@ def test_local_filesystem_data_adapter_blocks_symlink_escape(tmp_path: Path) -> 
     adapter = LocalFilesystemDataSourceAdapter(root)
     with pytest.raises(DataSourceBoundaryError):
         adapter.read_table("person")
-
-
-def test_local_registry_adapter_conforms() -> None:
-    assert_registry_adapter_conforms(LocalRegistryAdapter.synthetic_skills())
-
-
-def test_local_registry_adapter_blocks_path_escape(tmp_path: Path) -> None:
-    registry = LocalRegistryAdapter(tmp_path)
-    with pytest.raises(RegistryBoundaryError):
-        registry.resolve_skill("heartwood.synthetic.../outside", "0.1.0")
-
-
-def test_local_registry_adapter_rejects_outside_source(tmp_path: Path) -> None:
-    registry = LocalRegistryAdapter(tmp_path / "registry")
-    reference = registry.resolve_skill("heartwood.synthetic.missing", "0.1.0")
-    outside = reference.__class__(
-        skill_id=reference.skill_id,
-        version=reference.version,
-        source=str(tmp_path / "outside"),
-    )
-    verification = registry.verify_skill(outside)
-    assert verification.verified is False
-    assert verification.reason == "local skill source escapes registry root"

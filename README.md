@@ -26,7 +26,7 @@ Heartwood reuses OpenHands for the agent loop and coding tools, then adds projec
 - Research-environment, ChatGPT sign-in, hosted API, compatible-service, and Heartwood-managed model connections through one setup flow.
 - Recommended Heartwood-managed models plus best-effort support for arbitrary public Hugging Face repositories and reviewed offline imports.
 - Clear review of complete OpenHands action sets before execution.
-- Repository-verified research Skills and explicitly installed project extensions.
+- Repository-reviewed research Skills, signed extension catalogs, and explicitly approved project installations.
 - Bounded research-planning, data-quality, cohort, statistical, and reproducibility specialists delegated through OpenHands.
 - Persistent sessions, replay, and scrubbed audit export.
 - Versioned workstation, NVIDIA, Terra, and native Stanford Carina artifacts.
@@ -46,7 +46,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 

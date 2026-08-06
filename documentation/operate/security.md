@@ -95,9 +95,17 @@ A trusted identity assertion is an additional route marker, not a bearer secret 
 ### Skills and Instructions
 
 A Skill can influence agent behavior and tool selection.
-Structural validation and provenance records do not make third-party instructions trustworthy.
+Heartwood therefore accepts reviewed external packages only through deployment-approved TUF roots and verifies current signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy, and OpenHands compatibility before installation.
+Approval is bound to the exact complete-tree digest shown to the researcher, installation is atomic, and a signed revocation prevents later activation.
 
-Review Skill source and declared tools, install only through an approved path, and treat instructions embedded in project files or external content as potentially untrusted.
+These controls establish source authenticity and package integrity; they do not prove that instructions are safe for every dataset or task.
+Review the description, tools, network requirement, source, and permission summary before installation, and treat instructions embedded in project files or other external content as potentially untrusted.
+
+Repository review, project installation, and controlled-data approval are independent decisions.
+Only a deployment registry can approve an exact verified digest for controlled data.
+Catalog metadata and local unreviewed packages cannot grant that status.
+
+See [Skill Trust and Distribution](../architecture/skills.md).
 
 ### Audit Data
 

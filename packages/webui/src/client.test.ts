@@ -1010,44 +1010,87 @@ describe("GatewayClient", () => {
   });
 
   it("manages Skill inspection and installation through settings routes", async () => {
+    const digest = "a".repeat(64);
     const skill = {
       name: "community-summary",
       skill_id: "example.community-summary",
-      source: "candidate",
+      source: "catalog",
+      source_id: "heartwood-skills",
+      tree_sha256: digest,
     };
     const settings = { skills: [{ ...skill, source: "installed" }] };
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ skills: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ skills: [] })))
       .mockResolvedValueOnce(new Response(JSON.stringify(skill)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...skill, source: "local-candidate" })),
+      )
       .mockResolvedValueOnce(new Response(JSON.stringify(settings)))
       .mockResolvedValueOnce(new Response(JSON.stringify({ skills: [] })));
     vi.stubGlobal("fetch", fetch);
     const client = new GatewayClient("/proxy/8767");
 
     await client.getSkillSettings();
-    await client.inspectSkill("/mnt/community-summary");
-    await client.installSkill("/mnt/community-summary");
+    await client.refreshSkills();
+    await client.inspectSkill("community-summary", "heartwood-skills");
+    await client.installSkill("community-summary", "heartwood-skills", digest);
+    await client.inspectLocalSkill("/mnt/community-summary");
+    await client.installLocalSkill("/mnt/community-summary", digest);
     await client.removeSkill("community summary");
 
     expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/skills");
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      "/proxy/8767/settings/skills/inspect",
-      expect.objectContaining({ method: "POST" }),
+      "/proxy/8767/settings/skills/refresh",
+      expect.objectContaining({
+        body: JSON.stringify({ source_id: null }),
+        method: "POST",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       3,
+      "/proxy/8767/settings/skills/inspect",
+      expect.objectContaining({
+        body: JSON.stringify({
+          name: "community-summary",
+          source_id: "heartwood-skills",
+        }),
+        method: "POST",
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
       "/proxy/8767/settings/skills/install",
       expect.objectContaining({
         body: JSON.stringify({
           approved: true,
+          expected_tree_sha256: digest,
+          name: "community-summary",
+          source_id: "heartwood-skills",
+        }),
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      5,
+      "/proxy/8767/settings/skills/local/inspect",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      6,
+      "/proxy/8767/settings/skills/local/install",
+      expect.objectContaining({
+        body: JSON.stringify({
+          approved: true,
+          expected_tree_sha256: digest,
           source: "/mnt/community-summary",
         }),
       }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
-      4,
+      7,
       "/proxy/8767/settings/skills/community%20summary",
       { method: "DELETE" },
     );

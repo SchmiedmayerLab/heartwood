@@ -20,7 +20,6 @@ from heartwood.schemas import (
     EgressAttestationRecord,
     ModelCallDecision,
     PolicyProfile,
-    SkillMetadata,
 )
 
 _FIXTURES = Path("fixtures/synthetic")
@@ -95,13 +94,6 @@ def test_egress_attestation_fixture_matches_attestation_schema() -> None:
     payload = _read_json(_FIXTURES / "egress" / "attestation-record.json")
     record = EgressAttestationRecord.model_validate(payload)
     assert record.decision_id == "decision-synthetic-denied-egress"
-
-
-def test_skill_metadata_fixture_matches_skill_metadata_schema() -> None:
-    payload = _read_json(_FIXTURES / "skills" / "omop-cohort-summary" / "metadata.json")
-    metadata = SkillMetadata.model_validate(payload)
-    assert metadata.dataset_types == ("omop-cdm",)
-    assert metadata.trust_tier == "verified"
 
 
 def test_approval_fixture_matches_approval_schema() -> None:

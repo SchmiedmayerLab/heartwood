@@ -75,6 +75,9 @@ __all__ = [
     "SessionSummaryResponse",
     "SkillInspectRequest",
     "SkillInstallRequest",
+    "SkillLocalInspectRequest",
+    "SkillLocalInstallRequest",
+    "SkillRefreshRequest",
     "SkillSettingsResponse",
     "SkillSummaryResponse",
     "SpecialistRoleResponse",
@@ -263,15 +266,36 @@ class ModelSelectionRequest(ApiRequest):
 
 
 class SkillInspectRequest(ApiRequest):
-    """Inspect one mounted Skill source."""
+    """Inspect one Skill from a deployment-approved signed source."""
+
+    name: str = Field(min_length=1)
+    source_id: str | None = Field(default=None, min_length=1)
+
+
+class SkillInstallRequest(SkillInspectRequest):
+    """Install one explicitly approved signed Skill revision."""
+
+    approved: bool
+    expected_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SkillLocalInspectRequest(ApiRequest):
+    """Inspect one advanced local Agent Skill source."""
 
     source: str = Field(min_length=1)
 
 
-class SkillInstallRequest(SkillInspectRequest):
-    """Install one explicitly approved Skill source."""
+class SkillLocalInstallRequest(SkillLocalInspectRequest):
+    """Install one explicitly approved local, unreviewed Skill revision."""
 
     approved: bool
+    expected_tree_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SkillRefreshRequest(ApiRequest):
+    """Refresh all configured signed sources or one named source."""
+
+    source_id: str | None = Field(default=None, min_length=1)
 
 
 @with_config(ConfigDict(extra="forbid", strict=True))
@@ -895,16 +919,26 @@ class ModelArtifactsResponse(_ApiResponse):
 
 
 class SkillSummaryResponse(_ApiResponse):
-    """One bundled, candidate, or installed Skill."""
+    """One bundled, signed-catalog, installed, or local-candidate Skill."""
 
     name: str
     skill_id: str
+    version: str
     description: str
-    trust_tier: str
-    source: Literal["bundled", "candidate", "installed"]
+    source: Literal["bundled", "catalog", "installed", "local-candidate"]
+    source_id: str
+    review: Literal["repository-reviewed", "local-unreviewed"]
+    status: Literal["available", "active", "revoked", "unsupported"]
     approval_summary: str
     declared_tools: list[str]
     requires_network: bool
+    controlled_data_ready: bool
+    tree_sha256: str
+    source_revision: str | None
+    archive_size: int | None
+    revocation_reason: str | None
+    compatibility_reason: str | None
+    installable: bool
 
 
 class SkillSettingsResponse(_ApiResponse):
@@ -984,6 +1018,9 @@ type PublicApiContract = (
     | SessionRenameRequest
     | SkillInspectRequest
     | SkillInstallRequest
+    | SkillLocalInspectRequest
+    | SkillLocalInstallRequest
+    | SkillRefreshRequest
     | SubscriptionDeviceLoginRequest
     | SubscriptionDevicePollRequest
 )

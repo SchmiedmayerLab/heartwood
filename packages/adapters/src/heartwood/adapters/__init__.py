@@ -16,14 +16,10 @@ from heartwood.adapters._protocols import (
     IngressMode,
     PlatformAdapter,
     PlatformCapabilities,
-    RegistryAdapter,
-    RegistryVerification,
-    SkillReference,
 )
 from heartwood.adapters.conformance import (
     assert_data_source_adapter_conforms,
     assert_platform_adapter_conforms,
-    assert_registry_adapter_conforms,
 )
 
 __all__ = [
@@ -34,13 +30,9 @@ __all__ = [
     "IngressMode",
     "PlatformAdapter",
     "PlatformCapabilities",
-    "RegistryAdapter",
-    "RegistryVerification",
-    "SkillReference",
     "__version__",
     "assert_data_source_adapter_conforms",
     "assert_platform_adapter_conforms",
-    "assert_registry_adapter_conforms",
 ]
 
-__version__ = "0.3.0-beta.2"
+__version__ = "0.3.0-beta.3"

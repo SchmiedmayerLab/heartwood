@@ -70,6 +70,16 @@ An explicit license decision is required before import, and the request is bound
 Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
 Transferred models remain outside the repository-download registry, so an offline restart cannot silently turn an imported artifact into a network request.
 
+### Skill Artifact Lifecycle
+
+The curated `heartwood-skills` source owns complete Agent Skill validation and deterministic catalog artifacts.
+Heartwood pins one exact source revision for bundled content and uses deployment-owned TUF roots for additional connected or offline sources.
+
+The gateway refreshes signed metadata, projects catalog entries for every interface, binds explicit approval to the reviewed tree digest, and atomically activates the complete verified directory under `.heartwood/skills/`.
+It reapplies signed revocations and revalidates source metadata and installed content before supplying active roots to OpenHands.
+Local directories use the same complete-tree verifier and content-addressed store but remain visibly unreviewed.
+See [Skill Trust and Distribution](skills.md) for the trust and ownership boundaries.
+
 ### Workspace Inspection
 
 The gateway owns one bounded read-only workspace service for project trees, UTF-8 text files, changed paths, and per-file diffs.

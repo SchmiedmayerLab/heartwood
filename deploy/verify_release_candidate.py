@@ -167,6 +167,7 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     semantic_versions: dict[str, str] = {}
     python_source_versions: dict[str, str] = {}
     python_lock_versions: dict[str, str] = {}
+    release_package_names: set[str] = set()
     expected_python_version = python_package_version(version)
     release_metadata = tomllib.loads((root / "VERSION.toml").read_text(encoding="utf-8"))
     declared_version = release_metadata.get("version")
@@ -175,8 +176,13 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     for metadata_path in sorted((root / "packages").glob("*/pyproject.toml")):
         metadata = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
         project = metadata.get("project")
-        if isinstance(project, dict) and isinstance(project.get("version"), str):
-            python_source_versions[str(metadata_path.relative_to(root))] = project["version"]
+        if isinstance(project, dict):
+            project_name = project.get("name")
+            project_version = project.get("version")
+            if isinstance(project_name, str):
+                release_package_names.add(project_name)
+            if isinstance(project_version, str):
+                python_source_versions[str(metadata_path.relative_to(root))] = project_version
     for init_path in sorted((root / "packages").glob("*/src/heartwood/*/__init__.py")):
         module_version = _module_version(init_path)
         if module_version is not None:
@@ -196,21 +202,6 @@ def source_version_errors(root: Path, version: str) -> list[str]:
         errors.append("docker-bake.hcl: HEARTWOOD_VERSION default is missing")
     else:
         semantic_versions["docker-bake.hcl"] = bake_version.group(1)
-    for skill_root in (
-        root / "skills" / "verified",
-        root / "fixtures" / "synthetic" / "skills",
-    ):
-        for metadata_path in sorted(skill_root.glob("*/metadata.json")):
-            skill_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            relative_path = str(metadata_path.relative_to(root))
-            if not isinstance(skill_metadata, dict):
-                errors.append(f"{relative_path}: expected a JSON object")
-                continue
-            skill_version = skill_metadata.get("heartwood.version")
-            if not isinstance(skill_version, str):
-                errors.append(f"{relative_path}: heartwood.version must be a string")
-                continue
-            semantic_versions[relative_path] = skill_version
     web_lock_path = root / "packages" / "webui" / "package-lock.json"
     web_lock = json.loads(web_lock_path.read_text(encoding="utf-8"))
     if isinstance(web_lock, dict):
@@ -235,7 +226,7 @@ def source_version_errors(root: Path, version: str) -> list[str]:
             package_version = package.get("version")
             if (
                 isinstance(name, str)
-                and name.startswith("heartwood-")
+                and name in release_package_names
                 and isinstance(package_version, str)
             ):
                 python_lock_versions[f"uv.lock:{name}"] = package_version

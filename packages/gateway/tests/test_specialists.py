@@ -352,7 +352,7 @@ def _agents_dir() -> Path:
 
 
 def _skills_dir() -> Path:
-    return _repository_root() / "skills" / "verified"
+    return _repository_root() / "vendor" / "heartwood-skills" / "skills" / "verified"
 
 
 def _repository_root() -> Path:

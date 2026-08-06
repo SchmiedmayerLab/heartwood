@@ -4,213 +4,477 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Verified bundled Skills and explicit installation-time trust decisions."""
+"""Shared projection and lifecycle for trusted Agent Skill artifacts."""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, Protocol
 
-from heartwood.persistence import LockedJsonlStore, fsync_directory
+from heartwood_skill_catalog import CatalogEntry
+
+from heartwood.persistence import LockedJsonlStore
 from heartwood.skills import (
+    InstalledSkillRecord,
     LocalSkillVerifier,
+    SkillArtifactStore,
+    SkillCatalogClient,
+    SkillCatalogError,
+    SkillCatalogSnapshot,
     SkillManifest,
+    SkillSourceProfile,
+    SkillSourceRegistry,
+    SkillStoreError,
     SkillVerificationError,
-    build_skill_approval_record,
 )
 
 
 class SkillSettingsError(ValueError):
-    """Raised when a Skill cannot be inspected, installed, or removed safely."""
+    """Raised when a Skill cannot be discovered, verified, or activated safely."""
+
+
+class _CatalogClient(Protocol):
+    def refresh(self) -> SkillCatalogSnapshot: ...
+
+    def download(self, entry: CatalogEntry) -> Path: ...
 
 
 @dataclass(frozen=True, slots=True)
 class SkillSummary:
-    """API-safe Skill metadata for researcher interfaces."""
+    """API-safe Skill metadata shared by every researcher interface."""
 
     name: str
     skill_id: str
+    version: str
     description: str
-    trust_tier: str
-    source: str
+    source: Literal["bundled", "catalog", "installed", "local-candidate"]
+    source_id: str
+    review: Literal["repository-reviewed", "local-unreviewed"]
+    status: Literal["available", "active", "revoked", "unsupported"]
     approval_summary: str
     declared_tools: tuple[str, ...]
     requires_network: bool
+    controlled_data_ready: bool
+    tree_sha256: str
+    source_revision: str | None = None
+    archive_size: int | None = None
+    revocation_reason: str | None = None
+    compatibility_reason: str | None = None
+
+    @property
+    def installable(self) -> bool:
+        """Return whether this projection can be activated from a signed source."""
+        return self.source == "catalog" and self.status == "available"
 
     @classmethod
-    def from_manifest(cls, manifest: SkillManifest, *, source: str) -> SkillSummary:
-        """Build a summary from a verified local manifest."""
+    def from_manifest(
+        cls,
+        manifest: SkillManifest,
+        *,
+        source: Literal["bundled", "local-candidate"],
+    ) -> SkillSummary:
+        """Build a projection from a locally verified Agent Skill tree."""
         return cls(
             name=manifest.name,
             skill_id=manifest.skill_id,
+            version=manifest.version,
             description=manifest.description,
-            trust_tier=manifest.metadata.trust_tier,
             source=source,
+            source_id="heartwood" if source == "bundled" else "local",
+            review=manifest.review,
+            status="active" if source == "bundled" else "available",
             approval_summary=manifest.approval_summary,
             declared_tools=manifest.declared_tools,
-            requires_network=manifest.metadata.requires_network,
+            requires_network=manifest.requires_network,
+            controlled_data_ready=False,
+            tree_sha256=manifest.tree_sha256,
+        )
+
+    @classmethod
+    def from_catalog(
+        cls,
+        entry: CatalogEntry,
+        *,
+        source_id: str,
+        platform_id: str,
+        controlled_data_ready: bool,
+    ) -> SkillSummary:
+        """Build a projection from a TUF-verified catalog entry."""
+        compatible = "generic" in entry.policy.platforms or platform_id in entry.policy.platforms
+        if entry.revoked:
+            status: Literal["available", "revoked", "unsupported"] = "revoked"
+        elif compatible:
+            status = "available"
+        else:
+            status = "unsupported"
+        return cls(
+            name=entry.name,
+            skill_id=entry.policy.skill_id,
+            version=entry.policy.version,
+            description=entry.description,
+            source="catalog",
+            source_id=source_id,
+            review=entry.review,
+            status=status,
+            approval_summary=entry.policy.approval_summary,
+            declared_tools=entry.allowed_tools,
+            requires_network=entry.policy.requires_network,
+            controlled_data_ready=controlled_data_ready,
+            tree_sha256=entry.tree_sha256,
+            source_revision=entry.source_revision,
+            archive_size=entry.archive_size,
+            revocation_reason=entry.revocation_reason,
+            compatibility_reason=(
+                None if compatible else f"Not supported on the {platform_id} platform"
+            ),
+        )
+
+    @classmethod
+    def from_installed(
+        cls,
+        record: InstalledSkillRecord,
+        manifest: SkillManifest,
+    ) -> SkillSummary:
+        """Build a projection from an activated content-addressed artifact."""
+        return cls(
+            name=record.name,
+            skill_id=record.skill_id,
+            version=record.version,
+            description=manifest.description,
+            source="installed",
+            source_id=record.source_id,
+            review=record.review,
+            status=record.status,
+            approval_summary=manifest.approval_summary,
+            declared_tools=manifest.declared_tools,
+            requires_network=manifest.requires_network,
+            controlled_data_ready=record.controlled_data_ready,
+            tree_sha256=record.tree_sha256,
+            source_revision=record.source_revision,
+            revocation_reason=record.revocation_reason,
         )
 
     def safe_dict(self) -> dict[str, object]:
-        """Return JSON-compatible metadata."""
+        """Return the stable JSON projection used by CLI, browser, and notebook clients."""
         return {
             "name": self.name,
             "skill_id": self.skill_id,
+            "version": self.version,
             "description": self.description,
-            "trust_tier": self.trust_tier,
             "source": self.source,
+            "source_id": self.source_id,
+            "review": self.review,
+            "status": self.status,
             "approval_summary": self.approval_summary,
             "declared_tools": list(self.declared_tools),
             "requires_network": self.requires_network,
+            "controlled_data_ready": self.controlled_data_ready,
+            "tree_sha256": self.tree_sha256,
+            "source_revision": self.source_revision,
+            "archive_size": self.archive_size,
+            "revocation_reason": self.revocation_reason,
+            "compatibility_reason": self.compatibility_reason,
+            "installable": self.installable,
         }
 
 
 class SkillManager:
-    """List bundled Skills and manage explicitly approved local extensions."""
+    """Own trusted source refresh, content-addressed activation, and audit records."""
 
-    def __init__(self, *, bundled_dir: Path, installed_dir: Path, audit_path: Path) -> None:
+    def __init__(
+        self,
+        *,
+        bundled_dir: Path,
+        store: SkillArtifactStore,
+        source_registry: SkillSourceRegistry,
+        cache_dir: Path,
+        audit_path: Path,
+        platform_id: str,
+        client_factory: Callable[[SkillSourceProfile, Path], _CatalogClient] | None = None,
+    ) -> None:
         self.bundled_dir = bundled_dir.resolve()
-        self.installed_dir = installed_dir.resolve()
+        self.store = store
+        self.source_registry = source_registry
         self.audit_path = audit_path.resolve()
+        self.platform_id = platform_id
+        factory = SkillCatalogClient if client_factory is None else client_factory
+        profiles = source_registry.enabled_sources()
+        self._profiles = {profile.source_id: profile for profile in profiles}
+        self._clients: dict[str, _CatalogClient] = {
+            profile.source_id: factory(profile, cache_dir) for profile in profiles
+        }
+        self._snapshots: dict[str, SkillCatalogSnapshot] = {}
 
     def summaries(self) -> tuple[SkillSummary, ...]:
-        """Return all verified bundled and installed Skills."""
-        return (
-            *self._summaries_in(self.bundled_dir, source="bundled", require_verified=True),
-            *self._summaries_in(self.installed_dir, source="installed", require_verified=False),
+        """Return one deterministic projection of bundled, installed, and catalog Skills."""
+        bundled = self._bundled_summaries()
+        installed = self._installed_summaries()
+        active_names = {summary.name for summary in (*bundled, *installed)}
+        catalog = tuple(
+            summary
+            for source_id in sorted(self._snapshots)
+            for entry in self._snapshots[source_id].entries
+            if (summary := self._catalog_summary(entry, source_id=source_id)).name
+            not in active_names
         )
+        return tuple(sorted((*bundled, *installed, *catalog), key=_summary_order))
 
-    def inspect(self, source: Path) -> SkillSummary:
-        """Verify and summarize one mounted Skill source without installing it."""
-        manifest = self._source_manifest(source)
-        return SkillSummary.from_manifest(manifest, source="candidate")
+    def refresh(self, source_id: str | None = None) -> tuple[SkillSummary, ...]:
+        """Refresh configured TUF sources and apply signed revocation state."""
+        source_ids = (source_id,) if source_id is not None else tuple(sorted(self._clients))
+        if source_id is not None and source_id not in self._clients:
+            raise SkillSettingsError(f"Skill source is not configured: {source_id}")
+        snapshots: list[SkillCatalogSnapshot] = []
+        try:
+            for current_source_id in source_ids:
+                snapshot = self._clients[current_source_id].refresh()
+                if snapshot.source_id != current_source_id:
+                    raise SkillSettingsError(
+                        "Skill source returned metadata for a different source identifier"
+                    )
+                snapshots.append(snapshot)
+        except SkillCatalogError as error:
+            raise SkillSettingsError(str(error)) from error
+        for snapshot in snapshots:
+            self.store.apply_catalog_snapshot(snapshot)
+            self._snapshots[snapshot.source_id] = snapshot
+        return self.summaries()
 
-    def install(
+    def inspect_catalog(self, name: str, *, source_id: str | None = None) -> SkillSummary:
+        """Refresh and summarize one signed catalog entry without downloading its archive."""
+        source_id = self._resolve_source_id(source_id)
+        snapshot = self._refresh_source(source_id)
+        try:
+            entry = snapshot.entry(name)
+        except SkillCatalogError as error:
+            raise SkillSettingsError(str(error)) from error
+        return self._catalog_summary(entry, source_id=source_id)
+
+    def install_catalog(
         self,
-        source: Path,
+        name: str,
         *,
+        source_id: str | None,
+        expected_tree_sha256: str,
         approved: bool,
         actor_id: str = "human",
     ) -> SkillSummary:
-        """Install one verified source after recording an explicit trust decision."""
-        manifest = self._source_manifest(source)
-        if any(
-            summary.name == manifest.name
-            for summary in self._summaries_in(
-                self.bundled_dir,
-                source="bundled",
-                require_verified=True,
+        """Refresh, verify, download, and atomically activate one signed Skill."""
+        source_id = self._resolve_source_id(source_id)
+        snapshot = self._refresh_source(source_id)
+        try:
+            entry = snapshot.entry(name)
+        except SkillCatalogError as error:
+            raise SkillSettingsError(str(error)) from error
+        summary = self._catalog_summary(entry, source_id=source_id)
+        if entry.revoked:
+            raise SkillSettingsError(f"Skill has been revoked: {entry.name}")
+        if summary.status == "unsupported":
+            raise SkillSettingsError(summary.compatibility_reason or "Skill is not supported")
+        if entry.tree_sha256 != expected_tree_sha256:
+            raise SkillSettingsError(
+                "Skill content changed after review; inspect the current signed revision again"
             )
-        ):
-            msg = f"bundled Skill cannot be replaced by an extension: {manifest.name}"
-            raise SkillSettingsError(msg)
         if not approved:
-            self._record_decision(manifest, approved=False, actor_id=actor_id)
-            msg = f"installation approval is required: {manifest.approval_summary}"
-            raise SkillSettingsError(msg)
-        _validate_install_name(manifest.name)
-        destination = (self.installed_dir / manifest.name).resolve()
-        if destination.parent != self.installed_dir:
-            msg = "installed Skill destination escapes persistent Skill storage"
-            raise SkillSettingsError(msg)
-        if destination.exists():
-            msg = f"installed Skill already exists: {manifest.name}"
-            raise SkillSettingsError(msg)
-        source_root = source.resolve()
-        if self.installed_dir == source_root or self.installed_dir in source_root.parents:
-            msg = "Skill source cannot be inside persistent Skill storage"
-            raise SkillSettingsError(msg)
-        _reject_symlinks(source)
-        self._record_decision(manifest, approved=True, actor_id=actor_id)
-        self.installed_dir.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{manifest.name}.", dir=self.installed_dir))
+            self._record_decision(summary, approved=False, actor_id=actor_id)
+            raise SkillSettingsError("Skill installation requires explicit approval")
+        self._record_decision(summary, approved=True, actor_id=actor_id)
         try:
-            shutil.copytree(source_root, temporary, dirs_exist_ok=True)
-            installed = LocalSkillVerifier(
-                self.installed_dir,
-                require_verified_tier=False,
-            ).load_manifest(temporary)
-            temporary.replace(destination)
-            fsync_directory(self.installed_dir)
-        except (OSError, SkillVerificationError) as error:
-            msg = f"unable to install Skill {manifest.name}: {error}"
-            raise SkillSettingsError(msg) from error
-        finally:
-            shutil.rmtree(temporary, ignore_errors=True)
-        return SkillSummary.from_manifest(installed, source="installed")
+            archive = self._clients[source_id].download(entry)
+            record = self.store.install_catalog(
+                entry,
+                archive,
+                source_id=source_id,
+                controlled_data_ready=self._profiles[source_id].controlled_data_ready(entry),
+            )
+            manifest = self.store.manifest(record)
+        except (SkillCatalogError, SkillStoreError) as error:
+            self._record_installation_result(summary, activated=False, actor_id=actor_id)
+            raise SkillSettingsError(str(error)) from error
+        installed = SkillSummary.from_installed(record, manifest)
+        self._record_installation_result(installed, activated=True, actor_id=actor_id)
+        return installed
 
-    def remove(self, name: str) -> None:
-        """Remove one installed extension without touching bundled Skills."""
-        _validate_install_name(name)
-        destination = (self.installed_dir / name).resolve()
-        if destination.parent != self.installed_dir or not destination.is_dir():
-            msg = f"installed Skill does not exist: {name}"
-            raise SkillSettingsError(msg)
-        shutil.rmtree(destination)
-
-    def _source_manifest(self, source: Path) -> SkillManifest:
-        _reject_symlinks(source)
-        source_root = source.resolve()
-        if not source_root.is_dir():
-            msg = f"Skill source directory does not exist: {source}"
-            raise SkillSettingsError(msg)
+    def inspect_local(self, source: Path) -> SkillSummary:
+        """Inspect an advanced local source without treating it as repository-reviewed."""
         try:
-            return LocalSkillVerifier(
-                source_root.parent,
-                require_verified_tier=False,
-            ).load_manifest(source_root)
+            manifest = LocalSkillVerifier(source.resolve().parent).load_manifest(source)
         except SkillVerificationError as error:
             raise SkillSettingsError(str(error)) from error
+        return SkillSummary.from_manifest(manifest, source="local-candidate")
 
-    def _summaries_in(
+    def install_local(
         self,
-        root: Path,
+        source: Path,
         *,
-        source: str,
-        require_verified: bool,
-    ) -> tuple[SkillSummary, ...]:
-        if not root.is_dir():
+        expected_tree_sha256: str,
+        approved: bool,
+        actor_id: str = "human",
+    ) -> SkillSummary:
+        """Activate an explicitly approved local, unreviewed Agent Skill tree."""
+        summary = self.inspect_local(source)
+        if summary.tree_sha256 != expected_tree_sha256:
+            raise SkillSettingsError("Local Skill changed after review; inspect it again")
+        if not approved:
+            self._record_decision(summary, approved=False, actor_id=actor_id)
+            raise SkillSettingsError("Local Skill installation requires explicit approval")
+        self._record_decision(summary, approved=True, actor_id=actor_id)
+        try:
+            record = self.store.install_local(source)
+            manifest = self.store.manifest(record)
+        except SkillStoreError as error:
+            self._record_installation_result(summary, activated=False, actor_id=actor_id)
+            raise SkillSettingsError(str(error)) from error
+        installed = SkillSummary.from_installed(record, manifest)
+        self._record_installation_result(installed, activated=True, actor_id=actor_id)
+        return installed
+
+    def remove(self, name: str) -> None:
+        """Deactivate one installed Skill while retaining its immutable artifact."""
+        try:
+            removed = self.store.remove(name)
+        except SkillStoreError as error:
+            raise SkillSettingsError(str(error)) from error
+        summary = SkillSummary.from_installed(removed, self.store.manifest(removed))
+        self._record_removal(summary)
+
+    def active_skill_roots(self) -> tuple[Path, ...]:
+        """Return verified installed roots consumable by OpenHands."""
+        try:
+            active_sources = sorted(
+                {
+                    record.source_id
+                    for record in self.store.records()
+                    if record.source_kind == "catalog" and record.status == "active"
+                }
+            )
+            for source_id in active_sources:
+                if source_id not in self._clients:
+                    raise SkillSettingsError(
+                        f"Installed Skill source is no longer configured: {source_id}"
+                    )
+                self._refresh_source(source_id)
+            return self.store.active_skill_roots()
+        except SkillStoreError as error:
+            raise SkillSettingsError(str(error)) from error
+
+    def _catalog_summary(self, entry: CatalogEntry, *, source_id: str) -> SkillSummary:
+        return SkillSummary.from_catalog(
+            entry,
+            source_id=source_id,
+            platform_id=self.platform_id,
+            controlled_data_ready=self._profiles[source_id].controlled_data_ready(entry),
+        )
+
+    def _refresh_source(self, source_id: str) -> SkillCatalogSnapshot:
+        self.refresh(source_id)
+        return self._snapshots[source_id]
+
+    def _resolve_source_id(self, source_id: str | None) -> str:
+        if source_id is not None:
+            if source_id not in self._clients:
+                raise SkillSettingsError(f"Skill source is not configured: {source_id}")
+            return source_id
+        configured = tuple(sorted(self._clients))
+        if len(configured) == 1:
+            return configured[0]
+        if not configured:
+            raise SkillSettingsError("No signed Skill source is configured")
+        raise SkillSettingsError("Choose a Skill source: " + ", ".join(configured))
+
+    def _bundled_summaries(self) -> tuple[SkillSummary, ...]:
+        if not self.bundled_dir.is_dir():
             return ()
-        verifier = LocalSkillVerifier(root, require_verified_tier=require_verified)
+        verifier = LocalSkillVerifier(
+            self.bundled_dir,
+            review="repository-reviewed",
+            require_repository_review=True,
+        )
         summaries: list[SkillSummary] = []
-        for path in sorted(root.iterdir()):
+        for path in sorted(self.bundled_dir.iterdir()):
             if not path.is_dir():
                 continue
             try:
                 manifest = verifier.load_manifest(path)
             except SkillVerificationError as error:
-                msg = f"invalid {source} Skill {path.name}: {error}"
-                raise SkillSettingsError(msg) from error
-            summaries.append(SkillSummary.from_manifest(manifest, source=source))
+                raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
+            summaries.append(SkillSummary.from_manifest(manifest, source="bundled"))
         return tuple(summaries)
+
+    def _installed_summaries(self) -> tuple[SkillSummary, ...]:
+        try:
+            records = self.store.records()
+            return tuple(
+                SkillSummary.from_installed(record, self.store.manifest(record))
+                for record in records
+            )
+        except SkillStoreError as error:
+            raise SkillSettingsError(str(error)) from error
 
     def _record_decision(
         self,
-        manifest: SkillManifest,
+        summary: SkillSummary,
         *,
         approved: bool,
         actor_id: str,
     ) -> None:
-        record = build_skill_approval_record(
-            manifest,
-            session_id="skill-installation",
+        self._append_audit(
+            summary,
+            event="installation-decision",
             actor_id=actor_id,
-            occurred_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             decision="approved" if approved else "denied",
         )
-        LockedJsonlStore(self.audit_path).append(record.model_dump(mode="json"))
+
+    def _record_removal(self, summary: SkillSummary, *, actor_id: str = "human") -> None:
+        self._append_audit(summary, event="deactivated", actor_id=actor_id, decision=None)
+
+    def _record_installation_result(
+        self,
+        summary: SkillSummary,
+        *,
+        activated: bool,
+        actor_id: str,
+    ) -> None:
+        self._append_audit(
+            summary,
+            event="activated" if activated else "installation-failed",
+            actor_id=actor_id,
+            decision=None,
+        )
+
+    def _append_audit(
+        self,
+        summary: SkillSummary,
+        *,
+        event: Literal["installation-decision", "activated", "installation-failed", "deactivated"],
+        actor_id: str,
+        decision: Literal["approved", "denied"] | None,
+    ) -> None:
+        record: dict[str, object] = {
+            "schema_version": "heartwood.skill-audit.v1",
+            "event": event,
+            "occurred_at": datetime.now(UTC)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "actor_id": actor_id,
+            "name": summary.name,
+            "skill_id": summary.skill_id,
+            "version": summary.version,
+            "tree_sha256": summary.tree_sha256,
+            "source_id": summary.source_id,
+            "source_revision": summary.source_revision,
+            "review": summary.review,
+            "controlled_data_ready": summary.controlled_data_ready,
+        }
+        if decision is not None:
+            record["decision"] = decision
+        LockedJsonlStore(self.audit_path).append(record)
 
 
-def _validate_install_name(name: str) -> None:
-    if not name or not name.replace("-", "").replace("_", "").isalnum():
-        msg = "Skill name must contain only letters, numbers, hyphens, or underscores"
-        raise SkillSettingsError(msg)
-
-
-def _reject_symlinks(root: Path) -> None:
-    if root.is_symlink() or any(path.is_symlink() for path in root.rglob("*")):
-        msg = "Skill sources containing symbolic links cannot be installed"
-        raise SkillSettingsError(msg)
+def _summary_order(summary: SkillSummary) -> tuple[int, str, str]:
+    rank = {"bundled": 0, "installed": 1, "catalog": 2, "local-candidate": 3}
+    return rank[summary.source], summary.name, summary.source_id

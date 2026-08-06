@@ -59,7 +59,7 @@ Use screenshots only when they clarify a visual workflow that prose and accessib
 ## Validate the Site
 
 ```bash
-uv run zensical build --clean --strict
+uv run --group docs zensical build --clean --strict
 ```
 
 Strict mode checks links, anchors, references, and footnotes.

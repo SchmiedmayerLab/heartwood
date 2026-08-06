@@ -47,6 +47,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          submodules: true
       - name: Stage publication tooling
         run: |
           cp deploy/publish-versioned-documentation.sh \
@@ -60,6 +61,7 @@ jobs:
           ref: refs/tags/${{ inputs.version }}
           fetch-depth: 0
           persist-credentials: false
+          submodules: true
       - name: Verify the published release and channel
         id: release
         env:
@@ -154,6 +156,7 @@ jobs:
           fetch-depth: 0
           clean: false
           persist-credentials: true
+          submodules: true
       - name: Push the validated version store
         env:
           DOCUMENTATION_COMMIT: ${{ steps.version_store.outputs.commit }}

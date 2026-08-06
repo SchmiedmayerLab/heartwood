@@ -54,6 +54,7 @@ nav = [
     { "How Heartwood Works" = [
         { "Product Boundaries" = "architecture/index.md" },
         { "System Architecture" = "architecture/system.md" },
+        { "Skill Trust and Distribution" = "architecture/skills.md" },
         { "Sessions and Audit" = "architecture/sessions-audit.md" },
         { "Testing and Evidence" = "architecture/testing.md" },
     ] },

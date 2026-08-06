@@ -113,7 +113,11 @@ from pathlib import Path
 from openhands.sdk.skills import load_skills_from_dir
 
 repository, knowledge, agent = load_skills_from_dir(
-    Path(os.environ["HEARTWOOD_RUNTIME_ROOT"]) / "skills" / "verified"
+    Path(os.environ["HEARTWOOD_RUNTIME_ROOT"])
+    / "vendor"
+    / "heartwood-skills"
+    / "skills"
+    / "verified"
 )
 names = set(repository) | set(knowledge) | set(agent)
 expected = {"aggregate-export", "baseline-model", "omop-cohort-summary"}

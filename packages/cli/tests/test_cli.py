@@ -1946,19 +1946,22 @@ def test_skills_inspect_install_and_remove_use_project_local_extensions(
     source = _community_skill(tmp_path)
 
     assert _run(project, monkeypatch, ["skills", "list"]) == 0
-    assert _run(project, monkeypatch, ["skills", "inspect", str(source)]) == 0
+    assert _run(project, monkeypatch, ["skills", "inspect-local", str(source)]) == 0
     with pytest.raises(SystemExit) as approval:
-        _run(project, monkeypatch, ["skills", "install", str(source)])
+        _run(project, monkeypatch, ["skills", "install-local", str(source)])
     assert approval.value.code == 2
-    assert _run(project, monkeypatch, ["skills", "install", str(source), "--approve"]) == 0
-    assert (project / ".heartwood" / "skills" / "community-summary").is_dir()
+    assert _run(project, monkeypatch, ["skills", "install-local", str(source), "--approve"]) == 0
+    assert (project / ".heartwood" / "skills" / "index.json").is_file()
     assert _run(project, monkeypatch, ["skills", "remove", "community-summary"]) == 0
-    assert not (project / ".heartwood" / "skills" / "community-summary").exists()
+    index = json.loads(
+        (project / ".heartwood" / "skills" / "index.json").read_text(encoding="utf-8")
+    )
+    assert index["skills"] == []
 
     captured = capsys.readouterr()
-    assert "aggregate-export  trust=verified  source=bundled" in captured.out
-    assert "Skill: community-summary" in captured.out
-    assert "installation approval is required" in captured.err
+    assert "aggregate-export  version=1.0.0  status=active  source=bundled" in captured.out
+    assert "Skill: community-summary 1.0.0" in captured.out
+    assert "local installation approval is required" in captured.err
 
 
 def test_specialists_lists_the_shared_bounded_catalog(
@@ -2534,17 +2537,20 @@ def _audit_signer_registry(
 def _community_skill(tmp_path: Path) -> Path:
     repository_root = Path(__file__).resolve().parents[3]
     source = tmp_path / "source" / "community-summary"
-    shutil.copytree(repository_root / "skills" / "verified" / "aggregate-export", source)
+    shutil.copytree(
+        repository_root
+        / "vendor"
+        / "heartwood-skills"
+        / "skills"
+        / "verified"
+        / "aggregate-export",
+        source,
+    )
     skill_file = source / "SKILL.md"
     skill_file.write_text(
         skill_file.read_text(encoding="utf-8")
-        .replace("heartwood.synthetic.aggregate-export", "example.community-summary")
-        .replace('name: "aggregate-export"', 'name: "community-summary"')
-        .replace('heartwood.trust-tier: "verified"', 'heartwood.trust-tier: "community"'),
+        .replace("heartwood.research.aggregate-export", "example.community-summary")
+        .replace("name: aggregate-export", "name: community-summary"),
         encoding="utf-8",
     )
-    metadata_path = source / "metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["heartwood.trust-tier"] = "community"
-    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return source

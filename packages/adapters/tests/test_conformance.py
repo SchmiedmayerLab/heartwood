@@ -18,11 +18,8 @@ from heartwood.adapters import (
     AdapterDetection,
     DatasetFingerprint,
     PlatformCapabilities,
-    RegistryVerification,
-    SkillReference,
     assert_data_source_adapter_conforms,
     assert_platform_adapter_conforms,
-    assert_registry_adapter_conforms,
 )
 from heartwood.schemas import JsonValue, PolicyProfile
 
@@ -106,30 +103,6 @@ class FakeDataSourceAdapter:
         return rows[:limit]
 
 
-class FakeRegistryAdapter:
-    """Deterministic registry adapter used by conformance tests."""
-
-    @property
-    def registry_id(self) -> str:
-        """Return the fake registry id."""
-        return "local-fixture"
-
-    def resolve_skill(self, skill_id: str, version: str) -> SkillReference:
-        """Resolve a skill to a synthetic source path."""
-        return SkillReference(
-            skill_id=skill_id,
-            version=version,
-            source="fixtures/synthetic/skills/omop-cohort-summary",
-        )
-
-    def verify_skill(self, reference: SkillReference) -> RegistryVerification:
-        """Verify the synthetic skill reference."""
-        return RegistryVerification(
-            verified=reference.version == "0.2.0",
-            reason="synthetic fixture registry result",
-        )
-
-
 def test_platform_adapter_conformance() -> None:
     assert_platform_adapter_conforms(FakePlatformAdapter())
 
@@ -180,7 +153,3 @@ def test_platform_capabilities_reject_contradictory_security_claims() -> None:
 
 def test_data_source_adapter_conformance() -> None:
     assert_data_source_adapter_conforms(FakeDataSourceAdapter())
-
-
-def test_registry_adapter_conformance() -> None:
-    assert_registry_adapter_conforms(FakeRegistryAdapter())

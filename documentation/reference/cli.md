@@ -73,10 +73,16 @@ The selected non-secret model profile remains in the project until another conne
 
 | Command | Purpose |
 |---|---|
-| `heartwood skills list` | List bundled and installed Skills |
-| `heartwood skills inspect PATH` | Validate and summarize a mounted Skill source |
-| `heartwood skills install PATH --approve` | Install a reviewed extension into project state |
+| `heartwood skills list` | List bundled, available, installed, revoked, and unsupported Skills |
+| `heartwood skills refresh [--source ID]` | Refresh deployment-approved signed sources and apply revocations |
+| `heartwood skills inspect NAME [--source ID]` | Review one current signed catalog entry without downloading it |
+| `heartwood skills install NAME [--source ID] --approve` | Reverify and install the exact reviewed signed revision |
+| `heartwood skills inspect-local PATH` | Validate an advanced local, unreviewed Agent Skill directory |
+| `heartwood skills install-local PATH --approve` | Install the exact inspected local directory as unreviewed content |
 | `heartwood skills remove NAME` | Remove an installed extension |
+
+The browser uses the same gateway operations and approval fields.
+Source selection is required only when more than one signed source is configured.
 
 ## Research Specialists
 

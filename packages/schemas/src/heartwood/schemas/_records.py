@@ -17,13 +17,6 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-_SEMVER_PATTERN = (
-    r"^(0|[1-9][0-9]*)\."
-    r"(0|[1-9][0-9]*)\."
-    r"(0|[1-9][0-9]*)"
-    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
-    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
-)
 _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
@@ -47,7 +40,6 @@ __all__ = [
     "JsonValue",
     "ModelCallDecision",
     "PolicyProfile",
-    "SkillMetadata",
     "schema_for",
     "schema_names",
 ]
@@ -244,64 +236,6 @@ class DetectorEvidence(_HeartwoodRecord):
     evidence: tuple[str, ...] = Field(min_length=1)
 
 
-class SkillMetadata(_HeartwoodRecord):
-    """Validated namespaced ``heartwood.*`` metadata from a ``SKILL.md`` file."""
-
-    schema_version: Literal["heartwood.skill-metadata.v1"] = "heartwood.skill-metadata.v1"
-    dataset_types: tuple[str, ...] = Field(alias="heartwood.dataset-types", min_length=1)
-    platforms: tuple[str, ...] = Field(alias="heartwood.platforms", min_length=1)
-    phi_risk: Literal["none", "reads-phi", "writes-outside-boundary"] = Field(
-        alias="heartwood.phi-risk"
-    )
-    trust_tier: Literal["verified", "community", "experimental"] = Field(
-        alias="heartwood.trust-tier"
-    )
-    requires_network: bool = Field(alias="heartwood.requires-network")
-    version: str = Field(alias="heartwood.version", min_length=1, pattern=_SEMVER_PATTERN)
-    signature: str | None = Field(default=None, alias="heartwood.sig")
-
-    @field_validator("dataset_types", "platforms", mode="before")
-    @classmethod
-    def _split_comma_separated_values(cls, value: object) -> object:
-        """Accept SKILL.md-style comma-separated strings as tuple values."""
-        if isinstance(value, str):
-            return tuple(part.strip() for part in value.split(",") if part.strip())
-        return value
-
-    @field_validator("requires_network", mode="before")
-    @classmethod
-    def _parse_bool_string(cls, value: object) -> object:
-        """Accept YAML string booleans from skill metadata."""
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered == "true":
-                return True
-            if lowered == "false":
-                return False
-        return value
-
-    @field_validator("version")
-    @classmethod
-    def _reject_leading_zero_prerelease_identifiers(cls, value: str) -> str:
-        """Enforce the numeric prerelease rule from Semantic Versioning."""
-        prerelease = value.split("+", maxsplit=1)[0].partition("-")[2]
-        if prerelease and any(
-            identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
-            for identifier in prerelease.split(".")
-        ):
-            msg = "numeric Semantic Versioning prerelease identifiers cannot have leading zeroes"
-            raise ValueError(msg)
-        return value
-
-    @model_validator(mode="after")
-    def _verified_skills_require_signature(self) -> SkillMetadata:
-        """Require provenance for verified skills."""
-        if self.trust_tier == "verified" and not self.signature:
-            msg = "verified skills require heartwood.sig provenance"
-            raise ValueError(msg)
-        return self
-
-
 class ConfirmationRequest(_HeartwoodRecord):
     """Human-in-the-loop confirmation request for a proposed tool call."""
 
@@ -344,7 +278,6 @@ _SCHEMA_MODELS: Mapping[str, type[_HeartwoodRecord]] = {
     "egress-attestation-record.v1": EgressAttestationRecord,
     "model-call-decision.v1": ModelCallDecision,
     "policy-profile.v1": PolicyProfile,
-    "skill-metadata.v1": SkillMetadata,
 }
 
 

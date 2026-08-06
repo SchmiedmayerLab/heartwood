@@ -48,6 +48,9 @@ import type {
   SessionSummary,
   SkillInspectRequest,
   SkillInstallRequest,
+  SkillLocalInspectRequest,
+  SkillLocalInstallRequest,
+  SkillRefreshRequest,
   SkillSettings,
   SkillSummary,
   SpecialistSettings,
@@ -145,8 +148,18 @@ export interface HeartwoodClient {
   cancelModelTransfer(transferId: string): Promise<ModelTransfer>;
   getSkillSettings(): Promise<SkillSettings>;
   getSpecialistSettings(): Promise<SpecialistSettings>;
-  inspectSkill(source: string): Promise<SkillSummary>;
-  installSkill(source: string): Promise<SkillSettings>;
+  refreshSkills(sourceId?: string): Promise<SkillSettings>;
+  inspectSkill(name: string, sourceId?: string): Promise<SkillSummary>;
+  installSkill(
+    name: string,
+    sourceId: string | null,
+    expectedTreeSha256: string,
+  ): Promise<SkillSettings>;
+  inspectLocalSkill(source: string): Promise<SkillSummary>;
+  installLocalSkill(
+    source: string,
+    expectedTreeSha256: string,
+  ): Promise<SkillSettings>;
   removeSkill(name: string): Promise<SkillSettings>;
 }
 
@@ -563,8 +576,22 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async inspectSkill(source: string): Promise<SkillSummary> {
-    const request: SkillInspectRequest = { source };
+  async refreshSkills(sourceId?: string): Promise<SkillSettings> {
+    const request: SkillRefreshRequest = { source_id: sourceId ?? null };
+    return parseJsonResponse<SkillSettings>(
+      await fetch(this.url("/settings/skills/refresh"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async inspectSkill(name: string, sourceId?: string): Promise<SkillSummary> {
+    const request: SkillInspectRequest = {
+      name,
+      source_id: sourceId ?? null,
+    };
     return parseJsonResponse<SkillSummary>(
       await fetch(this.url("/settings/skills/inspect"), {
         body: JSON.stringify(request),
@@ -574,10 +601,48 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async installSkill(source: string): Promise<SkillSettings> {
-    const request: SkillInstallRequest = { approved: true, source };
+  async installSkill(
+    name: string,
+    sourceId: string | null,
+    expectedTreeSha256: string,
+  ): Promise<SkillSettings> {
+    const request: SkillInstallRequest = {
+      approved: true,
+      expected_tree_sha256: expectedTreeSha256,
+      name,
+      source_id: sourceId,
+    };
     return parseJsonResponse<SkillSettings>(
       await fetch(this.url("/settings/skills/install"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async inspectLocalSkill(source: string): Promise<SkillSummary> {
+    const request: SkillLocalInspectRequest = { source };
+    return parseJsonResponse<SkillSummary>(
+      await fetch(this.url("/settings/skills/local/inspect"), {
+        body: JSON.stringify(request),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+  }
+
+  async installLocalSkill(
+    source: string,
+    expectedTreeSha256: string,
+  ): Promise<SkillSettings> {
+    const request: SkillLocalInstallRequest = {
+      approved: true,
+      expected_tree_sha256: expectedTreeSha256,
+      source,
+    };
+    return parseJsonResponse<SkillSettings>(
+      await fetch(this.url("/settings/skills/local/install"), {
         body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",

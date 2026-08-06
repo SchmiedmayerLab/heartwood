@@ -39,6 +39,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+          submodules: true
       - name: Verify version, ref, and release absence
         id: release
         env:
@@ -140,6 +141,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          submodules: true
       - name: Download approved candidate assets
         uses: actions/download-artifact@v8
         with:
@@ -210,6 +212,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          submodules: true
       - name: Download approved candidate assets
         uses: actions/download-artifact@v8
         with:

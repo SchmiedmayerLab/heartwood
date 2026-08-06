@@ -31,6 +31,9 @@ export type HeartwoodApiContract =
   | SessionRenameRequest
   | SkillInspectRequest
   | SkillInstallRequest
+  | SkillLocalInspectRequest
+  | SkillLocalInstallRequest
+  | SkillRefreshRequest
   | SubscriptionDeviceLoginRequest
   | SubscriptionDevicePollRequest;
 export type ApiResponse =
@@ -590,17 +593,27 @@ export interface SkillSettingsResponse {
   skills: SkillSummaryResponse[];
 }
 /**
- * One bundled, candidate, or installed Skill.
+ * One bundled, signed-catalog, installed, or local-candidate Skill.
  */
 export interface SkillSummaryResponse {
   approval_summary: string;
+  archive_size: number | null;
+  compatibility_reason: string | null;
+  controlled_data_ready: boolean;
   declared_tools: string[];
   description: string;
+  installable: boolean;
   name: string;
   requires_network: boolean;
+  review: "repository-reviewed" | "local-unreviewed";
+  revocation_reason: string | null;
   skill_id: string;
-  source: "bundled" | "candidate" | "installed";
-  trust_tier: string;
+  source: "bundled" | "catalog" | "installed" | "local-candidate";
+  source_id: string;
+  source_revision: string | null;
+  status: "available" | "active" | "revoked" | "unsupported";
+  tree_sha256: string;
+  version: string;
 }
 /**
  * Validated research-specialist catalog shared by every interface.
@@ -872,17 +885,40 @@ export interface SessionRenameRequest {
   title: string;
 }
 /**
- * Inspect one mounted Skill source.
+ * Inspect one Skill from a deployment-approved signed source.
  */
 export interface SkillInspectRequest {
-  source: string;
+  name: string;
+  source_id?: string | null;
 }
 /**
- * Install one explicitly approved Skill source.
+ * Install one explicitly approved signed Skill revision.
  */
 export interface SkillInstallRequest {
   approved: boolean;
+  expected_tree_sha256: string;
+  name: string;
+  source_id?: string | null;
+}
+/**
+ * Inspect one advanced local Agent Skill source.
+ */
+export interface SkillLocalInspectRequest {
   source: string;
+}
+/**
+ * Install one explicitly approved local, unreviewed Skill revision.
+ */
+export interface SkillLocalInstallRequest {
+  approved: boolean;
+  expected_tree_sha256: string;
+  source: string;
+}
+/**
+ * Refresh all configured signed sources or one named source.
+ */
+export interface SkillRefreshRequest {
+  source_id?: string | null;
 }
 /**
  * Start an explicitly accepted subscription device login.

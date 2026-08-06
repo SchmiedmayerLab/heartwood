@@ -150,7 +150,7 @@ from heartwood.gateway._session_projection import (
     SessionProjection,
     project_session,
 )
-from heartwood.gateway._skill_settings import SkillManager
+from heartwood.gateway._skill_settings import SkillManager, SkillSettingsError
 from heartwood.gateway._startup import InterfaceKind, StartupPlan, plan_startup
 from heartwood.gateway._stream import EventStreamHub, GatewayEventStream
 from heartwood.gateway._subscriptions import (
@@ -191,6 +191,12 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+from heartwood.skills import (
+    SkillArtifactStore,
+    SkillCatalogError,
+    SkillSourceRegistry,
+    configured_skill_source_registry,
+)
 
 if TYPE_CHECKING:
     from heartwood.gateway._specialists import SpecialistCatalog
@@ -394,6 +400,7 @@ class SessionGateway:
         | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
+        skill_source_registry: SkillSourceRegistry | None = None,
         backend_id: str = "auto",
     ) -> None:
         self.project = ProjectContext.current() if project is None else project
@@ -496,12 +503,19 @@ class SessionGateway:
             models_dir=self.model_cache_dir,
             on_import_ready=self._select_transferred_local_model,
         )
-        bundled_skills_dir = repository_root / "skills" / "verified"
-        self.installed_skills_dir = self.project.skills_dir
+        bundled_skills_dir = repository_root / "vendor" / "heartwood-skills" / "skills" / "verified"
+        if skill_source_registry is None:
+            try:
+                skill_source_registry, _ = configured_skill_source_registry(self.env)
+            except SkillCatalogError as error:
+                raise SkillSettingsError(str(error)) from error
         self.skill_manager = SkillManager(
             bundled_dir=bundled_skills_dir,
-            installed_dir=self.installed_skills_dir,
+            store=SkillArtifactStore(self.project.skills_dir),
+            source_registry=skill_source_registry,
+            cache_dir=self.project.cache_dir / "skills",
             audit_path=self.project.audit_dir / "skill-installations.jsonl",
+            platform_id=adapter.adapter_id,
         )
         self._specialist_catalog_cache: SpecialistCatalog | None = None
         self._service_factory = service_factory
@@ -1836,11 +1850,19 @@ class SessionGateway:
         )
 
     def skill_settings(self) -> SkillSettingsResponse:
-        """Return bundled and explicitly installed Skills."""
+        """Return the shared bundled, installed, and signed-catalog projection."""
         return api_response(
             SkillSettingsResponse,
             {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]},
         )
+
+    @_serialized_state
+    def refresh_skills(self, source_id: str | None = None) -> SkillSettingsResponse:
+        """Refresh signed Skill sources and apply their current revocation state."""
+        self.project.initialize()
+        self.skill_manager.refresh(source_id)
+        self._reset_services()
+        return self.skill_settings()
 
     def specialist_settings(self) -> SpecialistSettingsResponse:
         """Return the validated research-specialist catalog."""
@@ -1849,15 +1871,51 @@ class SessionGateway:
             self._specialist_catalog().safe_dict(),
         )
 
-    def inspect_skill(self, source: Path) -> SkillSummaryResponse:
-        """Verify a mounted Skill source without installing it."""
-        return api_response(SkillSummaryResponse, self.skill_manager.inspect(source).safe_dict())
+    def inspect_skill(self, name: str, *, source_id: str | None = None) -> SkillSummaryResponse:
+        """Verify one signed catalog entry without installing its archive."""
+        summary = self.skill_manager.inspect_catalog(name, source_id=source_id)
+        return api_response(SkillSummaryResponse, summary.safe_dict())
 
     @_serialized_state
-    def install_skill(self, source: Path, *, approved: bool) -> SkillSettingsResponse:
-        """Install one extension after an explicit trust decision."""
+    def install_skill(
+        self,
+        name: str,
+        *,
+        source_id: str | None,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> SkillSettingsResponse:
+        """Install one signed, digest-pinned Skill after explicit approval."""
         self.project.initialize()
-        self.skill_manager.install(source, approved=approved)
+        self.skill_manager.install_catalog(
+            name,
+            source_id=source_id,
+            expected_tree_sha256=expected_tree_sha256,
+            approved=approved,
+        )
+        self._reset_services()
+        return self.skill_settings()
+
+    def inspect_local_skill(self, source: Path) -> SkillSummaryResponse:
+        """Verify one advanced local Skill without assigning repository review."""
+        summary = self.skill_manager.inspect_local(source)
+        return api_response(SkillSummaryResponse, summary.safe_dict())
+
+    @_serialized_state
+    def install_local_skill(
+        self,
+        source: Path,
+        *,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> SkillSettingsResponse:
+        """Install one digest-pinned local, unreviewed Skill after approval."""
+        self.project.initialize()
+        self.skill_manager.install_local(
+            source,
+            expected_tree_sha256=expected_tree_sha256,
+            approved=approved,
+        )
         self._reset_services()
         return self.skill_settings()
 
@@ -1990,7 +2048,7 @@ class SessionGateway:
             profile=profile,
             workspace=self.project.root,
             skills_dir=self.skill_manager.bundled_dir,
-            additional_skills_dirs=(self.installed_skills_dir,),
+            additional_skills_dirs=self.skill_manager.active_skill_roots(),
             specialist_catalog=self._specialist_catalog(),
             persistence_dir=self.sessions_root / session_id / "openhands",
             conversation_key=f"{self.project.root}#{session_id}",

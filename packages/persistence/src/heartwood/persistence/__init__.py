@@ -46,8 +46,7 @@ from heartwood.persistence._migrations import (
     SESSION_METADATA_VERSION,
     SESSION_WRITER_KIND,
     SESSION_WRITER_VERSION,
-    SKILL_METADATA_KIND,
-    SKILL_METADATA_VERSION,
+    SKILL_INSTALLATIONS_VERSION,
     MigrationError,
     MigrationRegistry,
     MigrationResult,
@@ -74,8 +73,7 @@ __all__ = [
     "SESSION_METADATA_VERSION",
     "SESSION_WRITER_KIND",
     "SESSION_WRITER_VERSION",
-    "SKILL_METADATA_KIND",
-    "SKILL_METADATA_VERSION",
+    "SKILL_INSTALLATIONS_VERSION",
     "AppendRecoveryError",
     "DurableFileError",
     "LockedJsonlStore",
@@ -97,4 +95,4 @@ __all__ = [
     "write_private_text_atomic",
 ]
 
-__version__ = "0.3.0-beta.2"
+__version__ = "0.3.0-beta.3"

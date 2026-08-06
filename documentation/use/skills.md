@@ -6,42 +6,68 @@ SPDX-License-Identifier: MIT
 
 # Research Skills
 
-Skills are versioned instruction packages that help OpenHands perform a repeatable workflow with declared tools, data expectations, and review guidance.
-Heartwood includes repository-verified Skills and can install project-scoped extensions after explicit inspection and approval.
+Skills give Heartwood reusable instructions, scripts, references, and supporting files for a research workflow.
+They use the Agent Skills format supported by OpenHands.
 
-## Inspect Available Skills
+Heartwood starts with a small set of reviewed Skills included in every release.
+Your research environment may also offer additional reviewed Skills from a signed catalog.
+Anything you install is active only for the current project.
+
+## See What Is Available
 
 ```bash
 heartwood skills list
 ```
 
-The browser **Skills** view presents the same catalog.
-Bundled Skills ship with the Heartwood release; installed extensions live under `.heartwood/skills/` for the current project.
+The browser **Skills** view shows the same list and status.
 
-## Inspect an Extension
+Entries are labeled as:
 
-Before installing a Skill from a mounted folder:
+- **Bundled:** included and reviewed with this Heartwood release.
+- **Available:** offered by a signed source configured by the deployment.
+- **Installed:** approved and stored for this project.
+- **Revoked:** withdrawn by its signed source and no longer available to the agent.
+- **Unsupported:** not compatible with the current platform.
 
-```bash
-heartwood skills inspect /path/to/skill
-```
+## Add a Reviewed Skill
 
-Review the source, metadata, declared tools, expected data access, and provenance outside Heartwood as well.
-Skill validation checks structure and integrity; it does not establish that third-party instructions are trustworthy for controlled data.
-
-## Install or Remove an Extension
+Refresh the configured sources, then inspect a Skill before installing it:
 
 ```bash
-heartwood skills install /path/to/skill --approve
-heartwood skills remove skill-name
+heartwood skills refresh
+heartwood skills inspect SKILL_NAME
+heartwood skills install SKILL_NAME --approve
 ```
 
-Installation copies the reviewed Skill into private project state and records the operation.
-Removing it resets active agent services so later turns cannot continue using the removed instructions.
+Inspection shows the description, declared tools, network requirement, download size, source, and exact content digest.
+Installation refreshes the signed source again and stops if the content changed after inspection.
 
-## Data Boundaries
+If more than one source is configured, add `--source SOURCE_ID` to `refresh`, `inspect`, or `install`.
 
-Skills do not grant new filesystem, network, credential, or platform permissions.
-The project boundary, OpenHands tools, process permissions, model-route policy, and deployment controls remain authoritative.
+## Add a Skill From This Environment
 
-Use synthetic fixtures for public examples, tests, and shared Skill development.
+A maintainer may provide a complete Agent Skill directory outside a catalog.
+This is an advanced path because the content has not passed repository review:
+
+```bash
+heartwood skills inspect-local /path/to/skill
+heartwood skills install-local /path/to/skill --approve
+```
+
+Heartwood verifies and copies the complete directory without following links, binds approval to its exact digest, and labels it **Local and unreviewed** in every interface.
+
+Remove an installed Skill with:
+
+```bash
+heartwood skills remove SKILL_NAME
+```
+
+## What Approval Means
+
+Skill installation does not grant filesystem, network, credential, model, or platform permissions.
+OpenHands tools, the project boundary, action confirmation, process permissions, and deployment policy remain authoritative.
+
+Repository review is also not controlled-data approval.
+Only a deployment can approve an exact Skill digest for controlled data, and the interface reports that decision separately.
+
+See [Skill Trust and Distribution](../architecture/skills.md) for the verification model and [Configuration and State](../reference/configuration.md#skill-source-registries) for deployment source configuration.
