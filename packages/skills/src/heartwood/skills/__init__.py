@@ -6,6 +6,8 @@
 
 """Verified Agent Skill acquisition, project activation, and replay helpers."""
 
+from heartwood_skill_catalog import CatalogEntry
+
 from heartwood.skills._catalog import (
     SkillCatalogClient,
     SkillCatalogError,
@@ -34,6 +36,7 @@ from heartwood.skills._verification import (
 )
 
 __all__ = [
+    "CatalogEntry",
     "InstalledSkillRecord",
     "LocalSkillVerifier",
     "ReplayFixture",

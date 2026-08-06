@@ -15,9 +15,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from heartwood_skill_catalog import build_catalog
+from heartwood_skill_catalog import CatalogDocument, build_catalog
 from pydantic import ValidationError
 from securesystemslib.signer import CryptoSigner  # type: ignore[attr-defined]
+from tuf.api.exceptions import DownloadError
 from tuf.api.metadata import (  # type: ignore[attr-defined]
     Metadata,
     MetaFile,
@@ -40,6 +41,7 @@ from heartwood.skills import (
     configured_skill_source_registry,
     load_skill_source_registry,
 )
+from heartwood.skills._catalog import _LocalRepositoryFetcher
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _CURATED_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills"
@@ -374,6 +376,16 @@ def test_catalog_client_rejects_missing_substituted_and_revoked_targets(
 ) -> None:
     client, snapshot, _ = _client(tmp_path)
     entry = snapshot.entry("aggregate-export")
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(
+        CatalogDocument(entries=(entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    catalog_info = SimpleNamespace(length=catalog_path.stat().st_size, hashes={"sha256": "unused"})
+    valid_target = SimpleNamespace(
+        length=entry.archive_size,
+        hashes={"sha256": entry.archive_sha256},
+    )
 
     class SyntheticUpdater:
         def __init__(self, targets: dict[str, object]) -> None:
@@ -385,13 +397,31 @@ def test_catalog_client_rejects_missing_substituted_and_revoked_targets(
         def get_targetinfo(self, name: str) -> object | None:
             return self.targets.get(name)
 
-        def download_target(self, _target: object) -> str:
+        def download_target(self, target: object) -> str:
+            if target is catalog_info:
+                return str(catalog_path)
             return str(tmp_path / "missing")
 
     monkeypatch.setattr(client, "_updater", lambda: SyntheticUpdater({}))
     with pytest.raises(SkillCatalogError, match=r"does not publish catalog\.json"):
         client.refresh()
-    with pytest.raises(SkillCatalogError, match="target is missing"):
+    oversized_catalog = SimpleNamespace(
+        length=9 * 1024 * 1024,
+        hashes={"sha256": "unused"},
+    )
+    monkeypatch.setattr(
+        client,
+        "_updater",
+        lambda: SyntheticUpdater({"catalog.json": oversized_catalog}),
+    )
+    with pytest.raises(SkillCatalogError, match="size limit"):
+        client.refresh()
+    monkeypatch.setattr(
+        client,
+        "_updater",
+        lambda: SyntheticUpdater({"catalog.json": catalog_info}),
+    )
+    with pytest.raises(SkillCatalogError, match="references a missing target"):
         client.download(entry)
 
     changed = SimpleNamespace(
@@ -400,14 +430,50 @@ def test_catalog_client_rejects_missing_substituted_and_revoked_targets(
     monkeypatch.setattr(
         client,
         "_updater",
-        lambda: SyntheticUpdater({entry.target: changed}),
+        lambda: SyntheticUpdater({"catalog.json": catalog_info, entry.target: changed}),
     )
-    with pytest.raises(SkillCatalogError, match="target changed"):
+    with pytest.raises(SkillCatalogError, match=r"disagrees with catalog\.json"):
+        client.download(entry)
+
+    changed_entry = entry.model_copy(update={"description": "Changed after review"})
+    catalog_path.write_text(
+        CatalogDocument(entries=(changed_entry,)).model_dump_json(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        client,
+        "_updater",
+        lambda: SyntheticUpdater(
+            {"catalog.json": catalog_info, changed_entry.target: valid_target}
+        ),
+    )
+    with pytest.raises(SkillCatalogError, match="changed after review"):
         client.download(entry)
 
     revoked = entry.model_copy(update={"revoked": True, "revocation_reason": "Security review"})
     with pytest.raises(SkillCatalogError, match="has been revoked"):
         client.download(revoked)
+
+    class FailingUpdater:
+        def refresh(self) -> None:
+            raise DownloadError("synthetic source unavailable")
+
+    monkeypatch.setattr(client, "_updater", FailingUpdater)
+    with pytest.raises(SkillCatalogError, match="Unable to verify"):
+        client.refresh()
+
+
+def test_offline_fetcher_streams_local_targets_through_tuf_limits(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    target = repository / "targets" / "large.bin"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"x" * (3 * 64 * 1024 + 17))
+    fetcher = _LocalRepositoryFetcher(repository)
+
+    chunks = tuple(fetcher.fetch(target.resolve().as_uri()))
+
+    assert b"".join(chunks) == target.read_bytes()
+    assert max(map(len, chunks)) <= 64 * 1024
 
 
 def test_catalog_client_rejects_missing_and_oversized_trusted_roots(tmp_path: Path) -> None:
@@ -542,6 +608,43 @@ def test_installed_record_cannot_forge_catalog_or_controlled_data_provenance() -
                 ),
             )
         )
+    second = InstalledSkillRecord.model_validate(
+        {
+            **common,
+            "name": "another-synthetic-skill",
+            "tree_sha256": "b" * 64,
+            "source_kind": "local",
+            "review": "local-unreviewed",
+        }
+    )
+    with pytest.raises(ValidationError, match="duplicate identifiers"):
+        SkillInstallationIndex(
+            skills=(
+                InstalledSkillRecord.model_validate(
+                    {**common, "source_kind": "local", "review": "local-unreviewed"}
+                ),
+                second,
+            )
+        )
+
+
+def test_store_rejects_a_second_name_for_an_active_skill_identifier(tmp_path: Path) -> None:
+    first = tmp_path / "first" / "aggregate-export"
+    second = tmp_path / "second" / "renamed-export"
+    shutil.copytree(_SKILLS_ROOT / "aggregate-export", first)
+    shutil.copytree(first, second)
+    skill_file = second / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8").replace(
+            "name: aggregate-export", "name: renamed-export"
+        ),
+        encoding="utf-8",
+    )
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+    store.install_local(first)
+
+    with pytest.raises(SkillStoreError, match="identifier is already active"):
+        store.install_local(second)
 
 
 def test_store_rejects_revoked_conflicting_and_corrupt_state(tmp_path: Path) -> None:

@@ -932,6 +932,9 @@ class SkillSummaryResponse(_ApiResponse):
     approval_summary: str
     declared_tools: list[str]
     requires_network: bool
+    phi_risk: Literal["none", "reads-phi", "writes-outside-boundary"]
+    data_access_summary: str
+    dataset_types: list[str]
     controlled_data_ready: bool
     tree_sha256: str
     source_revision: str | None

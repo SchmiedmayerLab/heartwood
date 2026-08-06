@@ -84,6 +84,7 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.session import EventKind, SessionEvent
+from heartwood.skills import load_skill_manifest
 
 
 def test_cli_import_keeps_openhands_runtime_lazy() -> None:
@@ -1944,14 +1945,29 @@ def test_skills_inspect_install_and_remove_use_project_local_extensions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "analysis"
-    source = _community_skill(tmp_path)
+    source = _community_skill(project)
 
     assert _run(project, monkeypatch, ["skills", "list"]) == 0
     assert _run(project, monkeypatch, ["skills", "inspect-local", str(source)]) == 0
+    digest = load_skill_manifest(source).tree_sha256
     with pytest.raises(SystemExit) as approval:
         _run(project, monkeypatch, ["skills", "install-local", str(source)])
     assert approval.value.code == 2
-    assert _run(project, monkeypatch, ["skills", "install-local", str(source), "--approve"]) == 0
+    assert (
+        _run(
+            project,
+            monkeypatch,
+            [
+                "skills",
+                "install-local",
+                str(source),
+                "--approve",
+                "--expected-tree-sha256",
+                f"sha256:{digest}",
+            ],
+        )
+        == 0
+    )
     assert (project / ".heartwood" / "skills" / "index.json").is_file()
     assert _run(project, monkeypatch, ["skills", "remove", "community-summary"]) == 0
     index = json.loads(
@@ -1962,7 +1978,29 @@ def test_skills_inspect_install_and_remove_use_project_local_extensions(
     captured = capsys.readouterr()
     assert "aggregate-export  version=1.0.0  status=active  source=bundled" in captured.out
     assert "Skill: community-summary 1.0.0" in captured.out
-    assert "local installation approval is required" in captured.err
+    assert "interactive approval is unavailable" in captured.err
+
+
+def test_skills_interactive_install_approves_the_digest_that_was_displayed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InteractiveInput(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    project = tmp_path / "analysis"
+    source = _community_skill(project)
+    _install_deterministic_gateway(monkeypatch)
+    monkeypatch.setattr(sys, "stdin", InteractiveInput("y\n"))
+
+    assert _run(project, monkeypatch, ["skills", "install-local", str(source)]) == 0
+
+    output = capsys.readouterr().out
+    assert "Digest: sha256:" in output
+    assert "Install this exact Skill revision? [y/N]:" in output
+    assert (project / ".heartwood" / "skills" / "index.json").is_file()
 
 
 def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
@@ -1982,6 +2020,9 @@ def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
         "approval_summary": "Read project files and write one derived summary.",
         "declared_tools": ["file_editor"],
         "requires_network": False,
+        "phi_risk": "reads-phi",
+        "data_access_summary": "Reads potentially identifiable row-level data",
+        "dataset_types": ["omop-cdm"],
         "controlled_data_ready": False,
         "tree_sha256": "a" * 64,
         "source_revision": "b" * 40,
@@ -2052,6 +2093,8 @@ def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
                 "--source",
                 "official",
                 "--approve",
+                "--expected-tree-sha256",
+                "a" * 64,
             ],
         )
         == 0
@@ -2061,13 +2104,12 @@ def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
         ("refresh", "official"),
         ("inspect", "synthetic-summary", "official"),
         ("inspect", "synthetic-summary", "official"),
-        ("inspect", "synthetic-summary", "official"),
         ("install", "synthetic-summary", "official", "a" * 64, True),
     ]
     captured = capsys.readouterr()
     assert "Skill: synthetic-summary 1.0.0" in captured.out
     assert "Download: 1.0 KiB" in captured.out
-    assert "installation approval is required" in captured.err
+    assert "interactive approval is unavailable" in captured.err
 
 
 def test_skill_commands_report_shared_gateway_failures_as_argument_errors(

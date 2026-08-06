@@ -3013,6 +3013,20 @@ def test_rest_manages_skill_settings(
     assert removed.body == {"skills": []}
 
 
+def test_gateway_confines_local_skill_sources_to_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    gateway = _gateway(project)
+    repository_root = Path(__file__).resolve().parents[3]
+    outside = (
+        repository_root / "vendor" / "heartwood-skills" / "skills" / "verified" / "aggregate-export"
+    )
+
+    with pytest.raises(SkillSettingsError, match="inside the project"):
+        gateway.inspect_local_skill(outside)
+    with pytest.raises(SkillSettingsError, match=r"outside \.heartwood"):
+        gateway.inspect_local_skill(project / ".heartwood" / "candidate")
+
+
 def test_gateway_exposes_one_bounded_specialist_catalog(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
 

@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 import tomllib
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ from tuf.ngclient.updater import Updater
 from heartwood.persistence import DurableFileError, read_private_bytes, read_private_text
 
 _MAX_ROOT_BYTES = 512_000
+_MAX_CATALOG_BYTES = 8 * 1024 * 1024
 _SOURCE_ID_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -206,67 +209,89 @@ class SkillCatalogClient:
         """Refresh signed metadata and return its validated catalog projection."""
         updater = self._updater()
         try:
-            updater.refresh()
-            catalog_info = updater.get_targetinfo("catalog.json")
-            if catalog_info is None:
-                raise SkillCatalogError("Signed Skill source does not publish catalog.json")
-            catalog_path = Path(updater.download_target(catalog_info))
-            document = CatalogDocument.model_validate_json(read_private_text(catalog_path))
-            for entry in document.entries:
-                target_info = updater.get_targetinfo(entry.target)
-                if target_info is None:
-                    raise SkillCatalogError(
-                        f"Signed Skill catalog references a missing target: {entry.target}"
-                    )
-                if (
-                    target_info.length != entry.archive_size
-                    or target_info.hashes.get("sha256") != entry.archive_sha256
-                ):
-                    raise SkillCatalogError(
-                        f"Signed Skill target metadata disagrees with catalog.json: {entry.target}"
-                    )
-        except (OSError, RepositoryError, DurableFileError, ValidationError) as error:
+            return self._refresh_with(updater)
+        except (
+            OSError,
+            DownloadError,
+            RepositoryError,
+            DurableFileError,
+            ValidationError,
+        ) as error:
             raise SkillCatalogError(
                 f"Unable to verify Skill source {self.profile.source_id}: {error}"
             ) from error
+
+    def download(self, entry: CatalogEntry) -> Path:
+        """Revalidate and download one approved entry from a single TUF snapshot."""
+        if entry.revoked:
+            raise SkillCatalogError(f"Skill has been revoked: {entry.name}")
+        updater = self._updater()
+        try:
+            snapshot = self._refresh_with(updater)
+            current_entry = snapshot.entry(entry.name)
+            if current_entry != entry:
+                raise SkillCatalogError(
+                    f"Skill changed after review; inspect it again: {entry.name}"
+                )
+            if current_entry.revoked:  # pragma: no cover - equality documents the invariant
+                raise SkillCatalogError(f"Skill has been revoked: {entry.name}")
+            target_info = updater.get_targetinfo(current_entry.target)
+            if target_info is None:
+                raise SkillCatalogError(f"Signed Skill target is missing: {current_entry.target}")
+            return Path(updater.download_target(target_info))
+        except (
+            OSError,
+            DownloadError,
+            RepositoryError,
+            DurableFileError,
+            ValidationError,
+        ) as error:
+            raise SkillCatalogError(
+                f"Unable to download Skill target from {self.profile.source_id}: {error}"
+            ) from error
+
+    def _refresh_with(self, updater: Updater) -> SkillCatalogSnapshot:
+        """Validate one catalog and all target declarations with one updater state."""
+        updater.refresh()
+        catalog_info = updater.get_targetinfo("catalog.json")
+        if catalog_info is None:
+            raise SkillCatalogError("Signed Skill source does not publish catalog.json")
+        if catalog_info.length > _MAX_CATALOG_BYTES:
+            raise SkillCatalogError("Signed Skill catalog exceeds the supported size limit")
+        catalog_path = Path(updater.download_target(catalog_info))
+        document = CatalogDocument.model_validate_json(
+            read_private_text(catalog_path, max_bytes=_MAX_CATALOG_BYTES)
+        )
+        for entry in document.entries:
+            target_info = updater.get_targetinfo(entry.target)
+            if target_info is None:
+                raise SkillCatalogError(
+                    f"Signed Skill catalog references a missing target: {entry.target}"
+                )
+            if (
+                target_info.length != entry.archive_size
+                or target_info.hashes.get("sha256") != entry.archive_sha256
+            ):
+                raise SkillCatalogError(
+                    f"Signed Skill target metadata disagrees with catalog.json: {entry.target}"
+                )
         return SkillCatalogSnapshot(
             source_id=self.profile.source_id,
             offline=self.profile.kind == "offline",
             entries=document.entries,
         )
 
-    def download(self, entry: CatalogEntry) -> Path:
-        """Download and verify one target from the currently trusted source metadata."""
-        if entry.revoked:
-            raise SkillCatalogError(f"Skill has been revoked: {entry.name}")
-        updater = self._updater()
-        try:
-            updater.refresh()
-            target_info = updater.get_targetinfo(entry.target)
-            if target_info is None:
-                raise SkillCatalogError(f"Signed Skill target is missing: {entry.target}")
-            if (
-                target_info.length != entry.archive_size
-                or target_info.hashes.get("sha256") != entry.archive_sha256
-            ):
-                raise SkillCatalogError(f"Signed Skill target changed: {entry.target}")
-            return Path(updater.download_target(target_info))
-        except (OSError, DownloadError, RepositoryError) as error:
-            raise SkillCatalogError(
-                f"Unable to download Skill target from {self.profile.source_id}: {error}"
-            ) from error
-
     def _updater(self) -> Updater:
         metadata_url, targets_url = self.profile.repository_urls()
         trusted_root = self.profile.trusted_root.resolve()
         try:
-            root_bytes = read_private_bytes(trusted_root)
+            if trusted_root.stat().st_size > _MAX_ROOT_BYTES:
+                raise SkillCatalogError(f"Trusted root is too large: {trusted_root}")
+            root_bytes = read_private_bytes(trusted_root, max_bytes=_MAX_ROOT_BYTES)
         except (DurableFileError, OSError) as error:
             raise SkillCatalogError(
                 f"Trusted root is unavailable for {self.profile.source_id}: {trusted_root}"
             ) from error
-        if len(root_bytes) > _MAX_ROOT_BYTES:
-            raise SkillCatalogError(f"Trusted root is too large: {trusted_root}")
         metadata_dir = self.cache_root / "metadata"
         targets_dir = self.cache_root / "targets"
         metadata_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -300,10 +325,19 @@ class _LocalRepositoryFetcher(FetcherInterface):
         path = Path(unquote(parsed.path)).resolve()
         if not path.is_relative_to(self.repository):
             raise DownloadHTTPError("Offline Skill source path escapes its repository", 403)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
-            content = read_private_bytes(path)
+            descriptor = os.open(path, flags)
         except FileNotFoundError as error:
             raise DownloadHTTPError(
                 f"Offline Skill target does not exist: {path.name}", 404
             ) from error
-        yield content
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise DownloadHTTPError(
+                    f"Offline Skill target is not a regular file: {path.name}", 400
+                )
+            while chunk := os.read(descriptor, 64 * 1024):
+                yield chunk
+        finally:
+            os.close(descriptor)

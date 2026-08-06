@@ -122,6 +122,13 @@ __version__ = "0.3.0-beta.3"
 _PROG = "heartwood"
 
 
+def _sha256_argument(value: str) -> str:
+    digest = value.removeprefix("sha256:").lower()
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise argparse.ArgumentTypeError("expected a complete SHA-256 digest")
+    return digest
+
+
 def _bundled_path(relative: Path) -> Path:
     for parent in Path(__file__).resolve().parents:
         candidate = parent / relative
@@ -430,7 +437,13 @@ def _build_parser() -> argparse.ArgumentParser:
     install.add_argument(
         "--approve",
         action="store_true",
-        help="Approve the current signed digest and install the Skill.",
+        help="Approve the digest supplied with --expected-tree-sha256.",
+    )
+    install.add_argument(
+        "--expected-tree-sha256",
+        type=_sha256_argument,
+        metavar="SHA256",
+        help="Exact content digest shown by `skills inspect`; required with --approve.",
     )
     inspect_local = skill_subparsers.add_parser(
         "inspect-local", help="Inspect an advanced local, unreviewed Agent Skill."
@@ -443,7 +456,13 @@ def _build_parser() -> argparse.ArgumentParser:
     install_local.add_argument(
         "--approve",
         action="store_true",
-        help="Approve the inspected local digest and install the Skill.",
+        help="Approve the digest supplied with --expected-tree-sha256.",
+    )
+    install_local.add_argument(
+        "--expected-tree-sha256",
+        type=_sha256_argument,
+        metavar="SHA256",
+        help="Exact content digest shown by `skills inspect-local`; required with --approve.",
     )
     remove_skill = skill_subparsers.add_parser("remove", help="Remove an installed extension.")
     remove_skill.add_argument("name")
@@ -1798,24 +1817,46 @@ def _handle_skills(
             print(_format_skill_summary(summary))
             return 0
         if command == "install":
-            summary = _run_with_progress(
-                lambda: gateway.inspect_skill(args.name, source_id=args.source_id),
-                activity=InteractionActivity(
-                    label="Verifying the Skill catalog",
-                    waiting_label="Still verifying the Skill catalog",
-                    guidance="Heartwood is checking signed metadata and immutable digests.",
-                ),
-            )
-            if not args.approve:
-                parser.error(
-                    "installation approval is required; review with `heartwood skills inspect` "
-                    f"and rerun with --approve\n{_format_skill_summary(summary)}"
+            expected_tree_sha256 = args.expected_tree_sha256
+            if args.approve:
+                if expected_tree_sha256 is None:
+                    parser.error(
+                        "--approve requires --expected-tree-sha256 with the digest shown by "
+                        "`heartwood skills inspect`"
+                    )
+            else:
+                if expected_tree_sha256 is not None:
+                    parser.error("--expected-tree-sha256 requires --approve")
+                summary = _run_with_progress(
+                    lambda: gateway.inspect_skill(args.name, source_id=args.source_id),
+                    activity=InteractionActivity(
+                        label="Verifying the Skill catalog",
+                        waiting_label="Still verifying the Skill catalog",
+                        guidance="Heartwood is checking signed metadata and immutable digests.",
+                    ),
                 )
+                expected_tree_sha256 = _confirm_skill_installation(
+                    parser,
+                    summary,
+                    automation_command=(
+                        "heartwood skills install "
+                        f"{shlex.quote(args.name)}"
+                        + (
+                            f" --source {shlex.quote(args.source_id)}"
+                            if args.source_id is not None
+                            else ""
+                        )
+                        + " --approve --expected-tree-sha256 "
+                        f"sha256:{summary['tree_sha256']}"
+                    ),
+                )
+                if expected_tree_sha256 is None:
+                    return 1
             settings = _run_with_progress(
                 lambda: gateway.install_skill(
                     args.name,
                     source_id=args.source_id,
-                    expected_tree_sha256=summary["tree_sha256"],
+                    expected_tree_sha256=expected_tree_sha256,
                     approved=True,
                 ),
                 activity=InteractionActivity(
@@ -1830,18 +1871,33 @@ def _handle_skills(
             print(_format_skill_summary(gateway.inspect_local_skill(args.source)))
             return 0
         if command == "install-local":
-            summary = gateway.inspect_local_skill(args.source)
-            if not args.approve:
-                parser.error(
-                    "local installation approval is required; review with "
-                    "`heartwood skills inspect-local` and rerun with --approve\n"
-                    f"{_format_skill_summary(summary)}"
+            expected_tree_sha256 = args.expected_tree_sha256
+            if args.approve:
+                if expected_tree_sha256 is None:
+                    parser.error(
+                        "--approve requires --expected-tree-sha256 with the digest shown by "
+                        "`heartwood skills inspect-local`"
+                    )
+            else:
+                if expected_tree_sha256 is not None:
+                    parser.error("--expected-tree-sha256 requires --approve")
+                summary = gateway.inspect_local_skill(args.source)
+                expected_tree_sha256 = _confirm_skill_installation(
+                    parser,
+                    summary,
+                    automation_command=(
+                        "heartwood skills install-local "
+                        f"{shlex.quote(str(args.source))} --approve --expected-tree-sha256 "
+                        f"sha256:{summary['tree_sha256']}"
+                    ),
                 )
+                if expected_tree_sha256 is None:
+                    return 1
             print(
                 _format_skill_settings(
                     gateway.install_local_skill(
                         args.source,
-                        expected_tree_sha256=summary["tree_sha256"],
+                        expected_tree_sha256=expected_tree_sha256,
                         approved=True,
                     )
                 )
@@ -1887,6 +1943,8 @@ def _format_skill_summary(summary: SkillSummaryResponse) -> str:
         f"Digest: sha256:{summary['tree_sha256']}",
         f"Tools: {tool_text or 'None declared'}",
         f"Network: {'required' if summary['requires_network'] else 'disabled'}",
+        f"Data access: {summary['data_access_summary']}",
+        f"Dataset types: {', '.join(summary['dataset_types']) or 'Not declared'}",
         f"Controlled data: {controlled_data}",
         f"Permissions: {summary['approval_summary']}",
     ]
@@ -1897,6 +1955,26 @@ def _format_skill_summary(summary: SkillSummaryResponse) -> str:
     if summary["compatibility_reason"] is not None:
         lines.append(f"Compatibility: {summary['compatibility_reason']}")
     return "\n".join(lines)
+
+
+def _confirm_skill_installation(
+    parser: argparse.ArgumentParser,
+    summary: SkillSummaryResponse,
+    *,
+    automation_command: str,
+) -> str | None:
+    """Show one exact revision and obtain interactive or digest-bound approval."""
+    print(_format_skill_summary(summary))
+    if not sys.stdin.isatty():
+        parser.error(
+            "interactive approval is unavailable; rerun with the exact reviewed digest:\n"
+            f"  {automation_command}"
+        )
+    approved = input("Install this exact Skill revision? [y/N]: ").strip().lower() == "y"
+    if not approved:
+        print("Skill installation canceled.")
+        return None
+    return summary["tree_sha256"]
 
 
 def _submit_task(

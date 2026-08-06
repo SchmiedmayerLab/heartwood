@@ -351,6 +351,11 @@ const SkillsContent = ({
         <span>
           Network: {skillCandidate.requires_network ? "Required" : "Disabled"}
         </span>
+        <span>Data access: {skillCandidate.data_access_summary}</span>
+        <span>
+          Dataset types:{" "}
+          {skillCandidate.dataset_types.join(", ") || "Not declared"}
+        </span>
         <span>
           Review:{" "}
           {skillCandidate.review === "repository-reviewed" ?

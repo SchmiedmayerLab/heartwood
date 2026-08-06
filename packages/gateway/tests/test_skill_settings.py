@@ -6,16 +6,18 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from heartwood_skill_catalog import CatalogEntry, build_catalog
+from heartwood_skill_catalog import build_catalog
 
+from heartwood.audit import AuditLog
 from heartwood.gateway import SkillManager, SkillSettingsError
+from heartwood.persistence import NativeLockUnavailableError
 from heartwood.skills import (
+    CatalogEntry,
     SkillArtifactStore,
     SkillCatalogError,
     SkillCatalogSnapshot,
@@ -82,16 +84,17 @@ def test_manager_refreshes_installs_and_audits_exact_catalog_revision(tmp_path: 
     assert manager.active_skill_roots() == (
         manager.store.artifact_path(manager.store.records()[0]).parent,
     )
-    audit = [
-        json.loads(line)
-        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    audit = AuditLog(tmp_path / "audit.jsonl").read()
+    assert [record.event_type for record in audit] == [
+        "skill.installation-decision",
+        "skill.activated",
     ]
-    assert [record["event"] for record in audit] == ["installation-decision", "activated"]
-    assert audit[0]["decision"] == "approved"
-    assert audit[0]["actor_id"] == "researcher"
-    assert audit[0]["tree_sha256"] == entry.tree_sha256
-    assert audit[0]["source_revision"] == _SOURCE_REVISION
-    assert all("path" not in record for record in audit)
+    assert audit[0].payload["decision"] == "approved"
+    assert audit[0].payload["actor_id"] == "researcher"
+    assert audit[0].payload["tree_sha256"] == entry.tree_sha256
+    assert audit[0].payload["source_revision"] == _SOURCE_REVISION
+    assert audit[1].previous_event_hash == audit[0].event_hash
+    assert all("path" not in record.payload for record in audit)
 
     repeated = manager.install_catalog(
         entry.name,
@@ -130,6 +133,47 @@ def test_manager_rejects_unreviewed_digest_and_signed_revocation(tmp_path: Path)
     assert revoked.status == "revoked"
     assert revoked.revocation_reason == "Security review"
     assert manager.active_skill_roots() == ()
+
+
+def test_manager_hides_and_rejects_bundled_identity_shadowing(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    bundled = _manager(tmp_path / "bundled").summaries()[0]
+    collision = entry.model_copy(
+        update={
+            "policy": entry.policy.model_copy(update={"skill_id": bundled.skill_id}),
+        }
+    )
+    manager = _manager(
+        tmp_path / "catalog",
+        client=_CatalogClient(_snapshot(collision), archive),
+    )
+
+    assert collision.name not in {summary.name for summary in manager.refresh()}
+    with pytest.raises(SkillSettingsError, match="conflicts with bundled Skill"):
+        manager.install_catalog(
+            collision.name,
+            source_id=None,
+            expected_tree_sha256=collision.tree_sha256,
+            approved=True,
+        )
+
+    local = _local_skill(tmp_path / "local")
+    skill_file = local / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8").replace(
+            'heartwood.id: "example.community-summary"',
+            f'heartwood.id: "{bundled.skill_id}"',
+        ),
+        encoding="utf-8",
+    )
+    local_manager = _manager(tmp_path / "local-manager")
+    inspected = local_manager.inspect_local(local)
+    with pytest.raises(SkillSettingsError, match="conflicts with bundled Skill"):
+        local_manager.install_local(
+            local,
+            expected_tree_sha256=inspected.tree_sha256,
+            approved=True,
+        )
 
 
 def test_manager_installs_local_skill_without_repository_or_controlled_data_claims(
@@ -195,6 +239,24 @@ def test_manager_fails_closed_when_source_refresh_fails(tmp_path: Path) -> None:
     assert all(summary.source == "bundled" for summary in manager.summaries())
 
 
+def test_manager_fails_closed_when_project_skill_state_cannot_be_locked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(tmp_path)
+
+    def unavailable(_path: Path) -> object:
+        raise NativeLockUnavailableError("synthetic unsupported filesystem")
+
+    monkeypatch.setattr(
+        "heartwood.gateway._skill_settings.native_file_lock",
+        unavailable,
+    )
+
+    with pytest.raises(SkillSettingsError, match="cannot lock Skill state safely"):
+        manager.refresh()
+
+
 def test_manager_reverifies_signed_source_before_runtime_activation(tmp_path: Path) -> None:
     entry, archive = _catalog_skill(tmp_path)
     client = _CatalogClient(_snapshot(entry), archive)
@@ -226,15 +288,47 @@ def test_manager_audits_approved_installation_failure_without_activating(
             approved=True,
         )
     assert manager.store.records() == ()
-    audit = [
-        json.loads(line)
-        for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    audit = AuditLog(tmp_path / "audit.jsonl").read()
+    assert [record.event_type for record in audit] == [
+        "skill.installation-decision",
+        "skill.installation-failed",
     ]
-    assert [record["event"] for record in audit] == [
-        "installation-decision",
-        "installation-failed",
-    ]
-    assert all("path" not in record for record in audit)
+    assert all("path" not in record.payload for record in audit)
+
+
+def test_manager_rejects_tampered_skill_audit_before_state_mutation(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    manager = _manager(tmp_path, client=_CatalogClient(_snapshot(entry), archive))
+    (tmp_path / "audit.jsonl").write_text('{"malformed":true}\n', encoding="utf-8")
+
+    with pytest.raises(SkillSettingsError, match="Unable to record Skill audit event"):
+        manager.install_catalog(
+            entry.name,
+            source_id=None,
+            expected_tree_sha256=entry.tree_sha256,
+            approved=True,
+        )
+
+    assert manager.store.records() == ()
+
+
+def test_manager_does_not_expose_installation_without_activation_audit(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    manager = _manager(tmp_path, client=_CatalogClient(_snapshot(entry), archive))
+    manager.install_catalog(
+        entry.name,
+        source_id=None,
+        expected_tree_sha256=entry.tree_sha256,
+        approved=True,
+    )
+    audit_path = tmp_path / "audit.jsonl"
+    decision = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)[0]
+    audit_path.write_text(decision, encoding="utf-8")
+
+    with pytest.raises(SkillSettingsError, match="missing a verified activation event"):
+        manager.summaries()
+    with pytest.raises(SkillSettingsError, match="missing a verified activation event"):
+        manager.active_skill_roots()
 
 
 def test_manager_enforces_platform_and_deployment_owned_controlled_data_approval(

@@ -97,9 +97,10 @@ A trusted identity assertion is an additional route marker, not a bearer secret 
 A Skill can influence agent behavior and tool selection.
 Heartwood therefore accepts reviewed external packages only through deployment-approved TUF roots and verifies current signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy, and OpenHands compatibility before installation.
 Approval is bound to the exact complete-tree digest shown to the researcher, installation is atomic, and a signed revocation prevents later activation.
+The advanced local-install route accepts source directories only inside the current project and outside reserved `.heartwood` state.
 
 These controls establish source authenticity and package integrity; they do not prove that instructions are safe for every dataset or task.
-Review the description, tools, network requirement, source, and permission summary before installation, and treat instructions embedded in project files or other external content as potentially untrusted.
+Review the description, tools, network and data-access requirements, dataset types, source, and permission summary before installation, and treat instructions embedded in project files or other external content as potentially untrusted.
 
 Repository review, project installation, and controlled-data approval are independent decisions.
 Only a deployment registry can approve an exact verified digest for controlled data.

@@ -600,10 +600,13 @@ export interface SkillSummaryResponse {
   archive_size: number | null;
   compatibility_reason: string | null;
   controlled_data_ready: boolean;
+  data_access_summary: string;
+  dataset_types: string[];
   declared_tools: string[];
   description: string;
   installable: boolean;
   name: string;
+  phi_risk: "none" | "reads-phi" | "writes-outside-boundary";
   requires_network: boolean;
   review: "repository-reviewed" | "local-unreviewed";
   revocation_reason: string | null;

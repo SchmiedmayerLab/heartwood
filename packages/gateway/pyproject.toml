@@ -18,7 +18,6 @@ dependencies = [
     "heartwood-adapters",
     "heartwood-audit",
     "heartwood-core-adapter",
-    "heartwood-skill-catalog",
     "heartwood-model-policy",
     "heartwood-persistence",
     "heartwood-schemas",
@@ -45,7 +44,6 @@ packages = ["src/heartwood"]
 heartwood-adapters = { workspace = true }
 heartwood-audit = { workspace = true }
 heartwood-core-adapter = { workspace = true }
-heartwood-skill-catalog = { workspace = true }
 heartwood-model-policy = { workspace = true }
 heartwood-persistence = { workspace = true }
 heartwood-schemas = { workspace = true }

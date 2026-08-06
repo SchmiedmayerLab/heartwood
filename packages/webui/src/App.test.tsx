@@ -3410,6 +3410,10 @@ describe("App", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(await screen.findByText("Review installation")).toBeInTheDocument();
+    expect(
+      screen.getByText("Data access: No row-level PHI access declared"),
+    ).toBeVisible();
+    expect(screen.getByText("Dataset types: omop-cdm")).toBeVisible();
     fireEvent.click(screen.getByLabelText("Approve this installation"));
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
@@ -3959,6 +3963,9 @@ const bundledSkill = (): SkillSummary => ({
   approval_summary: "Writes reviewed aggregate output.",
   declared_tools: ["write-aggregate-json"],
   requires_network: false,
+  phi_risk: "none",
+  data_access_summary: "No row-level PHI access declared",
+  dataset_types: ["omop-cdm"],
   controlled_data_ready: false,
   tree_sha256: "a".repeat(64),
   source_revision: null,

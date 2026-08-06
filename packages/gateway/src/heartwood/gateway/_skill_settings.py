@@ -8,16 +8,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
-from heartwood_skill_catalog import CatalogEntry
-
-from heartwood.persistence import LockedJsonlStore
+from heartwood.audit import AuditIntegrityError, AuditLog
+from heartwood.persistence import NativeLockUnavailableError, native_file_lock
+from heartwood.schemas import JsonValue
 from heartwood.skills import (
+    CatalogEntry,
     InstalledSkillRecord,
     LocalSkillVerifier,
     SkillArtifactStore,
@@ -34,6 +36,15 @@ from heartwood.skills import (
 
 class SkillSettingsError(ValueError):
     """Raised when a Skill cannot be discovered, verified, or activated safely."""
+
+
+_DATA_ACCESS_SUMMARIES: Final[
+    dict[Literal["none", "reads-phi", "writes-outside-boundary"], str]
+] = {
+    "none": "No row-level PHI access declared",
+    "reads-phi": "Reads potentially identifiable row-level data",
+    "writes-outside-boundary": "Declares writes outside the project boundary",
+}
 
 
 class _CatalogClient(Protocol):
@@ -59,6 +70,9 @@ class SkillSummary:
     approval_summary: str
     declared_tools: tuple[str, ...]
     requires_network: bool
+    phi_risk: Literal["none", "reads-phi", "writes-outside-boundary"]
+    data_access_summary: str
+    dataset_types: tuple[str, ...]
     controlled_data_ready: bool
     tree_sha256: str
     source_revision: str | None = None
@@ -91,6 +105,9 @@ class SkillSummary:
             approval_summary=manifest.approval_summary,
             declared_tools=manifest.declared_tools,
             requires_network=manifest.requires_network,
+            phi_risk=manifest.policy.phi_risk,
+            data_access_summary=_DATA_ACCESS_SUMMARIES[manifest.policy.phi_risk],
+            dataset_types=manifest.policy.dataset_types,
             controlled_data_ready=False,
             tree_sha256=manifest.tree_sha256,
         )
@@ -124,6 +141,9 @@ class SkillSummary:
             approval_summary=entry.policy.approval_summary,
             declared_tools=entry.allowed_tools,
             requires_network=entry.policy.requires_network,
+            phi_risk=entry.policy.phi_risk,
+            data_access_summary=_DATA_ACCESS_SUMMARIES[entry.policy.phi_risk],
+            dataset_types=entry.policy.dataset_types,
             controlled_data_ready=controlled_data_ready,
             tree_sha256=entry.tree_sha256,
             source_revision=entry.source_revision,
@@ -153,6 +173,9 @@ class SkillSummary:
             approval_summary=manifest.approval_summary,
             declared_tools=manifest.declared_tools,
             requires_network=manifest.requires_network,
+            phi_risk=manifest.policy.phi_risk,
+            data_access_summary=_DATA_ACCESS_SUMMARIES[manifest.policy.phi_risk],
+            dataset_types=manifest.policy.dataset_types,
             controlled_data_ready=record.controlled_data_ready,
             tree_sha256=record.tree_sha256,
             source_revision=record.source_revision,
@@ -173,6 +196,9 @@ class SkillSummary:
             "approval_summary": self.approval_summary,
             "declared_tools": list(self.declared_tools),
             "requires_network": self.requires_network,
+            "phi_risk": self.phi_risk,
+            "data_access_summary": self.data_access_summary,
+            "dataset_types": list(self.dataset_types),
             "controlled_data_ready": self.controlled_data_ready,
             "tree_sha256": self.tree_sha256,
             "source_revision": self.source_revision,
@@ -199,6 +225,7 @@ class SkillManager:
     ) -> None:
         self.bundled_dir = bundled_dir.resolve()
         self.store = store
+        self.lifecycle_lock_path = store.root / ".lifecycle.lock"
         self.source_registry = source_registry
         self.audit_path = audit_path.resolve()
         self.platform_id = platform_id
@@ -215,17 +242,26 @@ class SkillManager:
         bundled = self._bundled_summaries()
         installed = self._installed_summaries()
         active_names = {summary.name for summary in (*bundled, *installed)}
+        active_ids = {summary.skill_id for summary in (*bundled, *installed)}
         catalog = tuple(
             summary
             for source_id in sorted(self._snapshots)
             for entry in self._snapshots[source_id].entries
-            if (summary := self._catalog_summary(entry, source_id=source_id)).name
-            not in active_names
+            if (
+                (summary := self._catalog_summary(entry, source_id=source_id)).name
+                not in active_names
+                and summary.skill_id not in active_ids
+            )
         )
         return tuple(sorted((*bundled, *installed, *catalog), key=_summary_order))
 
     def refresh(self, source_id: str | None = None) -> tuple[SkillSummary, ...]:
         """Refresh configured TUF sources and apply signed revocation state."""
+        with self._lifecycle_lock():
+            return self._refresh(source_id)
+
+    def _refresh(self, source_id: str | None = None) -> tuple[SkillSummary, ...]:
+        """Refresh source state while holding the project Skill lifecycle lock."""
         source_ids = (source_id,) if source_id is not None else tuple(sorted(self._clients))
         if source_id is not None and source_id not in self._clients:
             raise SkillSettingsError(f"Skill source is not configured: {source_id}")
@@ -247,6 +283,11 @@ class SkillManager:
 
     def inspect_catalog(self, name: str, *, source_id: str | None = None) -> SkillSummary:
         """Refresh and summarize one signed catalog entry without downloading its archive."""
+        with self._lifecycle_lock():
+            return self._inspect_catalog(name, source_id=source_id)
+
+    def _inspect_catalog(self, name: str, *, source_id: str | None = None) -> SkillSummary:
+        """Inspect one catalog entry while holding the Skill lifecycle lock."""
         source_id = self._resolve_source_id(source_id)
         snapshot = self._refresh_source(source_id)
         try:
@@ -265,6 +306,25 @@ class SkillManager:
         actor_id: str = "human",
     ) -> SkillSummary:
         """Refresh, verify, download, and atomically activate one signed Skill."""
+        with self._lifecycle_lock():
+            return self._install_catalog(
+                name,
+                source_id=source_id,
+                expected_tree_sha256=expected_tree_sha256,
+                approved=approved,
+                actor_id=actor_id,
+            )
+
+    def _install_catalog(
+        self,
+        name: str,
+        *,
+        source_id: str | None,
+        expected_tree_sha256: str,
+        approved: bool,
+        actor_id: str,
+    ) -> SkillSummary:
+        """Install one catalog Skill while holding the lifecycle lock."""
         source_id = self._resolve_source_id(source_id)
         snapshot = self._refresh_source(source_id)
         try:
@@ -272,6 +332,7 @@ class SkillManager:
         except SkillCatalogError as error:
             raise SkillSettingsError(str(error)) from error
         summary = self._catalog_summary(entry, source_id=source_id)
+        self._assert_identity_available(summary)
         if entry.revoked:
             raise SkillSettingsError(f"Skill has been revoked: {entry.name}")
         if summary.status == "unsupported":
@@ -317,7 +378,25 @@ class SkillManager:
         actor_id: str = "human",
     ) -> SkillSummary:
         """Activate an explicitly approved local, unreviewed Agent Skill tree."""
+        with self._lifecycle_lock():
+            return self._install_local(
+                source,
+                expected_tree_sha256=expected_tree_sha256,
+                approved=approved,
+                actor_id=actor_id,
+            )
+
+    def _install_local(
+        self,
+        source: Path,
+        *,
+        expected_tree_sha256: str,
+        approved: bool,
+        actor_id: str,
+    ) -> SkillSummary:
+        """Install one local Skill while holding the lifecycle lock."""
         summary = self.inspect_local(source)
+        self._assert_identity_available(summary)
         if summary.tree_sha256 != expected_tree_sha256:
             raise SkillSettingsError("Local Skill changed after review; inspect it again")
         if not approved:
@@ -336,6 +415,11 @@ class SkillManager:
 
     def remove(self, name: str) -> None:
         """Deactivate one installed Skill while retaining its immutable artifact."""
+        with self._lifecycle_lock():
+            self._remove(name)
+
+    def _remove(self, name: str) -> None:
+        """Deactivate one installed Skill while holding the lifecycle lock."""
         try:
             removed = self.store.remove(name)
         except SkillStoreError as error:
@@ -345,11 +429,17 @@ class SkillManager:
 
     def active_skill_roots(self) -> tuple[Path, ...]:
         """Return verified installed roots consumable by OpenHands."""
+        with self._lifecycle_lock():
+            return self._active_skill_roots()
+
+    def _active_skill_roots(self) -> tuple[Path, ...]:
+        """Return active roots while holding the lifecycle lock."""
         try:
+            records = self.store.records()
             active_sources = sorted(
                 {
                     record.source_id
-                    for record in self.store.records()
+                    for record in records
                     if record.source_kind == "catalog" and record.status == "active"
                 }
             )
@@ -359,6 +449,7 @@ class SkillManager:
                         f"Installed Skill source is no longer configured: {source_id}"
                     )
                 self._refresh_source(source_id)
+            self._verify_active_installation_audit(records)
             return self.store.active_skill_roots()
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
@@ -371,8 +462,44 @@ class SkillManager:
             controlled_data_ready=self._profiles[source_id].controlled_data_ready(entry),
         )
 
+    @contextmanager
+    def _lifecycle_lock(self) -> Iterator[None]:
+        try:
+            with native_file_lock(self.lifecycle_lock_path):
+                yield
+        except NativeLockUnavailableError as error:
+            raise SkillSettingsError("Project storage cannot lock Skill state safely") from error
+
+    def _assert_identity_available(self, candidate: SkillSummary) -> None:
+        for bundled in self._bundled_summaries():
+            if candidate.name == bundled.name or candidate.skill_id == bundled.skill_id:
+                raise SkillSettingsError(
+                    f"Skill identity conflicts with bundled Skill {bundled.name}"
+                )
+        try:
+            records = self.store.records()
+        except SkillStoreError as error:
+            raise SkillSettingsError(str(error)) from error
+        for record in records:
+            exact_retry = (
+                candidate.name == record.name
+                and candidate.skill_id == record.skill_id
+                and candidate.version == record.version
+                and candidate.tree_sha256 == record.tree_sha256
+                and candidate.source_id == record.source_id
+                and candidate.source_revision == record.source_revision
+            )
+            if exact_retry:
+                continue
+            if candidate.name == record.name:
+                raise SkillSettingsError(f"Installed Skill already exists: {candidate.name}")
+            if candidate.skill_id == record.skill_id:
+                raise SkillSettingsError(
+                    f"Skill identifier is already active as {record.name}: {candidate.skill_id}"
+                )
+
     def _refresh_source(self, source_id: str) -> SkillCatalogSnapshot:
-        self.refresh(source_id)
+        self._refresh(source_id)
         return self._snapshots[source_id]
 
     def _resolve_source_id(self, source_id: str | None) -> str:
@@ -409,12 +536,44 @@ class SkillManager:
     def _installed_summaries(self) -> tuple[SkillSummary, ...]:
         try:
             records = self.store.records()
+            self._verify_active_installation_audit(records)
             return tuple(
                 SkillSummary.from_installed(record, self.store.manifest(record))
                 for record in records
             )
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
+
+    def _verify_active_installation_audit(
+        self,
+        records: tuple[InstalledSkillRecord, ...],
+    ) -> None:
+        active = tuple(record for record in records if record.status == "active")
+        if not active:
+            return
+        try:
+            audit = AuditLog(self.audit_path)
+            events = audit.read()
+            audit.verify(events)
+        except (AuditIntegrityError, NativeLockUnavailableError) as error:
+            raise SkillSettingsError(f"Unable to verify Skill audit state: {error}") from error
+        for record in active:
+            latest_event = next(
+                (
+                    event.event_type
+                    for event in reversed(events)
+                    if event.event_type in {"skill.activated", "skill.deactivated"}
+                    and event.payload.get("skill_id") == record.skill_id
+                    and event.payload.get("tree_sha256") == record.tree_sha256
+                    and event.payload.get("source_id") == record.source_id
+                    and event.payload.get("source_revision") == record.source_revision
+                ),
+                None,
+            )
+            if latest_event != "skill.activated":
+                raise SkillSettingsError(
+                    f"Active Skill is missing a verified activation event: {record.name}"
+                )
 
     def _record_decision(
         self,
@@ -455,13 +614,8 @@ class SkillManager:
         actor_id: str,
         decision: Literal["approved", "denied"] | None,
     ) -> None:
-        record: dict[str, object] = {
-            "schema_version": "heartwood.skill-audit.v1",
-            "event": event,
-            "occurred_at": datetime.now(UTC)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace("+00:00", "Z"),
+        occurred_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        payload: dict[str, JsonValue] = {
             "actor_id": actor_id,
             "name": summary.name,
             "skill_id": summary.skill_id,
@@ -473,8 +627,16 @@ class SkillManager:
             "controlled_data_ready": summary.controlled_data_ready,
         }
         if decision is not None:
-            record["decision"] = decision
-        LockedJsonlStore(self.audit_path).append(record)
+            payload["decision"] = decision
+        try:
+            AuditLog(self.audit_path).append(
+                session_id="project-skills",
+                event_type=f"skill.{event}",
+                occurred_at=occurred_at,
+                payload=payload,
+            )
+        except (AuditIntegrityError, NativeLockUnavailableError) as error:
+            raise SkillSettingsError(f"Unable to record Skill audit event: {error}") from error
 
 
 def _summary_order(summary: SkillSummary) -> tuple[int, str, str]:

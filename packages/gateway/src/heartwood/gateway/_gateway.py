@@ -1900,7 +1900,7 @@ class SessionGateway:
 
     def inspect_local_skill(self, source: Path) -> SkillSummaryResponse:
         """Verify one advanced local Skill without assigning repository review."""
-        summary = self.skill_manager.inspect_local(source)
+        summary = self.skill_manager.inspect_local(self._project_skill_source(source))
         return api_response(SkillSummaryResponse, summary.safe_dict())
 
     @_serialized_state
@@ -1914,12 +1914,18 @@ class SessionGateway:
         """Install one digest-pinned local, unreviewed Skill after approval."""
         self.project.initialize()
         self.skill_manager.install_local(
-            source,
+            self._project_skill_source(source),
             expected_tree_sha256=expected_tree_sha256,
             approved=approved,
         )
         self._reset_services()
         return self.skill_settings()
+
+    def _project_skill_source(self, source: Path) -> Path:
+        try:
+            return self.project.require_project_path(source)
+        except ProjectStateError as error:
+            raise SkillSettingsError(str(error)) from error
 
     @_serialized_state
     def remove_skill(self, name: str) -> SkillSettingsResponse:

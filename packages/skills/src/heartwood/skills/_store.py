@@ -92,10 +92,13 @@ class SkillInstallationIndex(_Record):
     skills: tuple[InstalledSkillRecord, ...] = ()
 
     @model_validator(mode="after")
-    def _names_are_unique(self) -> Self:
+    def _identities_are_unique(self) -> Self:
         names = [skill.name for skill in self.skills]
+        skill_ids = [skill.skill_id for skill in self.skills]
         if len(names) != len(set(names)):
             raise ValueError("Installed Skill index contains duplicate names")
+        if len(skill_ids) != len(set(skill_ids)):
+            raise ValueError("Installed Skill index contains duplicate identifiers")
         return self
 
 
@@ -254,6 +257,14 @@ class SkillArtifactStore:
                     self._verified_manifest(existing)
                     return existing
                 raise SkillStoreError(f"Installed Skill already exists: {record.name}")
+            identity_conflict = next(
+                (item for item in index.skills if item.skill_id == record.skill_id), None
+            )
+            if identity_conflict is not None:
+                raise SkillStoreError(
+                    "Installed Skill identifier is already active as "
+                    f"{identity_conflict.name}: {record.skill_id}"
+                )
             destination = self._artifact_path(record)
             if destination.exists():
                 self._verify_existing_artifact(record)

@@ -21,6 +21,13 @@ It adds a distribution and activation boundary for research environments; it doe
 
 The Heartwood release pins one exact `heartwood-skills` Git revision as a submodule.
 Packaging verifies that the initialized directory is clean and matches that gitlink, then archives that revision into native and container artifacts.
+Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
+Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.
+
+OpenHands also provides installed-Skill and marketplace APIs for its general-purpose runtime.
+Heartwood does not use those APIs as a second installation registry because they do not carry deployment TUF roots, exact-digest controlled-data approvals, signed revocation state, or project-scoped audit evidence.
+Heartwood instead verifies and activates a Skill once in its gateway-owned project store, then passes only the verified active directories to the public OpenHands loader.
+Installation decisions and lifecycle results use Heartwood's existing recoverable, scrubbed, hash-chained audit log rather than a Skill-specific logging format.
 
 ## Signed Source Flow
 
@@ -43,7 +50,8 @@ It refuses expired metadata, missing targets, substitutions, archive-manifest di
 
 Installed catalog artifacts are addressed by the complete tree SHA-256 digest.
 The activation index records the source identifier, full source commit, catalog target, version, review status, and revocation status.
-Heartwood revalidates the signed source and installed tree before exposing an active catalog Skill to OpenHands.
+One project-scoped native lock serializes source refresh, download, activation, removal, and runtime revalidation across CLI and browser processes.
+Heartwood revalidates the signed source, installed tree, and matching activation event in the verified audit chain before exposing an active catalog Skill to OpenHands.
 
 ## Offline Use
 
@@ -65,6 +73,6 @@ The active OpenHands tool set and deployment policy remain authoritative.
 
 ## Interface Contract
 
-The gateway owns one `SkillSummary` projection for bundled, available, installed, revoked, unsupported, and local-candidate content.
+The gateway owns one `SkillSummary` projection for bundled, available, installed, revoked, unsupported, and local-candidate content, including declared tools, network use, data access, and dataset types.
 The CLI, REST API, browser, and notebook bridge render that projection and submit the same inspect, refresh, install, and remove operations.
 They do not parse catalogs, validate files, or infer trust independently.
