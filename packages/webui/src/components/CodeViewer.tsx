@@ -31,8 +31,8 @@ const readOnlyExtensions = (label: string): Extension[] => [
   EditorView.theme({
     "&": {
       height: "100%",
-      backgroundColor: "#fff",
-      color: "#18241d",
+      backgroundColor: "var(--color-card)",
+      color: "var(--color-card-foreground)",
       fontSize: "13px",
     },
     ".cm-content": {
@@ -41,9 +41,9 @@ const readOnlyExtensions = (label: string): Extension[] => [
       padding: "12px 0",
     },
     ".cm-gutters": {
-      backgroundColor: "#f7f9f7",
-      borderRight: "1px solid #e1e5e2",
-      color: "#758179",
+      backgroundColor: "var(--color-code-gutter)",
+      borderRight: "1px solid var(--color-border-subtle)",
+      color: "var(--color-muted-foreground)",
     },
     ".cm-scroller": {
       overflow: "auto",

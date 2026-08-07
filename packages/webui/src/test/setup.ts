@@ -19,6 +19,16 @@ class ResizeObserverStub implements ResizeObserver {
 
 globalThis.ResizeObserver = ResizeObserverStub;
 Element.prototype.scrollIntoView = vi.fn();
+globalThis.matchMedia = vi.fn((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+  addListener: vi.fn(),
+  removeListener: vi.fn(),
+  dispatchEvent: vi.fn(),
+}));
 
 const emptyRectList = (): DOMRectList => {
   const rectangles: DOMRect[] = [];

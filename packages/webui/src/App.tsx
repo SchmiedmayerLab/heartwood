@@ -36,6 +36,7 @@ import {
   type HeartwoodClient,
   type SessionStreamState,
 } from "./client";
+import { useColorTheme } from "./colorTheme";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import {
@@ -140,6 +141,7 @@ const groveRouter = { Link: GroveLink };
 
 export const App = ({ client, initialSessionId }: AppProps) => {
   const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
+  const { theme, toggleTheme } = useColorTheme();
   const initializationRef = useRef<Promise<InitialState> | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -908,9 +910,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
+            theme={theme}
             onOpenActionReview={() => openPanel("action-review")}
             onOpenMenu={() => setMobileSessionsOpen(true)}
             onRename={(title) => void renameSession(title)}
+            onToggleTheme={toggleTheme}
           />
 
           {error ?

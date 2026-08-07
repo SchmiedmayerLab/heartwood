@@ -30,6 +30,46 @@ const closeSheet = async (page: Page): Promise<void> => {
   await expect(close).toBeHidden();
 };
 
+test("follows the system theme and persists an explicit choice", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+
+  const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("heading", { name: "Set up Heartwood" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Close", exact: true }),
+  ).toBeHidden();
+  const darkBackground = await page
+    .locator(".app-shell")
+    .evaluate((element) => getComputedStyle(element).backgroundColor);
+  await page.getByRole("button", { name: "Switch to light mode" }).click();
+  await expect(root).toHaveAttribute("data-theme", "light");
+  const lightBackground = await page
+    .locator(".app-shell")
+    .evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(lightBackground).not.toBe(darkBackground);
+  expect(
+    await page.evaluate(() => localStorage.getItem("heartwood.color-theme")),
+  ).toBe("light");
+
+  await page.reload();
+  await expect(root).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Close", exact: true }),
+  ).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "Switch to dark mode" }),
+  ).toBeVisible();
+  await expectNoAccessibilityViolations(page);
+});
+
 test("supports the researcher conversation and session workflow", async ({
   page,
 }) => {

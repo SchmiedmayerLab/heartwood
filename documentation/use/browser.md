@@ -30,6 +30,7 @@ The setup panel then presents model sources available in the detected environmen
 
 The project, model selection, and action-review setting are shared with the terminal and notebook bridge.
 Provider API keys and subscription tokens are never stored in browser storage.
+The interface follows the operating-system appearance on first use and stores only an explicit light or dark preference in browser storage.
 
 For **Sign in with ChatGPT**, select the connection and choose **Sign in with ChatGPT**.
 Open the displayed OpenAI page, enter the one-time code, and return to Heartwood.
@@ -64,6 +65,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Open **Skills** to inspect repository-verified and installed Skills.
 - Open **Specialists** to inspect the bounded research specialists available to the parent agent.
 - Select the current **Action review** value in the session header to change when Heartwood pauses.
+- Use the appearance button in the session header to switch between light and dark mode.
 - Open **Settings** to change the selected model or action-review mode.
 - Export the audit record from the session controls.
 
