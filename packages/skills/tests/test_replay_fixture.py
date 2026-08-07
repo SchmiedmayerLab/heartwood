@@ -12,12 +12,15 @@ from pathlib import Path
 
 from heartwood.skills import LocalSkillVerifier, load_replay_fixture
 
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+_SKILLS_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills" / "skills"
+
 
 def test_synthetic_omop_replay_fixture_matches_verified_skills() -> None:
     fixture = load_replay_fixture(Path("evals/replay/synthetic-omop-workflow.json"))
-    verifier = LocalSkillVerifier(Path("skills/verified"))
+    verifier = LocalSkillVerifier(_SKILLS_ROOT)
     verified_skill_ids = {
-        verifier.load_manifest(Path("skills/verified") / name).skill_id
+        verifier.load_manifest(_SKILLS_ROOT / name).skill_id
         for name in ("omop-cohort-summary", "aggregate-export", "baseline-model")
     }
     assert set(fixture.skills) == verified_skill_ids

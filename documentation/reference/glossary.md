@@ -15,6 +15,9 @@ SPDX-License-Identifier: MIT
 **Agent**
 : Software that uses a model and tools iteratively to pursue a task rather than returning only one text response.
 
+**Agent Skills**
+: An open directory format for agent instructions and optional scripts, references, assets, and tool declarations; Heartwood loads it through OpenHands.
+
 **Application programming interface (API)**
 : A structured way for software components to communicate.
 
@@ -131,6 +134,9 @@ SPDX-License-Identifier: MIT
 
 **Tensor parallelism**
 : A runtime layout that divides one model across a fixed number of GPUs.
+
+**The Update Framework (TUF)**
+: A signed metadata system that protects software distribution against repository compromise, rollback, freeze, and artifact-substitution attacks.
 
 **Terra**
 : A cloud platform for biomedical research workspaces, data, workflows, and interactive Jupyter compute.

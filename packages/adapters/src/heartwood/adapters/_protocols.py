@@ -111,23 +111,6 @@ class DatasetFingerprint:
     evidence: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class SkillReference:
-    """Resolved skill reference before verification and activation."""
-
-    skill_id: str
-    version: str
-    source: str
-
-
-@dataclass(frozen=True, slots=True)
-class RegistryVerification:
-    """Registry verification result for a resolved skill."""
-
-    verified: bool
-    reason: str
-
-
 class PlatformAdapter(Protocol):
     """Adapter surface for execution-platform integration."""
 
@@ -168,17 +151,3 @@ class DataSourceAdapter(Protocol):
         limit: int = 20,
     ) -> Sequence[Mapping[str, JsonValue]]:
         """Read a bounded table preview through the platform data boundary."""
-
-
-class RegistryAdapter(Protocol):
-    """Adapter surface for resolving and verifying skills."""
-
-    @property
-    def registry_id(self) -> str:
-        """Return the stable registry adapter id."""
-
-    def resolve_skill(self, skill_id: str, version: str) -> SkillReference:
-        """Resolve a skill id and version to a concrete source reference."""
-
-    def verify_skill(self, reference: SkillReference) -> RegistryVerification:
-        """Verify provenance and integrity for a resolved skill reference."""

@@ -29,6 +29,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          submodules: true
       - name: Install and run gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1

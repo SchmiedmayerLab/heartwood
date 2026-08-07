@@ -4,56 +4,78 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Verification gate for local ``SKILL.md`` directories."""
+"""OpenHands-native verification for complete Agent Skill directories."""
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from pydantic import ValidationError
+from heartwood_skill_catalog import CatalogBuildError, SkillPolicy, inspect_skill
 
-from heartwood.persistence import (
-    PERSISTENCE_MIGRATIONS,
-    SKILL_METADATA_KIND,
-    DurableFileError,
-    MigrationError,
-    read_private_text,
-)
-from heartwood.schemas import ApprovalRecord, JsonValue, SkillMetadata
+from heartwood.schemas import ApprovalRecord
 
-_DEFAULT_ALLOWED_TOOLS: Final[tuple[str, ...]] = (
-    "read-local-csv",
-    "write-aggregate-json",
-    "train-synthetic-baseline",
-    "emit-replay-record",
-)
+_DEFAULT_ALLOWED_TOOLS: Final[tuple[str, ...]] = ("terminal",)
+SkillReview = Literal["repository-reviewed", "local-unreviewed"]
 
 
 class SkillVerificationError(ValueError):
-    """Raised when a local skill directory fails verification."""
+    """Raised when an Agent Skill directory fails Heartwood policy verification."""
+
+
+def skill_compatibility_reason(
+    policy: SkillPolicy,
+    *,
+    declared_tools: tuple[str, ...],
+    platform_id: str | None = None,
+    allowed_tools: tuple[str, ...] = _DEFAULT_ALLOWED_TOOLS,
+    allow_network: bool = False,
+) -> str | None:
+    """Return the first deployment incompatibility for one Skill policy."""
+    if (
+        platform_id is not None
+        and "generic" not in policy.platforms
+        and platform_id not in policy.platforms
+    ):
+        return f"Not supported on the {platform_id} platform"
+    if policy.requires_network and not allow_network:
+        return "Skill requires network access, which is disabled"
+    unsupported_tools = sorted(set(declared_tools) - set(allowed_tools))
+    if unsupported_tools:
+        return f"Skill declares unsupported tools: {', '.join(unsupported_tools)}"
+    return None
 
 
 @dataclass(frozen=True, slots=True)
 class SkillManifest:
-    """Verified local skill manifest derived from ``SKILL.md`` frontmatter."""
+    """Verified projection of one complete Agent Skill directory."""
 
     skill_id: str
     name: str
     description: str
     root: Path
-    metadata: SkillMetadata
+    policy: SkillPolicy
     declared_tools: tuple[str, ...]
     approval_summary: str
-    entrypoint: Path
+    entrypoint: Path | None
+    review: SkillReview
+    tree_sha256: str
+
+    @property
+    def requires_network(self) -> bool:
+        """Return whether the Skill declares network access."""
+        return self.policy.requires_network
+
+    @property
+    def version(self) -> str:
+        """Return the Skill's Semantic Versioning identifier."""
+        return self.policy.version
 
 
 @dataclass(frozen=True, slots=True)
 class SkillVerification:
-    """Result of verifying a local skill directory."""
+    """Result of verifying one Agent Skill directory."""
 
     verified: bool
     reason: str
@@ -61,130 +83,90 @@ class SkillVerification:
 
 
 class LocalSkillVerifier:
-    """Verify local ``SKILL.md`` directories before they can be activated."""
+    """Verify complete Agent Skills under one root without executing their content."""
 
     def __init__(
         self,
         root: Path,
         *,
         allowed_tools: tuple[str, ...] = _DEFAULT_ALLOWED_TOOLS,
-        require_verified_tier: bool = True,
+        review: SkillReview = "local-unreviewed",
+        require_repository_review: bool = False,
         allow_network: bool = False,
+        platform_id: str | None = None,
     ) -> None:
-        """Initialize a root-confined verifier."""
+        """Initialize a root-confined verifier and its deployment policy."""
         self.root = root.resolve()
         self.allowed_tools = allowed_tools
-        self.require_verified_tier = require_verified_tier
+        self.review = review
+        self.require_repository_review = require_repository_review
         self.allow_network = allow_network
+        self.platform_id = platform_id
 
     def verify(self, path: Path) -> SkillVerification:
-        """Return a verification result for a local skill path."""
+        """Return a stable verification result for one path."""
         try:
             manifest = self.load_manifest(path)
         except SkillVerificationError as error:
             return SkillVerification(verified=False, reason=str(error))
         return SkillVerification(
             verified=True,
-            reason="local skill metadata, approval copy, and entrypoint verified",
+            reason="complete Agent Skill and declared permissions verified",
             manifest=manifest,
         )
 
     def load_manifest(self, path: Path) -> SkillManifest:
-        """Load and verify a local skill manifest."""
+        """Load one Skill through OpenHands and enforce Heartwood policy."""
+        manifest = self.inspect_manifest(path)
+        compatibility_reason = skill_compatibility_reason(
+            manifest.policy,
+            declared_tools=manifest.declared_tools,
+            platform_id=self.platform_id,
+            allowed_tools=self.allowed_tools,
+            allow_network=self.allow_network,
+        )
+        if compatibility_reason is not None:
+            raise SkillVerificationError(compatibility_reason)
+        return manifest
+
+    def inspect_manifest(self, path: Path) -> SkillManifest:
+        """Load one root-confined Skill without applying deployment compatibility."""
         skill_root = path.resolve()
         if not skill_root.is_relative_to(self.root):
-            msg = f"skill path escapes verification root: {path}"
-            raise SkillVerificationError(msg)
-        manifest = load_skill_manifest(skill_root)
-        if self.require_verified_tier and manifest.metadata.trust_tier != "verified":
-            msg = "only verified skills can pass this local gate"
-            raise SkillVerificationError(msg)
-        if manifest.metadata.requires_network and not self.allow_network:
-            msg = "skills requiring network access are not allowed in the local gate"
-            raise SkillVerificationError(msg)
-        if manifest.metadata.trust_tier == "verified" and (
-            not manifest.metadata.signature
-            or not manifest.metadata.signature.startswith("sigstore:")
-        ):
-            msg = "verified skills must declare a sigstore provenance placeholder"
-            raise SkillVerificationError(msg)
-        unsupported_tools = sorted(set(manifest.declared_tools) - set(self.allowed_tools))
-        if unsupported_tools:
-            msg = f"skill declares unsupported tools: {', '.join(unsupported_tools)}"
-            raise SkillVerificationError(msg)
-        if not manifest.entrypoint.is_relative_to(skill_root):
-            msg = "skill entrypoint escapes the skill root"
-            raise SkillVerificationError(msg)
-        if not manifest.entrypoint.is_file():
-            msg = f"skill entrypoint does not exist: {manifest.entrypoint.relative_to(skill_root)}"
-            raise SkillVerificationError(msg)
+            raise SkillVerificationError(f"Skill path escapes verification root: {path}")
+        manifest = load_skill_manifest(skill_root, review=self.review)
+        if self.require_repository_review and manifest.review != "repository-reviewed":
+            raise SkillVerificationError("Skill has not passed repository review")
         return manifest
 
 
-def load_skill_manifest(skill_root: Path) -> SkillManifest:
-    """Load a local skill manifest from a ``SKILL.md`` directory."""
-    skill_root = skill_root.resolve()
-    skill_file = skill_root / "SKILL.md"
-    metadata_file = skill_root / "metadata.json"
-    if not skill_file.is_file():
-        msg = "skill is missing SKILL.md"
-        raise SkillVerificationError(msg)
-    if not metadata_file.is_file():
-        msg = "skill is missing metadata.json"
-        raise SkillVerificationError(msg)
-
-    frontmatter = _read_skill_frontmatter(skill_file)
-    metadata_payload = _mapping(frontmatter.get("metadata"), "metadata")
+def load_skill_manifest(
+    skill_root: Path,
+    *,
+    review: SkillReview = "local-unreviewed",
+) -> SkillManifest:
+    """Load a complete Agent Skill through the public OpenHands Skill contract."""
+    root = skill_root.resolve()
     try:
-        skill_metadata = SkillMetadata.model_validate(metadata_payload)
-    except ValidationError as error:
-        msg = "SKILL.md metadata is invalid"
-        raise SkillVerificationError(msg) from error
-    try:
-        metadata_text = read_private_text(metadata_file)
-    except (DurableFileError, OSError) as error:
-        msg = "metadata.json must be a regular UTF-8 file"
-        raise SkillVerificationError(msg) from error
-    try:
-        metadata_json = json.loads(metadata_text)
-    except json.JSONDecodeError as error:
-        msg = "metadata.json is invalid JSON"
-        raise SkillVerificationError(msg) from error
-    try:
-        if not isinstance(metadata_json, dict):
-            raise SkillVerificationError("metadata.json must contain an object")
-        migrated_metadata = PERSISTENCE_MIGRATIONS.migrate(
-            SKILL_METADATA_KIND,
-            metadata_json,
-        ).payload
-        file_metadata = SkillMetadata.model_validate(migrated_metadata)
-    except (MigrationError, ValidationError) as error:
-        msg = "metadata.json is invalid"
-        raise SkillVerificationError(msg) from error
-    if skill_metadata.model_dump(mode="json", by_alias=True) != file_metadata.model_dump(
-        mode="json", by_alias=True
-    ):
-        msg = "SKILL.md metadata does not match metadata.json"
-        raise SkillVerificationError(msg)
-
-    skill_id = _required_string(frontmatter, "id")
-    name = _required_string(frontmatter, "name")
-    description = _required_string(frontmatter, "description")
-    approval_summary = _required_string(frontmatter, "approval-summary")
-    declared_tools = _split_csv(_required_string(frontmatter, "tools"))
-    if not declared_tools:
-        msg = "skill must declare at least one tool"
-        raise SkillVerificationError(msg)
-    entrypoint = (skill_root / _required_string(frontmatter, "entrypoint")).resolve()
+        inspected = inspect_skill(root)
+    except CatalogBuildError as error:
+        raise SkillVerificationError(str(error)) from error
+    entrypoint = (
+        (root / inspected.policy.entrypoint).resolve()
+        if inspected.policy.entrypoint is not None
+        else None
+    )
     return SkillManifest(
-        skill_id=skill_id,
-        name=name,
-        description=description,
-        root=skill_root,
-        metadata=skill_metadata,
-        declared_tools=declared_tools,
-        approval_summary=approval_summary,
+        skill_id=inspected.policy.skill_id,
+        name=inspected.name,
+        description=inspected.description,
+        root=root,
+        policy=inspected.policy,
+        declared_tools=inspected.allowed_tools,
+        approval_summary=inspected.policy.approval_summary,
         entrypoint=entrypoint,
+        review=review,
+        tree_sha256=inspected.tree_sha256,
     )
 
 
@@ -196,10 +178,9 @@ def build_skill_approval_record(
     occurred_at: str,
     decision: str = "approved",
 ) -> ApprovalRecord:
-    """Build the approval record that authorizes loading a verified skill."""
+    """Build the durable approval record for a Skill activation decision."""
     if decision not in {"approved", "denied"}:
-        msg = f"unsupported skill approval decision: {decision}"
-        raise SkillVerificationError(msg)
+        raise SkillVerificationError(f"Unsupported Skill approval decision: {decision}")
     checked_decision = cast(Literal["approved", "denied"], decision)
     return ApprovalRecord(
         approval_id=f"{session_id}-{manifest.skill_id.rsplit('.', maxsplit=1)[-1]}-approval",
@@ -211,81 +192,3 @@ def build_skill_approval_record(
         occurred_at=occurred_at,
         reason=manifest.approval_summary,
     )
-
-
-def _read_skill_frontmatter(path: Path) -> dict[str, JsonValue]:
-    try:
-        text = read_private_text(path)
-    except (DurableFileError, OSError) as error:
-        raise SkillVerificationError("SKILL.md must be a regular UTF-8 file") from error
-    lines = text.splitlines()
-    start = 0
-    if not lines or lines[start].strip() != "---":
-        msg = "SKILL.md must start with YAML frontmatter"
-        raise SkillVerificationError(msg)
-    try:
-        end = next(
-            index
-            for index, line in enumerate(lines[start + 1 :], start=start + 1)
-            if line.strip() == "---"
-        )
-    except StopIteration as error:
-        msg = "SKILL.md frontmatter is not closed"
-        raise SkillVerificationError(msg) from error
-
-    result: dict[str, JsonValue] = {}
-    current_section: str | None = None
-    for raw_line in lines[start + 1 : end]:
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        if raw_line.startswith("  ") and current_section:
-            section = _mapping(result[current_section], current_section)
-            key, value = _split_key_value(raw_line.strip())
-            section[key] = _parse_scalar(value)
-            continue
-        key, value = _split_key_value(raw_line)
-        if value.strip():
-            result[key] = _parse_scalar(value)
-            current_section = None
-        else:
-            result[key] = {}
-            current_section = key
-    return result
-
-
-def _split_key_value(line: str) -> tuple[str, str]:
-    if ":" not in line:
-        msg = f"unsupported SKILL.md frontmatter line: {line}"
-        raise SkillVerificationError(msg)
-    key, value = line.split(":", maxsplit=1)
-    return key.strip(), value.strip()
-
-
-def _parse_scalar(value: str) -> JsonValue:
-    normalized = value.strip()
-    if len(normalized) >= 2 and normalized[0] == normalized[-1] == '"':
-        return normalized[1:-1]
-    if normalized.lower() == "true":
-        return True
-    if normalized.lower() == "false":
-        return False
-    return normalized
-
-
-def _required_string(mapping: Mapping[str, JsonValue], key: str) -> str:
-    value = mapping.get(key)
-    if not isinstance(value, str) or not value.strip():
-        msg = f"skill frontmatter requires string field: {key}"
-        raise SkillVerificationError(msg)
-    return value
-
-
-def _mapping(value: JsonValue | None, name: str) -> dict[str, JsonValue]:
-    if isinstance(value, dict):
-        return value
-    msg = f"skill frontmatter requires object field: {name}"
-    raise SkillVerificationError(msg)
-
-
-def _split_csv(value: str) -> tuple[str, ...]:
-    return tuple(part.strip() for part in value.split(",") if part.strip())

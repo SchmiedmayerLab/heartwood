@@ -35,8 +35,6 @@ from heartwood.persistence import (
     SESSION_METADATA_VERSION,
     SESSION_WRITER_KIND,
     SESSION_WRITER_VERSION,
-    SKILL_METADATA_KIND,
-    SKILL_METADATA_VERSION,
     MigrationError,
     MigrationRegistry,
 )
@@ -64,7 +62,6 @@ _FIXTURES = Path(__file__).parent / "fixtures"
         (SESSION_COMMIT_KIND, "session-commit-v1.json", SESSION_COMMIT_VERSION),
         (SESSION_WRITER_KIND, "session-writer-v1.json", SESSION_WRITER_VERSION),
         (AUDIT_EVENT_KIND, "audit-event-v1.json", AUDIT_EVENT_VERSION),
-        (SKILL_METADATA_KIND, "skill-metadata-v1.json", SKILL_METADATA_VERSION),
         (OPENHANDS_STATE_KIND, "openhands-state-unversioned.json", OPENHANDS_STATE_VERSION),
         (OPENHANDS_STATE_KIND, "openhands-state-v1.json", OPENHANDS_STATE_VERSION),
     ],

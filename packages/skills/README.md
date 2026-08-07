@@ -10,8 +10,13 @@ SPDX-License-Identifier: MIT
 
 # Heartwood Skills
 
-Local `SKILL.md` verification, package-time bundle catalog validation, and deterministic skill test helpers for Heartwood.
+Verification, acquisition, and project-scoped storage for complete Agent Skill packages.
 
-The package validates checked-in Skill directories before they can be loaded. Bundled repository-verified Skills must declare no network requirement, carry `heartwood.*` metadata, expose an approval summary, and point to a root-confined script entry point.
+The shared `heartwood-skill-catalog` package owns strict OpenHands loading, complete-tree manifests, deterministic archives, and confined extraction and copying.
+Heartwood adds deployment-owned TUF source configuration, signature and expiry verification, exact-digest approval, atomic content-addressed installation, signed revocation handling, and revalidation before a Skill reaches OpenHands.
 
-The package also validates `skills/bundle.toml`, the repository-local catalog selected for packaging. Local entries resolve to checked-in Skill directories. External Git records can describe a semver tag, resolved commit, content SHA-256 hash, `heartwood.*` metadata, and provenance placeholder, but no build-time importer or cryptographic signature verifier is implemented yet.
+Curated source content is maintained in the pinned [`heartwood-skills`](https://github.com/SchmiedmayerLab/heartwood-skills) repository.
+The CLI, browser, and notebook bridge consume the same gateway projection and do not maintain independent Skill policy.
+
+Repository review and controlled-data approval are separate.
+A deployment may approve only an exact verified Skill tree digest; catalog metadata and local packages cannot grant that status.

@@ -1719,6 +1719,28 @@ summary:focus-visible {
   border-bottom: 1px solid #e1e6e2;
 }
 
+.panel-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-section-heading h3 {
+  margin: 0;
+}
+
+.panel-section-heading button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.skill-revocation {
+  color: #9a2f25 !important;
+}
+
 .specialist-row {
   align-items: start;
   grid-template-columns: minmax(0, 1fr);

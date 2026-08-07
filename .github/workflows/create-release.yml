@@ -39,6 +39,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+          submodules: true
       - name: Verify version, ref, and release absence
         id: release
         env:
@@ -69,6 +70,19 @@ jobs:
           fi
       - name: Verify catalog model sources
         run: python3 deploy/verify_model_sources.py --source-root .
+      - name: Verify curated Skill revision is published on main
+        run: |
+          skill_revision="$(git rev-parse HEAD:vendor/heartwood-skills)"
+          if [[ "$(git -C vendor/heartwood-skills rev-parse --is-shallow-repository)" == "true" ]]; then
+            git -C vendor/heartwood-skills fetch --no-tags --unshallow origin main
+          else
+            git -C vendor/heartwood-skills fetch --no-tags origin main
+          fi
+          if ! git -C vendor/heartwood-skills merge-base --is-ancestor \
+            "${skill_revision}" FETCH_HEAD; then
+            echo "curated Skill revision is not published on heartwood-skills/main" >&2
+            exit 1
+          fi
       - name: Verify release readiness on the exact commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -140,6 +154,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          submodules: true
       - name: Download approved candidate assets
         uses: actions/download-artifact@v8
         with:
@@ -210,6 +225,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          submodules: true
       - name: Download approved candidate assets
         uses: actions/download-artifact@v8
         with:

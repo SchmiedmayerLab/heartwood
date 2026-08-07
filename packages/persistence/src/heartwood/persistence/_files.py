@@ -43,22 +43,29 @@ class AppendRecoveryError(DurableFileError):
     """Raised when an interrupted append cannot be recovered unambiguously."""
 
 
-def read_private_bytes(path: Path) -> bytes:
-    """Read one regular file without following its final symbolic link."""
+def read_private_bytes(path: Path, *, max_bytes: int | None = None) -> bytes:
+    """Read one regular file without following its final link or exceeding a limit."""
+    if max_bytes is not None and max_bytes < 0:
+        raise ValueError("max_bytes must not be negative")
     descriptor = _open_regular(path, os.O_RDONLY)
     try:
         content = bytearray()
-        while chunk := os.read(descriptor, 64 * 1024):
+        while chunk := os.read(
+            descriptor,
+            64 * 1024 if max_bytes is None else min(64 * 1024, max_bytes - len(content) + 1),
+        ):
             content.extend(chunk)
+            if max_bytes is not None and len(content) > max_bytes:
+                raise DurableFileError(f"persisted file exceeds {max_bytes} bytes: {path}")
         return bytes(content)
     finally:
         os.close(descriptor)
 
 
-def read_private_text(path: Path) -> str:
-    """Read one UTF-8 regular file without following its final symbolic link."""
+def read_private_text(path: Path, *, max_bytes: int | None = None) -> str:
+    """Read one bounded UTF-8 regular file without following its final link."""
     try:
-        return read_private_bytes(path).decode("utf-8")
+        return read_private_bytes(path, max_bytes=max_bytes).decode("utf-8")
     except UnicodeDecodeError as error:
         raise DurableFileError(f"persisted file is not valid UTF-8: {path}") from error
 

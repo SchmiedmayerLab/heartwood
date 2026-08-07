@@ -51,6 +51,7 @@ from heartwood.gateway import (
     RestRequest,
     RestResponse,
     SessionGateway,
+    SkillSettingsError,
 )
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
@@ -122,6 +123,86 @@ def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
     gateway.start()
 
     assert prepared == []
+
+
+def test_gateway_prepares_openhands_before_skill_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared: list[bool] = []
+    monkeypatch.setattr(
+        "heartwood.gateway._gateway.prepare_openhands_import",
+        lambda: prepared.append(True),
+    )
+
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+    )
+
+    assert prepared == [True]
+    assert gateway.skill_settings()["skills"]
+
+
+def test_gateway_rejects_invalid_deployment_skill_source_configuration(tmp_path: Path) -> None:
+    with pytest.raises(SkillSettingsError, match="must be an absolute path"):
+        SessionGateway(
+            project=ProjectContext(tmp_path),
+            env={"HEARTWOOD_SKILL_SOURCES_FILE": "relative.toml"},
+            backend_id="deterministic",
+        )
+
+
+def test_gateway_exposes_one_skill_lifecycle_for_every_interface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    summary = gateway.skill_manager.summaries()[0]
+    resets: list[bool] = []
+    refreshes: list[str | None] = []
+    installs: list[tuple[str, str | None, str, bool]] = []
+
+    monkeypatch.setattr(
+        gateway.skill_manager,
+        "refresh",
+        lambda source_id=None: refreshes.append(source_id),
+    )
+    monkeypatch.setattr(
+        gateway.skill_manager,
+        "inspect_catalog",
+        lambda _name, **_kwargs: summary,
+    )
+
+    def install_catalog(
+        name: str,
+        *,
+        source_id: str | None,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> object:
+        installs.append((name, source_id, expected_tree_sha256, approved))
+        return summary
+
+    monkeypatch.setattr(gateway.skill_manager, "install_catalog", install_catalog)
+    monkeypatch.setattr(gateway, "_reset_services", lambda: resets.append(True))
+
+    refreshed = gateway.refresh_skills("official")
+    inspected = gateway.inspect_skill(summary.name, source_id="official")
+    installed = gateway.install_skill(
+        summary.name,
+        source_id="official",
+        expected_tree_sha256=summary.tree_sha256,
+        approved=True,
+    )
+
+    assert refreshes == ["official"]
+    assert inspected["name"] == summary.name
+    assert installed == refreshed
+    assert installs == [(summary.name, "official", summary.tree_sha256, True)]
+    assert resets == [True, True]
+    assert gateway.project.state_path.is_file()
 
 
 def test_persisted_projection_does_not_construct_an_agent_backend(
@@ -2822,15 +2903,52 @@ def test_rest_manages_skill_settings(
     candidate = {
         "name": "community-summary",
         "skill_id": "example.community-summary",
-        "source": "candidate",
+        "source": "catalog",
+        "source_id": "official",
+        "tree_sha256": "a" * 64,
     }
-    monkeypatch.setattr(gateway, "inspect_skill", lambda _source: candidate)
+    monkeypatch.setattr(
+        gateway,
+        "inspect_skill",
+        lambda _name, *, source_id: {**candidate, "source_id": source_id},
+    )
+
+    def install_skill(
+        _name: str,
+        *,
+        source_id: str | None,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> dict[str, object]:
+        assert source_id == "official"
+        assert expected_tree_sha256 == "a" * 64
+        return {"skills": [{**candidate, "source": "installed"}]} if approved else {}
+
     monkeypatch.setattr(
         gateway,
         "install_skill",
-        lambda _source, approved: (
-            {"skills": [{**candidate, "source": "installed"}]} if approved else {}
-        ),
+        install_skill,
+    )
+    monkeypatch.setattr(gateway, "refresh_skills", lambda _source_id: {"skills": []})
+    monkeypatch.setattr(
+        gateway,
+        "inspect_local_skill",
+        lambda _source: {**candidate, "source": "local-candidate", "source_id": "local"},
+    )
+
+    def install_local_skill(
+        _source: Path,
+        *,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> dict[str, object]:
+        assert expected_tree_sha256 == "a" * 64
+        return {"skills": [{**candidate, "source": "installed"}]} if approved else {}
+
+    monkeypatch.setattr(
+        gateway,
+        "install_local_skill",
+        install_local_skill,
     )
     monkeypatch.setattr(gateway, "remove_skill", lambda _name: {"skills": []})
 
@@ -2839,14 +2957,48 @@ def test_rest_manages_skill_settings(
         RestRequest(
             method="POST",
             path="/settings/skills/inspect",
-            body=json.dumps({"source": "/mnt/community-summary"}),
+            body=json.dumps({"name": "community-summary", "source_id": "official"}),
         )
     )
     installed = rest.handle(
         RestRequest(
             method="POST",
             path="/settings/skills/install",
-            body=json.dumps({"source": "/mnt/community-summary", "approved": True}),
+            body=json.dumps(
+                {
+                    "name": "community-summary",
+                    "source_id": "official",
+                    "expected_tree_sha256": "a" * 64,
+                    "approved": True,
+                }
+            ),
+        )
+    )
+    refreshed = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/skills/refresh",
+            body=json.dumps({"source_id": "official"}),
+        )
+    )
+    local = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/skills/local/inspect",
+            body=json.dumps({"source": "/mnt/community-summary"}),
+        )
+    )
+    local_installed = rest.handle(
+        RestRequest(
+            method="POST",
+            path="/settings/skills/local/install",
+            body=json.dumps(
+                {
+                    "source": "/mnt/community-summary",
+                    "expected_tree_sha256": "a" * 64,
+                    "approved": True,
+                }
+            ),
         )
     )
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/skills/community-summary"))
@@ -2855,7 +3007,22 @@ def test_rest_manages_skill_settings(
     assert len(cast(list[object], listed.body["skills"])) == 3
     assert inspected.body["name"] == "community-summary"
     assert installed.status_code == 200
+    assert refreshed.body == {"skills": []}
+    assert local.body["source"] == "local-candidate"
+    assert local_installed.status_code == 200
     assert removed.body == {"skills": []}
+
+
+def test_gateway_confines_local_skill_sources_to_the_project(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    gateway = _gateway(project)
+    repository_root = Path(__file__).resolve().parents[3]
+    outside = repository_root / "vendor" / "heartwood-skills" / "skills" / "aggregate-export"
+
+    with pytest.raises(SkillSettingsError, match="inside the project"):
+        gateway.inspect_local_skill(outside)
+    with pytest.raises(SkillSettingsError, match=r"outside \.heartwood"):
+        gateway.inspect_local_skill(project / ".heartwood" / "candidate")
 
 
 def test_gateway_exposes_one_bounded_specialist_catalog(tmp_path: Path) -> None:
@@ -2895,14 +3062,94 @@ def test_rest_skill_routes_validate_request_shapes(tmp_path: Path) -> None:
         rest.handle(RestRequest(method="POST", path="/settings/skills/inspect", body="{}")),
         rest.handle(RestRequest(method="POST", path="/settings/skills/install", body="{")),
         rest.handle(RestRequest(method="POST", path="/settings/skills/install", body="{}")),
+        rest.handle(RestRequest(method="POST", path="/settings/skills/refresh", body="{")),
+        rest.handle(RestRequest(method="POST", path="/settings/skills/local/inspect", body="{}")),
+        rest.handle(RestRequest(method="POST", path="/settings/skills/local/install", body="{}")),
         rest.handle(
             RestRequest(
                 method="POST",
                 path="/settings/skills/install",
-                body=json.dumps({"source": "/tmp/skill", "approved": "yes"}),
+                body=json.dumps(
+                    {
+                        "name": "skill",
+                        "approved": "yes",
+                        "expected_tree_sha256": "not-a-digest",
+                    }
+                ),
             )
         ),
         rest.handle(RestRequest(method="DELETE", path="/settings/skills/missing")),
     )
 
-    assert [response.status_code for response in responses] == [400, 422, 400, 422, 422, 422]
+    assert [response.status_code for response in responses] == [
+        400,
+        422,
+        400,
+        422,
+        400,
+        422,
+        422,
+        422,
+        422,
+    ]
+
+
+def test_rest_maps_skill_service_failures_to_unprocessable_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise SkillSettingsError("synthetic Skill failure")
+
+    monkeypatch.setattr(gateway, "inspect_skill", fail)
+    monkeypatch.setattr(gateway, "install_skill", fail)
+    monkeypatch.setattr(gateway, "refresh_skills", fail)
+    monkeypatch.setattr(gateway, "inspect_local_skill", fail)
+    monkeypatch.setattr(gateway, "install_local_skill", fail)
+
+    requests = (
+        RestRequest(
+            method="POST",
+            path="/settings/skills/inspect",
+            body=json.dumps({"name": "synthetic"}),
+        ),
+        RestRequest(
+            method="POST",
+            path="/settings/skills/install",
+            body=json.dumps(
+                {
+                    "name": "synthetic",
+                    "expected_tree_sha256": "a" * 64,
+                    "approved": True,
+                }
+            ),
+        ),
+        RestRequest(
+            method="POST",
+            path="/settings/skills/refresh",
+            body="{}",
+        ),
+        RestRequest(
+            method="POST",
+            path="/settings/skills/local/inspect",
+            body=json.dumps({"source": "/tmp/synthetic"}),
+        ),
+        RestRequest(
+            method="POST",
+            path="/settings/skills/local/install",
+            body=json.dumps(
+                {
+                    "source": "/tmp/synthetic",
+                    "expected_tree_sha256": "a" * 64,
+                    "approved": True,
+                }
+            ),
+        ),
+    )
+
+    responses = tuple(rest.handle(request) for request in requests)
+    assert [response.status_code for response in responses] == [422] * len(requests)
+    assert all(response.body["error"] == "synthetic Skill failure" for response in responses)

@@ -28,6 +28,7 @@ Read [AGENTS.md](AGENTS.md) for repository rules and the [documentation home](do
 - Keep the change within the existing component and adapter boundaries described in [System Architecture](documentation/architecture/system.md).
 - Reuse OpenHands and the existing platform, provider, policy, session, and UI abstractions instead of creating a parallel execution path.
 - Add or update tests for changed behavior, including failure and recovery paths.
+- Use the [Research Skill contribution guide](documentation/contribute/skills.md) for curated Skill packages and catalog changes.
 - Update the relevant user guidance or durable rationale in `documentation/` when its contract changes.
 - Track planned implementation and acceptance criteria in GitHub Issues rather than release documentation.
 - Add new acronyms and specialized terms to the [Glossary](documentation/reference/glossary.md).

@@ -20,6 +20,24 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  skill-source:
+    name: Verify Curated Skill Source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Verify pinned clean source
+        shell: bash
+        run: |
+          expected="$(git rev-parse HEAD:vendor/heartwood-skills)"
+          actual="$(git -C vendor/heartwood-skills rev-parse HEAD)"
+          test "${actual}" = "${expected}"
+          test -z "$(git -C vendor/heartwood-skills status --short)"
+          test "$(git config -f .gitmodules --get submodule.vendor/heartwood-skills.url)" = \
+            "https://github.com/SchmiedmayerLab/heartwood-skills.git"
   model-sources:
     name: Verify Catalog Model Sources
     runs-on: ubuntu-latest
@@ -28,6 +46,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          submodules: true
       - name: Verify immutable Hugging Face revisions
         run: python3 deploy/verify_model_sources.py --source-root . --allow-unavailable
   reuse:
@@ -50,6 +69,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          submodules: true
       - name: Set up Python
         uses: actions/setup-python@v7
       - name: Install yamllint
@@ -64,6 +84,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          submodules: true
       - name: Check trailing whitespace
         run: |
           if git grep -nI '[[:blank:]]$' -- .; then

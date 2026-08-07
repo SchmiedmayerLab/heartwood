@@ -4,11 +4,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for local skill verification."""
+"""Tests for the OpenHands-native Heartwood Skill policy adapter."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -21,58 +20,39 @@ from heartwood.skills import (
     load_skill_manifest,
 )
 
-_SKILLS_ROOT = Path("skills/verified")
-_COMPATIBILITY_FIXTURES = (
-    Path(__file__).resolve().parents[3] / "packages" / "persistence" / "tests" / "fixtures"
-)
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+_SKILLS_ROOT = _REPOSITORY_ROOT / "vendor" / "heartwood-skills" / "skills"
 
 
 def _write_skill(
     root: Path,
     *,
-    metadata_requires_network: str = "false",
-    frontmatter_requires_network: str = "false",
-    trust_tier: str = "verified",
-    signature: str | None = "sigstore:synthetic-fixture",
-    tools: str = "read-local-csv",
+    name: str = "synthetic-skill",
+    tools: str = "terminal",
+    requires_network: str = "false",
     entrypoint: str = "scripts/run.py",
+    platforms: str = "generic",
 ) -> Path:
-    skill_root = root / "synthetic-skill"
+    skill_root = root / name
     scripts = skill_root / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "run.py").write_text("print('offline placeholder')\n", encoding="utf-8")
-    metadata = {
-        "schema_version": "heartwood.skill-metadata.v1",
-        "heartwood.dataset-types": "omop-cdm",
-        "heartwood.platforms": "generic",
-        "heartwood.phi-risk": "none",
-        "heartwood.trust-tier": trust_tier,
-        "heartwood.requires-network": metadata_requires_network,
-        "heartwood.version": "0.1.0",
-    }
-    if signature is not None:
-        metadata["heartwood.sig"] = signature
-    (skill_root / "metadata.json").write_text(
-        json.dumps(metadata, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    signature_frontmatter = f'  heartwood.sig: "{signature}"\n' if signature is not None else ""
     (skill_root / "SKILL.md").write_text(
         f"""---
-id: "heartwood.synthetic.test-skill"
-name: "Synthetic skill"
-description: "A synthetic verifier fixture."
-tools: "{tools}"
-approval-summary: "Reads synthetic inputs."
-entrypoint: "{entrypoint}"
+name: {name}
+description: A synthetic Agent Skill used only by Heartwood tests.
+license: MIT
+allowed-tools: {tools}
 metadata:
-  heartwood.dataset-types: "omop-cdm"
-  heartwood.platforms: "generic"
+  heartwood.id: "heartwood.synthetic.{name}"
+  heartwood.version: "1.0.0"
+  heartwood.dataset-types: "synthetic-tabular"
+  heartwood.platforms: "{platforms}"
   heartwood.phi-risk: "none"
-  heartwood.trust-tier: "{trust_tier}"
-  heartwood.requires-network: "{frontmatter_requires_network}"
-  heartwood.version: "0.1.0"
-{signature_frontmatter.rstrip()}
+  heartwood.requires-network: "{requires_network}"
+  heartwood.controlled-data: "not-approved"
+  heartwood.approval-summary: "Reads and writes synthetic test files."
+  heartwood.entrypoint: "{entrypoint}"
 ---
 
 # Synthetic Skill
@@ -82,176 +62,125 @@ metadata:
     return skill_root
 
 
-def test_verified_prototype_skills_pass_local_gate() -> None:
-    harness = SkillTestHarness(_SKILLS_ROOT)
-    results = harness.verify_all()
-    manifests = tuple(result.manifest for result in results)
+def test_vendored_skills_load_through_openhands_as_repository_reviewed() -> None:
+    verifier = LocalSkillVerifier(
+        _SKILLS_ROOT,
+        review="repository-reviewed",
+        require_repository_review=True,
+    )
+    results = tuple(
+        verifier.verify(path) for path in sorted(_SKILLS_ROOT.iterdir()) if path.is_dir()
+    )
+    manifests = tuple(result.manifest for result in results if result.manifest is not None)
+
     assert all(result.verified for result in results)
-    assert {manifest.skill_id for manifest in manifests if manifest is not None} == {
-        "heartwood.synthetic.aggregate-export",
-        "heartwood.synthetic.baseline-model",
-        "heartwood.synthetic.omop-cohort-summary",
+    assert {manifest.skill_id for manifest in manifests} == {
+        "heartwood.research.aggregate-export",
+        "heartwood.research.baseline-model",
+        "heartwood.research.omop-cohort-summary",
     }
+    assert all(manifest.review == "repository-reviewed" for manifest in manifests)
+    assert all(len(manifest.tree_sha256) == 64 for manifest in manifests)
 
 
-def test_checked_in_skill_metadata_compatibility_fixture_loads(tmp_path: Path) -> None:
+def test_local_skill_review_and_policy_are_separate(tmp_path: Path) -> None:
     skill_root = _write_skill(tmp_path)
-    metadata_path = skill_root / "metadata.json"
-    metadata_path.write_text(
-        (_COMPATIBILITY_FIXTURES / "skill-metadata-v1.json").read_text(encoding="utf-8"),
+    local = LocalSkillVerifier(tmp_path).load_manifest(skill_root)
+    assert local.review == "local-unreviewed"
+    assert local.requires_network is False
+    assert local.version == "1.0.0"
+
+    reviewed = LocalSkillVerifier(
+        tmp_path,
+        review="repository-reviewed",
+        require_repository_review=True,
+    ).load_manifest(skill_root)
+    assert reviewed.review == "repository-reviewed"
+
+    result = LocalSkillVerifier(tmp_path, require_repository_review=True).verify(skill_root)
+    assert result.verified is False
+    assert result.reason == "Skill has not passed repository review"
+
+
+def test_verifier_rejects_network_and_unsupported_tools(tmp_path: Path) -> None:
+    network = _write_skill(tmp_path / "network", requires_network="true")
+    result = LocalSkillVerifier(network.parent).verify(network)
+    assert result.verified is False
+    assert result.reason == "Skill requires network access, which is disabled"
+
+    unsupported = _write_skill(tmp_path / "unsupported", tools="terminal network-fetch")
+    result = LocalSkillVerifier(unsupported.parent).verify(unsupported)
+    assert result.verified is False
+    assert result.reason == "Skill declares unsupported tools: network-fetch"
+
+
+def test_verifier_separates_structure_from_platform_compatibility(tmp_path: Path) -> None:
+    terra = _write_skill(tmp_path, platforms="terra")
+    verifier = LocalSkillVerifier(tmp_path, platform_id="carina")
+
+    assert verifier.inspect_manifest(terra).name == terra.name
+    result = verifier.verify(terra)
+    assert result.verified is False
+    assert result.reason == "Not supported on the carina platform"
+
+
+def test_verifier_confines_paths_and_wraps_openhands_errors(tmp_path: Path) -> None:
+    skill_root = _write_skill(tmp_path / "source")
+    with pytest.raises(SkillVerificationError, match="escapes verification root"):
+        LocalSkillVerifier(tmp_path / "other").load_manifest(skill_root)
+
+    (skill_root / "SKILL.md").write_text("---\nname: [\n---\n", encoding="utf-8")
+    with pytest.raises(SkillVerificationError, match="OpenHands rejected"):
+        load_skill_manifest(skill_root)
+
+
+def test_harness_requires_an_entrypoint_and_runs_vendored_script(tmp_path: Path) -> None:
+    manifest = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "aggregate-export")
+    summary = tmp_path / "summary.json"
+    output = tmp_path / "output.json"
+    summary.write_text(
+        '{"summary":{"participant_count":20,"condition_occurrence_count":20,'
+        '"target_condition_occurrence_count":20}}\n',
         encoding="utf-8",
     )
-    manifest_path = skill_root / "SKILL.md"
-    manifest = manifest_path.read_text(encoding="utf-8")
-    for previous, replacement in (
-        ("omop-cdm", "synthetic-tabular"),
-        ("sigstore:synthetic-fixture", "sigstore:synthetic-bundle"),
-        ("0.1.0", "0.2.0"),
-    ):
-        manifest = manifest.replace(previous, replacement)
-    manifest_path.write_text(manifest, encoding="utf-8")
+    completed = SkillTestHarness(_SKILLS_ROOT).run(
+        manifest,
+        "--summary",
+        str(summary),
+        "--output",
+        str(output),
+    )
+    assert completed.returncode == 0
+    assert output.is_file()
 
-    loaded = load_skill_manifest(skill_root)
+    no_entrypoint = _write_skill(tmp_path / "no-entrypoint")
+    skill_file = no_entrypoint / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8").replace(
+            '  heartwood.entrypoint: "scripts/run.py"\n', ""
+        ),
+        encoding="utf-8",
+    )
+    manifest = LocalSkillVerifier(no_entrypoint.parent).load_manifest(no_entrypoint)
+    with pytest.raises(SkillVerificationError, match="no executable entrypoint"):
+        SkillTestHarness(no_entrypoint.parent).run(manifest)
 
-    assert loaded.metadata.dataset_types == ("synthetic-tabular",)
-    assert loaded.metadata.version == "0.2.0"
 
-
-def test_verifier_builds_skill_approval_record() -> None:
-    verifier = LocalSkillVerifier(_SKILLS_ROOT)
-    manifest = verifier.load_manifest(_SKILLS_ROOT / "omop-cohort-summary")
+def test_skill_approval_record_uses_stable_policy_identity() -> None:
+    manifest = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "omop-cohort-summary")
     approval = build_skill_approval_record(
         manifest,
-        session_id="session-synthetic-0d",
+        session_id="session-synthetic",
         actor_id="synthetic-reviewer",
         occurred_at="2026-01-01T00:00:00Z",
     )
-    assert approval.target_type == "skill"
-    assert approval.target_id == "heartwood.synthetic.omop-cohort-summary"
+    assert approval.target_id == "heartwood.research.omop-cohort-summary"
     assert approval.reason == manifest.approval_summary
 
-
-def test_verifier_rejects_network_required_skill(tmp_path: Path) -> None:
-    skill_root = _write_skill(
-        tmp_path,
-        metadata_requires_network="true",
-        frontmatter_requires_network="true",
-    )
-    result = LocalSkillVerifier(tmp_path).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "skills requiring network access are not allowed in the local gate"
-
-
-def test_verifier_rejects_community_skill_in_verified_gate(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, trust_tier="community", signature=None)
-    result = LocalSkillVerifier(tmp_path).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "only verified skills can pass this local gate"
-
-
-def test_verifier_allows_unsigned_community_skill_when_gate_allows_it(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, trust_tier="community", signature=None)
-    result = LocalSkillVerifier(tmp_path, require_verified_tier=False).verify(skill_root)
-    assert result.verified is True
-    assert result.manifest is not None
-    assert result.manifest.metadata.signature is None
-
-
-def test_verifier_rejects_non_sigstore_signature(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, signature="synthetic-fixture")
-    result = LocalSkillVerifier(tmp_path).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "verified skills must declare a sigstore provenance placeholder"
-
-
-def test_verifier_rejects_unsupported_tools(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, tools="read-local-csv,network-fetch")
-    result = LocalSkillVerifier(tmp_path).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "skill declares unsupported tools: network-fetch"
-
-
-def test_verifier_rejects_missing_entrypoint(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, entrypoint="scripts/missing.py")
-    result = LocalSkillVerifier(tmp_path).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "skill entrypoint does not exist: scripts/missing.py"
-
-
-def test_verifier_rejects_mismatched_metadata(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path, frontmatter_requires_network="true")
-    with pytest.raises(SkillVerificationError, match=r"SKILL\.md metadata does not match"):
-        load_skill_manifest(skill_root)
-
-
-def test_verifier_returns_failed_result_for_invalid_metadata(tmp_path: Path) -> None:
-    skill_root = _write_skill(tmp_path)
-    (skill_root / "metadata.json").write_text("{invalid json\n", encoding="utf-8")
-    result = LocalSkillVerifier(tmp_path).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "metadata.json is invalid JSON"
-
-    invalid_frontmatter_root = tmp_path / "invalid-frontmatter"
-    skill_root = _write_skill(invalid_frontmatter_root, signature=None)
-    result = LocalSkillVerifier(invalid_frontmatter_root).verify(skill_root)
-    assert result.verified is False
-    assert result.reason == "SKILL.md metadata is invalid"
-
-
-def test_verifier_rejects_unsupported_or_linked_metadata(tmp_path: Path) -> None:
-    unsupported_root = _write_skill(tmp_path / "unsupported")
-    metadata_path = unsupported_root / "metadata.json"
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["schema_version"] = "heartwood.skill-metadata.v0"
-    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
-    with pytest.raises(SkillVerificationError, match=r"metadata\.json is invalid"):
-        load_skill_manifest(unsupported_root)
-
-    linked_root = _write_skill(tmp_path / "linked")
-    linked_metadata = linked_root / "metadata.json"
-    outside = tmp_path / "outside-metadata.json"
-    outside.write_bytes(linked_metadata.read_bytes())
-    linked_metadata.unlink()
-    linked_metadata.symlink_to(outside)
-    with pytest.raises(
-        SkillVerificationError, match=r"metadata\.json must be a regular UTF-8 file"
-    ):
-        load_skill_manifest(linked_root)
-
-
-def test_verifier_rejects_missing_manifest_files(tmp_path: Path) -> None:
-    skill_root = tmp_path / "missing"
-    skill_root.mkdir()
-    with pytest.raises(SkillVerificationError, match=r"missing SKILL\.md"):
-        load_skill_manifest(skill_root)
-    (skill_root / "SKILL.md").write_text("---\n---\n", encoding="utf-8")
-    with pytest.raises(SkillVerificationError, match=r"missing metadata\.json"):
-        load_skill_manifest(skill_root)
-
-
-def test_verifier_rejects_malformed_frontmatter(tmp_path: Path) -> None:
-    skill_root = tmp_path / "malformed"
-    skill_root.mkdir()
-    (skill_root / "metadata.json").write_text("{}", encoding="utf-8")
-    (skill_root / "SKILL.md").write_text("name: missing fence\n", encoding="utf-8")
-    with pytest.raises(SkillVerificationError, match="YAML frontmatter"):
-        load_skill_manifest(skill_root)
-    (skill_root / "SKILL.md").write_text(
-        "# Heading\n---\nname: late fence\n---\n", encoding="utf-8"
-    )
-    with pytest.raises(SkillVerificationError, match="must start with YAML frontmatter"):
-        load_skill_manifest(skill_root)
-    (skill_root / "SKILL.md").write_text("---\nname without colon\n---\n", encoding="utf-8")
-    with pytest.raises(SkillVerificationError, match=r"unsupported SKILL\.md"):
-        load_skill_manifest(skill_root)
-
-
-def test_build_skill_approval_record_rejects_unknown_decision() -> None:
-    manifest = LocalSkillVerifier(_SKILLS_ROOT).load_manifest(_SKILLS_ROOT / "aggregate-export")
-    with pytest.raises(SkillVerificationError, match="unsupported skill approval decision"):
+    with pytest.raises(SkillVerificationError, match="Unsupported Skill approval decision"):
         build_skill_approval_record(
             manifest,
-            session_id="session-synthetic-0d",
+            session_id="session-synthetic",
             actor_id="synthetic-reviewer",
             occurred_at="2026-01-01T00:00:00Z",
             decision="maybe",

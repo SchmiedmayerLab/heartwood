@@ -141,15 +141,9 @@ async function main() {
       page.getByRole("heading", { name: "Synthetic Cohort Analysis" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Skills", exact: true }).click();
-    await expect(
-      page.getByText("omop-cohort-summary", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText("baseline-model", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText("aggregate-export", { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByText(/^omop-cohort-summary\b/u)).toBeVisible();
+    await expect(page.getByText(/^baseline-model\b/u)).toBeVisible();
+    await expect(page.getByText(/^aggregate-export\b/u)).toBeVisible();
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     await page

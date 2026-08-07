@@ -106,6 +106,7 @@ interface UtilitySheetProps {
   projectReadiness: ProjectReadiness | null;
   startupPlan: StartupPlan | null;
   skillApproved: boolean;
+  skillBusy: boolean;
   skillCandidate: SkillSummary | null;
   skillSettings: SkillSettings | null;
   skillSource: string;
@@ -128,7 +129,7 @@ interface UtilitySheetProps {
     request: ModelTransferExportRequest,
   ) => Promise<ModelTransfer>;
   onExportAudit: () => void;
-  onInspectSkill: () => void;
+  onInspectLocalSkill: () => void;
   onInspectModelBundle: (
     request: ModelTransferInspectRequest,
   ) => Promise<ModelTransferPlan>;
@@ -143,10 +144,12 @@ interface UtilitySheetProps {
   onInstallSkill: () => void;
   onProfileDraft: (profile: ModelProfileDraft) => void;
   onRefreshActivity: () => void;
+  onRefreshSkills: () => void;
   onRefreshSettings: () => void;
   onRestoreFocus: () => void;
   onRemoveProfile: (profileId: string) => void;
   onRemoveSkill: (name: string) => void;
+  onReviewSkill: (skill: SkillSummary) => void;
   onSaveProfile: () => void;
   onSelectActionMode: (mode: ActionConfirmationMode) => Promise<void>;
   onSelectProfile: (profileId: string) => void;
@@ -240,12 +243,15 @@ const ActivityContent = ({
 
 const SkillsContent = ({
   skillApproved,
+  skillBusy,
   skillCandidate,
   skillSettings,
   skillSource,
-  onInspectSkill,
+  onInspectLocalSkill,
   onInstallSkill,
+  onRefreshSkills,
   onRemoveSkill,
+  onReviewSkill,
   onSetSkillApproved,
   onSetSkillSource,
 }: UtilitySheetProps) => (
@@ -253,24 +259,55 @@ const SkillsContent = ({
     <SheetHeader>
       <SheetTitle>Skills</SheetTitle>
       <SheetDescription>
-        Bundled and installed research workflows
+        Reviewed workflows and project extensions
       </SheetDescription>
     </SheetHeader>
     <section className="panel-section skill-list">
-      <h3>Available</h3>
+      <div className="panel-section-heading">
+        <h3>Available</h3>
+        <Tooltip tooltip="Refresh verified Skill sources">
+          <Button
+            aria-label="Refresh verified Skill sources"
+            disabled={skillBusy}
+            size="sm"
+            variant="outline"
+            onClick={onRefreshSkills}
+          >
+            {skillBusy ?
+              <LoaderCircle className="request-activity-icon" size={15} />
+            : <RotateCcw size={15} />}
+          </Button>
+        </Tooltip>
+      </div>
       {skillSettings?.skills.length ?
         skillSettings.skills.map((skill) => (
           <div className="skill-row" key={`${skill.source}-${skill.name}`}>
             <div>
-              <strong>{skill.name}</strong>
+              <strong>
+                {skill.name} <Badge variant="secondary">{skill.version}</Badge>
+              </strong>
               <span>{skill.description}</span>
               <small>
-                {skill.trust_tier === "verified" ?
-                  "Repository verified"
-                : skill.trust_tier}{" "}
-                · {skill.source}
+                {skill.review === "repository-reviewed" ?
+                  "Repository reviewed"
+                : "Local and unreviewed"}{" "}
+                · {skill.status}
               </small>
-              <small>No controlled-data approval claim</small>
+              <small>
+                {skill.controlled_data_ready ?
+                  "Deployment approved for controlled data"
+                : "Not approved for controlled data"}
+              </small>
+              {skill.revocation_reason ?
+                <small className="skill-revocation">
+                  {skill.revocation_reason}
+                </small>
+              : null}
+              {skill.compatibility_reason ?
+                <small className="skill-revocation">
+                  {skill.compatibility_reason}
+                </small>
+              : null}
             </div>
             {skill.source === "installed" ?
               <Tooltip tooltip={`Remove ${skill.name}`}>
@@ -283,52 +320,95 @@ const SkillsContent = ({
                   <Trash2 size={15} />
                 </Button>
               </Tooltip>
+            : skill.installable ?
+              <Tooltip tooltip={`Review ${skill.name}`}>
+                <Button
+                  aria-label={`Review ${skill.name}`}
+                  disabled={skillBusy}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onReviewSkill(skill)}
+                >
+                  <Download size={15} />
+                </Button>
+              </Tooltip>
             : null}
           </div>
         ))
       : <p className="panel-empty">No Skills available</p>}
     </section>
 
+    {skillCandidate ?
+      <section className="panel-section skill-review" aria-live="polite">
+        <h3>Review installation</h3>
+        <strong>
+          {skillCandidate.name} {skillCandidate.version}
+        </strong>
+        <span>{skillCandidate.approval_summary}</span>
+        <span>
+          Tools: {skillCandidate.declared_tools.join(", ") || "None declared"}
+        </span>
+        <span>
+          Network: {skillCandidate.requires_network ? "Required" : "Disabled"}
+        </span>
+        <span>Data access: {skillCandidate.data_access_summary}</span>
+        <span>
+          Dataset types:{" "}
+          {skillCandidate.dataset_types.join(", ") || "Not declared"}
+        </span>
+        <span>
+          Review:{" "}
+          {skillCandidate.review === "repository-reviewed" ?
+            "Repository reviewed"
+          : "Local and unreviewed"}
+        </span>
+        <span>
+          Controlled data:{" "}
+          {skillCandidate.controlled_data_ready ?
+            "Deployment approved"
+          : "Not approved"}
+        </span>
+        <span title={skillCandidate.tree_sha256}>
+          Content: {skillCandidate.tree_sha256.slice(0, 12)}
+        </span>
+        <label className="checkbox-control">
+          <Checkbox
+            aria-label="Approve this installation"
+            checked={skillApproved}
+            onCheckedChange={(checked) => onSetSkillApproved(checked === true)}
+          />
+          Approve this exact Skill revision
+        </label>
+        <Button disabled={!skillApproved || skillBusy} onClick={onInstallSkill}>
+          {skillBusy ?
+            <LoaderCircle className="request-activity-icon" size={15} />
+          : <Download size={15} />}
+          Install
+        </Button>
+      </section>
+    : null}
+
     <details className="advanced-section">
-      <summary>Install an extension</summary>
+      <summary>Install from this environment</summary>
       <div className="advanced-section-content">
         <label>
-          Mounted source directory
+          Local Agent Skill directory
           <Input
             value={skillSource}
             onChange={(event) => onSetSkillSource(event.target.value)}
           />
         </label>
         <Button
-          disabled={!skillSource.trim()}
+          disabled={!skillSource.trim() || skillBusy}
           variant="outline"
-          onClick={onInspectSkill}
+          onClick={onInspectLocalSkill}
         >
           Inspect
         </Button>
-        {skillCandidate ?
-          <div className="skill-review">
-            <strong>{skillCandidate.name}</strong>
-            <span>{skillCandidate.approval_summary}</span>
-            <span>
-              Tools:{" "}
-              {skillCandidate.declared_tools.join(", ") || "None declared"}
-            </span>
-            <label className="checkbox-control">
-              <Checkbox
-                aria-label="Approve this installation"
-                checked={skillApproved}
-                onCheckedChange={(checked) =>
-                  onSetSkillApproved(checked === true)
-                }
-              />
-              Approve this installation
-            </label>
-            <Button disabled={!skillApproved} onClick={onInstallSkill}>
-              Install
-            </Button>
-          </div>
-        : null}
+        <small>
+          Local Skills have not passed repository review. Heartwood verifies the
+          complete directory and records the exact installed digest.
+        </small>
       </div>
     </details>
   </>

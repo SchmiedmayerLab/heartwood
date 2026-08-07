@@ -1,0 +1,3 @@
+[submodule "vendor/heartwood-skills"]
+	path = vendor/heartwood-skills
+	url = https://github.com/SchmiedmayerLab/heartwood-skills.git

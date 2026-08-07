@@ -1857,7 +1857,7 @@ def _agent_context(
             "Operate only inside the configured project directory. Do not inspect or modify "
             "reserved .heartwood state. Skills are context resources, not tools named after "
             "their identifiers. Activate a Skill only through the OpenHands invoke_skill tool "
-            "with its exact Skill identifier. An explicitly loaded Skill may read or execute "
+            "with its exact Skill name. An explicitly loaded Skill may read or execute "
             "only the files under the Skill location returned by invoke_skill; never modify "
             "that location or inspect neighboring .heartwood content. Resolve a Skill-relative "
             "file such as scripts/run.py from the returned Skill location, never from the "

@@ -13,7 +13,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from heartwood.skills._verification import LocalSkillVerifier, SkillManifest, SkillVerification
+from heartwood.skills._verification import (
+    LocalSkillVerifier,
+    SkillManifest,
+    SkillVerification,
+    SkillVerificationError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +39,8 @@ class SkillTestHarness:
         cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run a skill entrypoint with explicit arguments."""
+        if manifest.entrypoint is None:
+            raise SkillVerificationError(f"Skill has no executable entrypoint: {manifest.name}")
         return subprocess.run(
             [sys.executable, str(manifest.entrypoint), *args],
             cwd=cwd,

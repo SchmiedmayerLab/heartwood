@@ -30,5 +30,6 @@ Use synthetic data in every public example, test, screenshot, and issue reproduc
 ## Next Steps
 
 - [Development Guide](development.md)
+- [Contribute Research Skills](skills.md)
 - [Documentation Guide](documentation.md)
 - [Release Guide](releases.md)

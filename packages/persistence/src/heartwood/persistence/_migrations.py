@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import Final
 
 type JsonObject = dict[str, object]
 type Migration = Callable[[Mapping[str, object]], JsonObject]
@@ -23,7 +24,6 @@ SESSION_COMMAND_RECEIPT_KIND = "session-command-receipt"
 SESSION_COMMIT_KIND = "session-commit"
 SESSION_WRITER_KIND = "session-writer"
 AUDIT_EVENT_KIND = "audit-event"
-SKILL_METADATA_KIND = "skill-metadata"
 OPENHANDS_STATE_KIND = "openhands-state"
 
 PROJECT_STATE_VERSION = "heartwood.project-state.v2"
@@ -34,8 +34,8 @@ SESSION_COMMAND_RECEIPT_VERSION = "heartwood.session-command-receipt.v1"
 SESSION_COMMIT_VERSION = "heartwood.session-commit.v1"
 SESSION_WRITER_VERSION = "heartwood.session-writer.v1"
 AUDIT_EVENT_VERSION = "heartwood.audit-event.v1"
-SKILL_METADATA_VERSION = "heartwood.skill-metadata.v1"
 OPENHANDS_STATE_VERSION = "heartwood.openhands-state.v1"
+SKILL_INSTALLATIONS_VERSION: Final = "heartwood.skill-installations.v1"
 
 PROJECT_STATE_FORMATS: dict[str, str] = {
     "audit_event": AUDIT_EVENT_VERSION,
@@ -46,7 +46,7 @@ PROJECT_STATE_FORMATS: dict[str, str] = {
     "session_event": SESSION_EVENT_VERSION,
     "session_metadata": SESSION_METADATA_VERSION,
     "session_writer": SESSION_WRITER_VERSION,
-    "skill_metadata": SKILL_METADATA_VERSION,
+    "skill_installations": SKILL_INSTALLATIONS_VERSION,
 }
 
 
@@ -218,7 +218,6 @@ def _build_registry() -> MigrationRegistry:
         (SESSION_COMMIT_KIND, SESSION_COMMIT_VERSION),
         (SESSION_WRITER_KIND, SESSION_WRITER_VERSION),
         (AUDIT_EVENT_KIND, AUDIT_EVENT_VERSION),
-        (SKILL_METADATA_KIND, SKILL_METADATA_VERSION),
         (OPENHANDS_STATE_KIND, OPENHANDS_STATE_VERSION),
     ):
         registry.register_kind(kind, current_version=version)

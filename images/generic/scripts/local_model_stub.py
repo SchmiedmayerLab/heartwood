@@ -317,9 +317,9 @@ class LocalModelHandler(BaseHTTPRequestHandler):
             runtime_root = os.environ.get("HEARTWOOD_RUNTIME_ROOT") or None
             tool_python = os.environ.get("HEARTWOOD_TOOL_PYTHON") or sys.executable
             script_root = (
-                '"$HEARTWOOD_RUNTIME_ROOT"/skills/verified'
+                '"$HEARTWOOD_RUNTIME_ROOT"/vendor/heartwood-skills/skills'
                 if runtime_root is not None
-                else shlex.quote(str(Path.cwd() / "skills" / "verified"))
+                else shlex.quote(str(Path.cwd() / "vendor" / "heartwood-skills" / "skills"))
             )
             cohort_command = " ".join(
                 (

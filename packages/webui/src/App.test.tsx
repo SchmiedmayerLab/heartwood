@@ -1056,25 +1056,67 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({ skills: [bundledSkill()] });
   }
 
+  refreshSkills(): Promise<SkillSettings> {
+    return this.getSkillSettings();
+  }
+
   getSpecialistSettings(): Promise<SpecialistSettings> {
     return Promise.resolve(specialistSettings());
   }
 
-  inspectSkill(source: string): Promise<SkillSummary> {
+  inspectSkill(name: string, sourceId?: string): Promise<SkillSummary> {
     return Promise.resolve({
       ...bundledSkill(),
-      name: "community-summary",
-      source: "candidate",
-      approval_summary: `Reads mounted source ${source}`,
+      name,
+      source: "catalog",
+      source_id: sourceId ?? "heartwood-skills",
+      status: "available",
+      installable: true,
+      approval_summary: `Installs signed Skill ${name}`,
     });
   }
 
-  installSkill(source: string): Promise<SkillSettings> {
+  installSkill(
+    name: string,
+    _sourceId: string | null,
+    _expectedTreeSha256: string,
+  ): Promise<SkillSettings> {
+    this.installedSkill = name;
+    return Promise.resolve({
+      skills: [
+        bundledSkill(),
+        { ...bundledSkill(), name, source: "installed" },
+      ],
+    });
+  }
+
+  inspectLocalSkill(source: string): Promise<SkillSummary> {
+    return Promise.resolve({
+      ...bundledSkill(),
+      name: "community-summary",
+      source: "local-candidate",
+      source_id: "local",
+      review: "local-unreviewed",
+      status: "available",
+      approval_summary: `Reads local source ${source}`,
+    });
+  }
+
+  installLocalSkill(
+    source: string,
+    _expectedTreeSha256: string,
+  ): Promise<SkillSettings> {
     this.installedSkill = source;
     return Promise.resolve({
       skills: [
         bundledSkill(),
-        { ...bundledSkill(), name: "community-summary", source: "installed" },
+        {
+          ...bundledSkill(),
+          name: "community-summary",
+          source: "installed",
+          source_id: "local",
+          review: "local-unreviewed",
+        },
       ],
     });
   }
@@ -3356,18 +3398,22 @@ describe("App", () => {
     ).toBeDisabled();
   });
 
-  it("inspects and explicitly approves a mounted Skill extension", async () => {
+  it("inspects and explicitly approves a local Skill extension", async () => {
     const client = new FakeClient();
     render(<App client={client} initialSessionId="session-test" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Skills" }));
     expect(await screen.findByText("aggregate-export")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Install an extension"));
-    fireEvent.change(screen.getByLabelText("Mounted source directory"), {
+    fireEvent.click(screen.getByText("Install from this environment"));
+    fireEvent.change(screen.getByLabelText("Local Agent Skill directory"), {
       target: { value: "/mnt/community-summary" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
-    expect(await screen.findByText("community-summary")).toBeInTheDocument();
+    expect(await screen.findByText("Review installation")).toBeInTheDocument();
+    expect(
+      screen.getByText("Data access: No row-level PHI access declared"),
+    ).toBeVisible();
+    expect(screen.getByText("Dataset types: omop-cdm")).toBeVisible();
     fireEvent.click(screen.getByLabelText("Approve this installation"));
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
@@ -3379,6 +3425,39 @@ describe("App", () => {
       expect(client.installedSkill).toBe("removed:community-summary"),
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  });
+
+  it("refreshes, reviews, and installs a repository Skill", async () => {
+    class CatalogClient extends FakeClient {
+      override refreshSkills(): Promise<SkillSettings> {
+        return Promise.resolve({
+          skills: [
+            bundledSkill(),
+            {
+              ...bundledSkill(),
+              name: "cohort-review",
+              source: "catalog",
+              source_id: "heartwood-skills",
+              status: "available",
+              installable: true,
+            },
+          ],
+        });
+      }
+    }
+    const client = new CatalogClient();
+    render(<App client={client} initialSessionId="session-test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+    fireEvent.click(
+      await screen.findByLabelText("Refresh verified Skill sources"),
+    );
+    fireEvent.click(await screen.findByLabelText("Review cohort-review"));
+    expect(await screen.findByText("Review installation")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Approve this installation"));
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    await waitFor(() => expect(client.installedSkill).toBe("cohort-review"));
   });
 
   it("presents the shared bounded specialist catalog", async () => {
@@ -3874,13 +3953,26 @@ const startupPlan = (readiness: ProjectReadiness): StartupPlan => ({
 
 const bundledSkill = (): SkillSummary => ({
   name: "aggregate-export",
-  skill_id: "heartwood.synthetic.aggregate-export",
+  skill_id: "heartwood.research.aggregate-export",
+  version: "0.1.0",
   description: "Aggregate export Skill",
-  trust_tier: "verified",
   source: "bundled",
+  source_id: "heartwood",
+  review: "repository-reviewed",
+  status: "active",
   approval_summary: "Writes reviewed aggregate output.",
   declared_tools: ["write-aggregate-json"],
   requires_network: false,
+  phi_risk: "none",
+  data_access_summary: "No row-level PHI access declared",
+  dataset_types: ["omop-cdm"],
+  controlled_data_ready: false,
+  tree_sha256: "a".repeat(64),
+  source_revision: null,
+  archive_size: null,
+  revocation_reason: null,
+  compatibility_reason: null,
+  installable: false,
 });
 
 const specialistSettings = (): SpecialistSettings => ({

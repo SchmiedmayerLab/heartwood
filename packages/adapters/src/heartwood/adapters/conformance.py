@@ -13,7 +13,6 @@ from collections.abc import Mapping
 from heartwood.adapters._protocols import (
     DataSourceAdapter,
     PlatformAdapter,
-    RegistryAdapter,
 )
 
 
@@ -59,19 +58,3 @@ def assert_data_source_adapter_conforms(
     for row in rows:
         assert isinstance(row, Mapping)
         assert set(row).issubset(requested_columns)
-
-
-def assert_registry_adapter_conforms(
-    adapter: RegistryAdapter,
-    skill_id: str = "heartwood.synthetic.omop-cohort-summary",
-    version: str = "0.2.0",
-) -> None:
-    """Assert the shared minimum contract for registry adapters."""
-    assert adapter.registry_id
-    reference = adapter.resolve_skill(skill_id, version)
-    assert reference.skill_id == skill_id
-    assert reference.version == version
-    assert reference.source
-    verification = adapter.verify_skill(reference)
-    assert verification.verified is True
-    assert verification.reason

@@ -4,49 +4,60 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Local skill verification and replay helpers."""
+"""Verified Agent Skill acquisition, project activation, and replay helpers."""
 
-from heartwood.skills._bundle import (
-    BundledSkill,
-    BundledSkillResolution,
-    GitSkillSource,
-    LocalSkillSource,
-    SkillBundle,
-    SkillBundleError,
-    SkillSourceProvenance,
-    load_skill_bundle,
-    resolve_skill_bundle,
-    skill_ids,
+from heartwood_skill_catalog import CatalogEntry
+
+from heartwood.skills._catalog import (
+    SkillCatalogClient,
+    SkillCatalogError,
+    SkillCatalogSnapshot,
+    SkillSourceProfile,
+    SkillSourceRegistry,
+    configured_skill_source_registry,
+    load_skill_source_registry,
 )
 from heartwood.skills._harness import SkillTestHarness
 from heartwood.skills._replay import ReplayFixture, load_replay_fixture
+from heartwood.skills._store import (
+    InstalledSkillRecord,
+    SkillArtifactStore,
+    SkillInstallationIndex,
+    SkillStoreError,
+)
 from heartwood.skills._verification import (
     LocalSkillVerifier,
     SkillManifest,
+    SkillReview,
     SkillVerification,
     SkillVerificationError,
     build_skill_approval_record,
     load_skill_manifest,
+    skill_compatibility_reason,
 )
 
 __all__ = [
-    "BundledSkill",
-    "BundledSkillResolution",
-    "GitSkillSource",
-    "LocalSkillSource",
+    "CatalogEntry",
+    "InstalledSkillRecord",
     "LocalSkillVerifier",
     "ReplayFixture",
-    "SkillBundle",
-    "SkillBundleError",
+    "SkillArtifactStore",
+    "SkillCatalogClient",
+    "SkillCatalogError",
+    "SkillCatalogSnapshot",
+    "SkillInstallationIndex",
     "SkillManifest",
-    "SkillSourceProvenance",
+    "SkillReview",
+    "SkillSourceProfile",
+    "SkillSourceRegistry",
+    "SkillStoreError",
     "SkillTestHarness",
     "SkillVerification",
     "SkillVerificationError",
     "build_skill_approval_record",
+    "configured_skill_source_registry",
     "load_replay_fixture",
-    "load_skill_bundle",
     "load_skill_manifest",
-    "resolve_skill_bundle",
-    "skill_ids",
+    "load_skill_source_registry",
+    "skill_compatibility_reason",
 ]

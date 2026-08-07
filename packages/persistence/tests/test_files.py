@@ -25,6 +25,7 @@ from heartwood.persistence import (
     LockedJsonlStore,
     NativeLockUnavailableError,
     _files,
+    read_private_bytes,
     read_private_json,
     read_private_text,
     truncate_private_file,
@@ -71,6 +72,18 @@ def test_private_readers_reject_invalid_utf8_and_non_object_json(tmp_path: Path)
     non_object.write_text("[]", encoding="utf-8")
     with pytest.raises(DurableFileError, match="must be an object"):
         read_private_json(non_object)
+
+
+def test_private_readers_enforce_limits_while_streaming(tmp_path: Path) -> None:
+    path = tmp_path / "bounded.txt"
+    path.write_bytes(b"12345")
+
+    assert read_private_bytes(path, max_bytes=5) == b"12345"
+    assert read_private_text(path, max_bytes=5) == "12345"
+    with pytest.raises(DurableFileError, match="exceeds 4 bytes"):
+        read_private_bytes(path, max_bytes=4)
+    with pytest.raises(ValueError, match="must not be negative"):
+        read_private_bytes(path, max_bytes=-1)
 
 
 @pytest.mark.parametrize("boundary", ["journal", "partial-append", "complete-append"])

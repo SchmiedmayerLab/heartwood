@@ -133,7 +133,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 COPY fixtures ./fixtures
-COPY skills ./skills
+COPY vendor/heartwood-skills ./vendor/heartwood-skills
 COPY agents ./agents
 COPY evals ./evals
 COPY images ./images

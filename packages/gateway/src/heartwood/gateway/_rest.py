@@ -59,6 +59,9 @@ from heartwood.schemas import (
     SessionRenameRequest,
     SkillInspectRequest,
     SkillInstallRequest,
+    SkillLocalInspectRequest,
+    SkillLocalInstallRequest,
+    SkillRefreshRequest,
     SubscriptionDeviceLoginRequest,
     SubscriptionDevicePollRequest,
 )
@@ -198,6 +201,12 @@ class RestGateway:
             return self._handle_skill_inspection(body=request.body)
         if parts == ("settings", "skills", "install") and request.method == "POST":
             return self._handle_skill_install(body=request.body)
+        if parts == ("settings", "skills", "refresh") and request.method == "POST":
+            return self._handle_skill_refresh(body=request.body)
+        if parts == ("settings", "skills", "local", "inspect") and request.method == "POST":
+            return self._handle_local_skill_inspection(body=request.body)
+        if parts == ("settings", "skills", "local", "install") and request.method == "POST":
+            return self._handle_local_skill_install(body=request.body)
         if len(parts) == 3 and parts[:2] == ("settings", "skills") and request.method == "DELETE":
             try:
                 skill_settings = self.gateway.remove_skill(parts[2])
@@ -567,7 +576,7 @@ class RestGateway:
         if isinstance(payload, RestResponse):
             return payload
         try:
-            summary = self.gateway.inspect_skill(Path(payload.source))
+            summary = self.gateway.inspect_skill(payload.name, source_id=payload.source_id)
         except SkillSettingsError as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(summary))
@@ -578,7 +587,43 @@ class RestGateway:
             return payload
         try:
             skill_settings = self.gateway.install_skill(
+                payload.name,
+                source_id=payload.source_id,
+                expected_tree_sha256=payload.expected_tree_sha256,
+                approved=payload.approved,
+            )
+        except SkillSettingsError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(skill_settings))
+
+    def _handle_skill_refresh(self, *, body: str) -> RestResponse:
+        payload = _request_body(SkillRefreshRequest, body)
+        if isinstance(payload, RestResponse):
+            return payload
+        try:
+            skill_settings = self.gateway.refresh_skills(payload.source_id)
+        except SkillSettingsError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(skill_settings))
+
+    def _handle_local_skill_inspection(self, *, body: str) -> RestResponse:
+        payload = _request_body(SkillLocalInspectRequest, body)
+        if isinstance(payload, RestResponse):
+            return payload
+        try:
+            summary = self.gateway.inspect_local_skill(Path(payload.source))
+        except SkillSettingsError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(summary))
+
+    def _handle_local_skill_install(self, *, body: str) -> RestResponse:
+        payload = _request_body(SkillLocalInstallRequest, body)
+        if isinstance(payload, RestResponse):
+            return payload
+        try:
+            skill_settings = self.gateway.install_local_skill(
                 Path(payload.source),
+                expected_tree_sha256=payload.expected_tree_sha256,
                 approved=payload.approved,
             )
         except SkillSettingsError as error:

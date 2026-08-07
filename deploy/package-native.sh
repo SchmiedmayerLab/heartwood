@@ -22,6 +22,18 @@ trap cleanup EXIT
 
 mkdir -p "${output_dir}" "${workspace}/heartwood"
 git archive --format=tar HEAD | tar -xf - -C "${workspace}/heartwood"
+skill_revision="$(git rev-parse HEAD:vendor/heartwood-skills)"
+if [[ ! -f vendor/heartwood-skills/skills/aggregate-export/SKILL.md ]]; then
+  echo "heartwood-skills submodule is not initialized" >&2
+  exit 69
+fi
+if [[ "$(git -C vendor/heartwood-skills rev-parse HEAD)" != "${skill_revision}" ]]; then
+  echo "heartwood-skills checkout does not match the pinned repository revision" >&2
+  exit 65
+fi
+mkdir -p "${workspace}/heartwood/vendor/heartwood-skills"
+git -C vendor/heartwood-skills archive --format=tar "${skill_revision}" \
+  | tar -xf - -C "${workspace}/heartwood/vendor/heartwood-skills"
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required to build the native browser assets" >&2
   exit 69

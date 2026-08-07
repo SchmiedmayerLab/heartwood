@@ -35,7 +35,7 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
             "session_event": "heartwood.session-event.v1",
             "session_metadata": "heartwood.session-metadata.v1",
             "session_writer": "heartwood.session-writer.v1",
-            "skill_metadata": "heartwood.skill-metadata.v1",
+            "skill_installations": "heartwood.skill-installations.v1",
         },
         "schema_version": "heartwood.project-state.v2",
     }

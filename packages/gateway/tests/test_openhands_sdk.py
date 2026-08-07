@@ -57,7 +57,7 @@ from openhands.sdk.settings import (
     LLMSummarizingCondenserSettings,
     OpenHandsAgentSettings,
 )
-from openhands.sdk.skills import load_skills_from_dir
+from openhands.sdk.skills import Skill, load_skills_from_dir
 from openhands.sdk.subagent import (
     get_agent_factory,
     get_registered_agent_definitions,
@@ -142,13 +142,58 @@ def _disable_profile_store_probe(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_verified_skills_load_through_openhands_native_loader() -> None:
-    repository, knowledge, agent = load_skills_from_dir(_repository_root() / "skills" / "verified")
+    repository, knowledge, agent = load_skills_from_dir(_verified_skills_root())
 
     assert set(repository) | set(knowledge) | set(agent) == {
         "aggregate-export",
         "baseline-model",
         "omop-cohort-summary",
     }
+
+
+def test_real_sdk_invokes_a_verified_skill_through_the_public_tool(tmp_path: Path) -> None:
+    repository, knowledge, agent_skills = load_skills_from_dir(_verified_skills_root())
+    skills = [*repository.values(), *knowledge.values(), *agent_skills.values()]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="")],
+                tool_calls=[
+                    MessageToolCall(
+                        id="invoke-skill-call",
+                        name="invoke_skill",
+                        arguments=json.dumps({"name": "aggregate-export"}),
+                        origin="completion",
+                    )
+                ],
+            ),
+            _assistant_message("The aggregate export instructions are loaded."),
+        ]
+    )
+    backend = _backend(
+        tmp_path,
+        _conversation_factory(tmp_path, llm, tools=[], skills=skills),
+    )
+
+    backend.submit_turn(session_id="session-1", prompt="Load the aggregate export Skill")
+    group = _wait_for_pending_group(backend)
+    backend.resolve_confirmation(
+        session_id="session-1",
+        action_group_id=group.group_id,
+        approved=True,
+    )
+
+    events = _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+    tool_calls = [event for event in events if isinstance(event, BackendToolCallEvent)]
+    executions = [event for event in events if isinstance(event, BackendToolExecutionEvent)]
+    conversation = backend._get_conversation()
+    assert [event.tool_call.tool_name for event in tool_calls] == ["invoke_skill"]
+    assert [event.tool_execution.tool_name for event in executions] == ["invoke_skill"]
+    assert all(event.tool_execution.exit_code == 0 for event in executions)
+    assert conversation.state.invoked_skills == ["aggregate-export"]
+    assert llm.call_count == 2
+    backend.close()
 
 
 def test_bundled_tool_free_specialists_register_with_openhands(tmp_path: Path) -> None:
@@ -216,7 +261,7 @@ def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(SpecialistCatalogError, match="must remain unavailable"):
-        load_specialist_catalog(agents_dir, _repository_root() / "skills" / "verified")
+        load_specialist_catalog(agents_dir, _verified_skills_root())
 
 
 def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
@@ -264,7 +309,7 @@ def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
         conversation_key="specialist-collision",
         specialist_catalog=load_specialist_catalog(
             agents_dir,
-            _repository_root() / "skills" / "verified",
+            _verified_skills_root(),
         ),
         env={},
         conversation_factory=_finished_conversation_factory(
@@ -3305,6 +3350,7 @@ def _conversation_factory(
     conversation_id: uuid.UUID | None = None,
     persistence_dir: Path | None = None,
     workspace: Path | None = None,
+    skills: list[Skill] | None = None,
 ) -> ConversationFactory:
     def factory(
         callback: Callable[[OpenHandsEvent], None],
@@ -3315,6 +3361,7 @@ def _conversation_factory(
         settings = OpenHandsAgentSettings(
             llm=llm,
             tools=tools,
+            agent_context=_agent_context([] if skills is None else skills),
             enable_switch_llm_tool=False,
             tool_concurrency_limit=1,
         )
@@ -3603,11 +3650,15 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _verified_skills_root() -> Path:
+    return _repository_root() / "vendor" / "heartwood-skills" / "skills"
+
+
 @cache
 def _specialist_catalog() -> SpecialistCatalog:
     return load_specialist_catalog(
         _repository_root() / "agents" / "verified",
-        _repository_root() / "skills" / "verified",
+        _verified_skills_root(),
     )
 
 

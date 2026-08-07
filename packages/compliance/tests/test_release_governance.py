@@ -131,6 +131,29 @@ def test_release_source_versions_match_candidate() -> None:
     assert _release_verifier().source_version_errors(Path.cwd(), _declared_version()) == []
 
 
+def test_every_checkout_initializes_the_pinned_skill_source() -> None:
+    checkouts = 0
+    for workflow_path in sorted(Path(".github/workflows").glob("*.yml")):
+        workflow = _workflow(str(workflow_path))
+        for job in cast(dict[str, Any], workflow.get("jobs", {})).values():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps", []):
+                if not isinstance(step, dict) or not str(step.get("uses", "")).startswith(
+                    "actions/checkout@"
+                ):
+                    continue
+                checkouts += 1
+                options = step.get("with", {})
+                assert isinstance(options, dict)
+                assert options.get("submodules") == "true", workflow_path
+    assert checkouts > 0
+
+    validation = Path(".github/workflows/validate.yml").read_text(encoding="utf-8")
+    assert "Verify Curated Skill Source" in validation
+    assert "https://github.com/SchmiedmayerLab/heartwood-skills.git" in validation
+
+
 def test_release_source_versions_reject_other_candidate() -> None:
     errors = _release_verifier().source_version_errors(Path.cwd(), "999.999.999")
     assert errors
@@ -192,15 +215,19 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
         f'{{"version": "{version}", "packages": {{"": {{"version": "{version}"}}}}}}\n',
         encoding="utf-8",
     )
-    skill = tmp_path / "skills" / "verified" / "example"
-    skill.mkdir(parents=True)
-    skill_metadata = skill / "metadata.json"
-    skill_metadata.write_text(
-        f'{{"heartwood.version": "{version}"}}\n',
-        encoding="utf-8",
-    )
     (tmp_path / "uv.lock").write_text(
-        '[[package]]\nname = "heartwood-cli"\nversion = "0.2.0b1"\n',
+        "\n".join(
+            (
+                "[[package]]",
+                'name = "heartwood-cli"',
+                'version = "0.2.0b1"',
+                "",
+                "[[package]]",
+                'name = "heartwood-skill-catalog"',
+                'version = "0.1.0"',
+                "",
+            )
+        ),
         encoding="utf-8",
     )
     documentation = {
@@ -226,30 +253,6 @@ def test_prerelease_sources_use_semver_and_python_lock_uses_pep440(
     (tmp_path / "README.md").write_text(f"heartwood:{version}\n", encoding="utf-8")
 
     assert _release_verifier().source_version_errors(tmp_path, version) == []
-
-    skill_metadata.write_text('{"heartwood.version": "0.2.0"}\n', encoding="utf-8")
-    assert (
-        "skills/verified/example/metadata.json: 0.2.0"
-        in _release_verifier().source_version_errors(tmp_path, version)
-    )
-
-    skill_metadata.write_text("{}\n", encoding="utf-8")
-    assert (
-        "skills/verified/example/metadata.json: heartwood.version must be a string"
-        in _release_verifier().source_version_errors(tmp_path, version)
-    )
-
-    skill_metadata.write_text('{"heartwood.version": 2}\n', encoding="utf-8")
-    assert (
-        "skills/verified/example/metadata.json: heartwood.version must be a string"
-        in _release_verifier().source_version_errors(tmp_path, version)
-    )
-
-    skill_metadata.write_text("[]\n", encoding="utf-8")
-    assert (
-        "skills/verified/example/metadata.json: expected a JSON object"
-        in _release_verifier().source_version_errors(tmp_path, version)
-    )
 
 
 def test_main_validation_owns_release_readiness_dependencies() -> None:
@@ -436,6 +439,10 @@ def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:
     assert "--required-check 'Analyze (python)'" in workflow
     assert "--required-check 'Analyze (javascript-typescript)'" in workflow
     assert "python3 deploy/verify_model_sources.py --source-root ." in workflow
+    assert 'skill_revision="$(git rev-parse HEAD:vendor/heartwood-skills)"' in workflow
+    assert "fetch --no-tags --unshallow origin main" in workflow
+    assert "merge-base --is-ancestor" in workflow
+    assert "curated Skill revision is not published on heartwood-skills/main" in workflow
     assert (
         "python3 deploy/verify_model_sources.py --source-root . --allow-unavailable" in validation
     )

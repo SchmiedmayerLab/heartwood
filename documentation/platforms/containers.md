@@ -27,7 +27,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3 \
   heartwood
 ```
 
@@ -50,7 +50,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
   -v "$HOME/.local/share/heartwood/openhands-auth:/tmp/.openhands/auth" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3 \
   heartwood
 ```
 
@@ -65,7 +65,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
@@ -87,7 +87,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2-gpu-nvidia \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3-gpu-nvidia \
   heartwood
 ```
 
@@ -99,10 +99,10 @@ Review the [GPU compatibility matrix](../reference/gpu-compatibility.md) before 
 
 Use immutable release tags for research work:
 
-- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2` — standard AMD64/ARM64 image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2-gpu-nvidia` — NVIDIA GPU image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2-terra` — Terra CPU image; and
-- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.2-terra-gpu-nvidia` — Terra NVIDIA image.
+- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3` — standard AMD64/ARM64 image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3-gpu-nvidia` — NVIDIA GPU image;
+- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3-terra` — Terra CPU image; and
+- `ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3-terra-gpu-nvidia` — Terra NVIDIA image.
 
 The moving `edge` tags represent current `main` and are intended for development, not reproducible analyses.
 Release publication verifies candidate digests and manifest shape before creating version tags.

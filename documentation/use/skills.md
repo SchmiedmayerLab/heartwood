@@ -6,42 +6,84 @@ SPDX-License-Identifier: MIT
 
 # Research Skills
 
-Skills are versioned instruction packages that help OpenHands perform a repeatable workflow with declared tools, data expectations, and review guidance.
-Heartwood includes repository-verified Skills and can install project-scoped extensions after explicit inspection and approval.
+Skills give Heartwood reusable instructions, scripts, references, and supporting files for a research workflow.
+They use the Agent Skills format supported by OpenHands.
 
-## Inspect Available Skills
+Heartwood starts with a small set of reviewed Skills included in every release.
+Your research environment may also offer additional reviewed Skills from a signed catalog.
+Anything you install is active only for the current project.
+
+| Source | What the user sees |
+|---|---|
+| Heartwood release | **Bundled** Skills maintained with Heartwood |
+| Deployment catalog | **Available** Skills published as signed immutable packages by Heartwood or another configured operator |
+| Current project | **Local and unreviewed** packages added explicitly by a maintainer |
+
+## See What Is Available
 
 ```bash
 heartwood skills list
 ```
 
-The browser **Skills** view presents the same catalog.
-Bundled Skills ship with the Heartwood release; installed extensions live under `.heartwood/skills/` for the current project.
+The browser **Skills** view shows the same list and status.
 
-## Inspect an Extension
+Entries are labeled as:
 
-Before installing a Skill from a mounted folder:
+- **Bundled:** included and reviewed with this Heartwood release.
+- **Available:** offered by a signed source configured by the deployment.
+- **Installed:** approved and stored for this project.
+- **Revoked:** withdrawn by its signed source and no longer available to the agent.
+- **Unsupported:** not compatible with the current platform.
 
-```bash
-heartwood skills inspect /path/to/skill
-```
+## Add a Reviewed Skill
 
-Review the source, metadata, declared tools, expected data access, and provenance outside Heartwood as well.
-Skill validation checks structure and integrity; it does not establish that third-party instructions are trustworthy for controlled data.
-
-## Install or Remove an Extension
+Refresh the configured sources, then inspect a Skill before installing it:
 
 ```bash
-heartwood skills install /path/to/skill --approve
-heartwood skills remove skill-name
+heartwood skills refresh
+heartwood skills inspect SKILL_NAME
+heartwood skills install SKILL_NAME
 ```
 
-Installation copies the reviewed Skill into private project state and records the operation.
-Removing it resets active agent services so later turns cannot continue using the removed instructions.
+Inspection shows the description, declared tools, network and data-access requirements, dataset types, download size, source, and exact content digest.
+The interactive install command shows the current revision again and asks before continuing.
+Installation refreshes the signed source again and stops if the content changes after that review.
 
-## Data Boundaries
+Non-interactive automation must supply the exact digest from inspection instead of approving whichever revision is current:
 
-Skills do not grant new filesystem, network, credential, or platform permissions.
-The project boundary, OpenHands tools, process permissions, model-route policy, and deployment controls remain authoritative.
+```bash
+heartwood skills install SKILL_NAME \
+  --approve \
+  --expected-tree-sha256 sha256:DIGEST_FROM_INSPECTION
+```
 
-Use synthetic fixtures for public examples, tests, and shared Skill development.
+If more than one source is configured, add `--source SOURCE_ID` to `refresh`, `inspect`, or `install`.
+
+## Add a Skill From This Environment
+
+A maintainer may place a complete Agent Skill directory inside the current project.
+This is an advanced path because the content has not passed repository review:
+
+```bash
+heartwood skills inspect-local ./skills/my-skill
+heartwood skills install-local ./skills/my-skill
+```
+
+Heartwood rejects paths outside the project or inside `.heartwood`, verifies and copies the complete directory without following links, binds approval to its exact digest, and labels it **Local and unreviewed** in every interface.
+Local installation uses the same interactive confirmation and digest-bound automation options as signed catalog installation.
+
+Remove an installed Skill with:
+
+```bash
+heartwood skills remove SKILL_NAME
+```
+
+## What Approval Means
+
+Skill installation does not grant filesystem, network, credential, model, or platform permissions.
+OpenHands tools, the project boundary, action confirmation, process permissions, and deployment policy remain authoritative.
+
+Repository review is also not controlled-data approval.
+Only a deployment can approve an exact Skill digest for controlled data, and the interface reports that decision separately.
+
+See [Skill Trust and Distribution](../architecture/skills.md) for the verification model and [Configuration and State](../reference/configuration.md#skill-source-registries) for deployment source configuration.

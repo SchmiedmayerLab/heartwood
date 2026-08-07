@@ -46,6 +46,8 @@ from heartwood.schemas import (
     ModelValidationResponse,
     PlatformCapabilitiesResponse,
     ProjectReadinessResponse,
+    SkillSettingsResponse,
+    SkillSummaryResponse,
     SpecialistSettingsResponse,
     StartupPlanResponse,
     WorkspaceChangesResponse,
@@ -352,6 +354,61 @@ class NotebookSession:
     def action_settings(self) -> ActionSettingsResponse:
         """Return the shared action-confirmation settings."""
         return self.gateway.action_settings()
+
+    def skill_settings(self) -> SkillSettingsResponse:
+        """Return the shared bundled, installed, and catalog Skill projection."""
+        return self.gateway.skill_settings()
+
+    def refresh_skills(self, source_id: str | None = None) -> SkillSettingsResponse:
+        """Refresh signed Skill sources and apply current revocations."""
+        return self.gateway.refresh_skills(source_id)
+
+    def inspect_skill(
+        self,
+        name: str,
+        *,
+        source_id: str | None = None,
+    ) -> SkillSummaryResponse:
+        """Inspect one signed catalog Skill without installing it."""
+        return self.gateway.inspect_skill(name, source_id=source_id)
+
+    def install_skill(
+        self,
+        name: str,
+        *,
+        source_id: str | None,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> SkillSettingsResponse:
+        """Install one digest-pinned signed Skill after explicit approval."""
+        return self.gateway.install_skill(
+            name,
+            source_id=source_id,
+            expected_tree_sha256=expected_tree_sha256,
+            approved=approved,
+        )
+
+    def inspect_local_skill(self, source: Path) -> SkillSummaryResponse:
+        """Inspect one project-local unreviewed Skill."""
+        return self.gateway.inspect_local_skill(source)
+
+    def install_local_skill(
+        self,
+        source: Path,
+        *,
+        expected_tree_sha256: str,
+        approved: bool,
+    ) -> SkillSettingsResponse:
+        """Install one digest-pinned project-local Skill after approval."""
+        return self.gateway.install_local_skill(
+            source,
+            expected_tree_sha256=expected_tree_sha256,
+            approved=approved,
+        )
+
+    def remove_skill(self, name: str) -> SkillSettingsResponse:
+        """Remove one installed Skill from the shared project state."""
+        return self.gateway.remove_skill(name)
 
     def specialist_settings(self) -> SpecialistSettingsResponse:
         """Return the same bounded specialist catalog used by terminal and browser clients."""

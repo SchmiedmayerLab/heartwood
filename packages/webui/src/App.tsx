@@ -180,6 +180,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   );
   const [skillSource, setSkillSource] = useState("");
   const [skillApproved, setSkillApproved] = useState(false);
+  const [skillBusy, setSkillBusy] = useState(false);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const selectionGeneration = useRef(0);
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
@@ -1063,6 +1064,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           startupPlan={startupPlan}
           settings={modelSettings}
           skillApproved={skillApproved}
+          skillBusy={skillBusy}
           skillCandidate={skillCandidate}
           skillSettings={skillSettings}
           skillSource={skillSource}
@@ -1144,18 +1146,33 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               updateSessionId(created.session_id);
             }
           }}
-          onInspectSkill={() =>
+          onInspectLocalSkill={() => {
+            setSkillBusy(true);
             void resolvedClient
-              .inspectSkill(skillSource.trim())
+              .inspectLocalSkill(skillSource.trim())
               .then((summary) => {
                 setSkillCandidate(summary);
                 setSkillApproved(false);
               })
               .catch((caught: unknown) => setError(errorMessage(caught)))
-          }
-          onInstallSkill={() =>
-            void resolvedClient
-              .installSkill(skillSource.trim())
+              .finally(() => setSkillBusy(false));
+          }}
+          onInstallSkill={() => {
+            const candidate = skillCandidate;
+            if (candidate === null) return;
+            setSkillBusy(true);
+            const installation =
+              candidate.source === "local-candidate" ?
+                resolvedClient.installLocalSkill(
+                  skillSource.trim(),
+                  candidate.tree_sha256,
+                )
+              : resolvedClient.installSkill(
+                  candidate.name,
+                  candidate.source_id,
+                  candidate.tree_sha256,
+                );
+            void installation
               .then((settings) => {
                 setSkillSettings(settings);
                 setSkillCandidate(null);
@@ -1163,7 +1180,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 setSkillSource("");
               })
               .catch((caught: unknown) => setError(errorMessage(caught)))
-          }
+              .finally(() => setSkillBusy(false));
+          }}
           onProfileDraft={setProfileDraft}
           onRefreshActivity={() => {
             const selectedSessionId = sessionId;
@@ -1188,6 +1206,18 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 }
               });
           }}
+          onRefreshSkills={() => {
+            setSkillBusy(true);
+            void resolvedClient
+              .refreshSkills()
+              .then((settings) => {
+                setSkillSettings(settings);
+                setSkillCandidate(null);
+                setSkillApproved(false);
+              })
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+              .finally(() => setSkillBusy(false));
+          }}
           onRefreshSettings={refreshSettings}
           onRestoreFocus={() => utilityTriggerRef.current?.focus()}
           onRemoveProfile={(profileId) =>
@@ -1205,6 +1235,17 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               .then(setSkillSettings)
               .catch((caught: unknown) => setError(errorMessage(caught)))
           }
+          onReviewSkill={(skill) => {
+            setSkillBusy(true);
+            void resolvedClient
+              .inspectSkill(skill.name, skill.source_id)
+              .then((summary) => {
+                setSkillCandidate(summary);
+                setSkillApproved(false);
+              })
+              .catch((caught: unknown) => setError(errorMessage(caught)))
+              .finally(() => setSkillBusy(false));
+          }}
           onSaveProfile={() => void saveProfile()}
           onSelectActionMode={selectActionMode}
           onSelectProfile={(profileId) => void selectProfile(profileId)}

@@ -3,23 +3,23 @@
   "fixture_id": "synthetic-terra-reference-analysis",
   "session_id": "session-terra-reference-analysis",
   "skills": [
-    "heartwood.synthetic.omop-cohort-summary",
-    "heartwood.synthetic.aggregate-export",
-    "heartwood.synthetic.baseline-model"
+    "heartwood.research.omop-cohort-summary",
+    "heartwood.research.aggregate-export",
+    "heartwood.research.baseline-model"
   ],
   "expected_tool_calls": [
     {
-      "skill_id": "heartwood.synthetic.omop-cohort-summary",
+      "skill_id": "heartwood.research.omop-cohort-summary",
       "tool_name": "omop-cohort-summary",
       "output_ref": "outputs/cohort-summary.json"
     },
     {
-      "skill_id": "heartwood.synthetic.baseline-model",
+      "skill_id": "heartwood.research.baseline-model",
       "tool_name": "baseline-model",
       "output_ref": "outputs/baseline-model.json"
     },
     {
-      "skill_id": "heartwood.synthetic.aggregate-export",
+      "skill_id": "heartwood.research.aggregate-export",
       "tool_name": "aggregate-export",
       "output_ref": "outputs/aggregate-export.json"
     }

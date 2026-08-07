@@ -78,6 +78,56 @@ Registry scopes are not merged.
 Common examples include platform markers, `GOOGLE_PROJECT`, `CLUSTER_NAME`, Slurm variables, CUDA visibility, and provider credential bindings.
 Do not add these to shell history or documentation with real secret values.
 
+### Skill Source Registries
+
+Signed Skill sources are deployment configuration rather than project state.
+Heartwood checks `/etc/heartwood/skill-sources.toml` and then `~/.config/heartwood/skill-sources.toml`; the first existing registry is authoritative and registries are not merged.
+`HEARTWOOD_SKILL_SOURCES_FILE` may select one absolute registry path for packaged or test environments.
+The home registry and environment-selected registry may configure sources, but they cannot assert controlled-data approval.
+
+A connected source uses HTTPS endpoints and a separately provisioned TUF root:
+
+```toml
+schema_version = "heartwood.skill-sources.v1"
+
+[[sources]]
+id = "institution"
+kind = "remote"
+trusted-root = "/etc/heartwood/trust/institution-skills-root.json"
+metadata-url = "https://skills.example.edu/metadata/"
+targets-url = "https://skills.example.edu/targets/"
+```
+
+An offline deployment points to a complete transferred repository:
+
+```toml
+schema_version = "heartwood.skill-sources.v1"
+
+[[sources]]
+id = "institution-offline"
+kind = "offline"
+trusted-root = "/approved-media/skills/metadata/1.root.json"
+repository = "/approved-media/skills"
+```
+
+The trusted root must arrive through an independently trusted deployment channel.
+In a managed deployment, mount the source registry and trusted root read-only to the Heartwood process and keep the root outside Heartwood's writable TUF metadata cache.
+Mount a transferred offline repository read-only when the platform permits it.
+Remote URLs must use HTTPS and cannot contain credentials, query strings, or fragments.
+Heartwood verifies signatures, metadata versions and expiry, target length and digest, catalog policy, the complete archive manifest, and the extracted Agent Skill before installation.
+
+Only the deployment-owned `/etc/heartwood/skill-sources.toml` registry may declare optional controlled-data approval tied to exact tree digests:
+
+```toml
+controlled-data-approved-digests = [
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+]
+```
+
+Do not copy this example digest.
+Repository review alone never populates this list.
+An unrestricted marketplace, mutable branch, or unauthenticated archive URL is not a trusted Heartwood Skill source.
+
 ## Concurrency
 
 Configuration updates are serialized across concurrent Heartwood processes.

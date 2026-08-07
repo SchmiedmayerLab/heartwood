@@ -60,6 +60,9 @@ from heartwood.schemas._api import (
     SessionSummaryResponse,
     SkillInspectRequest,
     SkillInstallRequest,
+    SkillLocalInspectRequest,
+    SkillLocalInstallRequest,
+    SkillRefreshRequest,
     SkillSettingsResponse,
     SkillSummaryResponse,
     SpecialistRoleResponse,
@@ -94,7 +97,6 @@ from heartwood.schemas._records import (
     JsonValue,
     ModelCallDecision,
     PolicyProfile,
-    SkillMetadata,
     schema_for,
     schema_names,
 )
@@ -166,7 +168,9 @@ __all__ = [
     "SessionSummaryResponse",
     "SkillInspectRequest",
     "SkillInstallRequest",
-    "SkillMetadata",
+    "SkillLocalInspectRequest",
+    "SkillLocalInstallRequest",
+    "SkillRefreshRequest",
     "SkillSettingsResponse",
     "SkillSummaryResponse",
     "SpecialistRoleResponse",
@@ -189,4 +193,4 @@ __all__ = [
     "schema_names",
 ]
 
-__version__ = "0.3.0-beta.2"
+__version__ = "0.3.0-beta.3"
