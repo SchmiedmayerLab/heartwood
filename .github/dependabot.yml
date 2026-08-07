@@ -25,11 +25,9 @@ updates:
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
     ignore:
-      # Spezi Web Configurations 0.7 supports ESLint 9 and TypeScript below 6.1.
-      - dependency-name: "eslint"
-        update-types: ["version-update:semver-major"]
+      # The current TypeScript ESLint parser supports TypeScript below 6.1.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
-      # Heartwood and the Spezi design system currently target Node 24.
+      # Heartwood targets the Node 24 runtime and its matching type definitions.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]

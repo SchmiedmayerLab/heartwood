@@ -6,12 +6,20 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
-import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
-import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
-import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
-import { LoaderCircle, Menu, Pencil, ShieldCheck } from "lucide-react";
+import { Badge } from "@schmiedmayerlab/grove-design-system/components/Badge";
+import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
+import { Input } from "@schmiedmayerlab/grove-design-system/components/Input";
+import { Tooltip } from "@schmiedmayerlab/grove-design-system/components/Tooltip";
+import {
+  LoaderCircle,
+  Menu,
+  Moon,
+  Pencil,
+  ShieldCheck,
+  Sun,
+} from "lucide-react";
 import { useState } from "react";
+import type { ColorTheme } from "../colorTheme";
 import type { ProjectionResearcherStatus, SessionSummary } from "../types";
 import { displaySafeText } from "./SafeMarkdown";
 
@@ -25,9 +33,11 @@ interface WorkspaceHeaderProps {
   researcherStatus: ProjectionResearcherStatus | null;
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
+  theme: ColorTheme;
   onOpenActionReview: () => void;
   onOpenMenu: () => void;
   onRename: (title: string) => void;
+  onToggleTheme: () => void;
 }
 
 export const WorkspaceHeader = ({
@@ -40,9 +50,11 @@ export const WorkspaceHeader = ({
   researcherStatus,
   requestStatus,
   session,
+  theme,
   onOpenActionReview,
   onOpenMenu,
   onRename,
+  onToggleTheme,
 }: WorkspaceHeaderProps) => {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
@@ -105,6 +117,18 @@ export const WorkspaceHeader = ({
           }
         </div>
         <div className="workspace-actions">
+          <Tooltip tooltip={`Use ${theme === "light" ? "dark" : "light"} mode`}>
+            <Button
+              aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+              size="sm"
+              variant="ghost"
+              onClick={onToggleTheme}
+            >
+              {theme === "light" ?
+                <Moon size={16} />
+              : <Sun size={16} />}
+            </Button>
+          </Tooltip>
           <StatusBadge
             modelStatus={modelStatus}
             researcherStatus={researcherStatus}

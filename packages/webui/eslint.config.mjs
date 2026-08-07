@@ -6,12 +6,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-const {
-  getEslintReactConfig,
-} = require("@stanfordspezi/spezi-web-configurations");
+import { getEslintReactConfig } from "@schmiedmayerlab/grove-configurations";
 
-module.exports = [
-  ...getEslintReactConfig({ tsconfigRootDir: __dirname }),
+export default [
+  ...getEslintReactConfig({ tsconfigRootDir: import.meta.dirname }),
   {
     ignores: ["dist/**/*", "coverage/**/*", "playwright-report/**/*"],
   },
@@ -71,8 +69,14 @@ module.exports = [
   },
   {
     rules: {
-      "import/no-default-export": "off",
-      "prefer-arrow/prefer-arrow-functions": "off",
+      "@eslint-react/no-unused-props": "off",
+      "import-x/no-default-export": "off",
+      "prefer-arrow-functions/prefer-arrow-functions": "off",
+      "sonarjs/cognitive-complexity": "off",
+      "sonarjs/different-types-comparison": "off",
+      "sonarjs/function-return-type": "off",
+      "sonarjs/no-nested-conditional": "off",
+      "sonarjs/no-nested-functions": "off",
     },
   },
 ];

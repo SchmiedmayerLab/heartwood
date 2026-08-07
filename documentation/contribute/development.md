@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # Development Guide
 
-Heartwood is a Python workspace with a TypeScript researcher web interface, container and native packaging, and repository-level compliance and release tests.
+Heartwood is a Python workspace with a TypeScript researcher web interface built on [Grove](https://github.com/SchmiedmayerLab/grove-ts), container and native packaging, and repository-level compliance and release tests.
 
 ## Set Up the Repository
 
@@ -24,6 +24,7 @@ Do not add a new language, agent implementation, UI stack, or service when an ex
 
 The session gateway owns setup choices, researcher-facing model metadata, readiness, action settings, and session behavior.
 The terminal, browser, and notebook packages adapt those shared projections to their interface; they must not maintain parallel business rules or persisted settings.
+The browser consumes Grove's design-system components and shared TypeScript configuration rather than maintaining project-local equivalents.
 
 Generic and platform-derived artifacts use `images/Dockerfile` and `docker-bake.hcl` as one assembly path.
 Native and container GPU variants use `images/gpu/install_runtime.sh` for the same pinned vLLM environment.

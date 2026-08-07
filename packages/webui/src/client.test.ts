@@ -29,7 +29,7 @@ const setGatewayBase = (value: string): void => {
 };
 
 class FakeWebSocket {
-  static instances: FakeWebSocket[] = [];
+  static readonly instances: FakeWebSocket[] = [];
 
   onerror: (() => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
@@ -67,7 +67,7 @@ class FakeWebSocket {
 }
 
 class FakeEventSource {
-  static instances: FakeEventSource[] = [];
+  static readonly instances: FakeEventSource[] = [];
   static readonly CLOSED = 2;
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -118,8 +118,8 @@ class FakeEventSource {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
-  FakeWebSocket.instances = [];
-  FakeEventSource.instances = [];
+  FakeWebSocket.instances.length = 0;
+  FakeEventSource.instances.length = 0;
   document
     .querySelectorAll('meta[name="heartwood-gateway-base"]')
     .forEach((element) => element.remove());

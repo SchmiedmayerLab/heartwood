@@ -46,7 +46,8 @@ In the terminal, run `heartwood specialists` before opening a session or enter `
 
 In the browser, open **Specialists** from the session navigation.
 
-![Heartwood Specialists panel showing the available advisory roles](../assets/screenshots/browser-specialists.png)
+![Heartwood Specialists panel showing the available advisory roles](../assets/screenshots/browser-specialists-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood Specialists panel showing the available advisory roles](../assets/screenshots/browser-specialists-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 In a notebook, use the shared typed response:
 

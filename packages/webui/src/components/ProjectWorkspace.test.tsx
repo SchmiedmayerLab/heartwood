@@ -325,11 +325,12 @@ describe("ProjectWorkspace", () => {
         name: "artifact.heartwood-test, Added",
       }),
     );
-    expect(
-      await screen.findByRole("region", {
-        name: "Read-only change: artifact.heartwood-test",
-      }),
-    ).toHaveTextContent("synthetic result");
+    const artifactPreview = await screen.findByRole("region", {
+      name: "Read-only change: artifact.heartwood-test",
+    });
+    await waitFor(() => {
+      expect(artifactPreview).toHaveTextContent("synthetic result");
+    });
   });
 
   it("explains empty and unavailable workspace states", async () => {

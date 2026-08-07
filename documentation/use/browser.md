@@ -21,7 +21,8 @@ heartwood --interface web
 Keep the terminal process running and open the exact URL Heartwood prints.
 On a workstation the default is `http://127.0.0.1:8767/`.
 
-![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation.png)
+![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 ## First Use
 
@@ -30,6 +31,7 @@ The setup panel then presents model sources available in the detected environmen
 
 The project, model selection, and action-review setting are shared with the terminal and notebook bridge.
 Provider API keys and subscription tokens are never stored in browser storage.
+The interface follows the operating-system appearance on first use and stores only an explicit light or dark preference in browser storage.
 
 For **Sign in with ChatGPT**, select the connection and choose **Sign in with ChatGPT**.
 Open the displayed OpenAI page, enter the one-time code, and return to Heartwood.
@@ -64,6 +66,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Open **Skills** to inspect repository-verified and installed Skills.
 - Open **Specialists** to inspect the bounded research specialists available to the parent agent.
 - Select the current **Action review** value in the session header to change when Heartwood pauses.
+- Use the appearance button in the session header to switch between light and dark mode.
 - Open **Settings** to change the selected model or action-review mode.
 - Export the audit record from the session controls.
 
@@ -71,7 +74,8 @@ The session header and conversation use the same gateway-owned states as the oth
 When a command cannot be applied, the browser presents a separate request notice without replacing the authoritative agent lifecycle.
 Task and specialist labels are shown in researcher-facing language; OpenHands identifiers remain available under **Technical details** when they are needed for diagnosis.
 
-![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists.png)
+![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 When the parent delegates work, the OpenHands Task action appears in the normal grouped review flow.
 Heartwood runs one specialist at a time and shows its lifecycle and final result in the shared session projection.
@@ -82,7 +86,8 @@ Heartwood treats every response as untrusted content: raw HTML and unsafe links 
 
 ## Review an Action Set
 
-![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review.png)
+![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 The review panel lists all proposed members together with tool names, risk labels, summaries, and relevant arguments.
 One decision resolves the complete OpenHands action set: allowing runs every listed action once, while rejecting runs none of them.
@@ -95,11 +100,13 @@ The **Files** and **Changes** views are read-only.
 They never provide a second editing path around action review.
 Tree, file, changed-path, and diff responses have fixed depth, count, line, and byte limits; the interface labels truncated or unavailable content instead of silently omitting the condition.
 
-![Heartwood Files view showing the bounded project tree and a syntax-highlighted result](../assets/screenshots/browser-files.png)
+![Heartwood Files view showing the bounded project tree and a syntax-highlighted result](../assets/screenshots/browser-files-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood Files view showing the bounded project tree and a syntax-highlighted result](../assets/screenshots/browser-files-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 Select a file to inspect its contents without leaving the session.
 
-![Heartwood Changes view showing a Git-backed per-file diff](../assets/screenshots/browser-changes.png)
+![Heartwood Changes view showing a Git-backed per-file diff](../assets/screenshots/browser-changes-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood Changes view showing a Git-backed per-file diff](../assets/screenshots/browser-changes-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 Select a changed path to compare its current contents with the Git baseline.
 When the project does not use Git, Heartwood instead shows changes that OpenHands reported through typed file-editor actions in the selected session.

@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-persistence"
-version = "0.3.0-beta.3"
+version = "0.3.0-beta.4"
 description = "Durable file and schema-migration primitives for Heartwood state."
 readme = "README.md"
 requires-python = ">=3.12"

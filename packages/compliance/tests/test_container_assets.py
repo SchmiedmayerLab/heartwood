@@ -231,7 +231,7 @@ def test_runtime_image_sets_the_release_version_label() -> None:
     assert "FROM heartwood-image-metadata AS runtime-image" in dockerfile
     assert dockerfile.index("uv sync --locked") < dockerfile.index("ARG HEARTWOOD_REVISION=unknown")
     assert 'variable "HEARTWOOD_VERSION"' in bake
-    assert 'default = "0.3.0-beta.3"' in bake
+    assert 'default = "0.3.0-beta.4"' in bake
     assert bake.count('HEARTWOOD_VERSION = "${HEARTWOOD_VERSION}"') == 2
     assert bake.count('HEARTWOOD_REVISION = "${GIT_SHA}"') == 2
     generic_build = workflow.split("      - name: Build and stage image by digest\n", maxsplit=1)[
