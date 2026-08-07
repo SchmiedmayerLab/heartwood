@@ -70,8 +70,8 @@ export default [
   {
     rules: {
       "@eslint-react/no-unused-props": "off",
-      "import/no-default-export": "off",
-      "prefer-arrow/prefer-arrow-functions": "off",
+      "import-x/no-default-export": "off",
+      "prefer-arrow-functions/prefer-arrow-functions": "off",
       "sonarjs/cognitive-complexity": "off",
       "sonarjs/different-types-comparison": "off",
       "sonarjs/function-return-type": "off",
