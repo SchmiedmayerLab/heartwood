@@ -6,9 +6,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
-import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
-import { Checkbox } from "@stanfordspezi/spezi-web-design-system/components/Checkbox";
+import { Badge } from "@schmiedmayerlab/grove-design-system/components/Badge";
+import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
+import { Checkbox } from "@schmiedmayerlab/grove-design-system/components/Checkbox";
 import {
   Dialog,
   DialogContent,
@@ -16,10 +16,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@stanfordspezi/spezi-web-design-system/components/Dialog";
-import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
-import { Progress } from "@stanfordspezi/spezi-web-design-system/components/Progress";
-import { RadioGroup } from "@stanfordspezi/spezi-web-design-system/components/RadioGroup";
+} from "@schmiedmayerlab/grove-design-system/components/Dialog";
+import { Input } from "@schmiedmayerlab/grove-design-system/components/Input";
+import { Progress } from "@schmiedmayerlab/grove-design-system/components/Progress";
+import { RadioGroup } from "@schmiedmayerlab/grove-design-system/components/RadioGroup";
 import {
   Select,
   SelectContent,
@@ -27,21 +27,21 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@stanfordspezi/spezi-web-design-system/components/Select";
+} from "@schmiedmayerlab/grove-design-system/components/Select";
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@stanfordspezi/spezi-web-design-system/components/Sheet";
+} from "@schmiedmayerlab/grove-design-system/components/Sheet";
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from "@stanfordspezi/spezi-web-design-system/components/Tabs";
-import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
+} from "@schmiedmayerlab/grove-design-system/components/Tabs";
+import { Tooltip } from "@schmiedmayerlab/grove-design-system/components/Tooltip";
 import {
   Archive,
   ArrowDownToLine,
@@ -191,12 +191,9 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
 );
 
 const profileDraftFrom = ({
-  credential_status: credentialStatus,
+  credential_status: _credentialStatus,
   ...profile
-}: ModelProfile): ModelProfileDraft => {
-  void credentialStatus;
-  return profile;
-};
+}: ModelProfile): ModelProfileDraft => profile;
 
 const ActivityContent = ({
   onExportAudit,
@@ -692,7 +689,7 @@ const SettingsContent = (props: UtilitySheetProps) => {
                                   </small>
                                   {model.tool_call_parser ?
                                     <small>
-                                      Tool parser: {model.tool_call_parser};
+                                      Tool parser: {model.tool_call_parser},
                                       tensor parallelism:{" "}
                                       {model.tensor_parallel_size}
                                     </small>
@@ -1730,7 +1727,7 @@ const ModelConnectionSetup = ({
   const [remember, setRemember] = useState(false);
   const [subscriptionLogin, setSubscriptionLogin] =
     useState<SubscriptionDeviceLogin | null>(null);
-  const activeSubscriptionLoginId = useRef<string | null>(null);
+  const activeSubscriptionLoginIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -1754,7 +1751,7 @@ const ModelConnectionSetup = ({
   useEffect(() => {
     if (subscriptionLogin?.status !== "pending") return;
     const loginId = subscriptionLogin.login_id;
-    activeSubscriptionLoginId.current = loginId;
+    activeSubscriptionLoginIdRef.current = loginId;
     let polling = false;
     const interval = window.setInterval(() => {
       if (polling) return;
@@ -1765,19 +1762,19 @@ const ModelConnectionSetup = ({
       )
         .then((updated) => {
           if (
-            activeSubscriptionLoginId.current !== loginId ||
+            activeSubscriptionLoginIdRef.current !== loginId ||
             updated.login_id !== loginId
           )
             return;
           setSubscriptionLogin(updated);
           if (updated.status === "complete") {
-            activeSubscriptionLoginId.current = null;
+            activeSubscriptionLoginIdRef.current = null;
             onSubscriptionComplete();
           }
         })
         .catch((caught: unknown) => {
-          if (activeSubscriptionLoginId.current !== loginId) return;
-          activeSubscriptionLoginId.current = null;
+          if (activeSubscriptionLoginIdRef.current !== loginId) return;
+          activeSubscriptionLoginIdRef.current = null;
           setError(errorMessage(caught));
           setSubscriptionLogin(null);
         })
@@ -1787,14 +1784,14 @@ const ModelConnectionSetup = ({
     }, subscriptionLogin.poll_interval_seconds * 1000);
     return () => {
       window.clearInterval(interval);
-      if (activeSubscriptionLoginId.current === loginId) {
-        activeSubscriptionLoginId.current = null;
+      if (activeSubscriptionLoginIdRef.current === loginId) {
+        activeSubscriptionLoginIdRef.current = null;
       }
     };
   }, [onPollSubscriptionLogin, onSubscriptionComplete, subscriptionLogin]);
 
   const selectConnection = (next: ModelConnection) => {
-    activeSubscriptionLoginId.current = null;
+    activeSubscriptionLoginIdRef.current = null;
     setConnectionId(next.connection_id);
     setCatalog(null);
     setSelectedModel("");
@@ -1865,7 +1862,7 @@ const ModelConnectionSetup = ({
     setError(null);
     try {
       const started = await onStartSubscriptionLogin(connection.connection_id);
-      activeSubscriptionLoginId.current = started.login_id;
+      activeSubscriptionLoginIdRef.current = started.login_id;
       setSubscriptionLogin(started);
     } catch (caught) {
       setError(errorMessage(caught));

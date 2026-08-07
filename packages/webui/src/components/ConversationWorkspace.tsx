@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
-import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
-import { Textarea } from "@stanfordspezi/spezi-web-design-system/components/Textarea";
-import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
+import { Badge } from "@schmiedmayerlab/grove-design-system/components/Badge";
+import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
+import { Textarea } from "@schmiedmayerlab/grove-design-system/components/Textarea";
+import { Tooltip } from "@schmiedmayerlab/grove-design-system/components/Tooltip";
 import {
   Ban,
   Check,
@@ -101,23 +101,23 @@ export const ConversationWorkspace = ({
         action.state !== "awaiting-review" && action.state !== "proposed",
     ) ?? [];
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const previousApprovalId = useRef<string | null>(
+  const previousApprovalIdRef = useRef<string | null>(
     pendingApproval?.groupId ?? null,
   );
 
   useEffect(() => {
     if (pendingApproval !== null) {
-      previousApprovalId.current = pendingApproval.groupId;
+      previousApprovalIdRef.current = pendingApproval.groupId;
       return;
     }
     if (
-      previousApprovalId.current === null ||
+      previousApprovalIdRef.current === null ||
       !modelConfigured ||
       !canChat ||
       requestStatus === "busy"
     )
       return;
-    previousApprovalId.current = null;
+    previousApprovalIdRef.current = null;
     composerRef.current?.focus();
   }, [canChat, modelConfigured, pendingApproval, requestStatus]);
 
@@ -615,6 +615,8 @@ const RuntimeStatus = ({
           </summary>
           <ol>
             {projection.taskPlan.map((task, index) => (
+              // OpenHands task projections do not expose a stable task identifier.
+              // eslint-disable-next-line @eslint-react/no-array-index-key
               <li key={`${index}-${task.title}`}>
                 <span>{displaySafeText(task.title)}</span>
                 <small>{displaySafeText(task.statusLabel)}</small>

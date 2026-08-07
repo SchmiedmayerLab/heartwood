@@ -144,7 +144,7 @@ async function main() {
     await expect(page.getByText(/^omop-cohort-summary\b/u)).toBeVisible();
     await expect(page.getByText(/^baseline-model\b/u)).toBeVisible();
     await expect(page.getByText(/^aggregate-export\b/u)).toBeVisible();
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await closeSheet(page);
 
     await page
       .getByRole("button", { name: "Specialists", exact: true })
@@ -163,7 +163,7 @@ async function main() {
       "browser-specialists.png",
       "research specialists",
     );
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await closeSheet(page);
 
     await page.getByLabel("Open action review settings").click();
     await expect(
@@ -177,7 +177,7 @@ async function main() {
       "browser-action-settings.png",
       "action review settings",
     );
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await closeSheet(page);
 
     await runApprovedTask(page, task, {
       approvalSummaries: [
@@ -276,7 +276,7 @@ async function main() {
     await expect(
       page.getByText("terminal · exit=1", { exact: true }),
     ).toHaveCount(1);
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await closeSheet(page);
 
     const downloadPromise = page.waitForEvent("download");
     await page
@@ -394,6 +394,12 @@ async function main() {
       console.error(`Preserved reference-analysis state at ${stateRoot}`);
     }
   }
+}
+
+async function closeSheet(page) {
+  const close = page.getByRole("button", { name: "Close", exact: true });
+  await close.click();
+  await expect(close).toBeHidden();
 }
 
 async function runApprovedTask(page, task, taskSpec) {

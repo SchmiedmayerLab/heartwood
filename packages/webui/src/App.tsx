@@ -6,22 +6,29 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
+import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetTitle,
-} from "@stanfordspezi/spezi-web-design-system/components/Sheet";
+} from "@schmiedmayerlab/grove-design-system/components/Sheet";
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from "@stanfordspezi/spezi-web-design-system/components/Tabs";
-import { SpeziProvider } from "@stanfordspezi/spezi-web-design-system/SpeziProvider";
+} from "@schmiedmayerlab/grove-design-system/components/Tabs";
+import { GroveProvider } from "@schmiedmayerlab/grove-design-system/GroveProvider";
 import { FileCode2, GitCompareArrows, MessagesSquare, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { selectedActionMode } from "./actionPresentation";
 import {
   GatewayClient,
@@ -125,9 +132,15 @@ const emptyProfile = (): ModelProfileDraft => ({
   description: null,
 });
 
+const GroveLink = ({ href, ...props }: ComponentProps<"a">) => (
+  <a href={href ?? "#"} {...props} />
+);
+
+const groveRouter = { Link: GroveLink };
+
 export const App = ({ client, initialSessionId }: AppProps) => {
   const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
-  const initialization = useRef<Promise<InitialState> | null>(null);
+  const initializationRef = useRef<Promise<InitialState> | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -182,19 +195,20 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const [skillApproved, setSkillApproved] = useState(false);
   const [skillBusy, setSkillBusy] = useState(false);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
-  const selectionGeneration = useRef(0);
+  const selectionGenerationRef = useRef(0);
   const utilityTriggerRef = useRef<HTMLElement | null>(null);
-  const commandInFlight = useRef(false);
-  const retiredStreamEpochs = useRef(new Map<string, Set<string>>());
-  const setupOpened = useRef(false);
-  const modelPollingError = useRef<string | null>(null);
+  const commandInFlightRef = useRef(false);
+  const retiredStreamEpochsRef = useRef(new Map<string, Set<string>>());
+  const setupOpenedRef = useRef(false);
+  const modelPollingErrorRef = useRef<string | null>(null);
 
   const acceptProjection = useCallback(
     (next: SessionProjection, selectedSessionId: string) => {
       if (sessionIdRef.current !== selectedSessionId) return;
       const current = projectionRef.current;
       const retiredEpochs =
-        retiredStreamEpochs.current.get(selectedSessionId) ?? new Set<string>();
+        retiredStreamEpochsRef.current.get(selectedSessionId) ??
+        new Set<string>();
       const selection = selectProjection(
         current,
         next,
@@ -204,9 +218,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       if (selection.retiredEpoch !== null) {
         const updatedEpochs = new Set(retiredEpochs);
         updatedEpochs.add(selection.retiredEpoch);
-        const updatedBySession = new Map(retiredStreamEpochs.current);
+        const updatedBySession = new Map(retiredStreamEpochsRef.current);
         updatedBySession.set(selectedSessionId, updatedEpochs);
-        retiredStreamEpochs.current = updatedBySession;
+        retiredStreamEpochsRef.current = updatedBySession;
       }
       if (selection.projection === current) return;
       projectionRef.current = selection.projection;
@@ -304,19 +318,19 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   useEffect(() => {
     let active = true;
-    const generation = selectionGeneration.current;
-    initialization.current ??= initializeSessions(
+    const generation = selectionGenerationRef.current;
+    initializationRef.current ??= initializeSessions(
       resolvedClient,
       initialSessionId,
     );
-    void initialization.current
+    void initializationRef.current
       .then((state) => {
-        if (!active || selectionGeneration.current !== generation) return;
+        if (!active || selectionGenerationRef.current !== generation) return;
         setSessions(state.sessions);
         updateSessionId(state.selectedSessionId);
       })
       .catch((caught: unknown) => {
-        if (!active || selectionGeneration.current !== generation) return;
+        if (!active || selectionGenerationRef.current !== generation) return;
         setError(errorMessage(caught));
         setRequestStatus("error");
       });
@@ -336,7 +350,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         if (!active || sessionIdRef.current !== sessionId) return;
         setConnectionError(null);
         acceptProjection(replayed, sessionId);
-        if (!commandInFlight.current) {
+        if (!commandInFlightRef.current) {
           setRequestStatus("idle");
         }
         closeStream = resolvedClient.streamSession(
@@ -397,11 +411,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
         setStartupPlan(startup);
         setProjectReadiness(startup.readiness);
         if (
-          !setupOpened.current &&
+          !setupOpenedRef.current &&
           startup.readiness.state === "setup-required" &&
           models.active_profile === null
         ) {
-          setupOpened.current = true;
+          setupOpenedRef.current = true;
           setPanel("settings");
         }
       })
@@ -434,8 +448,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   useEffect(() => {
     if (!modelOperationActive) {
-      const recoveredError = modelPollingError.current;
-      modelPollingError.current = null;
+      const recoveredError = modelPollingErrorRef.current;
+      modelPollingErrorRef.current = null;
       if (recoveredError !== null) {
         setError((current) => (current === recoveredError ? null : current));
       }
@@ -447,8 +461,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       try {
         const artifacts = await resolvedClient.getModelArtifacts();
         if (!active) return;
-        const recoveredError = modelPollingError.current;
-        modelPollingError.current = null;
+        const recoveredError = modelPollingErrorRef.current;
+        modelPollingErrorRef.current = null;
         if (recoveredError !== null) {
           setError((current) => (current === recoveredError ? null : current));
         }
@@ -463,7 +477,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       } catch (caught) {
         if (active) {
           const message = errorMessage(caught);
-          modelPollingError.current = message;
+          modelPollingErrorRef.current = message;
           setError(message);
           timer = window.setTimeout(() => void poll(), 2_000);
         }
@@ -628,10 +642,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     payload: Record<string, JsonValue> = {},
     existingCommand?: SessionCommand,
   ) => {
-    if (sessionId === null || commandInFlight.current) return false;
+    if (sessionId === null || commandInFlightRef.current) return false;
     const selectedSessionId = sessionId;
-    const selectedGeneration = selectionGeneration.current;
-    commandInFlight.current = true;
+    const selectedGeneration = selectionGenerationRef.current;
+    commandInFlightRef.current = true;
     const command =
       existingCommand ?? createCommand(selectedSessionId, kind, payload);
     setRequestActivity(requestActivityForCommand(kind));
@@ -641,7 +655,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       const response = await resolvedClient.postCommand(command);
       const selectionIsCurrent = () =>
         sessionIdRef.current === selectedSessionId &&
-        selectionGeneration.current === selectedGeneration;
+        selectionGenerationRef.current === selectedGeneration;
       if (selectionIsCurrent()) {
         acceptProjection(response.projection, selectedSessionId);
       }
@@ -662,7 +676,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     } catch (caught) {
       if (
         sessionIdRef.current !== selectedSessionId ||
-        selectionGeneration.current !== selectedGeneration
+        selectionGenerationRef.current !== selectedGeneration
       ) {
         return false;
       }
@@ -671,11 +685,11 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       setRequestStatus("error");
       return false;
     } finally {
-      commandInFlight.current = false;
+      commandInFlightRef.current = false;
       setRequestActivity(null);
       if (
         sessionIdRef.current !== selectedSessionId ||
-        selectionGeneration.current !== selectedGeneration
+        selectionGenerationRef.current !== selectedGeneration
       ) {
         setRequestStatus("idle");
       }
@@ -708,12 +722,12 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   };
 
   const createSession = async () => {
-    const generation = ++selectionGeneration.current;
+    const generation = ++selectionGenerationRef.current;
     setError(null);
     try {
       const created = await resolvedClient.createSession();
       setSessions((current) => mergeSessionSummaries(current, [created]));
-      if (selectionGeneration.current !== generation) return;
+      if (selectionGenerationRef.current !== generation) return;
       clearProjection();
       setPrompt("");
       setRetryCommand(null);
@@ -738,7 +752,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
   const selectSession = (nextSessionId: string) => {
     if (nextSessionId === sessionIdRef.current) return;
-    selectionGeneration.current += 1;
+    selectionGenerationRef.current += 1;
     clearProjection();
     setPrompt("");
     setError(null);
@@ -877,11 +891,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   };
 
   return (
-    <SpeziProvider
-      router={{
-        Link: ({ href, ...props }) => <a href={href ?? "#"} {...props} />,
-      }}
-    >
+    <GroveProvider router={groveRouter}>
       <main className="app-shell">
         <SessionRail {...railProps} />
         <section className="workbench">
@@ -1185,14 +1195,14 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           onProfileDraft={setProfileDraft}
           onRefreshActivity={() => {
             const selectedSessionId = sessionId;
-            const selectedGeneration = selectionGeneration.current;
+            const selectedGeneration = selectionGenerationRef.current;
             if (selectedSessionId === null) return;
             void resolvedClient
               .replayEvents(selectedSessionId)
               .then(({ projection: replayed }) => {
                 if (
                   sessionIdRef.current !== selectedSessionId ||
-                  selectionGeneration.current !== selectedGeneration
+                  selectionGenerationRef.current !== selectedGeneration
                 )
                   return;
                 acceptProjection(replayed, selectedSessionId);
@@ -1200,7 +1210,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
               .catch((caught: unknown) => {
                 if (
                   sessionIdRef.current === selectedSessionId &&
-                  selectionGeneration.current === selectedGeneration
+                  selectionGenerationRef.current === selectedGeneration
                 ) {
                   setError(errorMessage(caught));
                 }
@@ -1254,7 +1264,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           onValidateProfile={(profileId) => void validateProfile(profileId)}
         />
       </main>
-    </SpeziProvider>
+    </GroveProvider>
   );
 };
 

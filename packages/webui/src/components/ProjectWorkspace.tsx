@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
+import { Badge } from "@schmiedmayerlab/grove-design-system/components/Badge";
 import {
   AlertTriangle,
   File,

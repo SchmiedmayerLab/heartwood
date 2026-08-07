@@ -52,7 +52,7 @@ const readOnlyExtensions = (label: string): Extension[] => [
 ];
 
 export const CodeViewer = ({ content, path }: CodeViewerProps) => {
-  const parent = useRef<HTMLDivElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -60,14 +60,14 @@ export const CodeViewer = ({ content, path }: CodeViewerProps) => {
     void loadLanguage(path)
       .catch(() => null)
       .then((language) => {
-        if (!active || parent.current === null) return;
+        if (!active || parentRef.current === null) return;
         view = new EditorView({
           doc: content,
           extensions: [
             ...readOnlyExtensions(`Read-only file contents: ${path}`),
             ...(language === null ? [] : [language]),
           ],
-          parent: parent.current,
+          parent: parentRef.current,
         });
         makeScrollerAccessible(view, `Scrollable file contents: ${path}`);
       });
@@ -81,14 +81,14 @@ export const CodeViewer = ({ content, path }: CodeViewerProps) => {
     <div
       aria-label={`Read-only file: ${path}`}
       className="code-viewer"
-      ref={parent}
+      ref={parentRef}
       role="region"
     />
   );
 };
 
 export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
-  const parent = useRef<HTMLDivElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -96,7 +96,7 @@ export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
     void loadLanguage(path)
       .catch(() => null)
       .then((language) => {
-        if (!active || parent.current === null) return;
+        if (!active || parentRef.current === null) return;
         const languageExtensions = language === null ? [] : [language];
         view = new MergeView({
           a: {
@@ -118,7 +118,7 @@ export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
           gutter: true,
           highlightChanges: true,
           orientation: "a-b",
-          parent: parent.current,
+          parent: parentRef.current,
         });
         makeScrollerAccessible(
           view.a,
@@ -139,7 +139,7 @@ export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
     <div
       aria-label={`Read-only change: ${path}`}
       className="code-viewer diff-viewer"
-      ref={parent}
+      ref={parentRef}
       role="region"
     />
   );

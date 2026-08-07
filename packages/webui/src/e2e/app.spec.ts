@@ -24,6 +24,12 @@ import type {
 
 test.beforeEach(async ({ page }) => installGatewayRoutes(page));
 
+const closeSheet = async (page: Page): Promise<void> => {
+  const close = page.getByRole("button", { name: "Close", exact: true });
+  await close.click();
+  await expect(close).toBeHidden();
+};
+
 test("supports the researcher conversation and session workflow", async ({
   page,
 }) => {
@@ -34,6 +40,17 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByRole("heading", { name: "Set up Heartwood" }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Close", exact: true }),
+  ).toBeHidden();
+  await page.getByLabel("Open action review settings").click();
+  await expect(
+    page.getByRole("tab", { name: "Action Review" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Close", exact: true }),
+  ).toBeHidden();
   const newAnalysis = page.getByRole("button", { name: "New analysis" });
   await expect(newAnalysis).toHaveCSS("display", "flex");
   await expect(newAnalysis).toHaveCSS("gap", "8px");
@@ -102,14 +119,14 @@ test("supports the researcher conversation and session workflow", async ({
       "Tool-enabled specialists require restart-safe child review.",
     ),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close" }).click();
+  await closeSheet(page);
 
   await page.getByRole("button", { name: "Skills" }).click();
   await expect(page.getByRole("heading", { name: "Skills" })).toBeVisible();
   await expect(page.getByText("omop-cohort-summary")).toBeVisible();
   await expect(page.getByText("baseline-model")).toBeVisible();
   await expect(page.getByText("aggregate-export")).toBeVisible();
-  await page.getByRole("button", { name: "Close" }).click();
+  await closeSheet(page);
 
   const modelPolicyButton = page.getByRole("button", {
     name: "Settings",

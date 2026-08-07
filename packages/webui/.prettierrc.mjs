@@ -6,7 +6,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-@import "@stanfordspezi/spezi-web-design-system/tailwind.css";
-@import "@stanfordspezi/spezi-web-design-system/base.css";
+import { prettierConfig } from "@schmiedmayerlab/grove-configurations";
 
-@source "../node_modules/@stanfordspezi/spezi-web-design-system/dist";
+export default prettierConfig;

@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Badge } from "@stanfordspezi/spezi-web-design-system/components/Badge";
-import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
-import { Input } from "@stanfordspezi/spezi-web-design-system/components/Input";
-import { Tooltip } from "@stanfordspezi/spezi-web-design-system/components/Tooltip";
+import { Badge } from "@schmiedmayerlab/grove-design-system/components/Badge";
+import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
+import { Input } from "@schmiedmayerlab/grove-design-system/components/Input";
+import { Tooltip } from "@schmiedmayerlab/grove-design-system/components/Tooltip";
 import { LoaderCircle, Menu, Pencil, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import type { ProjectionResearcherStatus, SessionSummary } from "../types";

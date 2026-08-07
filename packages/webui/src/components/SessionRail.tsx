@@ -6,8 +6,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Button } from "@stanfordspezi/spezi-web-design-system/components/Button";
-import { StatusDot } from "@stanfordspezi/spezi-web-design-system/components/StatusDot";
+import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
+import { StatusDot } from "@schmiedmayerlab/grove-design-system/components/StatusDot";
 import {
   Activity,
   BookOpen,
