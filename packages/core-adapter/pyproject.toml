@@ -13,7 +13,7 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
-    "filelock==3.32.0",
+    "filelock==3.32.2",
     "heartwood-adapters",
     "heartwood-audit",
     "heartwood-model-policy",

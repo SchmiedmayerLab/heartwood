@@ -17,6 +17,7 @@ from typing import TypedDict, override
 from openhands.sdk import Agent, LocalConversation
 from openhands.sdk.conversation.state import ConversationState
 from openhands.sdk.hooks.config import HookConfig
+from openhands.sdk.observability.laminar import detached_delegate_context
 from openhands.sdk.tool import ToolDefinition, register_tool
 from openhands.tools.task import TaskAction, TaskObservation, TaskTool
 from openhands.tools.task.impl import TaskExecutor
@@ -81,6 +82,7 @@ class _CatalogTaskManager(TaskManager):
         description: str | None,
         max_iteration_per_run: int,
         task_id: str,
+        subagent_type: str,
         conversation_id: uuid.UUID,
         worker_agent: Agent,
         hook_config: HookConfig | None = None,
@@ -96,19 +98,26 @@ class _CatalogTaskManager(TaskManager):
             LocalConversation.get_persistence_dir(persistence_dir, conversation_id),
             cache_limit_size=max_iteration_per_run,
         )
-        return LocalConversation(
-            agent=worker_agent,
-            workspace=parent.state.workspace.working_dir,
-            persistence_dir=persistence_dir,
-            conversation_id=conversation_id,
-            max_iteration_per_run=max_iteration_per_run,
-            max_budget_per_run=max_budget_per_run,
-            hook_config=hook_config,
-            delete_on_close=True,
-            prompt_cache_key=str(parent.state.id),
-            file_store=file_store,
-            visualizer=None,
-        )
+        with detached_delegate_context() as link:
+            return LocalConversation(
+                agent=worker_agent,
+                workspace=parent.state.workspace.working_dir,
+                persistence_dir=persistence_dir,
+                conversation_id=conversation_id,
+                max_iteration_per_run=max_iteration_per_run,
+                max_budget_per_run=max_budget_per_run,
+                hook_config=hook_config,
+                delete_on_close=True,
+                prompt_cache_key=str(parent.state.id),
+                file_store=file_store,
+                visualizer=None,
+                observability_metadata=self._delegate_observability_metadata(
+                    task_id=task_id,
+                    subagent_type=subagent_type,
+                    link=link,
+                ),
+                observability_tags=["delegate"],
+            )
 
     @override
     def _run_task(self, task: Task, prompt: str) -> Task:

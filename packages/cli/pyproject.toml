@@ -16,10 +16,10 @@ dependencies = [
     "heartwood-gateway",
     "heartwood-schemas",
     "heartwood-session",
-    "packaging==26.2",
+    "packaging==26.3",
     "rich==15.0.0",
     "textual==8.2.8",
-    "uvicorn==0.51.0",
+    "uvicorn==0.52.1",
 ]
 
 [project.scripts]

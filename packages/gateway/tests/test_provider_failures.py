@@ -381,7 +381,7 @@ def test_provider_timeout_is_bounded_and_content_safe(
                     for _ in range(6)
                 ),
             ),
-            7,
+            4,
         ),
     ],
     ids=["malformed", "interrupted"],
