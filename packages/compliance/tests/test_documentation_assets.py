@@ -208,26 +208,48 @@ def test_terra_notebook_is_output_free_and_uses_the_shared_project() -> None:
             assert cell["outputs"] == []
 
 
-def test_web_documentation_uses_generated_desktop_screenshots() -> None:
+def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> None:
     browser_guide = _read("documentation/use/browser.md")
+    screenshot_documents = "\n".join(
+        (
+            _read("README.md"),
+            browser_guide,
+            _read("documentation/use/actions-audit.md"),
+            _read("documentation/use/specialists.md"),
+        )
+    )
     package = json.loads(_read("packages/webui/package.json"))
     screenshot_script = _read("packages/webui/scripts/smoke-reference-analysis.cjs")
     assets = _repo_root() / "documentation" / "assets" / "screenshots"
 
-    assert "assets/screenshots/browser-conversation.png" in _read("README.md")
-    assert "../assets/screenshots/browser-conversation.png" in browser_guide
-    assert "../assets/screenshots/browser-action-review.png" in browser_guide
+    assert _read("README.md").count('<source media="(prefers-color-scheme: dark)"') == 2
+    assert screenshot_documents.count("{ .theme-screenshot-light }") == 7
+    assert screenshot_documents.count("{ .theme-screenshot-dark }") == 7
+    stylesheet = _read("documentation/stylesheets/extra.css")
+    assert '[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-light' in stylesheet
+    assert '[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-dark' in stylesheet
     assert package["scripts"]["screenshots:docs"].endswith("../../documentation/assets/screenshots")
-    assert '"browser-conversation.png"' in screenshot_script
-    assert '"browser-action-review.png"' in screenshot_script
+    assert 'for (const theme of ["light", "dark"])' in screenshot_script
+    assert "page.emulateMedia({ colorScheme: theme })" in screenshot_script
     assert "captureApproval: true" in screenshot_script
-    for filename in ("browser-conversation.png", "browser-action-review.png"):
-        screenshot = assets / filename
-        assert screenshot.stat().st_size > 1_000
-        width, height = _png_dimensions(screenshot)
-        assert width >= 1280
-        assert height >= 800
-        assert (assets / f"{filename}.license").is_file()
+    for basename in (
+        "browser-action-review",
+        "browser-action-settings",
+        "browser-changes",
+        "browser-conversation",
+        "browser-files",
+        "browser-specialists",
+    ):
+        assert f'"{basename}.png"' in screenshot_script
+        for theme in ("light", "dark"):
+            filename = f"{basename}-{theme}.png"
+            assert filename in screenshot_documents
+            screenshot = assets / filename
+            assert screenshot.stat().st_size > 1_000
+            width, height = _png_dimensions(screenshot)
+            assert width >= 1280
+            assert height >= 800
+            assert (assets / f"{filename}.license").is_file()
 
 
 def test_diagnostic_routes_resolve_into_public_documentation() -> None:

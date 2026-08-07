@@ -158,7 +158,7 @@ async function main() {
     await expect(
       page.getByText("Data Quality Reviewer", { exact: true }),
     ).toBeVisible();
-    await captureDesktopScreenshot(
+    await captureDesktopScreenshots(
       page,
       "browser-specialists.png",
       "research specialists",
@@ -172,7 +172,7 @@ async function main() {
     await expect(
       page.getByRole("radio", { name: /Review Every Action/u }),
     ).toBeChecked();
-    await captureDesktopScreenshot(
+    await captureDesktopScreenshots(
       page,
       "browser-action-settings.png",
       "action review settings",
@@ -429,7 +429,7 @@ async function runApprovedTask(page, task, taskSpec) {
         approval.getByRole("button", { name: /^Allow \d+ actions? once$/u }),
         "action review decision controls",
       );
-      await captureDesktopScreenshot(
+      await captureDesktopScreenshots(
         page,
         "browser-action-review.png",
         "action review",
@@ -531,7 +531,7 @@ async function captureReferenceScreenshots(page) {
     .evaluate((element) => {
       element.scrollTop = 0;
     });
-  await captureDesktopScreenshot(
+  await captureDesktopScreenshots(
     page,
     "browser-conversation.png",
     "conversation",
@@ -550,7 +550,7 @@ async function inspectProjectEvidence(page) {
       name: "Read-only file: cohort-summary.json",
     }),
   ).toContainText('"target_condition_concept_id": 201826');
-  await captureDesktopScreenshot(page, "browser-files.png", "project files");
+  await captureDesktopScreenshots(page, "browser-files.png", "project files");
 
   await page.getByRole("tab", { name: "Changes", exact: true }).click();
   const changes = page.getByRole("region", { name: "Project changes" });
@@ -566,7 +566,7 @@ async function inspectProjectEvidence(page) {
       name: "Read-only change: cohort-summary.json",
     }),
   ).toContainText('"target_condition_concept_id": 201826');
-  await captureDesktopScreenshot(
+  await captureDesktopScreenshots(
     page,
     "browser-changes.png",
     "project changes",
@@ -574,10 +574,9 @@ async function inspectProjectEvidence(page) {
   await page.getByRole("tab", { name: "Conversation", exact: true }).click();
 }
 
-async function captureDesktopScreenshot(page, filename, stateName) {
+async function captureDesktopScreenshots(page, filename, stateName) {
   if (screenshotDirectory === null) return;
   fs.mkdirSync(screenshotDirectory, { recursive: true });
-  const screenshotPath = path.join(screenshotDirectory, filename);
   await assertNoHorizontalOverflow(page, stateName);
   await page.evaluate(() => {
     const activeElement = globalThis.document.activeElement;
@@ -585,11 +584,17 @@ async function captureDesktopScreenshot(page, filename, stateName) {
       activeElement.blur();
     }
   });
-  await page.screenshot({ animations: "disabled", path: screenshotPath });
-  if (fs.statSync(screenshotPath).size < 1_000) {
-    throw new Error(
-      `reference screenshot is unexpectedly small: ${screenshotPath}`,
-    );
+  for (const theme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const themedFilename = filename.replace(/\.png$/u, `-${theme}.png`);
+    const screenshotPath = path.join(screenshotDirectory, themedFilename);
+    await page.screenshot({ animations: "disabled", path: screenshotPath });
+    if (fs.statSync(screenshotPath).size < 1_000) {
+      throw new Error(
+        `reference screenshot is unexpectedly small: ${screenshotPath}`,
+      );
+    }
   }
 }
 

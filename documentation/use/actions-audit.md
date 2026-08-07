@@ -32,7 +32,8 @@ heartwood actions set ask-every-time
 heartwood actions set auto-approve-low-risk
 ```
 
-![Heartwood action-review settings showing the project-wide modes](../assets/screenshots/browser-action-settings.png)
+![Heartwood action-review settings showing the project-wide modes](../assets/screenshots/browser-action-settings-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood action-review settings showing the project-wide modes](../assets/screenshots/browser-action-settings-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 ## Grouped Decisions
 

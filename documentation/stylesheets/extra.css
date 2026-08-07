@@ -48,6 +48,15 @@
   box-shadow: 0 12px 28px rgb(0 0 0 / 10%);
 }
 
+.md-typeset .theme-screenshot-dark,
+[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-light {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-dark {
+  display: block;
+}
+
 .md-typeset code {
   border-radius: 4px;
 }

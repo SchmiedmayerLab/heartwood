@@ -31,7 +31,10 @@ Heartwood reuses OpenHands for the agent loop and coding tools, then adds projec
 - Persistent sessions, replay, and scrubbed audit export.
 - Versioned workstation, NVIDIA, Terra, and native Stanford Carina artifacts.
 
-![Heartwood browser interface showing a project conversation](documentation/assets/screenshots/browser-conversation.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-conversation-dark.png">
+  <img alt="Heartwood browser interface showing a project conversation" src="documentation/assets/screenshots/browser-conversation-light.png">
+</picture>
 
 ## Quick Start
 
@@ -46,7 +49,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.3 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.4 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
@@ -60,7 +63,10 @@ The [prerelease documentation](https://schmiedmayerlab.github.io/heartwood/previ
 The parent agent can ask one bounded specialist at a time to plan an analysis or review supplied evidence for data-quality, cohort, statistical, or reproducibility concerns.
 Specialists use the active model and verified Skills, and their delegation appears in the same action-review flow as other OpenHands work.
 
-![Heartwood browser interface showing the available research specialists](documentation/assets/screenshots/browser-specialists.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-specialists-dark.png">
+  <img alt="Heartwood browser interface showing the available research specialists" src="documentation/assets/screenshots/browser-specialists-light.png">
+</picture>
 
 ## Choose a Setup
 

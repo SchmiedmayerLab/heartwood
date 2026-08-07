@@ -85,4 +85,4 @@ __all__ = [
     "verify_checkpoint_signature",
 ]
 
-__version__ = "0.3.0-beta.3"
+__version__ = "0.3.0-beta.4"
