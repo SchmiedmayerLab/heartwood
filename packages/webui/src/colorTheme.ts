@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ColorTheme = "dark" | "light";
 
@@ -38,12 +38,13 @@ const initialTheme = (): ColorTheme => {
 
 export const useColorTheme = () => {
   const [theme, setTheme] = useState<ColorTheme>(initialTheme);
+  const hasExplicitThemeRef = useRef(storedTheme() !== null);
 
   useEffect(() => {
-    if (storedTheme() !== null) return;
+    if (hasExplicitThemeRef.current) return;
     const mediaQuery = window.matchMedia(darkSchemeQuery);
     const updateSystemTheme = (event: MediaQueryListEvent) => {
-      if (storedTheme() !== null) return;
+      if (hasExplicitThemeRef.current) return;
       const nextTheme = event.matches ? "dark" : "light";
       applyTheme(nextTheme);
       setTheme(nextTheme);
@@ -54,6 +55,7 @@ export const useColorTheme = () => {
 
   const toggleTheme = useCallback(() => {
     const nextTheme = theme === "light" ? "dark" : "light";
+    hasExplicitThemeRef.current = true;
     applyTheme(nextTheme);
     try {
       window.localStorage.setItem(colorThemeStorageKey, nextTheme);

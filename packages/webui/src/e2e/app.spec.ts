@@ -41,10 +41,10 @@ test("follows the system theme and persists an explicit choice", async ({
   await expect(
     page.getByRole("heading", { name: "Set up Heartwood" }),
   ).toBeVisible();
+  const setupClose = page.getByRole("button", { name: "Close", exact: true });
+  await expect(setupClose).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(
-    page.getByRole("button", { name: "Close", exact: true }),
-  ).toBeHidden();
+  await expect(setupClose).toBeHidden();
   const darkBackground = await page
     .locator(".app-shell")
     .evaluate((element) => getComputedStyle(element).backgroundColor);
@@ -60,10 +60,13 @@ test("follows the system theme and persists an explicit choice", async ({
 
   await page.reload();
   await expect(root).toHaveAttribute("data-theme", "light");
+  const reloadedSetupClose = page.getByRole("button", {
+    name: "Close",
+    exact: true,
+  });
+  await expect(reloadedSetupClose).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(
-    page.getByRole("button", { name: "Close", exact: true }),
-  ).toBeHidden();
+  await expect(reloadedSetupClose).toBeHidden();
   await expect(
     page.getByRole("button", { name: "Switch to dark mode" }),
   ).toBeVisible();

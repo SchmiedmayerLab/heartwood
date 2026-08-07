@@ -100,6 +100,31 @@ describe("useColorTheme", () => {
     expect(screen.getByRole("button")).toHaveTextContent("dark");
   });
 
+  it("keeps an explicit theme when browser storage rejects writes", () => {
+    const query = installSystemTheme("light");
+    const rejectingStorage: Storage = {
+      get length() {
+        return memoryStorage.length;
+      },
+      clear: () => memoryStorage.clear(),
+      getItem: (key) => memoryStorage.getItem(key),
+      key: (index) => memoryStorage.key(index),
+      removeItem: (key) => memoryStorage.removeItem(key),
+      setItem: () => {
+        throw new DOMException("Storage is unavailable");
+      },
+    };
+    vi.stubGlobal("localStorage", rejectingStorage);
+    render(<ThemeControl />);
+
+    fireEvent.click(screen.getByRole("button", { name: "light" }));
+    expect(screen.getByRole("button")).toHaveTextContent("dark");
+
+    act(() => query.setMatches(false));
+    expect(screen.getByRole("button")).toHaveTextContent("dark");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  });
+
   it("restores a saved preference instead of the system theme", () => {
     window.localStorage.setItem(colorThemeStorageKey, "light");
     installSystemTheme("dark");
