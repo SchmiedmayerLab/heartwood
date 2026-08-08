@@ -1,0 +1,3916 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Auditable agentic coding for biomedical research environments">
+      
+      
+      
+        <link rel="canonical" href="https://schmiedmayerlab.github.io/heartwood/0.3.0-beta.4/reference/troubleshooting/">
+      
+      
+        <link rel="prev" href="../gpu-compatibility/">
+      
+      
+        <link rel="next" href="../glossary/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="zensical-0.0.52">
+    
+    
+      
+        <title>Diagnostics and Troubleshooting - Heartwood</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.8b3b5a67.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.dfe2e883.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#diagnostics-and-troubleshooting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Heartwood" class="md-header__button md-logo" aria-label="Heartwood" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-trees" viewBox="0 0 24 24"><path d="M10 10v.2A3 3 0 0 1 8.9 16H5a3 3 0 0 1-1-5.8V10a3 3 0 0 1 6 0M7 16v6M13 19v3"/><path d="M12 19h8.3a1 1 0 0 0 .7-1.7L18 14h.3a1 1 0 0 0 .7-1.7L16 9h.2a1 1 0 0 0 .8-1.7L13 3l-1.4 1.5"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Heartwood
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Diagnostics and Troubleshooting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light appearance"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use light appearance" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun-moon" viewBox="0 0 24 24"><path d="M12 2v2M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715M16 12a4 4 0 0 0-4-4M19 5l-1.256 1.256M20 12h2"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Use dark appearance"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use dark appearance" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Follow system appearance"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Follow system appearance" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/SchmiedmayerLab/heartwood" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SchmiedmayerLab/heartwood
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../start/" class="md-tabs__link">
+          
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../use/" class="md-tabs__link">
+          
+  
+  Work With Heartwood
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../platforms/" class="md-tabs__link">
+          
+  
+  Platforms
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../operate/" class="md-tabs__link">
+          
+  
+  Operate Heartwood
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  How Heartwood Works
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../cli/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../contribute/" class="md-tabs__link">
+          
+  
+  Contribute
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Heartwood" class="md-nav__button md-logo" aria-label="Heartwood" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-trees" viewBox="0 0 24 24"><path d="M10 10v.2A3 3 0 0 1 8.9 16H5a3 3 0 0 1-1-5.8V10a3 3 0 0 1 6 0M7 16v6M13 19v3"/><path d="M12 19h8.3a1 1 0 0 0 .7-1.7L18 14h.3a1 1 0 0 0 .7-1.7L16 9h.2a1 1 0 0 0 .8-1.7L13 3l-1.4 1.5"/></svg>
+
+    </a>
+    Heartwood
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SchmiedmayerLab/heartwood" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SchmiedmayerLab/heartwood
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../start/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Get Started
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Get Started
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../start/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install Heartwood
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../start/project/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Projects and Private State
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../use/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Work With Heartwood
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Work With Heartwood
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/terminal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Terminal
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/browser/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Browser
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/notebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Notebooks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/actions-audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Actions and Audit History
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Skills
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/specialists/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Specialists
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Models
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/connections/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Hosted and Managed Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/choose-managed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Choose a Heartwood-Managed Model
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/run-with-heartwood/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run a Model With Heartwood
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Move a Model Offline
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../platforms/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platforms
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Platforms
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Containers
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/native-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Native Linux
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/terra/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Terra
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/carina/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Stanford Carina
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Operate Heartwood
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Operate Heartwood
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/audit-checkpoints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Audit Checkpoints and Retention
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Support and Compatibility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and Controlled Data
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/platform-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Add a Platform
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../architecture/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  How Heartwood Works
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  How Heartwood Works
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/system/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  System Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Skill Trust and Distribution
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sessions-audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sessions and Audit
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing and Evidence
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Reference
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Reference
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command Reference
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration and State
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform Capabilities
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gpu-compatibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  GPU Compatibility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Diagnostics and Troubleshooting
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Diagnostics and Troubleshooting
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-diagnostic-codes-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        How Diagnostic Codes Work
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Project Storage
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Storage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-project-001-project-storage-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-PROJECT-001</code> — Project Storage Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-project-002-project-setup-needs-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-PROJECT-002</code> — Project Setup Needs Attention
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-project-003-choose-a-dedicated-project-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-PROJECT-003</code> — Choose a Dedicated Project Directory
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Configuration
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-setup-001-project-configuration-needs-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-SETUP-001</code> — Project Configuration Needs Attention
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-setup-002-model-and-policy-settings-do-not-agree" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-SETUP-002</code> — Model and Policy Settings Do Not Agree
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#models-and-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Models and Credentials
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Models and Credentials">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-model-001-no-model-is-selected" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-MODEL-001</code> — No Model Is Selected
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-credential-001-model-credential-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-CREDENTIAL-001</code> — Model Credential Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-credential-002-model-credential-isolation-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-CREDENTIAL-002</code> — Model Credential Isolation Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-model-002-heartwood-managed-model-files-are-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-MODEL-002</code> — Heartwood-Managed Model Files Are Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-model-bundle-cannot-be-imported" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        A Model Bundle Cannot Be Imported
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Agent Runtime
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent Runtime">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-001-agent-runtime-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-001</code> — Agent Runtime Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-002-an-agent-action-failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-002</code> — An Agent Action Failed
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-003-the-agent-conversation-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-003</code> — The Agent Conversation Stopped
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-004-the-agent-worker-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-004</code> — The Agent Worker Stopped
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-005-the-agent-cannot-perform-that-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-005</code> — The Agent Cannot Perform That Operation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-006-an-approved-action-has-an-unknown-outcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-006</code> — An Approved Action Has an Unknown Outcome
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-007-an-agent-turn-has-an-unknown-outcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-007</code> — An Agent Turn Has an Unknown Outcome
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-008-model-provider-authentication-failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-008</code> — Model Provider Authentication Failed
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-009-model-provider-quota-exhausted" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-009</code> — Model Provider Quota Exhausted
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-010-model-provider-rate-limited" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-010</code> — Model Provider Rate Limited
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-011-model-configuration-is-invalid" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-011</code> — Model Configuration Is Invalid
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-012-model-provider-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-012</code> — Model Provider Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-999-the-agent-runtime-reported-an-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-999</code> — The Agent Runtime Reported an Error
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-inspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Project Inspection
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Inspection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-001-project-path-is-invalid" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-001</code> — Project Path Is Invalid
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-002-private-project-state-is-not-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-002</code> — Private Project State Is Not Available
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-003-symbolic-link-inspection-is-not-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-003</code> — Symbolic Link Inspection Is Not Available
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-004-expected-a-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-004</code> — Expected a Directory
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-005-project-entry-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-005</code> — Project Entry Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-006-requested-tree-depth-is-unsupported" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-006</code> — Requested Tree Depth Is Unsupported
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-compute" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Managed Compute
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managed Compute">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-compute-001-a-compute-allocation-may-be-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-COMPUTE-001</code> — A Compute Allocation May Be Required
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-compute-002-allocation-scratch-storage-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-COMPUTE-002</code> — Allocation Scratch Storage Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-compute-003-a-compatible-gpu-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-COMPUTE-003</code> — A Compatible GPU Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#terra" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Terra
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Terra">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-terra-001-choose-a-dedicated-terra-project-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-TERRA-001</code> — Choose a Dedicated Terra Project Directory
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-terra-002-terra-gpu-support-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-TERRA-002</code> — Terra GPU Support Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Environment Fallback
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Environment Fallback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-env-999-environment-check-needs-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-ENV-999</code> — Environment Check Needs Attention
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gateway-ingress" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Gateway Ingress
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gateway Ingress">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-ingress-001-gateway-ingress-configuration-is-unsafe" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-INGRESS-001</code> — Gateway Ingress Configuration Is Unsafe
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-ingress-002-gateway-request-does-not-match-the-configured-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-INGRESS-002</code> — Gateway Request Does Not Match the Configured Route
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Browser Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-ownership-and-interrupted-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Session Ownership and Interrupted Commands
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-verification-and-checkpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Audit Verification and Checkpoints
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#collect-safe-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Collect Safe Diagnostics
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contribute/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contribute
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Contribute
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contribute Research Skills
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Documentation Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/releases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Release Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-diagnostic-codes-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        How Diagnostic Codes Work
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Project Storage
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Storage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-project-001-project-storage-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-PROJECT-001</code> — Project Storage Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-project-002-project-setup-needs-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-PROJECT-002</code> — Project Setup Needs Attention
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-project-003-choose-a-dedicated-project-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-PROJECT-003</code> — Choose a Dedicated Project Directory
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Configuration
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-setup-001-project-configuration-needs-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-SETUP-001</code> — Project Configuration Needs Attention
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-setup-002-model-and-policy-settings-do-not-agree" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-SETUP-002</code> — Model and Policy Settings Do Not Agree
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#models-and-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Models and Credentials
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Models and Credentials">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-model-001-no-model-is-selected" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-MODEL-001</code> — No Model Is Selected
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-credential-001-model-credential-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-CREDENTIAL-001</code> — Model Credential Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-credential-002-model-credential-isolation-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-CREDENTIAL-002</code> — Model Credential Isolation Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-model-002-heartwood-managed-model-files-are-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-MODEL-002</code> — Heartwood-Managed Model Files Are Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-model-bundle-cannot-be-imported" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        A Model Bundle Cannot Be Imported
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Agent Runtime
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Agent Runtime">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-001-agent-runtime-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-001</code> — Agent Runtime Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-002-an-agent-action-failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-002</code> — An Agent Action Failed
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-003-the-agent-conversation-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-003</code> — The Agent Conversation Stopped
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-004-the-agent-worker-stopped" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-004</code> — The Agent Worker Stopped
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-005-the-agent-cannot-perform-that-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-005</code> — The Agent Cannot Perform That Operation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-006-an-approved-action-has-an-unknown-outcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-006</code> — An Approved Action Has an Unknown Outcome
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-007-an-agent-turn-has-an-unknown-outcome" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-007</code> — An Agent Turn Has an Unknown Outcome
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-008-model-provider-authentication-failed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-008</code> — Model Provider Authentication Failed
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-009-model-provider-quota-exhausted" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-009</code> — Model Provider Quota Exhausted
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-010-model-provider-rate-limited" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-010</code> — Model Provider Rate Limited
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-011-model-configuration-is-invalid" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-011</code> — Model Configuration Is Invalid
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-012-model-provider-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-012</code> — Model Provider Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-agent-999-the-agent-runtime-reported-an-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-AGENT-999</code> — The Agent Runtime Reported an Error
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-inspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Project Inspection
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Project Inspection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-001-project-path-is-invalid" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-001</code> — Project Path Is Invalid
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-002-private-project-state-is-not-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-002</code> — Private Project State Is Not Available
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-003-symbolic-link-inspection-is-not-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-003</code> — Symbolic Link Inspection Is Not Available
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-004-expected-a-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-004</code> — Expected a Directory
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-005-project-entry-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-005</code> — Project Entry Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-workspace-006-requested-tree-depth-is-unsupported" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-WORKSPACE-006</code> — Requested Tree Depth Is Unsupported
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-compute" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Managed Compute
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managed Compute">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-compute-001-a-compute-allocation-may-be-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-COMPUTE-001</code> — A Compute Allocation May Be Required
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-compute-002-allocation-scratch-storage-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-COMPUTE-002</code> — Allocation Scratch Storage Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-compute-003-a-compatible-gpu-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-COMPUTE-003</code> — A Compatible GPU Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#terra" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Terra
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Terra">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-terra-001-choose-a-dedicated-terra-project-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-TERRA-001</code> — Choose a Dedicated Terra Project Directory
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-terra-002-terra-gpu-support-is-unavailable" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-TERRA-002</code> — Terra GPU Support Is Unavailable
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Environment Fallback
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Environment Fallback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-env-999-environment-check-needs-attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-ENV-999</code> — Environment Check Needs Attention
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gateway-ingress" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Gateway Ingress
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Gateway Ingress">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hw-ingress-001-gateway-ingress-configuration-is-unsafe" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-INGRESS-001</code> — Gateway Ingress Configuration Is Unsafe
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hw-ingress-002-gateway-request-does-not-match-the-configured-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        <code>HW-INGRESS-002</code> — Gateway Request Does Not Match the Configured Route
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Browser Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-ownership-and-interrupted-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Session Ownership and Interrupted Commands
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-verification-and-checkpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Audit Verification and Checkpoints
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#collect-safe-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Collect Safe Diagnostics
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../cli/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+  
+
+
+<!--
+This source file is part of the Heartwood open-source project
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+SPDX-License-Identifier: MIT
+-->
+
+<h1 id="diagnostics-and-troubleshooting">Diagnostics and Troubleshooting<a class="headerlink" href="#diagnostics-and-troubleshooting" title="Permanent link">&para;</a></h1>
+<p>Most setup failures are recoverable without deleting the project.
+Start with the content-safe readiness report:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>heartwood<span class="w"> </span>doctor
+</code></pre></div>
+<p>Each warning or failure includes a stable <code>HW-*</code> code, plain-language title, next action, and documentation route.
+Use <code>heartwood doctor --json</code> when an administrator needs the structured report; review paths before sharing it.</p>
+<h2 id="how-diagnostic-codes-work">How Diagnostic Codes Work<a class="headerlink" href="#how-diagnostic-codes-work" title="Permanent link">&para;</a></h2>
+<p>Codes use <code>HW-{AREA}-{NNN}</code>.
+<code>AREA</code> identifies where the condition must be resolved; it does not identify severity.</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Conditions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PROJECT</code></td>
+<td>Project boundary, storage, and private project state</td>
+</tr>
+<tr>
+<td><code>SETUP</code></td>
+<td>Non-secret Heartwood configuration and policy agreement</td>
+</tr>
+<tr>
+<td><code>MODEL</code></td>
+<td>Model selection, compatibility, and managed model files</td>
+</tr>
+<tr>
+<td><code>CREDENTIAL</code></td>
+<td>Provider API key, subscription credential, or managed-identity availability</td>
+</tr>
+<tr>
+<td><code>INGRESS</code></td>
+<td>Gateway binding, proxy trust, origins, forwarding metadata, and paths</td>
+</tr>
+<tr>
+<td><code>AGENT</code></td>
+<td>OpenHands agent runtime availability</td>
+</tr>
+<tr>
+<td><code>WORKSPACE</code></td>
+<td>Read-only project file and change inspection</td>
+</tr>
+<tr>
+<td><code>COMPUTE</code></td>
+<td>Scheduler allocation, GPU, memory, and scratch storage</td>
+</tr>
+<tr>
+<td><code>TERRA</code></td>
+<td>Terra-specific project and compute requirements</td>
+</tr>
+<tr>
+<td><code>ENV</code></td>
+<td>Conditions that cannot yet be classified more precisely</td>
+</tr>
+</tbody>
+</table>
+<p>Numbers from <code>001</code> through <code>899</code> are assigned sequentially within that area and are never reused for a different condition.
+Numbers from <code>900</code> through <code>999</code> are reserved for generic fallbacks when Heartwood cannot classify a condition more precisely.
+A gap can therefore represent a retired code rather than an omitted priority level.</p>
+<p>Warning and failure status is reported separately from the code, so a numeric suffix does not imply urgency.</p>
+<h2 id="project-storage">Project Storage<a class="headerlink" href="#project-storage" title="Permanent link">&para;</a></h2>
+<h3 id="hw-project-001-project-storage-is-unavailable"><code>HW-PROJECT-001</code> — Project Storage Is Unavailable<a class="headerlink" href="#hw-project-001-project-storage-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>Enter an existing writable directory dedicated to the analysis.
+Check the path and permissions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">pwd</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>ls<span class="w"> </span>-ld<span class="w"> </span>.
+</code></pre></div>
+<p>On Terra, use a child directory below <code>/home/jupyter</code>.
+On Carina, use an approved writable project directory below <code>/projects</code>.</p>
+<h3 id="hw-project-002-project-setup-needs-attention"><code>HW-PROJECT-002</code> — Project Setup Needs Attention<a class="headerlink" href="#hw-project-002-project-setup-needs-attention" title="Permanent link">&para;</a></h3>
+<p>Run <code>heartwood</code> from the intended project and confirm <strong>Use this project</strong>.
+If <code>.heartwood/</code> already exists but has no valid state marker, move it aside only after confirming it does not contain needed state; do not let Heartwood overwrite an unknown directory.</p>
+<h3 id="hw-project-003-choose-a-dedicated-project-directory"><code>HW-PROJECT-003</code> — Choose a Dedicated Project Directory<a class="headerlink" href="#hw-project-003-choose-a-dedicated-project-directory" title="Permanent link">&para;</a></h3>
+<p>Heartwood refuses a filesystem root or home directory because that boundary is too broad.
+Create and enter a child folder, then run <code>heartwood doctor</code> again.</p>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<h3 id="hw-setup-001-project-configuration-needs-attention"><code>HW-SETUP-001</code> — Project Configuration Needs Attention<a class="headerlink" href="#hw-setup-001-project-configuration-needs-attention" title="Permanent link">&para;</a></h3>
+<p>Run <code>heartwood setup</code> or open browser settings and choose a model connection.
+Do not repair <code>config.toml</code> by inserting a token or copying a profile from another platform.</p>
+<h3 id="hw-setup-002-model-and-policy-settings-do-not-agree"><code>HW-SETUP-002</code> — Model and Policy Settings Do Not Agree<a class="headerlink" href="#hw-setup-002-model-and-policy-settings-do-not-agree" title="Permanent link">&para;</a></h3>
+<p>Open setup and select the intended model connection again.
+This regenerates the non-secret model profile and matching platform policy as one update.</p>
+<h2 id="models-and-credentials">Models and Credentials<a class="headerlink" href="#models-and-credentials" title="Permanent link">&para;</a></h2>
+<h3 id="hw-model-001-no-model-is-selected"><code>HW-MODEL-001</code> — No Model Is Selected<a class="headerlink" href="#hw-model-001-no-model-is-selected" title="Permanent link">&para;</a></h3>
+<p>Run <code>heartwood</code> and choose a model returned by an available connection.
+For Heartwood-managed inference, download or import the model before starting the agent.</p>
+<h3 id="hw-credential-001-model-credential-is-unavailable"><code>HW-CREDENTIAL-001</code> — Model Credential Is Unavailable<a class="headerlink" href="#hw-credential-001-model-credential-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>Reopen setup and enter the provider API key, or ask the platform operator how its secret binding is supplied.
+An operating-system keyring entry is project-scoped, so another project may correctly ask again.
+For <strong>Sign in with ChatGPT</strong>, repeat the one-time-code flow.
+If the account should no longer be used, run <code>heartwood models forget openai-subscription</code> before signing in with another account.</p>
+<h3 id="hw-credential-002-model-credential-isolation-is-unavailable"><code>HW-CREDENTIAL-002</code> — Model Credential Isolation Is Unavailable<a class="headerlink" href="#hw-credential-002-model-credential-isolation-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>The selected model uses a credential, but the active platform provides application scrubbing rather than a separate model-only credential boundary.
+Select <strong>Review Every Action</strong>, or choose a credential-free model route.
+Low-Risk Automation becomes available for a secret-backed route only when the platform adapter reports live-qualified isolation.</p>
+<p>Application scrubbing still keeps the credential out of supported tool inputs, project state, browser and notebook output, session events, logs, and audit exports.
+It does not isolate same-identity process memory or every operating-system resource.
+See <a href="../../operate/security/#model-credential-isolation">Security and Controlled Data</a>.</p>
+<h3 id="hw-model-002-heartwood-managed-model-files-are-unavailable"><code>HW-MODEL-002</code> — Heartwood-Managed Model Files Are Unavailable<a class="headerlink" href="#hw-model-002-heartwood-managed-model-files-are-unavailable" title="Permanent link">&para;</a></h3>
+<p>Run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>heartwood<span class="w"> </span>models<span class="w"> </span>managed
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>heartwood<span class="w"> </span>models<span class="w"> </span>inspect<span class="w"> </span>OWNER/MODEL
+</code></pre></div>
+<p>Choose a Qualified configuration, confirm enough free disk, and download again.
+For a Heartwood bundle, run <code>heartwood models inspect-bundle PATH</code> and then <code>heartwood models import PATH</code>.
+For raw GGUF or <a href="../glossary/">safetensors</a> files, use <code>heartwood models import</code> with the immutable source revision and license record.</p>
+<h3 id="a-model-bundle-cannot-be-imported">A Model Bundle Cannot Be Imported<a class="headerlink" href="#a-model-bundle-cannot-be-imported" title="Permanent link">&para;</a></h3>
+<p>Run <code>heartwood models inspect-bundle PATH</code> from the destination project and keep the complete error message.
+Do not edit the archive or its manifest.</p>
+<p>For a checksum, size, or file-list mismatch, obtain a new bundle from the connected source project.
+For an interrupted import, rerun the unchanged command; Heartwood discards incomplete private staging before retrying.
+For an existing model mismatch, use a clean project or investigate why <code>.heartwood/models/</code> changed.
+For a runtime warning, install a compatible Heartwood release or choose a model supported by the destination compute.</p>
+<h2 id="agent-runtime">Agent Runtime<a class="headerlink" href="#agent-runtime" title="Permanent link">&para;</a></h2>
+<h3 id="hw-agent-001-agent-runtime-is-unavailable"><code>HW-AGENT-001</code> — Agent Runtime Is Unavailable<a class="headerlink" href="#hw-agent-001-agent-runtime-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>The installed OpenHands dependency set cannot be loaded.
+Run <code>heartwood --version</code>, reinstall the same Heartwood release through its documented installation route, and rerun <code>heartwood doctor</code>.
+Model download, import, and inspection commands remain available so a broken agent runtime does not block project recovery.</p>
+<h3 id="hw-agent-002-an-agent-action-failed"><code>HW-AGENT-002</code> — An Agent Action Failed<a class="headerlink" href="#hw-agent-002-an-agent-action-failed" title="Permanent link">&para;</a></h3>
+<p>Heartwood received a failed action from the OpenHands runtime.
+Review the proposed action set and model connection in Activity &amp; audit, then try the task again.
+Heartwood deliberately omits provider and project content from this diagnostic.</p>
+<h3 id="hw-agent-003-the-agent-conversation-stopped"><code>HW-AGENT-003</code> — The Agent Conversation Stopped<a class="headerlink" href="#hw-agent-003-the-agent-conversation-stopped" title="Permanent link">&para;</a></h3>
+<p>OpenHands stopped the conversation before the task completed.
+Review Activity &amp; audit, verify the model connection, and start the task again.</p>
+<h3 id="hw-agent-004-the-agent-worker-stopped"><code>HW-AGENT-004</code> — The Agent Worker Stopped<a class="headerlink" href="#hw-agent-004-the-agent-worker-stopped" title="Permanent link">&para;</a></h3>
+<p>The background OpenHands worker stopped unexpectedly.
+Run <code>heartwood doctor</code>, review Activity &amp; audit, and try the task again.</p>
+<h3 id="hw-agent-005-the-agent-cannot-perform-that-operation"><code>HW-AGENT-005</code> — The Agent Cannot Perform That Operation<a class="headerlink" href="#hw-agent-005-the-agent-cannot-perform-that-operation" title="Permanent link">&para;</a></h3>
+<p>The requested operation does not match the conversation's current state.
+Review the active task or pending action set before trying the operation again.</p>
+<h3 id="hw-agent-006-an-approved-action-has-an-unknown-outcome"><code>HW-AGENT-006</code> — An Approved Action Has an Unknown Outcome<a class="headerlink" href="#hw-agent-006-an-approved-action-has-an-unknown-outcome" title="Permanent link">&para;</a></h3>
+<p>Heartwood stopped after an action was approved but before OpenHands recorded whether it completed.
+Do not approve or repeat the action blindly.
+Inspect the project files and Activity &amp; audit, then continue in a new session once you understand the project state.</p>
+<h3 id="hw-agent-007-an-agent-turn-has-an-unknown-outcome"><code>HW-AGENT-007</code> — An Agent Turn Has an Unknown Outcome<a class="headerlink" href="#hw-agent-007-an-agent-turn-has-an-unknown-outcome" title="Permanent link">&para;</a></h3>
+<p>Heartwood stopped during a model turn before OpenHands recorded a stable completion boundary.
+Do not repeat the task blindly because the provider may already have processed the request.
+Inspect the session replay and Activity &amp; audit, then continue in a new session.</p>
+<h3 id="hw-agent-008-model-provider-authentication-failed"><code>HW-AGENT-008</code> — Model Provider Authentication Failed<a class="headerlink" href="#hw-agent-008-model-provider-authentication-failed" title="Permanent link">&para;</a></h3>
+<p>The model provider rejected the credential configured for the active connection.
+Open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.</p>
+<h3 id="hw-agent-009-model-provider-quota-exhausted"><code>HW-AGENT-009</code> — Model Provider Quota Exhausted<a class="headerlink" href="#hw-agent-009-model-provider-quota-exhausted" title="Permanent link">&para;</a></h3>
+<p>The provider reported that the configured quota, credit, or budget is exhausted.
+Review the approved provider account or select another approved model connection before continuing.</p>
+<h3 id="hw-agent-010-model-provider-rate-limited"><code>HW-AGENT-010</code> — Model Provider Rate Limited<a class="headerlink" href="#hw-agent-010-model-provider-rate-limited" title="Permanent link">&para;</a></h3>
+<p>The provider temporarily limited requests.
+Wait briefly and retry the task without repeating any action whose outcome is unknown.</p>
+<h3 id="hw-agent-011-model-configuration-is-invalid"><code>HW-AGENT-011</code> — Model Configuration Is Invalid<a class="headerlink" href="#hw-agent-011-model-configuration-is-invalid" title="Permanent link">&para;</a></h3>
+<p>The selected model, endpoint, or provider configuration cannot serve the requested task.
+Open model settings, correct the connection, and validate it before retrying.</p>
+<h3 id="hw-agent-012-model-provider-is-unavailable"><code>HW-AGENT-012</code> — Model Provider Is Unavailable<a class="headerlink" href="#hw-agent-012-model-provider-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>The configured model service could not be reached or returned a temporary availability failure.
+Check the connection and provider status, then retry the task.</p>
+<h3 id="hw-agent-999-the-agent-runtime-reported-an-error"><code>HW-AGENT-999</code> — The Agent Runtime Reported an Error<a class="headerlink" href="#hw-agent-999-the-agent-runtime-reported-an-error" title="Permanent link">&para;</a></h3>
+<p>An execution backend returned an error without a more specific stable code.
+Review Activity &amp; audit, run <code>heartwood doctor</code>, and try the task again.</p>
+<h2 id="project-inspection">Project Inspection<a class="headerlink" href="#project-inspection" title="Permanent link">&para;</a></h2>
+<h3 id="hw-workspace-001-project-path-is-invalid"><code>HW-WORKSPACE-001</code> — Project Path Is Invalid<a class="headerlink" href="#hw-workspace-001-project-path-is-invalid" title="Permanent link">&para;</a></h3>
+<p>Use a normalized path relative to the current project.
+Do not use an absolute path, <code>..</code>, backslashes, repeated separators, control characters, or a trailing separator.</p>
+<h3 id="hw-workspace-002-private-project-state-is-not-available"><code>HW-WORKSPACE-002</code> — Private Project State Is Not Available<a class="headerlink" href="#hw-workspace-002-private-project-state-is-not-available" title="Permanent link">&para;</a></h3>
+<p>The Files and Changes interfaces never expose <code>.heartwood/</code> or <code>.git/</code>, including nested directories with either name.
+Use the documented audit export or Git commands from a trusted terminal when you are authorized to inspect that state.</p>
+<h3 id="hw-workspace-003-symbolic-link-inspection-is-not-available"><code>HW-WORKSPACE-003</code> — Symbolic Link Inspection Is Not Available<a class="headerlink" href="#hw-workspace-003-symbolic-link-inspection-is-not-available" title="Permanent link">&para;</a></h3>
+<p>Heartwood does not follow symbolic links through its read-only project API.
+Inspect the intended regular file through its project-relative path.</p>
+<h3 id="hw-workspace-004-expected-a-directory"><code>HW-WORKSPACE-004</code> — Expected a Directory<a class="headerlink" href="#hw-workspace-004-expected-a-directory" title="Permanent link">&para;</a></h3>
+<p>Use <code>heartwood files show FILE</code> for a file or choose a directory for <code>heartwood files list</code>.</p>
+<h3 id="hw-workspace-005-project-entry-is-unavailable"><code>HW-WORKSPACE-005</code> — Project Entry Is Unavailable<a class="headerlink" href="#hw-workspace-005-project-entry-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>The path does not exist or its metadata cannot be read.
+Confirm the spelling and project permissions, then retry from the same project directory.</p>
+<h3 id="hw-workspace-006-requested-tree-depth-is-unsupported"><code>HW-WORKSPACE-006</code> — Requested Tree Depth Is Unsupported<a class="headerlink" href="#hw-workspace-006-requested-tree-depth-is-unsupported" title="Permanent link">&para;</a></h3>
+<p>Choose a positive depth no greater than the limit reported by the workspace response.
+Omit <code>--depth</code> to use the default bounded depth.</p>
+<h2 id="managed-compute">Managed Compute<a class="headerlink" href="#managed-compute" title="Permanent link">&para;</a></h2>
+<h3 id="hw-compute-001-a-compute-allocation-may-be-required"><code>HW-COMPUTE-001</code> — A Compute Allocation May Be Required<a class="headerlink" href="#hw-compute-001-a-compute-allocation-may-be-required" title="Permanent link">&para;</a></h3>
+<p>On Carina, start <code>heartwood</code>, inspect the full Slurm request, and approve it only when the resources and duration are appropriate.
+Use <code>heartwood runtime start --dry-run</code> to inspect without allocating.</p>
+<h3 id="hw-compute-002-allocation-scratch-storage-is-unavailable"><code>HW-COMPUTE-002</code> — Allocation Scratch Storage Is Unavailable<a class="headerlink" href="#hw-compute-002-allocation-scratch-storage-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>Request an allocation that provides writable job scratch or use the platform's supported runtime path.
+Keep durable project and model state in approved project storage.</p>
+<h3 id="hw-compute-003-a-compatible-gpu-is-unavailable"><code>HW-COMPUTE-003</code> — A Compatible GPU Is Unavailable<a class="headerlink" href="#hw-compute-003-a-compatible-gpu-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>Choose a hosted model, a GGUF CPU model, or GPU-enabled compute.
+For containers, verify the NVIDIA Container Toolkit and <code>--gpus all</code>; for Terra, select the GPU image and attach an NVIDIA GPU.
+The CUDA 12.9 runtime requires compute capability 7.5 or newer, so P4, P100, and V100 GPUs are rejected before model startup.
+Compare the detected environment with <a href="../gpu-compatibility/">GPU Compatibility</a>.</p>
+<h2 id="terra">Terra<a class="headerlink" href="#terra" title="Permanent link">&para;</a></h2>
+<h3 id="hw-terra-001-choose-a-dedicated-terra-project-directory"><code>HW-TERRA-001</code> — Choose a Dedicated Terra Project Directory<a class="headerlink" href="#hw-terra-001-choose-a-dedicated-terra-project-directory" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>/home/jupyter/heartwood-project
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nb">cd</span><span class="w"> </span>/home/jupyter/heartwood-project
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>heartwood<span class="w"> </span>doctor
+</code></pre></div>
+<p>Do not use <code>/home/jupyter</code> itself as the agent boundary.</p>
+<h3 id="hw-terra-002-terra-gpu-support-is-unavailable"><code>HW-TERRA-002</code> — Terra GPU Support Is Unavailable<a class="headerlink" href="#hw-terra-002-terra-gpu-support-is-unavailable" title="Permanent link">&para;</a></h3>
+<p>Use the <code>-terra-gpu-nvidia</code> image and attach supported GPU compute, or choose hosted inference.
+Delete and recreate the Cloud Environment with a T4 while retaining the persistent disk; Terra does not apply a changed image or GPU selection to an existing environment.</p>
+<h2 id="environment-fallback">Environment Fallback<a class="headerlink" href="#environment-fallback" title="Permanent link">&para;</a></h2>
+<h3 id="hw-env-999-environment-check-needs-attention"><code>HW-ENV-999</code> — Environment Check Needs Attention<a class="headerlink" href="#hw-env-999-environment-check-needs-attention" title="Permanent link">&para;</a></h3>
+<p>Heartwood encountered a readiness check that has no more specific public diagnostic.
+Run <code>heartwood doctor</code>, inspect the failed check and its next action, and include the structured <code>heartwood doctor --json</code> output in a synthetic issue report if the condition persists.</p>
+<h2 id="gateway-ingress">Gateway Ingress<a class="headerlink" href="#gateway-ingress" title="Permanent link">&para;</a></h2>
+<h3 id="hw-ingress-001-gateway-ingress-configuration-is-unsafe"><code>HW-INGRESS-001</code> — Gateway Ingress Configuration Is Unsafe<a class="headerlink" href="#hw-ingress-001-gateway-ingress-configuration-is-unsafe" title="Permanent link">&para;</a></h3>
+<p>The requested bind, origin, prefix, or proxy trust values do not form one safe route.
+Use the default loopback gateway for direct access.
+For a Jupyter or trusted platform proxy, configure the exact browser-visible origin and base path, the expected prefix behavior, and the trusted proxy source boundary.</p>
+<p>Do not solve this diagnostic by widening the bind or using a wildcard origin.
+See <a href="../../operate/platform-integration/#gateway-ingress">Add a Platform</a>.</p>
+<h3 id="hw-ingress-002-gateway-request-does-not-match-the-configured-route"><code>HW-INGRESS-002</code> — Gateway Request Does Not Match the Configured Route<a class="headerlink" href="#hw-ingress-002-gateway-request-does-not-match-the-configured-route" title="Permanent link">&para;</a></h3>
+<p>Use the exact URL supplied by the deployment.
+If the route is operator-managed, verify the upstream source address, external host and protocol, stripped or preserved prefix, HTTP and WebSocket origins, and complete forwarded-header set.</p>
+<p>The proxy must remove forwarding and identity headers supplied by the client before adding its own values.
+Do not disable host, origin, or path validation to make the request pass.</p>
+<h2 id="browser-access">Browser Access<a class="headerlink" href="#browser-access" title="Permanent link">&para;</a></h2>
+<p>If the browser page does not open:</p>
+<ol>
+<li>keep the launching terminal running;</li>
+<li>confirm <code>heartwood --interface web</code> reported ready;</li>
+<li>use the exact printed URL;</li>
+<li>check whether port <code>8767</code> is already in use; and</li>
+<li>run <code>heartwood doctor</code> from the same directory.</li>
+</ol>
+<p>The browser interface is not supported on Terra or Stanford Carina.
+Use the terminal or the Terra notebook interface instead of constructing a proxy path.</p>
+<p>Do not work around a proxy failure by binding the gateway publicly without authentication.</p>
+<h2 id="session-ownership-and-interrupted-commands">Session Ownership and Interrupted Commands<a class="headerlink" href="#session-ownership-and-interrupted-commands" title="Permanent link">&para;</a></h2>
+<p>If Heartwood reports that a session is active in another process, stop the terminal, browser server, or notebook kernel that owns it and try again.
+Do not remove <code>.writer.lock</code> or <code>.writer.json</code>; the operating-system lock determines ownership, and Heartwood reclaims stale metadata after the prior process has exited.
+If Heartwood reports that the project storage does not support required process locks, move the complete project to a native local, attached persistent, or qualified project filesystem.
+Do not move only <code>.heartwood/</code>, and do not use an object-store mount as session storage.</p>
+<p>A completed request can be retried with the same command identifier and content without repeating model or tool work.
+If Heartwood reports that a command was interrupted after acceptance, replay the session and verify the project files and audit records before continuing.
+Then continue in a new session; the interrupted session remains read-only so an uncertain action cannot be repeated.
+Do not edit or remove files below the session's <code>.commands/</code> directory or its recovery journal.</p>
+<h2 id="audit-verification-and-checkpoints">Audit Verification and Checkpoints<a class="headerlink" href="#audit-verification-and-checkpoints" title="Permanent link">&para;</a></h2>
+<p>Run the full session check before transferring evidence:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>heartwood<span class="w"> </span>--session-id<span class="w"> </span>session-main<span class="w"> </span>audit<span class="w"> </span>verify
+</code></pre></div>
+<p>If verification fails, stop mutating that session and preserve the complete project state for authorized review.
+Do not edit an audit line, remove a recovery journal, or recreate a missing hash.</p>
+<p>A checkpoint output, signer registry, trusted public key, signer credential, and local fallback key must be outside the Heartwood project.
+Run <code>heartwood audit signer list</code> to confirm that a deployment registry is available and that the expected profile is active.
+For the explicit offline fallback, keep <code>heartwood signer serve-local</code> running and confirm that its registry endpoint, profile, key fingerprint, and owner-only token still agree.
+Use a new output directory, a valid retention date on or after checkpoint creation, and storage that supports native process-shared locks.
+Verify a restored bundle with the active deployment profile or an independently retained public key before relying on it.</p>
+<p>See <a href="../../operate/audit-checkpoints/">Audit Checkpoints and Retention</a> for the complete workflow and the limits of the signed retention declaration.</p>
+<h2 id="collect-safe-diagnostics">Collect Safe Diagnostics<a class="headerlink" href="#collect-safe-diagnostics" title="Permanent link">&para;</a></h2>
+<p>Share the Heartwood version, <code>heartwood doctor --json</code>, platform, image tag or digest, failing <code>HW-*</code> code, and a minimal synthetic reproduction.
+Remove project content, credentials, protected data, signed URLs, user identifiers, and unrestricted logs before attaching anything to a public issue.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../gpu-compatibility/" class="md-footer__link md-footer__link--prev" aria-label="Previous: GPU Compatibility">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                GPU Compatibility
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../glossary/" class="md-footer__link md-footer__link--next" aria-label="Next: Glossary">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Glossary
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright Stanford University and the Heartwood project authors
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["content.code.copy","navigation.footer","navigation.indexes","navigation.path","navigation.sections","navigation.tabs","navigation.tabs.sticky","navigation.top","search.highlight","toc.follow"],"search":"../../assets/javascripts/workers/search.7d14d953.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":{"alias":true,"provider":"mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.ed145cee.min.js"></script>
+      
+    
+  </body>
+</html>
