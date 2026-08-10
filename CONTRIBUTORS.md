@@ -8,6 +8,6 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Contributors
+# Heartwood Contributors
 
 * [Paul Schmiedmayer](https://github.com/PSchmiedmayer)
