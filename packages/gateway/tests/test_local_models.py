@@ -533,6 +533,21 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     }
 
 
+def test_artifact_capability_tier_is_preserved_in_the_shared_catalog() -> None:
+    root = Path(__file__).resolve().parents[3]
+    artifacts = load_model_artifact_catalog(
+        root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
+    )
+    powerful = replace(
+        artifacts.artifact("qwen25-7b-instruct-q4_k_m"),
+        tier="powerful",
+    )
+
+    (choice,) = catalog_model_choices((powerful,), (), recommended_only=False)
+
+    assert choice.tier == "powerful"
+
+
 def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
     root = Path(__file__).resolve().parents[3]
     artifacts = load_model_artifact_catalog(

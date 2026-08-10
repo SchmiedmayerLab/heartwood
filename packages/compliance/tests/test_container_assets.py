@@ -273,6 +273,35 @@ def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
     )
     assert "No Heartwood image contains model weights" in flavors["model_weight_policy"]
 
+    assert set(catalog["preview_models"]) == {"muse-glimmer-30b-kquant-17gb"}
+    preview = catalog["preview_models"]["muse-glimmer-30b-kquant-17gb"]
+    assert preview["status"] == "upstream-preview"
+    artifact = _toml(preview["artifact_manifest"])
+    assert artifact["source_revision"] == "93769bc7ab5ad1e9cd22d857e3138cf5d977ae81"
+    assert artifact["artifact_sha256"] == (
+        "7e9b74b7c8875e9e265695df9613bf6290f2392e479ce740495a129019c488d8"
+    )
+    assert artifact["tier"] == "powerful"
+
+
+def test_muse_glimmer_preview_is_pinned_and_manually_qualified() -> None:
+    workflow = (_repo_root() / ".github/workflows/muse-glimmer-preview.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "push:" not in workflow
+    assert "075d645af60dff4abd97a2db280b2f89da93b459" in workflow
+    assert "1aef13956381c6c2ba2bf1eea1eea4c282c6c9c8245ee0de9f581f3d910dd38e" in workflow
+    assert "f84ecc3a0ea984a4c04542a84269e3d065350a6e" in workflow
+    assert "R580 or newer is required" in workflow
+    assert "--tool-call-parser muse_glimmer" in workflow
+    assert "--reasoning-parser muse_glimmer" in workflow
+    assert "coding_agent_e2e.sh" in workflow
+    assert "docker push" not in workflow
+    assert "dflash" not in workflow.casefold()
+
 
 def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     bake = _read("docker-bake.hcl")

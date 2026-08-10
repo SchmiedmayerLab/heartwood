@@ -514,7 +514,7 @@ def catalog_model_choices(
             recommended_resource_envelope=artifact.recommended_resource_envelope,
             license_id=_license_id_from_posture(artifact.license_posture),
             precision=_gguf_precision(artifact.source_path),
-            tier="standard",
+            tier=artifact.tier,
             qualification=artifact.qualification,
             recommended_ram_bytes=max(16 * 1024**3, artifact.artifact_size_bytes * 4),
             recommended_disk_bytes=max(

@@ -418,6 +418,7 @@ def test_background_manager_downloads_and_selects_a_snapshot(
         ({"minimum_free_bytes": 1}, "storage metadata"),
         ({"context_window": 1_048_577}, "between 2048 and 1048576"),
         ({"artifact_sha256": "ABC"}, "lowercase SHA-256"),
+        ({"tier": "unsupported"}, "unsupported model artifact tier"),
     ],
 )
 def test_artifact_metadata_rejects_unsafe_values(
@@ -580,6 +581,7 @@ def _artifact_manifest(artifact_id: str) -> str:
             f'artifact_sha256 = "{digest}"',
             'license_posture = "Synthetic"',
             'model_alias = "test"',
+            'tier = "standard"',
             "context_window = 16384",
         )
     )

@@ -1,0 +1,274 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Muse Glimmer Preview Qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: muse-glimmer-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MUSE_MODEL_REPOSITORY: meta-models/Muse-Glimmer-30B
+  MUSE_MODEL_REVISION: f84ecc3a0ea984a4c04542a84269e3d065350a6e
+  VLLM_SOURCE_REVISION: 075d645af60dff4abd97a2db280b2f89da93b459
+  VLLM_SOURCE_SHA256: 1aef13956381c6c2ba2bf1eea1eea4c282c6c9c8245ee0de9f581f3d910dd38e
+
+jobs:
+  qualification:
+    name: Muse Glimmer Coding-Agent Qualification
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 360
+    environment: gpu-qualification
+    steps:
+      - name: Checkout Heartwood
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Define qualification paths
+        run: |
+          {
+            echo "MUSE_MODEL_ROOT=${RUNNER_TEMP}/heartwood-muse-model-f84ecc3a"
+            echo "MUSE_PROJECT_ROOT=${RUNNER_TEMP}/heartwood-muse-project-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "VLLM_SOURCE_ROOT=${RUNNER_TEMP}/vllm-source-075d645a"
+          } >> "${GITHUB_ENV}"
+
+      - name: Verify preview host
+        run: |
+          python3 - <<'PY'
+          import subprocess
+
+          result = subprocess.run(
+              [
+                  "nvidia-smi",
+                  "--query-gpu=index,name,memory.total,driver_version",
+                  "--format=csv,noheader,nounits",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          devices = [line.split(", ") for line in result.stdout.splitlines() if line.strip()]
+          if len(devices) < 2:
+              raise SystemExit("Muse Glimmer BF16 qualification requires at least two GPUs")
+          for index, name, memory, driver in devices[:2]:
+              if int(memory) < 45_000:
+                  raise SystemExit(f"GPU {index} ({name}) has only {memory} MiB")
+              if int(driver.split(".", 1)[0]) < 580:
+                  raise SystemExit(f"GPU {index} uses driver {driver}; R580 or newer is required")
+          print("Preview host provides two compatible GPUs:")
+          print("\n".join(", ".join(device) for device in devices[:2]))
+          PY
+          available_kib="$(df --output=avail -k "${RUNNER_TEMP}" | tail -n 1)"
+          minimum_kib=$((180 * 1024 * 1024))
+          if (( available_kib < minimum_kib )); then
+            printf 'Muse Glimmer qualification requires at least 180 GiB free; found %s KiB.\n' \
+              "${available_kib}" >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
+
+      - name: Fetch and verify the vLLM preview source
+        run: |
+          source_archive="${VLLM_SOURCE_ROOT}.tar.gz"
+          curl --fail --location --retry 3 \
+            "https://codeload.github.com/xianbaoqian/vllm/tar.gz/${VLLM_SOURCE_REVISION}" \
+            --output "${source_archive}"
+          printf '%s  %s\n' "${VLLM_SOURCE_SHA256}" "${source_archive}" | sha256sum --check
+          rm -rf "${VLLM_SOURCE_ROOT}"
+          mkdir -p "${VLLM_SOURCE_ROOT}"
+          tar --extract --gzip --file "${source_archive}" \
+            --directory "${VLLM_SOURCE_ROOT}" --strip-components 1
+          test "$(git -C . rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Build the isolated vLLM preview
+        run: |
+          docker buildx build --load \
+            --file "${VLLM_SOURCE_ROOT}/docker/Dockerfile" \
+            --target vllm-openai \
+            --build-arg "VLLM_BUILD_COMMIT=${VLLM_SOURCE_REVISION}" \
+            --build-arg VLLM_BUILD_PIPELINE=heartwood-preview-qualification \
+            --build-arg "VLLM_BUILD_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --build-arg VLLM_IMAGE_TAG=heartwood-vllm-muse-preview:local \
+            --tag heartwood-vllm-muse-preview:local \
+            "${VLLM_SOURCE_ROOT}"
+
+      - name: Build the Heartwood application image
+        run: >-
+          docker buildx bake --file docker-bake.hcl --load
+          --set runtime.platform=linux/amd64
+          --set runtime.tags=heartwood-muse-qualification:local
+          runtime
+
+      - name: Download the immutable Muse Glimmer snapshot
+        run: |
+          mkdir -p "${MUSE_MODEL_ROOT}" "${MUSE_PROJECT_ROOT}"
+          docker run --rm --interactive \
+            --volume "${MUSE_MODEL_ROOT}:/models" \
+            --env "MUSE_MODEL_REPOSITORY=${MUSE_MODEL_REPOSITORY}" \
+            --env "MUSE_MODEL_REVISION=${MUSE_MODEL_REVISION}" \
+            --entrypoint python \
+            heartwood-vllm-muse-preview:local \
+            -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MUSE_MODEL_REPOSITORY"], revision=os.environ["MUSE_MODEL_REVISION"], local_dir="/models")'
+          (
+            cd "${MUSE_MODEL_ROOT}"
+            find . -path './.cache' -prune -o -type f -print0 \
+              | sort --zero-terminated \
+              | xargs --null --no-run-if-empty sha256sum
+          ) > "${MUSE_PROJECT_ROOT}/model-SHA256SUMS"
+          sudo chown -R 10001:10001 "${MUSE_PROJECT_ROOT}"
+
+      - name: Start the isolated Muse Glimmer server
+        run: |
+          docker run --detach --name heartwood-muse-server \
+            --gpus '"device=0,1"' \
+            --network none \
+            --read-only \
+            --shm-size 16g \
+            --tmpfs /tmp:rw,nosuid,nodev,size=8g \
+            --tmpfs /root/.cache:rw,nosuid,nodev,size=2g \
+            --volume "${MUSE_MODEL_ROOT}:/models:ro" \
+            --volume "${VLLM_SOURCE_ROOT}/examples/tool_chat_template_muse_glimmer.jinja:/templates/muse-glimmer.jinja:ro" \
+            heartwood-vllm-muse-preview:local \
+            /models \
+            --served-model-name heartwood-managed-runtime \
+            --host 127.0.0.1 \
+            --port 8765 \
+            --max-model-len 32768 \
+            --tensor-parallel-size 2 \
+            --gpu-memory-utilization 0.90 \
+            --enable-auto-tool-choice \
+            --tool-call-parser muse_glimmer \
+            --reasoning-parser muse_glimmer \
+            --chat-template /templates/muse-glimmer.jinja
+
+      - name: Wait for model readiness
+        run: |
+          docker run --rm --interactive \
+            --network container:heartwood-muse-server \
+            --entrypoint python \
+            heartwood-muse-qualification:local \
+            - <<'PY'
+          import time
+          import urllib.error
+          import urllib.request
+
+          deadline = time.time() + 1_800
+          next_update = time.time()
+          last_error = None
+          while time.time() < deadline:
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8765/health", timeout=2) as response:
+                      if response.status == 200:
+                          print("Muse Glimmer is ready; starting Heartwood acceptance.")
+                          break
+              except (OSError, urllib.error.URLError) as error:
+                  last_error = error
+              if time.time() >= next_update:
+                  print("Muse Glimmer is still loading; the qualification will continue automatically.", flush=True)
+                  next_update = time.time() + 30
+              time.sleep(1)
+          else:
+              raise SystemExit(f"Muse Glimmer did not become ready: {last_error}")
+          PY
+
+      - name: Record preview runtime metadata
+        run: |
+          runtime_metadata="${RUNNER_TEMP}/heartwood-muse-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          docker exec --interactive heartwood-muse-server python - <<'PY' > "${runtime_metadata}"
+          import json
+          import subprocess
+          from importlib.metadata import version
+
+          import torch
+
+          inventory = subprocess.run(
+              [
+                  "nvidia-smi",
+                  "--query-gpu=index,name,memory.total,driver_version,compute_cap",
+                  "--format=csv,noheader,nounits",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          print(json.dumps({
+              "cuda_version": torch.version.cuda,
+              "pytorch_version": version("torch"),
+              "source_archive_sha256": "1aef13956381c6c2ba2bf1eea1eea4c282c6c9c8245ee0de9f581f3d910dd38e",
+              "visible_gpus": [line.strip() for line in inventory.stdout.splitlines() if line.strip()],
+              "vllm_source_revision": "075d645af60dff4abd97a2db280b2f89da93b459",
+              "vllm_version": version("vllm"),
+          }, sort_keys=True))
+          PY
+          sudo install --owner 10001 --group 10001 --mode 0600 \
+            "${runtime_metadata}" "${MUSE_PROJECT_ROOT}/runtime.json"
+          rm "${runtime_metadata}"
+
+      - name: Run Heartwood coding-agent acceptance
+        run: |
+          docker run --rm \
+            --network container:heartwood-muse-server \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges=true \
+            --pids-limit 2048 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=8g \
+            --tmpfs /home/heartwood/.cache:rw,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /home/heartwood/.openhands:rw,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700 \
+            --volume "${MUSE_MODEL_ROOT}:/models:ro" \
+            --volume "${MUSE_PROJECT_ROOT}:/workspace" \
+            --env HEARTWOOD_CAPABLE_PROJECT=/workspace \
+            --env HEARTWOOD_LOCAL_MODEL_PATH=/models \
+            --env HEARTWOOD_LOCAL_RUNTIME_ACTIVE=1 \
+            --env HEARTWOOD_LOCAL_RUNTIME_PROFILE=vllm-cuda-preview \
+            --env HEARTWOOD_LOCAL_RUNTIME_PORT=8765 \
+            --env HEARTWOOD_LOCAL_MODEL_CONTEXT=32768 \
+            --env HEARTWOOD_MANAGED_MODEL_ALIAS=heartwood-managed-runtime \
+            --env "HEARTWOOD_QUALIFICATION_MODEL_REPOSITORY=${MUSE_MODEL_REPOSITORY}" \
+            --env "HEARTWOOD_QUALIFICATION_MODEL_REVISION=${MUSE_MODEL_REVISION}" \
+            --env HEARTWOOD_QUALIFICATION_RUNTIME_METADATA=/workspace/runtime.json \
+            heartwood-muse-qualification:local \
+            bash /opt/heartwood/images/generic/scripts/coding_agent_e2e.sh
+
+      - name: Show server logs on failure
+        if: failure()
+        run: docker logs --tail 300 heartwood-muse-server || true
+
+      - name: Prepare qualification evidence
+        if: always()
+        run: >-
+          sudo chown -R "$(id -u):$(id -g)"
+          "${MUSE_PROJECT_ROOT}"
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: muse-glimmer-preview-qualification-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-qualification.json
+            ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-replay.txt
+            ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-transcript.txt
+            ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/model-SHA256SUMS
+            ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/runtime.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Stop preview runtime
+        if: always()
+        run: docker rm --force heartwood-muse-server >/dev/null 2>&1 || true

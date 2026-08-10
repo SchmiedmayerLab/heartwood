@@ -35,6 +35,7 @@ from heartwood.gateway._model_snapshots import (
     ModelSnapshot,
     ModelSnapshotCatalog,
     ModelSnapshotError,
+    ModelTier,
     download_model_snapshot,
 )
 
@@ -120,6 +121,7 @@ class ModelArtifact:
     context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     minimum_resource_envelope: str | None = None
     recommended_resource_envelope: str | None = None
+    tier: ModelTier = "standard"
     qualification: ModelQualification = "unvalidated"
     validated_platforms: tuple[str, ...] = ()
     qualification_test: str | None = None
@@ -159,6 +161,8 @@ class ModelArtifact:
             raise ModelArtifactError(msg)
         if self.qualification not in {"unvalidated", "qualified"}:
             raise ModelArtifactError("unsupported model artifact qualification")
+        if self.tier not in {"standard", "powerful", "maximum"}:
+            raise ModelArtifactError("unsupported model artifact tier")
         if len(self.validated_platforms) != len(set(self.validated_platforms)) or any(
             platform not in {"carina", "generic", "terra"} for platform in self.validated_platforms
         ):
@@ -502,6 +506,7 @@ def _load_artifact(path: Path) -> ModelArtifact:
         context_window=_positive_int(data, "context_window"),
         minimum_resource_envelope=_optional_string(data, "minimum_resource_envelope"),
         recommended_resource_envelope=_optional_string(data, "recommended_resource_envelope"),
+        tier=cast(ModelTier, _string(data, "tier")),
         qualification=cast(
             ModelQualification,
             _optional_string(data, "qualification") or "unvalidated",

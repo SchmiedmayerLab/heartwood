@@ -35,6 +35,10 @@ The shared coding-agent acceptance test performs direct model inference and then
 It emits a machine-readable qualification record containing the exact runtime, model revision, GPU, driver, context, tensor parallelism, server parser, and agent tool mode.
 The CPU capable-model job and GPU qualification wrapper use this same acceptance contract instead of maintaining separate agent scenarios.
 
+Upstream runtime support that has not reached a stable release is evaluated only through a manually dispatched, source-pinned preview qualification.
+The preview verifies the upstream archive digest, builds the upstream runtime in isolation, runs the same coding-agent acceptance contract, and publishes evidence without changing or publishing Heartwood release images.
+An upstream preview cannot become a managed recommendation until the support is available in a stable, locked Heartwood runtime and the exact release configuration passes qualification.
+
 The CPU capable-model job obtains its model through the complete portable-transfer contract.
 It downloads and verifies the pinned model in a connected project, exports a bundle, mounts only that bundle into an empty project with `--network none`, imports and selects it after explicit license approval, verifies the normal launcher plan, and then runs the shared coding-agent acceptance task against the imported copy.
 Deterministic tests additionally cover reproducible bundle bytes, GGUF and vLLM snapshots, untrusted qualification claims, path and symbolic-link attacks, tampered and incomplete payloads, incompatible runtime metadata, insufficient or modified destinations, cancellation cleanup, interrupted retries, duplicate imports, process restart, and the absence of a repository download path for transferred models.

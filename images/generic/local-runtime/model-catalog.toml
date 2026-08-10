@@ -28,6 +28,15 @@ quality_claim = false
 quality_claim_scope = "Demo-quality Heartwood-managed coding output only; no biomedical, production, or benchmark claim."
 production_use = false
 
+[preview_models.muse-glimmer-30b-kquant-17gb]
+status = "upstream-preview"
+purpose = "High-resource coding-agent model with native structured tool use; not reviewed for biomedical use."
+runtime_profile = "llama-cpp-cpu"
+artifact_manifest = "images/generic/local-runtime/models/muse-glimmer-30b-kquant-17gb.toml"
+quality_claim = false
+quality_claim_scope = "Heartwood coding-agent qualification only; no biomedical, production, or comparative benchmark claim."
+production_use = false
+
 [models.llama-cpp-stories260k-ci]
 status = "implemented"
 purpose = "Installation and offline checks only; not suitable for coding tasks."

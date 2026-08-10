@@ -28,7 +28,8 @@ The tier describes the intended agent workload, not scientific quality.
 | **Powerful** | Larger repositories, multi-step coding tasks, and longer sessions |
 | **Maximum capability** | Broad multi-file work on substantial multi-GPU compute |
 
-The managed catalog contains only configurations that fit a supported environment and have completed the full coding-agent qualification.
+The guided selector recommends only configurations that fit the detected environment and have completed the full coding-agent qualification.
+The complete catalog can also show explicitly labeled **Not tested** candidates under advanced options so they can be qualified without being selected automatically.
 
 List the complete catalog from the terminal:
 

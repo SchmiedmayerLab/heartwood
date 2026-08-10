@@ -737,6 +737,7 @@ class ModelArtifactResponse(_ApiResponse):
     context_window: int
     minimum_resource_envelope: str | None
     recommended_resource_envelope: str | None
+    tier: LocalModelTier
     qualification: LocalModelQualification
     validated_platforms: list[str]
     qualification_test: str | None
