@@ -123,7 +123,17 @@ jobs:
             --env "MUSE_MODEL_REVISION=${MUSE_MODEL_REVISION}" \
             --entrypoint python \
             heartwood-vllm-muse-preview:local \
-            -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["MUSE_MODEL_REPOSITORY"], revision=os.environ["MUSE_MODEL_REVISION"], local_dir="/models")'
+            - <<'PY'
+          import os
+
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id=os.environ["MUSE_MODEL_REPOSITORY"],
+              revision=os.environ["MUSE_MODEL_REVISION"],
+              local_dir="/models",
+          )
+          PY
           (
             cd "${MUSE_MODEL_ROOT}"
             find . -path './.cache' -prune -o -type f -print0 \
@@ -189,8 +199,12 @@ jobs:
       - name: Record preview runtime metadata
         run: |
           runtime_metadata="${RUNNER_TEMP}/heartwood-muse-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          docker exec --interactive heartwood-muse-server python - <<'PY' > "${runtime_metadata}"
+          docker exec --interactive \
+            --env "VLLM_SOURCE_REVISION=${VLLM_SOURCE_REVISION}" \
+            --env "VLLM_SOURCE_SHA256=${VLLM_SOURCE_SHA256}" \
+            heartwood-muse-server python - <<'PY' > "${runtime_metadata}"
           import json
+          import os
           import subprocess
           from importlib.metadata import version
 
@@ -209,9 +223,9 @@ jobs:
           print(json.dumps({
               "cuda_version": torch.version.cuda,
               "pytorch_version": version("torch"),
-              "source_archive_sha256": "1aef13956381c6c2ba2bf1eea1eea4c282c6c9c8245ee0de9f581f3d910dd38e",
+              "source_archive_sha256": os.environ["VLLM_SOURCE_SHA256"],
               "visible_gpus": [line.strip() for line in inventory.stdout.splitlines() if line.strip()],
-              "vllm_source_revision": "075d645af60dff4abd97a2db280b2f89da93b459",
+              "vllm_source_revision": os.environ["VLLM_SOURCE_REVISION"],
               "vllm_version": version("vllm"),
           }, sort_keys=True))
           PY
@@ -262,6 +276,7 @@ jobs:
           name: muse-glimmer-preview-qualification-${{ github.sha }}
           path: |
             ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-qualification.json
+            ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-audit-export.jsonl
             ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-replay.txt
             ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/heartwood-transcript.txt
             ${{ runner.temp }}/heartwood-muse-project-${{ github.run_id }}-${{ github.run_attempt }}/model-SHA256SUMS
