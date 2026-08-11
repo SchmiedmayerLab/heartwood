@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT
 
 [![Build and Test](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/main-validation.yml/badge.svg)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/main-validation.yml)
 [![REUSE status](https://api.reuse.software/badge/github.com/SchmiedmayerLab/heartwood)](https://api.reuse.software/info/github.com/SchmiedmayerLab/heartwood)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/SchmiedmayerLab/heartwood/blob/main/LICENSE.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 [![Release](https://img.shields.io/github/v/release/SchmiedmayerLab/heartwood?display_name=tag&include_prereleases&sort=semver)](https://github.com/SchmiedmayerLab/heartwood/releases)
 
 [Stable Documentation](https://schmiedmayerlab.github.io/heartwood/) · [Prerelease Documentation](https://schmiedmayerlab.github.io/heartwood/preview/)
