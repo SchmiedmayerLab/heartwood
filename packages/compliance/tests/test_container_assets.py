@@ -1121,6 +1121,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert 'audit_path="${project}/heartwood-audit-export.jsonl"' in coding_agent
     assert 'audit_path="${state_root}/' not in coding_agent
     assert "Checking direct model inference" in coding_agent
+    assert '"max_tokens": 256' in coding_agent
+    assert "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" in coding_agent
     assert "verify_coding_agent_e2e.py" in coding_agent
     assert "/tmp/heartwood-model-transfer:/transfer:ro" in capable_workflow
     assert (
