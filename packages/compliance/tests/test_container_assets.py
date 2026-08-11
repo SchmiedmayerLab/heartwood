@@ -453,6 +453,59 @@ def test_gpu_runtime_verifier_allows_hash_locked_dependency_tensor(tmp_path: Pat
     assert completed.stderr == ""
 
 
+@pytest.mark.parametrize(
+    ("platform", "tensor_parallel_size", "expected_fallback"),
+    [("carina", 2, True), ("carina", 1, False), ("terra", 2, False)],
+)
+def test_secured_vllm_wrapper_scopes_carina_multi_gpu_fallback(
+    tmp_path: Path,
+    platform: str,
+    tensor_parallel_size: int,
+    expected_fallback: bool,
+) -> None:
+    runtime_bin = tmp_path / "bin"
+    runtime_bin.mkdir()
+    wrapper = runtime_bin / "heartwood-vllm"
+    wrapper.write_bytes((_repo_root() / "images/gpu/heartwood-vllm").read_bytes())
+    wrapper.chmod(0o755)
+    arguments = tmp_path / "arguments.json"
+    environment = tmp_path / "environment.json"
+    vllm = runtime_bin / "vllm"
+    vllm.write_text(
+        (
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            f"open({str(arguments)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+            "values = {\n"
+            "    'nccl': os.environ.get('NCCL_P2P_DISABLE'),\n"
+            "    'outlines': os.environ.get('VLLM_V1_USE_OUTLINES_CACHE'),\n"
+            "}\n"
+            f"open({str(environment)!r}, 'w').write(json.dumps(values))\n"
+        ),
+        encoding="utf-8",
+    )
+    vllm.chmod(0o755)
+
+    completed = subprocess.run(
+        [
+            str(wrapper),
+            "serve",
+            "/synthetic/model",
+            "--tensor-parallel-size",
+            str(tensor_parallel_size),
+        ],
+        check=False,
+        env={**os.environ, "HEARTWOOD_PLATFORM": platform},
+    )
+
+    assert completed.returncode == 0
+    observed_arguments = json.loads(arguments.read_text(encoding="utf-8"))
+    observed_environment = json.loads(environment.read_text(encoding="utf-8"))
+    assert ("--disable-custom-all-reduce" in observed_arguments) is expected_fallback
+    assert observed_environment["nccl"] == ("1" if expected_fallback else None)
+    assert observed_environment["outlines"] == "0"
+
+
 def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
     model = tmp_path / "model"
     model.mkdir()

@@ -161,9 +161,10 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         path=model_root,
         runtime="vllm",
         model_id="test-model",
-        minimum_gpu_count=1,
+        minimum_gpu_count=2,
         minimum_gpu_memory_bytes=1,
         tool_call_parser="hermes",
+        tensor_parallel_size=2,
     )
 
     _write_executable(
@@ -214,7 +215,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
           "SLURM_JOB_PARTITION=dev"
           "SLURM_CLUSTER_NAME=carina"
           "LOCAL_SCRATCH_JOB=${scratch}"
-          "CUDA_VISIBLE_DEVICES=0"
+          "CUDA_VISIBLE_DEVICES=0,1"
         )
         cd "${workdir}"
         exec env -i "${clean_environment[@]}" "${command[@]}"
@@ -226,6 +227,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         #!/usr/bin/env bash
         set -euo pipefail
         printf '0, NVIDIA L40S, 46068, 45000, 570.148.08, 8.9\n'
+        printf '1, NVIDIA L40S, 46068, 45000, 570.148.08, 8.9\n'
         """,
     )
     heartwood_python = runtime_root / "heartwood" / "bin" / "python"
@@ -239,8 +241,12 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         echo '0.25.1+cu129 2.11.0+cu129 12.9'
         """,
     )
+    vllm_bin = runtime_root / "vllm" / "bin"
+    wrapper = vllm_bin / "heartwood-vllm"
+    wrapper.write_bytes((Path(__file__).parents[3] / "images/gpu/heartwood-vllm").read_bytes())
+    wrapper.chmod(0o755)
     _write_python_executable(
-        runtime_root / "vllm" / "bin" / "heartwood-vllm",
+        vllm_bin / "vllm",
         r"""
         import json
         import os
@@ -263,6 +269,8 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
                     "ld_library_path": os.environ.get("LD_LIBRARY_PATH"),
                     "path": os.environ.get("PATH"),
                     "sampler": os.environ.get("VLLM_USE_FLASHINFER_SAMPLER"),
+                    "nccl_p2p_disable": os.environ.get("NCCL_P2P_DISABLE"),
+                    "arguments": sys.argv[1:],
                     "secret_present": "HEARTWOOD_TEST_SECRET" in os.environ,
                 },
                 sort_keys=True,
@@ -486,6 +494,10 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         str(runtime_root / "bootstrap" / "lib")
     )
     assert runtime_environment["sampler"] == "0"
+    assert runtime_environment["nccl_p2p_disable"] == "1"
+    assert runtime_environment["arguments"].count("--disable-custom-all-reduce") == 1
+    tensor_parallel_index = runtime_environment["arguments"].index("--tensor-parallel-size")
+    assert runtime_environment["arguments"][tensor_parallel_index + 1] == "2"
     assert not runtime_environment["secret_present"]
     assert runtime_environment["path"].startswith(str(runtime_root / "bootstrap" / "bin"))
     config = tomllib.loads(project.config_path.read_text(encoding="utf-8"))
