@@ -273,6 +273,16 @@ def test_image_catalog_contains_only_explicit_verified_downloads() -> None:
     )
     assert "No Heartwood image contains model weights" in flavors["model_weight_policy"]
 
+    assert set(catalog["preview_models"]) == {"muse-glimmer-30b-kquant-17gb"}
+    preview = catalog["preview_models"]["muse-glimmer-30b-kquant-17gb"]
+    assert preview["status"] == "upstream-preview"
+    artifact = _toml(preview["artifact_manifest"])
+    assert artifact["source_revision"] == "93769bc7ab5ad1e9cd22d857e3138cf5d977ae81"
+    assert artifact["artifact_sha256"] == (
+        "7e9b74b7c8875e9e265695df9613bf6290f2392e479ce740495a129019c488d8"
+    )
+    assert artifact["tier"] == "powerful"
+
 
 def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
     bake = _read("docker-bake.hcl")
@@ -441,6 +451,59 @@ def test_gpu_runtime_verifier_allows_hash_locked_dependency_tensor(tmp_path: Pat
 
     assert completed.returncode == 0
     assert completed.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("platform", "tensor_parallel_size", "expected_fallback"),
+    [("carina", 2, True), ("carina", 1, False), ("terra", 2, False)],
+)
+def test_secured_vllm_wrapper_scopes_carina_multi_gpu_fallback(
+    tmp_path: Path,
+    platform: str,
+    tensor_parallel_size: int,
+    expected_fallback: bool,
+) -> None:
+    runtime_bin = tmp_path / "bin"
+    runtime_bin.mkdir()
+    wrapper = runtime_bin / "heartwood-vllm"
+    wrapper.write_bytes((_repo_root() / "images/gpu/heartwood-vllm").read_bytes())
+    wrapper.chmod(0o755)
+    arguments = tmp_path / "arguments.json"
+    environment = tmp_path / "environment.json"
+    vllm = runtime_bin / "vllm"
+    vllm.write_text(
+        (
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            f"open({str(arguments)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+            "values = {\n"
+            "    'nccl': os.environ.get('NCCL_P2P_DISABLE'),\n"
+            "    'outlines': os.environ.get('VLLM_V1_USE_OUTLINES_CACHE'),\n"
+            "}\n"
+            f"open({str(environment)!r}, 'w').write(json.dumps(values))\n"
+        ),
+        encoding="utf-8",
+    )
+    vllm.chmod(0o755)
+
+    completed = subprocess.run(
+        [
+            str(wrapper),
+            "serve",
+            "/synthetic/model",
+            "--tensor-parallel-size",
+            str(tensor_parallel_size),
+        ],
+        check=False,
+        env={**os.environ, "HEARTWOOD_PLATFORM": platform},
+    )
+
+    assert completed.returncode == 0
+    observed_arguments = json.loads(arguments.read_text(encoding="utf-8"))
+    observed_environment = json.loads(environment.read_text(encoding="utf-8"))
+    assert ("--disable-custom-all-reduce" in observed_arguments) is expected_fallback
+    assert observed_environment["nccl"] == ("1" if expected_fallback else None)
+    assert observed_environment["outlines"] == "0"
 
 
 def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
@@ -1111,6 +1174,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert 'audit_path="${project}/heartwood-audit-export.jsonl"' in coding_agent
     assert 'audit_path="${state_root}/' not in coding_agent
     assert "Checking direct model inference" in coding_agent
+    assert '"max_tokens": 256' in coding_agent
+    assert "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" in coding_agent
     assert "verify_coding_agent_e2e.py" in coding_agent
     assert "/tmp/heartwood-model-transfer:/transfer:ro" in capable_workflow
     assert (

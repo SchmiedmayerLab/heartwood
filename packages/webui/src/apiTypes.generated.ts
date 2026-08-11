@@ -252,6 +252,7 @@ export interface ModelArtifactResponse {
   source_path: string;
   source_repository: string;
   source_revision: string;
+  tier: LocalModelTier;
   validated_platforms: string[];
 }
 /**

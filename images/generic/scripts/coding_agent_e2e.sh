@@ -69,6 +69,7 @@ export HEARTWOOD_LOCAL_RUNTIME_PORT="${runtime_port}"
 export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 export OPENHANDS_SUPPRESS_BANNER=1
+export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 
 if [[ "${HEARTWOOD_PRESERVE_PROJECT_MODEL_STATE:-0}" == "1" ]]; then
   rm -rf "${project}/input"
@@ -102,7 +103,7 @@ payload = json.dumps(
     {
         "model": os.environ["HEARTWOOD_MANAGED_MODEL_ALIAS"],
         "messages": [{"role": "user", "content": "Reply briefly that inference is ready."}],
-        "max_tokens": 32,
+        "max_tokens": 256,
         "temperature": 0,
     }
 ).encode()
