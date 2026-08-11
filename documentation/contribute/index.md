@@ -11,7 +11,7 @@ Contributions should preserve the shared project, gateway, OpenHands, interface,
 
 ## Before You Start
 
-Read the repository [contribution guide](https://github.com/SchmiedmayerLab/heartwood/blob/main/CONTRIBUTING.md), [code of conduct](https://github.com/SchmiedmayerLab/.github/blob/main/CODE_OF_CONDUCT.md), and [AGENTS.md](https://github.com/SchmiedmayerLab/heartwood/blob/main/AGENTS.md).
+Read the repository [contribution guide](https://github.com/SchmiedmayerLab/.github/blob/main/CONTRIBUTING.md), [code of conduct](https://github.com/SchmiedmayerLab/.github/blob/main/CODE_OF_CONDUCT.md), and [AGENTS.md](https://github.com/SchmiedmayerLab/heartwood/blob/main/AGENTS.md).
 Check [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) for scoped work and acceptance criteria.
 
 ## Contribution Areas
