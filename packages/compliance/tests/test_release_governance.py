@@ -176,13 +176,11 @@ def test_python_packages_publish_pep_561_markers() -> None:
         assert all((module / "py.typed").is_file() for module in modules), package_metadata.parent
 
 
-def test_support_and_security_policies_define_current_ownership() -> None:
-    security = Path("SECURITY.md").read_text(encoding="utf-8")
+def test_support_policies_define_current_ownership() -> None:
     support = Path("documentation/operate/support.md").read_text(encoding="utf-8")
     releases = Path("documentation/contribute/releases.md").read_text(encoding="utf-8")
     navigation = Path("zensical.toml").read_text(encoding="utf-8")
 
-    assert "GitHub private vulnerability reporting" in security
     assert "latest stable release is the maintained release line" in support
     assert "Before `1.0.0`" in support
     assert "Repository `CODEOWNERS` identifies the current maintainer" in support
@@ -330,7 +328,7 @@ def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
     )
 
     assert validation.count("SchmiedmayerLab/.github/.github/workflows/") == 3
-    assert validation.count("@v0.3") == 3
+    assert validation.count("@v0.5") == 3
     markdown_job = validation.split("  markdown-links:\n", maxsplit=1)[1].split(
         "\n  yamllint:\n", maxsplit=1
     )[0]

@@ -14,6 +14,8 @@ ignorePatterns:
   - pattern: '^http://localhost.*$'
   - pattern: '^http://127\.0\.0\.1.*$'
   - pattern: '^https://schmiedmayerlab\.github\.io/heartwood/.*$'
+  # Terra's support site sits behind a Cloudflare challenge that answers every headless request with a 403.
+  - pattern: '^https://support\.terra\.bio/.*$'
 replacementPatterns:
   - pattern: '(.*)#gh-dark-mode-only'
     replacement: '$1'
