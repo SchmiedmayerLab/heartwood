@@ -33,7 +33,7 @@ The exact driver used in a live qualification is recorded with its machine-reada
 
 | Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Outcome | Date |
 |---|---|---|---|---|---:|---|---:|---|---|---|---|
-| Terra | Powerful | 2 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ](https://huggingface.co/YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ/tree/e69e73813144d9b715648d8384b3f2c035397411) | W4A16 AWQ | 18,432 | Eager | 2 | `qwen3_coder` | OpenHands native tools | Qualified | 2026-07-22 |
+| Terra | Powerful | 2 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ](https://huggingface.co/YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ/tree/e69e73813144d9b715648d8384b3f2c035397411) | W4A16 AWQ | 18,432 | Eager | 2 | `qwen3_coder` | OpenHands native tools | Qualified | 2026-08-11 |
 | Carina | Powerful | 1 x L40S, 48 GB | [Qwen3-Coder-30B-A3B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8/tree/dcaee4d4dfc5ee71ad501f01f530e5652438fde0) | FP8 | 32,768 | CUDA graphs | 1 | `qwen3_coder` | OpenHands native tools | Qualified | 2026-07-21 |
 
 All listed model repositories declare the Apache-2.0 license at the pinned revision.

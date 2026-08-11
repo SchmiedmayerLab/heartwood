@@ -924,6 +924,7 @@ class FakeClient implements HeartwoodClient {
           license_posture: "Test fixture",
           model_alias: "Stories 260K",
           context_window: 32_768,
+          tier: "standard",
           minimum_resource_envelope: null,
           recommended_resource_envelope: null,
           qualification: "qualified",

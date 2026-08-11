@@ -18,4 +18,33 @@ if [[ "$#" -eq 1 && "$1" == "__heartwood_verify_runtime__" ]]; then
   exec "${runtime_bin}/python" "${runtime_bin}/verify_vllm.py"
 fi
 
-exec "${runtime_bin}/vllm" "$@"
+arguments=("$@")
+tensor_parallel_size=1
+disable_custom_all_reduce=0
+for ((index = 0; index < ${#arguments[@]}; index++)); do
+  case "${arguments[index]}" in
+    --tensor-parallel-size)
+      if ((index + 1 < ${#arguments[@]})); then
+        tensor_parallel_size="${arguments[index + 1]}"
+      fi
+      ;;
+    --tensor-parallel-size=*)
+      tensor_parallel_size="${arguments[index]#*=}"
+      ;;
+    --disable-custom-all-reduce)
+      disable_custom_all_reduce=1
+      ;;
+  esac
+done
+
+# Carina multi-GPU allocations use the NCCL fallback that avoids topology-dependent hangs.
+if [[ "${HEARTWOOD_PLATFORM:-}" == "carina" ]] &&
+  [[ "${tensor_parallel_size}" =~ ^[1-9][0-9]*$ ]] &&
+  ((tensor_parallel_size > 1)); then
+  export NCCL_P2P_DISABLE=1
+  if ((disable_custom_all_reduce == 0)); then
+    arguments+=(--disable-custom-all-reduce)
+  fi
+fi
+
+exec "${runtime_bin}/vllm" "${arguments[@]}"

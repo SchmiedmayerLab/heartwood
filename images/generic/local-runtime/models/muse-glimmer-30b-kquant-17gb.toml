@@ -1,0 +1,35 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+schema_version = "1"
+artifact_id = "muse-glimmer-30b-kquant-17gb"
+runtime_profile = "llama-cpp-cpu"
+purpose = "High-resource coding-agent model with native structured tool use; not reviewed for biomedical use."
+source_repository = "meta-models/Muse-Glimmer-30B-GGUF"
+source_path = "muse-glimmer-30B-kquant-17gb.gguf"
+source_revision = "93769bc7ab5ad1e9cd22d857e3138cf5d977ae81"
+source_url = "https://huggingface.co/meta-models/Muse-Glimmer-30B-GGUF/resolve/93769bc7ab5ad1e9cd22d857e3138cf5d977ae81/muse-glimmer-30B-kquant-17gb.gguf"
+artifact_format = "GGUF"
+artifact_size_bytes = 16756681056
+minimum_free_bytes = 42949672960
+artifact_sha256 = "7e9b74b7c8875e9e265695df9613bf6290f2392e479ce740495a129019c488d8"
+base_model = "meta-models/Muse-Glimmer-30B"
+base_model_url = "https://huggingface.co/meta-models/Muse-Glimmer-30B"
+base_model_license = "Apache-2.0"
+quantized_artifact_license = "Apache-2.0"
+parameter_count = "29.6B"
+context_window = 131072
+quantization = "K-quant, 17 GB"
+license_posture = "Apache-2.0 model and quantized artifact; retain the model card, license, and artifact provenance."
+redistribution = "Not bundled or redistributed in Heartwood images; downloaded from the pinned source only after an explicit user request."
+minimum_resource_envelope = "16 vCPU, 40 GB RAM, and 40 GB available storage for one 18,432-token agent session."
+recommended_resource_envelope = "16 vCPU, 64 GB RAM, and 75 GB available storage; larger contexts require additional memory."
+gpu_acceleration = "The portable Heartwood profile uses llama.cpp CPU inference; platform-specific acceleration requires separate qualification."
+model_alias = "Muse Glimmer 30B (17 GB)"
+tier = "powerful"
+qualification = "unvalidated"
+recommended = false
+agent_acceptance = "Meta publishes the model for long-running agents and native tool use. Heartwood requires its own complete coding-agent qualification before presenting this artifact as recommended."

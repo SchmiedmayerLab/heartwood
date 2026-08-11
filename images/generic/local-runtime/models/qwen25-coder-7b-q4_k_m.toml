@@ -29,4 +29,5 @@ minimum_resource_envelope = "4 vCPU, 16 GB RAM, and 25 GB available storage for 
 recommended_resource_envelope = "8 vCPU, 32 GB RAM, and 50 GB available storage for the project and runtime; use at least a 75 GB persistent disk on Terra because the platform base, image layers, model artifact, extraction overhead, and workspace share the environment."
 gpu_acceleration = "The baseline llama-cpp-cpu profile does not use attached GPUs; GPU runtimes require a separately tested profile."
 model_alias = "Qwen2.5-Coder-7B-Instruct Q4_K_M"
+tier = "standard"
 recommended = false

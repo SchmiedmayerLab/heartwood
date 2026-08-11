@@ -37,6 +37,7 @@ Open the workspace's Jupyter Cloud Environment settings and configure the enviro
 6. Review every value before selecting **Create**.
 
 Terra can reset the image or GPU selection when the CPU choice changes, so set compute resources first and verify the complete form before creation.
+After entering the image, wait for Terra to finish auto-detection and enable **Next** before changing fields or continuing.
 
 Use one of these combinations:
 
