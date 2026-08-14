@@ -137,8 +137,10 @@ def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> N
     assert readme_pictures
     for picture in readme_pictures:
         assert '<source media="(prefers-color-scheme: dark)"' in picture
-        assert "-dark.png" in picture
-        assert "-light.png" in picture
+        filenames = _theme_screenshot_filenames(picture)
+        assert len(filenames) == 2
+        assert any(filename.endswith("-dark.png") for filename in filenames)
+        assert any(filename.endswith("-light.png") for filename in filenames)
     assert screenshot_documents.count("{ .theme-screenshot-light }") == (
         screenshot_documents.count("{ .theme-screenshot-dark }")
     )
@@ -149,18 +151,17 @@ def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> N
     assert 'for (const theme of ["light", "dark"])' in screenshot_script
     assert "page.emulateMedia({ colorScheme: theme })" in screenshot_script
     assert "captureApproval: true" in screenshot_script
-    for basename in (
-        "browser-action-review",
-        "browser-action-settings",
-        "browser-changes",
-        "browser-conversation",
-        "browser-files",
-        "browser-specialists",
-    ):
+    referenced_screenshots = set(_theme_screenshot_filenames(screenshot_documents))
+    assert referenced_screenshots
+    basenames = {
+        re.sub(r"-(?:light|dark)\.png$", "", filename)
+        for filename in referenced_screenshots
+    }
+    for basename in basenames:
         assert f'"{basename}.png"' in screenshot_script
         for theme in ("light", "dark"):
             filename = f"{basename}-{theme}.png"
-            assert filename in screenshot_documents
+            assert filename in referenced_screenshots
             screenshot = assets / filename
             assert screenshot.stat().st_size > 1_000
             width, height = _png_dimensions(screenshot)
@@ -236,6 +237,16 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
     header = path.read_bytes()[:24]
     assert header[:8] == b"\x89PNG\r\n\x1a\n"
     return struct.unpack(">II", header[16:24])
+
+
+def _theme_screenshot_filenames(content: str) -> tuple[str, ...]:
+    return tuple(
+        re.findall(
+            r"(?:documentation/|\.\./)assets/screenshots/"
+            r"([a-z0-9-]+-(?:light|dark)\.png)",
+            content,
+        )
+    )
 
 
 def _read(path: str) -> str:
