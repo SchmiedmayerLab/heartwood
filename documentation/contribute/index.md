@@ -6,8 +6,8 @@ SPDX-License-Identifier: MIT
 
 # Contribute to Heartwood
 
-Heartwood is developed by the Schmiedmayer Lab at Stanford University and open-source contributors.
-Contributions should preserve the shared project, gateway, OpenHands, interface, platform, and evidence contracts rather than introducing parallel workflows.
+Heartwood welcomes contributions to its application, platform integrations, research Skills, tests, and documentation.
+Changes should preserve the shared project, gateway, OpenHands, interface, platform, and evidence contracts rather than introducing parallel workflows.
 
 ## Before You Start
 
