@@ -15,14 +15,16 @@ Heartwood recommends and automatically selects only Qualified configurations.
 | Component | Locked Version |
 |---|---|
 | Python | 3.12 |
-| vLLM | `0.25.1+cu129` |
-| PyTorch | `2.11.0+cu129` |
+| vLLM | `0.27.2rc1.dev77+gac7509e2b.cu129` from immutable commit `ac7509e2b1db40fec2f03dde1ed4e9dfdc2338c9` |
+| PyTorch | `2.13.0+cu129` |
 | TorchAudio | `2.11.0+cu129` |
-| TorchVision | `0.26.0+cu129` |
+| TorchVision | `0.28.0+cu129` |
 | CUDA application binary interface | 12.9 |
 | Minimum NVIDIA Linux driver | `525.60.13` |
 
 The vLLM environment is installed separately from Heartwood's application environment and resolved from a fully hashed lock.
+The vLLM build is the official CUDA 12.9 per-commit wheel immediately following the merged upstream Muse Glimmer implementation; the intervening commit changes only the RISC-V CPU build.
+Heartwood can move back to a stable release after that implementation is included and the replacement runtime passes the same qualification checks.
 Its dependency exclusions prevent a package resolver from replacing the CUDA 12.9 stack with CUDA 13 artifacts.
 CUDA 13 is not qualified for Heartwood.
 
@@ -38,6 +40,15 @@ The exact driver used in a live qualification is recorded with its machine-reada
 
 All listed model repositories declare the Apache-2.0 license at the pinned revision.
 Confirm that a model's license and intended use remain suitable for the project before downloading it.
+
+## Advanced Model Candidates
+
+| Platform Target | Capability Tier | GPU | Model and Immutable Revision | Precision | Default Context | Tensor Parallelism | Parsers | Status |
+|---|---|---|---|---|---:|---:|---|---|
+| Carina | Maximum capability | 2 x L40S, 48 GB each | [Muse-Glimmer-30B](https://huggingface.co/meta-models/Muse-Glimmer-30B/tree/a4e59da52a7bc87ae7251dd5545c0dd437c44b68) | BF16 | 65,536 | 2 | `muse_glimmer` tool and reasoning | Not tested with the packaged runtime |
+
+Advanced candidates appear only under advanced model choices and are never selected automatically.
+Muse Glimmer previously completed Heartwood's workflow with an external immutable vLLM image, but that does not qualify Heartwood's packaged runtime.
 
 ## Unsupported Configurations
 
@@ -81,7 +92,7 @@ The acceptance test must establish all of the following:
 8. audit export validates event coverage, hash-chain integrity, and content scrubbing.
 
 The result records the GPU model, count, memory, driver, runtime versions, model revision, context size, tensor parallelism, server parser, and agent tool mode.
-Not-tested configurations are not added to the managed catalog.
+Not-tested configurations are never added to the recommended set or selected automatically.
 Unsupported and inconclusive attempts remain only in this evidence record so Heartwood does not offer or automatically retry them.
 
 ## Unsupported Hardware

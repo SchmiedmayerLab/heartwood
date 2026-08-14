@@ -31,17 +31,17 @@ runs:
           --python-platform x86_64-manylinux_2_28 \
           --generate-hashes \
           --emit-index-url \
-          --exclude-newer 2026-07-20T00:00:00Z \
+          --exclude-newer 2026-08-14T05:05:00Z \
           --override images/gpu/vllm-overrides.txt \
           --exclude images/gpu/vllm-exclusions.txt \
           --output-file images/gpu/vllm-requirements.txt \
           images/gpu/vllm.in
         cmp /tmp/vllm-requirements.expected images/gpu/vllm-requirements.txt
-        grep --fixed-strings 'vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-        grep --fixed-strings 'torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+        grep --fixed-strings 'vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+        grep --fixed-strings 'torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
         grep --fixed-strings 'torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-        grep --fixed-strings 'torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
-        grep --fixed-strings 'flashinfer-python==0.6.13' images/gpu/vllm-requirements.txt
+        grep --fixed-strings 'torchvision-0.28.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
+        grep --fixed-strings 'flashinfer-python==0.6.16.post3' images/gpu/vllm-requirements.txt
         grep --fixed-strings 'nvidia-cuda-runtime-cu12==12.9.79' images/gpu/vllm-requirements.txt
         grep --fixed-strings 'xgrammar==0.2.3' images/gpu/vllm-requirements.txt
         grep --fixed-strings -- '--hash=sha256:' images/gpu/vllm-requirements.txt

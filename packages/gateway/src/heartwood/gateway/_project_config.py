@@ -26,8 +26,11 @@ from heartwood.gateway._action_settings import (
 )
 from heartwood.gateway._local_model_contract import (
     DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MANAGED_MODEL_REASONING_PARSERS,
+    MANAGED_MODEL_TOOL_CALL_PARSERS,
     MAXIMUM_LOCAL_CONTEXT_WINDOW,
     MINIMUM_LOCAL_CONTEXT_WINDOW,
+    managed_model_parsers_compatible,
 )
 from heartwood.gateway._model_catalog import (
     BUILT_IN_MODEL_CONNECTIONS,
@@ -121,6 +124,7 @@ class LocalModelSelection:
     recommended_disk_bytes: int | None = None
     recommended_cpu_count: int = 8
     tool_call_parser: str | None = None
+    reasoning_parser: str | None = None
     tensor_parallel_size: int = 1
     startup_seconds_min: int = 30
     startup_seconds_max: int = 600
@@ -210,12 +214,25 @@ class LocalModelSelection:
                 raise ProjectConfigError(f"Heartwood-managed {field_name} must be positive")
         if self.recommended_cpu_count <= 0:
             raise ProjectConfigError("Heartwood-managed recommended_cpu_count must be positive")
-        if self.tool_call_parser is not None and self.tool_call_parser not in {
-            "hermes",
-            "openai",
-            "qwen3_coder",
-        }:
+        if (
+            self.tool_call_parser is not None
+            and self.tool_call_parser not in MANAGED_MODEL_TOOL_CALL_PARSERS
+        ):
             raise ProjectConfigError("unsupported Heartwood-managed tool-call parser")
+        if (
+            self.reasoning_parser is not None
+            and self.reasoning_parser not in MANAGED_MODEL_REASONING_PARSERS
+        ):
+            raise ProjectConfigError("unsupported Heartwood-managed reasoning parser")
+        if (
+            self.tool_call_parser is not None or self.reasoning_parser is not None
+        ) and not managed_model_parsers_compatible(
+            self.tool_call_parser,
+            self.reasoning_parser,
+        ):
+            raise ProjectConfigError(
+                "Heartwood-managed tool-call and reasoning parsers are incompatible"
+            )
         if self.runtime == "vllm" and (
             self.minimum_gpu_count < 1
             or self.minimum_gpu_memory_bytes < 1
@@ -226,6 +243,7 @@ class LocalModelSelection:
             self.minimum_gpu_count != 0
             or self.minimum_gpu_memory_bytes != 0
             or self.tool_call_parser is not None
+            or self.reasoning_parser is not None
         ):
             raise ProjectConfigError("llama.cpp models cannot declare vLLM GPU settings")
         for metadata_name, metadata_value in (
@@ -462,6 +480,7 @@ class ProjectConfigStore:
         recommended_disk_bytes: int | None = None,
         recommended_cpu_count: int = 8,
         tool_call_parser: str | None = None,
+        reasoning_parser: str | None = None,
         tensor_parallel_size: int = 1,
         startup_seconds_min: int = 30,
         startup_seconds_max: int = 600,
@@ -507,6 +526,7 @@ class ProjectConfigStore:
             recommended_disk_bytes=recommended_disk_bytes,
             recommended_cpu_count=recommended_cpu_count,
             tool_call_parser=tool_call_parser,
+            reasoning_parser=reasoning_parser,
             tensor_parallel_size=tensor_parallel_size,
             startup_seconds_min=startup_seconds_min,
             startup_seconds_max=startup_seconds_max,
@@ -719,6 +739,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
             "tensor_parallel_size",
             "tier",
             "tool_call_parser",
+            "reasoning_parser",
             "validated_platforms",
             "qualification_date",
             "qualification_evidence",
@@ -780,6 +801,7 @@ def _local_model_from_mapping(value: object) -> LocalModelSelection:
         )
         or 8,
         tool_call_parser=_optional_string(value.get("tool_call_parser"), "tool_call_parser"),
+        reasoning_parser=_optional_string(value.get("reasoning_parser"), "reasoning_parser"),
         tensor_parallel_size=_optional_positive_int(
             value.get("tensor_parallel_size"), "tensor_parallel_size"
         )

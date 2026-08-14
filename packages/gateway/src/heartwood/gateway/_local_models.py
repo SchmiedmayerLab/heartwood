@@ -18,9 +18,14 @@ from typing import Literal, Protocol, cast
 
 from heartwood.gateway._local_model_contract import (
     DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MANAGED_MODEL_TOOL_CALL_PARSERS,
     MAXIMUM_LOCAL_CONTEXT_WINDOW,
     MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
     MINIMUM_LOCAL_CONTEXT_WINDOW,
+    ReasoningParser,
+    ToolCallParser,
+    managed_model_parsers_compatible,
+    managed_model_reasoning_parser,
 )
 from heartwood.gateway._model_artifacts import ModelArtifact
 from heartwood.gateway._model_identity import (
@@ -32,7 +37,6 @@ from heartwood.gateway._model_snapshots import (
     ModelQualification,
     ModelSnapshot,
     ModelTier,
-    ToolCallParser,
 )
 
 type LocalModelRuntime = Literal["llama-cpp", "vllm"]
@@ -56,6 +60,7 @@ _SNAPSHOT_ALLOW_PATTERNS = (
     "LICENSE*",
     "NOTICE*",
     "README*",
+    "USAGE*",
 )
 _SNAPSHOT_IGNORE_PATTERNS = ("*.bin", "*.py", ".git/*", "metal/*", "original/*")
 _USER_SELECTED_PURPOSE = (
@@ -112,6 +117,7 @@ class LocalModelChoice:
     recommended_disk_bytes: int = 0
     maximum_context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW
     tool_call_parser: ToolCallParser | None = None
+    reasoning_parser: ReasoningParser | None = None
     tensor_parallel_size: int = 1
     startup_seconds_min: int = 30
     startup_seconds_max: int = 600
@@ -181,7 +187,11 @@ class LocalModelChoice:
                 raise ModelRepositoryError("GGUF models require a source SHA-256 digest")
             if self.minimum_gpu_count != 0 or self.minimum_gpu_memory_bytes != 0:
                 raise ModelRepositoryError("CPU models must not require GPU resources")
-            if self.tool_call_parser is not None or self.download_policy is not None:
+            if (
+                self.tool_call_parser is not None
+                or self.reasoning_parser is not None
+                or self.download_policy is not None
+            ):
                 raise ModelRepositoryError("CPU models must not declare vLLM settings")
         else:
             if self.source_path is not None or self.artifact_sha256 is not None:
@@ -190,8 +200,13 @@ class LocalModelChoice:
                 raise ModelRepositoryError("GPU models require a positive GPU resource envelope")
             if self.tensor_parallel_size < self.minimum_gpu_count:
                 raise ModelRepositoryError("tensor parallelism must cover the minimum GPU count")
-            if self.tool_call_parser not in {"hermes", "openai", "qwen3_coder"}:
+            if self.tool_call_parser not in MANAGED_MODEL_TOOL_CALL_PARSERS:
                 raise ModelRepositoryError("GPU models require a supported tool-call parser")
+            if not managed_model_parsers_compatible(
+                self.tool_call_parser,
+                self.reasoning_parser,
+            ):
+                raise ModelRepositoryError("GPU model tool-call and reasoning parsers disagree")
             if self.download_policy is None or not self.allow_patterns:
                 raise ModelRepositoryError("GPU models require a reviewed download policy")
 
@@ -251,6 +266,7 @@ class LocalModelChoice:
             recommended_disk_bytes=self.recommended_disk_bytes,
             maximum_context_window=self.maximum_context_window,
             tool_call_parser=cast(ToolCallParser, self.tool_call_parser),
+            reasoning_parser=self.reasoning_parser,
             tensor_parallel_size=self.tensor_parallel_size,
             startup_seconds_min=self.startup_seconds_min,
             startup_seconds_max=self.startup_seconds_max,
@@ -438,13 +454,15 @@ class HuggingFaceModelRepository:
             )
             is not None
         ]
+        tool_call_parser = _tool_call_parser(source_repository, info)
         snapshot = _snapshot_candidate(
             source_repository,
             resolved_revision,
             files,
             license_posture,
             metadata_complete=metadata_complete,
-            tool_call_parser=_tool_call_parser(source_repository, info),
+            tool_call_parser=tool_call_parser,
+            reasoning_parser=managed_model_reasoning_parser(tool_call_parser),
             context_window=context_window,
             model_type=model_type,
             license_id=license_id,
@@ -557,6 +575,7 @@ def catalog_model_choices(
             recommended_disk_bytes=snapshot.recommended_disk_bytes,
             maximum_context_window=snapshot.maximum_context_window,
             tool_call_parser=snapshot.tool_call_parser,
+            reasoning_parser=snapshot.reasoning_parser,
             tensor_parallel_size=snapshot.tensor_parallel_size,
             startup_seconds_min=snapshot.startup_seconds_min,
             startup_seconds_max=snapshot.startup_seconds_max,
@@ -641,6 +660,7 @@ def _snapshot_candidate(
     *,
     metadata_complete: bool,
     tool_call_parser: ToolCallParser | None,
+    reasoning_parser: ReasoningParser | None,
     context_window: int,
     model_type: str | None,
     license_id: str,
@@ -680,6 +700,7 @@ def _snapshot_candidate(
         recommended_disk_bytes=max((size * 3 + 1) // 2, size * 2),
         maximum_context_window=context_window,
         tool_call_parser=tool_call_parser,
+        reasoning_parser=reasoning_parser,
         tensor_parallel_size=1,
         download_policy="transformers-safetensors",
         allow_patterns=_SNAPSHOT_ALLOW_PATTERNS,
@@ -754,7 +775,11 @@ def _requires_custom_code(info: object) -> bool:
 def _tool_call_parser(repository: str, info: object) -> ToolCallParser | None:
     model_type = _model_type(info)
     pipeline_tag = getattr(info, "pipeline_tag", None)
-    if isinstance(pipeline_tag, str) and pipeline_tag not in _TEXT_GENERATION_PIPELINES:
+    if (
+        isinstance(pipeline_tag, str)
+        and pipeline_tag not in _TEXT_GENERATION_PIPELINES
+        and model_type != "muse_glimmer"
+    ):
         return None
     return infer_tool_call_parser(repository, model_type)
 
@@ -765,6 +790,8 @@ def infer_tool_call_parser(
 ) -> ToolCallParser | None:
     """Choose a supported vLLM parser from reviewed model-family metadata."""
     normalized_repository = repository.casefold().replace("_", "-")
+    if model_type == "muse_glimmer" or "muse-glimmer" in normalized_repository:
+        return "muse_glimmer"
     if "qwen3-coder" in normalized_repository:
         return "qwen3_coder"
     if model_type == "gpt_oss" or normalized_repository.startswith("openai/gpt-oss-"):
@@ -801,6 +828,8 @@ def infer_model_type(repository: str, declared: object = None) -> str | None:
     normalized = repository.casefold().replace(".", "").replace("-", "")
     if "qwen3" in normalized:
         return "qwen3"
+    if "museglimmer" in normalized:
+        return "muse_glimmer"
     if "qwen25" in normalized:
         return "qwen2"
     return None

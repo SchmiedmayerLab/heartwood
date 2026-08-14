@@ -243,6 +243,7 @@ const localModelChoice = (
   recommended_ram_bytes: 16 * 1024 * 1024 * 1024,
   recommended_disk_bytes: 1024 * 1024 * 1024,
   tool_call_parser: null,
+  reasoning_parser: null,
   tensor_parallel_size: 1,
   startup_seconds_min: 5,
   startup_seconds_max: 30,
@@ -3004,6 +3005,10 @@ describe("App", () => {
       qualification_date: null,
       qualification_evidence: null,
       recommended: false,
+      runtime: "vllm",
+      source_path: null,
+      tool_call_parser: "muse_glimmer",
+      reasoning_parser: "muse_glimmer",
     });
     render(<App client={client} initialSessionId="session-test" />);
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -3015,6 +3020,9 @@ describe("App", () => {
     );
 
     expect(screen.getByText("Not tested")).toBeInTheDocument();
+    expect(screen.getByText(/Tool parser: muse_glimmer/u)).toHaveTextContent(
+      "Reasoning parser: muse_glimmer",
+    );
   });
 
   it("continues polling a model download after a transient status failure", async () => {

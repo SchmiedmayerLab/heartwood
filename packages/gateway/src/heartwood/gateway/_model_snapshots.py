@@ -16,7 +16,7 @@ import shutil
 import threading
 import time
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Set
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from importlib import import_module
@@ -27,8 +27,13 @@ from filelock import FileLock
 
 from heartwood.gateway._local_model_contract import (
     DEFAULT_LOCAL_CONTEXT_WINDOW,
+    MANAGED_MODEL_REASONING_PARSERS,
+    MANAGED_MODEL_TOOL_CALL_PARSERS,
     MAXIMUM_LOCAL_CONTEXT_WINDOW,
     MINIMUM_LOCAL_CONTEXT_WINDOW,
+    ReasoningParser,
+    ToolCallParser,
+    managed_model_parsers_compatible,
 )
 from heartwood.gateway._model_identity import (
     is_hugging_face_model_id,
@@ -46,12 +51,10 @@ _GENERATED_SNAPSHOT_FILES = frozenset({"HEARTWOOD-SOURCE.json", "SHA256SUMS"})
 type ProgressCallback = Callable[[int, int], None]
 type ModelTier = Literal["standard", "powerful", "maximum"]
 type ModelQualification = Literal["unvalidated", "qualified"]
-type ToolCallParser = Literal["hermes", "openai", "qwen3_coder"]
 
 _MODEL_TIERS = {"standard", "powerful", "maximum"}
 _MODEL_TIER_RANK: dict[str, int] = {"standard": 0, "powerful": 1, "maximum": 2}
 _MODEL_QUALIFICATIONS = {"unvalidated", "qualified"}
-_TOOL_CALL_PARSERS = {"hermes", "openai", "qwen3_coder"}
 _VALIDATED_PLATFORMS = {"carina", "generic", "terra"}
 
 
@@ -114,6 +117,7 @@ class ModelSnapshot:
     download_policy: str
     allow_patterns: tuple[str, ...]
     ignore_patterns: tuple[str, ...]
+    reasoning_parser: ReasoningParser | None = None
     validated_platforms: tuple[str, ...] = ()
     qualification_test: str | None = None
     qualification_date: str | None = None
@@ -159,8 +163,15 @@ class ModelSnapshot:
             raise ModelSnapshotError(f"unsupported model tier: {self.tier}")
         if self.qualification not in _MODEL_QUALIFICATIONS:
             raise ModelSnapshotError(f"unsupported model qualification: {self.qualification}")
-        if self.tool_call_parser not in _TOOL_CALL_PARSERS:
+        if self.tool_call_parser not in MANAGED_MODEL_TOOL_CALL_PARSERS:
             raise ModelSnapshotError(f"unsupported vLLM tool-call parser: {self.tool_call_parser}")
+        if (
+            self.reasoning_parser is not None
+            and self.reasoning_parser not in MANAGED_MODEL_REASONING_PARSERS
+        ):
+            raise ModelSnapshotError(f"unsupported vLLM reasoning parser: {self.reasoning_parser}")
+        if not managed_model_parsers_compatible(self.tool_call_parser, self.reasoning_parser):
+            raise ModelSnapshotError("vLLM tool-call and reasoning parsers are incompatible")
         if self.startup_seconds_min <= 0 or self.startup_seconds_max < self.startup_seconds_min:
             raise ModelSnapshotError("snapshot startup estimate is invalid")
         if not MINIMUM_LOCAL_CONTEXT_WINDOW <= self.context_window <= MAXIMUM_LOCAL_CONTEXT_WINDOW:
@@ -359,7 +370,11 @@ def load_model_snapshot_catalog(path: Path) -> ModelSnapshotCatalog:
             maximum_context_window=_positive_int(item, "maximum_context_window"),
             tool_call_parser=cast(
                 ToolCallParser,
-                _enum_string(item, "tool_call_parser", _TOOL_CALL_PARSERS),
+                _enum_string(item, "tool_call_parser", MANAGED_MODEL_TOOL_CALL_PARSERS),
+            ),
+            reasoning_parser=cast(
+                ReasoningParser | None,
+                _optional_string(item, "reasoning_parser"),
             ),
             tensor_parallel_size=_positive_int(item, "tensor_parallel_size"),
             startup_seconds_min=_positive_int(item, "startup_seconds_min"),
@@ -861,7 +876,7 @@ def _optional_bool(data: dict[str, Any], key: str, *, default: bool) -> bool:
     return value
 
 
-def _enum_string(data: dict[str, Any], key: str, allowed: set[str]) -> str:
+def _enum_string(data: dict[str, Any], key: str, allowed: Set[str]) -> str:
     value = _string(data, key)
     if value not in allowed:
         raise ModelSnapshotError(f"unsupported {key}: {value}")

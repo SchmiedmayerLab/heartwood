@@ -32,7 +32,9 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    ReasoningParser,
     SessionGateway,
+    ToolCallParser,
     automatic_model_tier,
     discover_slurm_gpu_partitions,
     estimate_local_runtime_memory,
@@ -206,11 +208,12 @@ class LocalRuntimeSelection:
     minimum_gpu_memory_bytes: int
     recommended_ram_bytes: int | None
     recommended_disk_bytes: int | None
-    tool_call_parser: Literal["hermes", "openai", "qwen3_coder"] | None
+    tool_call_parser: ToolCallParser | None
     tensor_parallel_size: int
     startup_seconds_min: int
     startup_seconds_max: int
     catalog_source: Literal["catalog", "user-selected"]
+    reasoning_parser: ReasoningParser | None = None
     recommended_cpu_count: int = 8
     qualification_date: str | None = None
 
@@ -816,7 +819,7 @@ def _runtime_command(
         )
     if selection.tool_call_parser is None:  # pragma: no cover - persisted invariant
         raise LaunchConfigurationError("the selected vLLM model has no tool-call parser")
-    command = (
+    command: tuple[str, ...] = (
         str(executable),
         "serve",
         str(model),
@@ -834,6 +837,8 @@ def _runtime_command(
         "--tool-call-parser",
         selection.tool_call_parser,
     )
+    if selection.reasoning_parser is not None:
+        command = (*command, "--reasoning-parser", selection.reasoning_parser)
     return (*command, "--enforce-eager") if enforce_eager else command
 
 
@@ -899,8 +904,12 @@ def _local_model_selection(
         recommended_disk_bytes=selection.recommended_disk_bytes,
         recommended_cpu_count=selection.recommended_cpu_count,
         tool_call_parser=cast(
-            Literal["hermes", "openai", "qwen3_coder"] | None,
+            ToolCallParser | None,
             selection.tool_call_parser,
+        ),
+        reasoning_parser=cast(
+            ReasoningParser | None,
+            selection.reasoning_parser,
         ),
         tensor_parallel_size=selection.tensor_parallel_size,
         startup_seconds_min=selection.startup_seconds_min,

@@ -688,11 +688,19 @@ const SettingsContent = (props: UtilitySheetProps) => {
                                     tokens
                                   </small>
                                   {model.tool_call_parser ?
-                                    <small>
-                                      Tool parser: {model.tool_call_parser},
-                                      tensor parallelism:{" "}
-                                      {model.tensor_parallel_size}
-                                    </small>
+                                    <>
+                                      <small>
+                                        Tool parser: {model.tool_call_parser},
+                                        tensor parallelism:{" "}
+                                        {model.tensor_parallel_size}
+                                      </small>
+                                      {model.reasoning_parser ?
+                                        <small>
+                                          Reasoning parser:{" "}
+                                          {model.reasoning_parser}
+                                        </small>
+                                      : null}
+                                    </>
                                   : null}
                                   <small>
                                     Revision: {model.source_revision}
@@ -1107,6 +1115,14 @@ const ModelDownloadConfirmation = ({
                 {model.precision} · {model.context_window.toLocaleString()}{" "}
                 token default
               </small>
+              {model.tool_call_parser ?
+                <small>
+                  Tool parser: {model.tool_call_parser}
+                  {model.reasoning_parser ?
+                    ` · Reasoning parser: ${model.reasoning_parser}`
+                  : ""}
+                </small>
+              : null}
             </div>
           </details>
         </div>

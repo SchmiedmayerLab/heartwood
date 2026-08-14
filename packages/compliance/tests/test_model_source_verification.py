@@ -32,6 +32,10 @@ def test_repository_model_sources_are_immutable_and_use_revision_routes() -> Non
     sources = verifier.load_model_sources(Path.cwd())
 
     assert {source.model_id: (source.repository, source.revision) for source in sources} == {
+        "muse-glimmer-30b-bf16-vllm": (
+            "meta-models/Muse-Glimmer-30B",
+            "a4e59da52a7bc87ae7251dd5545c0dd437c44b68",
+        ),
         "qwen3-coder-30b-a3b-instruct-fp8-vllm": (
             "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
             "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",

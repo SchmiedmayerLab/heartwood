@@ -92,6 +92,26 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
     assert snapshot.recommended is True
 
 
+def test_repository_snapshot_catalog_pins_muse_as_an_unvalidated_advanced_model() -> None:
+    catalog = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+
+    snapshot = catalog.snapshot("muse-glimmer-30b-bf16-vllm")
+
+    assert snapshot.source_repository == "meta-models/Muse-Glimmer-30B"
+    assert snapshot.source_revision == "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
+    assert snapshot.precision == "BF16"
+    assert snapshot.minimum_gpu_count == 2
+    assert snapshot.context_window == 65_536
+    assert snapshot.maximum_context_window == 131_072
+    assert snapshot.tool_call_parser == "muse_glimmer"
+    assert snapshot.reasoning_parser == "muse_glimmer"
+    assert snapshot.qualification == "unvalidated"
+    assert snapshot.validated_platforms == ()
+    assert snapshot.recommended is False
+
+
 @pytest.mark.parametrize(
     ("platform_id", "tier"),
     [
@@ -601,6 +621,12 @@ def test_snapshot_metadata_rejects_floating_revisions() -> None:
         ({"tier": "unknown"}, "unsupported model tier"),
         ({"qualification": "unknown"}, "unsupported model qualification"),
         ({"tool_call_parser": "unknown"}, "unsupported vLLM tool-call parser"),
+        ({"reasoning_parser": "unknown"}, "unsupported vLLM reasoning parser"),
+        ({"reasoning_parser": "muse_glimmer"}, "parsers are incompatible"),
+        (
+            {"tool_call_parser": "muse_glimmer", "reasoning_parser": None},
+            "parsers are incompatible",
+        ),
         ({"startup_seconds_min": 0}, "startup estimate is invalid"),
         ({"startup_seconds_max": 0}, "startup estimate is invalid"),
         ({"context_window": 2047}, "between 2048 and 1048576"),

@@ -94,6 +94,36 @@ def test_imports_supported_vllm_snapshot_and_rejects_executable_code(tmp_path: P
         )
 
 
+def test_imports_muse_snapshot_with_native_parser_pair(tmp_path: Path) -> None:
+    models = tmp_path / "models"
+    models.mkdir()
+    snapshot = tmp_path / "muse"
+    snapshot.mkdir()
+    (snapshot / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["MuseGlimmerForConditionalGeneration"],
+                "model_type": "muse_glimmer",
+                "max_position_embeddings": 131_072,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"synthetic")
+
+    imported = import_local_model(
+        snapshot,
+        models_dir=models,
+        source_repository="meta-models/Muse-Glimmer-30B",
+        source_revision="a" * 40,
+        license_posture="Apache-2.0",
+    )
+
+    assert imported.model.model_type == "muse_glimmer"
+    assert imported.model.tool_call_parser == "muse_glimmer"
+    assert imported.model.reasoning_parser == "muse_glimmer"
+
+
 def test_import_rejects_symlinks_and_requires_immutable_provenance(tmp_path: Path) -> None:
     models = tmp_path / "models"
     models.mkdir()
