@@ -150,6 +150,8 @@ def test_vllm_bundle_reuses_snapshot_integrity_contract(tmp_path: Path) -> None:
 
     assert created is True
     assert imported.runtime == "vllm"
+    assert imported.tool_call_parser == "muse_glimmer"
+    assert imported.reasoning_parser == "muse_glimmer"
     assert selected.is_dir()
     assert (selected / "config.json").is_file()
     assert (selected / "model.safetensors").is_file()
@@ -1041,7 +1043,12 @@ def _gguf_choice(path: Path) -> LocalModelChoice:
 def _vllm_snapshot(path: Path) -> Path:
     path.mkdir()
     (path / "config.json").write_text(
-        json.dumps({"architectures": ["Qwen3ForCausalLM"], "model_type": "qwen3"}),
+        json.dumps(
+            {
+                "architectures": ["MuseGlimmerForConditionalGeneration"],
+                "model_type": "muse_glimmer",
+            }
+        ),
         encoding="utf-8",
     )
     (path / "model.safetensors").write_bytes(b"synthetic-safetensors")
@@ -1066,7 +1073,7 @@ def _vllm_choice(path: Path) -> LocalModelChoice:
         minimum_free_bytes=size,
         license_posture="Apache-2.0",
         catalog_source="catalog",
-        model_type="qwen3",
+        model_type="muse_glimmer",
         context_window=32_768,
         license_id="Apache-2.0",
         precision="BF16",
@@ -1075,7 +1082,8 @@ def _vllm_choice(path: Path) -> LocalModelChoice:
         recommended_ram_bytes=1_024,
         recommended_disk_bytes=max(size, 1_024),
         maximum_context_window=32_768,
-        tool_call_parser="hermes",
+        tool_call_parser="muse_glimmer",
+        reasoning_parser="muse_glimmer",
         tensor_parallel_size=1,
         download_policy="synthetic",
         allow_patterns=("*.json", "*.safetensors"),

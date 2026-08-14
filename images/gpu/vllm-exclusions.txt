@@ -4,13 +4,12 @@
 #
 # SPDX-License-Identifier: MIT
 
-# flashinfer-python 0.6.13 declares cuda-tile[tileiras] for optional generated
-# kernels. That compiler path requires CUDA 13.2 and an R580 driver. Heartwood's
-# qualified runtime uses the vLLM and PyTorch CUDA 12.9 wheels, so the CUDA 13
-# compiler/runtime packages remain excluded until that complete stack is
-# separately qualified.
+# Optional kernel packages can request CUDA 13 compiler tools even when vLLM
+# and PyTorch use CUDA 12.9 wheels. Keep those compiler and runtime packages
+# excluded until the complete CUDA 13 stack is separately qualified.
 cuda-tile
 nvidia-cuda-crt
+nvidia-cuda-nvdisasm
 nvidia-cuda-nvcc
 nvidia-cuda-runtime
 nvidia-cuda-tileiras

@@ -121,7 +121,7 @@ if [[ "${1:-}" == */verify_vllm.py ]]; then
   echo "Heartwood GPU runtime verified: synthetic CUDA 12.9 stack"
   exit 0
 fi
-echo "0.25.1+cu129 2.11.0+cu129 12.9"
+echo "0.27.2rc1.dev77+gac7509e2b.cu129 2.13.0+cu129 12.9"
 COMMAND
   cat >"${runtime}/bin/vllm" <<'COMMAND'
 #!/usr/bin/env bash

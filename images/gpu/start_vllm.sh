@@ -12,6 +12,7 @@ host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"
 port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 alias="${HEARTWOOD_MANAGED_MODEL_ALIAS:-heartwood-managed-runtime}"
 tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"
+reasoning_parser="${HEARTWOOD_VLLM_REASONING_PARSER:-}"
 context="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 tensor_parallel_size="${HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE:-1}"
 gpu_memory_utilization="${HEARTWOOD_VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
@@ -44,6 +45,15 @@ if [[ "${flashinfer_sampler}" != "0" && "${flashinfer_sampler}" != "1" ]]; then
   echo "HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER must be 0 or 1" >&2
   exit 64
 fi
+if [[ -n "${reasoning_parser}" && "${reasoning_parser}" != "muse_glimmer" ]]; then
+  echo "HEARTWOOD_VLLM_REASONING_PARSER is unsupported: ${reasoning_parser}" >&2
+  exit 64
+fi
+if [[ "${tool_parser}" == "muse_glimmer" && "${reasoning_parser}" != "muse_glimmer" ]] || \
+  [[ "${tool_parser}" != "muse_glimmer" && -n "${reasoning_parser}" ]]; then
+  echo "HEARTWOOD_VLLM_TOOL_PARSER and HEARTWOOD_VLLM_REASONING_PARSER are incompatible" >&2
+  exit 64
+fi
 
 arguments=(
   serve "${model_path}"
@@ -56,6 +66,9 @@ arguments=(
   --enable-auto-tool-choice
   --tool-call-parser "${tool_parser}"
 )
+if [[ -n "${reasoning_parser}" ]]; then
+  arguments+=(--reasoning-parser "${reasoning_parser}")
+fi
 if [[ "${enforce_eager}" == "1" ]]; then
   arguments+=(--enforce-eager)
 elif [[ "${enforce_eager}" != "0" ]]; then

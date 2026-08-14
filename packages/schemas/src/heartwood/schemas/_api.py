@@ -124,7 +124,8 @@ type ModelSource = Literal[
     "openai-subscription",
     "stanford-ai-api-gateway",
 ]
-type ToolCallParser = Literal["hermes", "openai", "qwen3_coder"]
+type ToolCallParser = Literal["hermes", "muse_glimmer", "openai", "qwen3_coder"]
+type ReasoningParser = Literal["muse_glimmer"]
 
 
 class ApiRequest(BaseModel):
@@ -784,6 +785,7 @@ class LocalModelChoiceResponse(_ApiResponse):
     recommended_ram_bytes: int
     recommended_disk_bytes: int
     tool_call_parser: ToolCallParser | None
+    reasoning_parser: ReasoningParser | None
     tensor_parallel_size: int
     startup_seconds_min: int
     startup_seconds_max: int
@@ -891,6 +893,7 @@ class ModelSnapshotResponse(_ApiResponse):
     context_window: int
     maximum_context_window: int
     tool_call_parser: ToolCallParser
+    reasoning_parser: ReasoningParser | None
     tensor_parallel_size: int
     startup_seconds_min: int
     startup_seconds_max: int

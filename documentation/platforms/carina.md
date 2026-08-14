@@ -131,6 +131,8 @@ Run `heartwood` and complete model setup before using `heartwood runtime start` 
 Use `--task-profile standard`, `powerful`, or `maximum` when the task has a known resource envelope.
 The `--gpus` option is an advanced constraint and must match a catalog configuration that was qualified at that tensor-parallel size.
 
+Muse Glimmer 30B BF16 is available under advanced model choices for qualification on two L40S GPUs, but Heartwood does not recommend or select it automatically until the exact packaged runtime completes the full coding-agent acceptance workflow.
+
 Heartwood scopes model caches to the project, waits up to ten minutes by default, and reports the current stage and elapsed startup time every 15 seconds.
 For multi-GPU Carina allocations, Heartwood's secured vLLM launcher applies the conservative NCCL communication fallback automatically; users should not set NCCL or custom-all-reduce options manually.
 The installer reports completion only after temporary installation state and locks have been removed.

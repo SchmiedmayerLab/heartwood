@@ -65,9 +65,11 @@ export type ApiResponse =
 export type ActionConfirmationMode = "always-confirm" | "confirm-risky";
 export type ActionRisk = "high" | "low" | "medium" | "unknown";
 export type LocalModelQualification = "unvalidated" | "qualified";
+export type ReasoningParser = "muse_glimmer";
 export type LocalModelRuntime = "llama-cpp" | "vllm";
 export type LocalModelTier = "standard" | "powerful" | "maximum";
-export type ToolCallParser = "hermes" | "openai" | "qwen3_coder";
+export type ToolCallParser =
+  "hermes" | "muse_glimmer" | "openai" | "qwen3_coder";
 export type CredentialKind =
   "environment" | "file" | "managed-identity" | "none";
 export type CredentialStatus = "available" | "configured" | "missing";
@@ -197,6 +199,7 @@ export interface LocalModelChoiceResponse {
   qualification_date: string | null;
   qualification_evidence: string | null;
   qualification_test: string | null;
+  reasoning_parser: ReasoningParser | null;
   recommended: boolean;
   recommended_cpu_count: number;
   recommended_disk_bytes: number;
@@ -307,6 +310,7 @@ export interface ModelSnapshotResponse {
   qualification_date: string | null;
   qualification_evidence: string | null;
   qualification_test: string | null;
+  reasoning_parser: ReasoningParser | null;
   recommended: boolean;
   recommended_cpu_count: number;
   recommended_disk_bytes: number;

@@ -238,7 +238,7 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         """
         #!/usr/bin/env bash
         set -euo pipefail
-        echo '0.25.1+cu129 2.11.0+cu129 12.9'
+        echo '0.27.2rc1.dev77+gac7509e2b.cu129 2.13.0+cu129 12.9'
         """,
     )
     vllm_bin = runtime_root / "vllm" / "bin"

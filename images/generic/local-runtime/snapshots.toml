@@ -16,8 +16,40 @@ allow_patterns = [
   "LICENSE*",
   "NOTICE*",
   "README*",
+  "USAGE*",
 ]
 ignore_patterns = ["*.bin", "*.py", ".git/*", "metal/*", "original/*"]
+
+[snapshots.muse-glimmer-30b-bf16-vllm]
+runtime_profile = "vllm-cuda"
+purpose = "High-resource coding-agent model with native structured tool use; not reviewed for biomedical use."
+source_repository = "meta-models/Muse-Glimmer-30B"
+source_revision = "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
+expected_size_bytes = 59581827646
+minimum_free_bytes = 85899345920
+license_id = "Apache-2.0"
+license_posture = "Apache-2.0; retain the model card, license, usage policy, and source provenance."
+model_alias = "Muse Glimmer 30B BF16"
+precision = "BF16"
+tier = "maximum"
+qualification = "unvalidated"
+minimum_gpu_count = 2
+minimum_gpu_memory_bytes = 42000000000
+recommended_cpu_count = 24
+recommended_ram_bytes = 137438953472
+recommended_disk_bytes = 103079215104
+context_window = 65536
+maximum_context_window = 131072
+tool_call_parser = "muse_glimmer"
+reasoning_parser = "muse_glimmer"
+tensor_parallel_size = 2
+startup_seconds_min = 300
+startup_seconds_max = 1200
+download_policy = "transformers-safetensors"
+minimum_resource_envelope = "Two NVIDIA L40S-class GPUs with 48 GB VRAM each, 16 CPU cores, 96 GB RAM, and 80 GB free project storage."
+recommended_resource_envelope = "Two NVIDIA L40S-class GPUs with 48 GB VRAM each, 24 CPU cores, 128 GB RAM, and 96 GB free project storage."
+validated_platforms = []
+recommended = false
 
 [snapshots.qwen3-coder-30b-a3b-instruct-fp8-vllm]
 runtime_profile = "vllm-cuda"

@@ -177,7 +177,9 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
     assert terra["gpu_runtime_tag"] == "edge-terra-gpu-nvidia"
     assert terra["commit_runtime_tag"] == "sha-<git-sha>-terra"
     assert terra["commit_gpu_runtime_tag"] == "sha-<git-sha>-terra-gpu-nvidia"
-    assert terra["gpu_runtime"] == "vLLM 0.25.1+cu129 with PyTorch 2.11.0+cu129"
+    assert terra["gpu_runtime"] == (
+        "vLLM 0.27.2rc1.dev77+gac7509e2b.cu129 with PyTorch 2.13.0+cu129"
+    )
     assert terra["bundles_model_artifact"] is False
     assert terra["supported_platforms"] == ["linux/amd64"]
     assert terra["manifest_media_type"] == "application/vnd.docker.distribution.manifest.v2+json"
@@ -343,19 +345,20 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert '"${runtime_sources}/verify_vllm.py"' in installer
     assert '"${runtime_sources}/compatibility.toml"' in installer
     assert '"${runtime_sources}/heartwood-vllm"' in installer
-    assert "vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl" in lock
-    assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl" in lock
+    assert "torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
-    assert "torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
+    assert "torchvision-0.28.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "nvidia-cuda-runtime-cu12==12.9.79" in lock
-    assert "flashinfer-python==0.6.13" in lock
-    assert "setuptools==83.0.0" in lock
-    assert "setuptools==83.0.0" in overrides
+    assert "flashinfer-python==0.6.16.post3" in lock
+    assert "setuptools==80.10.2" in lock
+    assert "setuptools==80.10.2" in overrides
     assert "xgrammar==0.2.3" in lock
     assert "--extra-index-url" not in lock
     for package in (
         "cuda-tile==",
         "nvidia-cuda-crt==",
+        "nvidia-cuda-nvdisasm==",
         "nvidia-cuda-nvcc==",
         "nvidia-cuda-runtime==",
         "nvidia-cuda-tileiras==",
@@ -367,6 +370,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
+    assert 'reasoning_parser="${HEARTWOOD_VLLM_REASONING_PARSER:-}"' in launcher
+    assert "--reasoning-parser" in launcher
     assert 'flashinfer_sampler="${HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER:-0}"' in launcher
     assert 'export VLLM_USE_FLASHINFER_SAMPLER="${flashinfer_sampler}"' in launcher
     assert "huggingface.co" not in launcher
@@ -382,17 +387,24 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "PYTHONPATH" not in executable
     assert runtime_contract["runtime"] == {
         "python_version": "3.12",
-        "vllm_version": "0.25.1+cu129",
-        "pytorch_version": "2.11.0+cu129",
+        "vllm_version": "0.27.2rc1.dev77+gac7509e2b.cu129",
+        "vllm_source_revision": "ac7509e2b1db40fec2f03dde1ed4e9dfdc2338c9",
+        "vllm_wheel_sha256": ("774cab63c82e511618fe859c2af4335be6f67ce1cab89dfcd0efb85f049e6d7e"),
+        "pytorch_version": "2.13.0+cu129",
         "torchaudio_version": "2.11.0+cu129",
-        "torchvision_version": "0.26.0+cu129",
+        "torchvision_version": "0.28.0+cu129",
         "cuda_version": "12.9",
         "minimum_driver_version": "525.60.13",
         "cuda_13_qualified": False,
     }
     assert "ToolParserManager.list_registered" in runtime_verifier
+    assert "ReasoningParserManager.list_registered" in runtime_verifier
+    assert "ModelRegistry.get_supported_archs" in runtime_verifier
+    assert '"muse_glimmer"' in runtime_verifier
     assert 'import_module("flashinfer")' in runtime_verifier
     assert "_FORBIDDEN_CUDA_13_PACKAGES" in runtime_verifier
+    assert "_native_cuda_linkages" in runtime_verifier
+    assert "libcudart\\.so" in runtime_verifier
     assert not (_repo_root() / "images/gpu/heartwood_vllm.py").exists()
     assert not (_repo_root() / "images/gpu/sitecustomize.py").exists()
     assert os.access(_repo_root() / "images/gpu/verify_runtime.sh", os.X_OK)
@@ -478,7 +490,6 @@ def test_secured_vllm_wrapper_scopes_carina_multi_gpu_fallback(
             f"open({str(arguments)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
             "values = {\n"
             "    'nccl': os.environ.get('NCCL_P2P_DISABLE'),\n"
-            "    'outlines': os.environ.get('VLLM_V1_USE_OUTLINES_CACHE'),\n"
             "}\n"
             f"open({str(environment)!r}, 'w').write(json.dumps(values))\n"
         ),
@@ -503,7 +514,6 @@ def test_secured_vllm_wrapper_scopes_carina_multi_gpu_fallback(
     observed_environment = json.loads(environment.read_text(encoding="utf-8"))
     assert ("--disable-custom-all-reduce" in observed_arguments) is expected_fallback
     assert observed_environment["nccl"] == ("1" if expected_fallback else None)
-    assert observed_environment["outlines"] == "0"
 
 
 def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
@@ -574,6 +584,23 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     values = arguments.read_text(encoding="utf-8").splitlines()
     assert values[values.index("--tensor-parallel-size") + 1] == "2"
     assert values[values.index("--gpu-memory-utilization") + 1] == "1.0"
+
+    env["HEARTWOOD_VLLM_TOOL_PARSER"] = "muse_glimmer"
+    env["HEARTWOOD_VLLM_REASONING_PARSER"] = "muse_glimmer"
+    muse = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert muse.returncode == 0
+    values = arguments.read_text(encoding="utf-8").splitlines()
+    assert values[values.index("--tool-call-parser") + 1] == "muse_glimmer"
+    assert values[values.index("--reasoning-parser") + 1] == "muse_glimmer"
+
+    env["HEARTWOOD_VLLM_TOOL_PARSER"] = "hermes"
+    incompatible_parsers = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert incompatible_parsers.returncode == 64
+
+    env["HEARTWOOD_VLLM_TOOL_PARSER"] = "muse_glimmer"
+    env.pop("HEARTWOOD_VLLM_REASONING_PARSER")
+    missing_reasoning_parser = subprocess.run(["bash", str(script)], env=env, check=False)
+    assert missing_reasoning_parser.returncode == 64
 
     env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
     denied = subprocess.run(["bash", str(script)], env=env, check=False)
@@ -1087,9 +1114,7 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
         or "requirements" in Path(path).name
         or Path(path).suffix == ".in"
     }
-    declaration = re.compile(
-        r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(diskcache|torch|vllm)(?:["\'\s<>=!~@\[])'
-    )
+    declaration = re.compile(r'(?im)(?:^name\s*=\s*["\']|^|["\'\s])(torch|vllm)(?:["\'\s<>=!~@\[])')
     unexpected = [
         path.relative_to(root).as_posix()
         for path in sorted(dependency_files)
@@ -1098,11 +1123,11 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
 
     assert unexpected == []
     text = lock.read_text(encoding="utf-8")
-    assert "diskcache==5.6.3" in text
-    assert "vllm-0.25.1%2Bcu129" in text
-    assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in text
-    assert "vllm-0.25.1%2Bcu129" in input_file.read_text(encoding="utf-8")
-    assert "torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in (
+    assert "diskcache" not in text.casefold()
+    assert "vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129" in text
+    assert "torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in text
+    assert "vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129" in input_file.read_text(encoding="utf-8")
+    assert "torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in (
         input_file.read_text(encoding="utf-8")
     )
     wrapper = _read("images/gpu/heartwood-vllm")
@@ -1110,8 +1135,8 @@ def test_vllm_advisory_exceptions_remain_isolated_to_gpu_dependencies() -> None:
     dockerfile = _read("images/Dockerfile")
     carina = _read("deploy/carina/bootstrap.sh")
 
-    assert "export VLLM_V1_USE_OUTLINES_CACHE=0" in wrapper
-    assert "vllm_envs.VLLM_V1_USE_OUTLINES_CACHE" in verifier
+    assert "VLLM_V1_USE_OUTLINES_CACHE" not in wrapper
+    assert "VLLM_V1_USE_OUTLINES_CACHE" not in verifier
     assert "_torchscript_calls" in verifier
     assert "torch.jit.script" in verifier
     assert "install -d --mode=0700 \\\n" in dockerfile

@@ -24,6 +24,8 @@ from heartwood.gateway import (
     load_model_artifact_catalog,
     load_model_snapshot_catalog,
     managed_model_native_tool_calling,
+    managed_model_parsers_compatible,
+    managed_model_reasoning_parser,
     managed_model_request_body,
     managed_model_token_budgets,
     plan_local_context_window,
@@ -145,10 +147,19 @@ def test_managed_model_budgets_reserve_output_inside_the_runtime_window() -> Non
 
 def test_managed_model_native_tool_calling_uses_supported_runtime_parsers() -> None:
     assert managed_model_native_tool_calling("hermes") is True
+    assert managed_model_native_tool_calling("muse_glimmer") is True
     assert managed_model_native_tool_calling("openai") is True
     assert managed_model_native_tool_calling("qwen3_coder") is True
     assert managed_model_native_tool_calling(None) is False
     assert managed_model_native_tool_calling("unsupported") is False
+
+
+def test_managed_model_parser_contract_derives_muse_reasoning() -> None:
+    assert managed_model_reasoning_parser("muse_glimmer") == "muse_glimmer"
+    assert managed_model_reasoning_parser("qwen3_coder") is None
+    assert managed_model_parsers_compatible("muse_glimmer", "muse_glimmer") is True
+    assert managed_model_parsers_compatible("muse_glimmer", None) is False
+    assert managed_model_parsers_compatible("hermes", "muse_glimmer") is False
 
 
 def test_context_planner_rejects_short_models_and_insufficient_memory() -> None:
@@ -194,6 +205,28 @@ def test_repository_plan_prefers_standard_snapshot_when_gpu_runtime_is_available
     assert plan.model.source_path is None
     assert "NVIDIA GPU" in str(plan.model.minimum_resource_envelope)
     assert "NVIDIA vLLM runtime" in plan.selection_reason
+
+
+def test_repository_plan_recognizes_muse_native_parser_pair() -> None:
+    repository = _repository(
+        _file("config.json", 100),
+        _file("model.safetensors", 10 * 1024**3, digest="a" * 64),
+        model_type="muse_glimmer",
+        pipeline_tag="image-text-to-text",
+        context_window=131_072,
+    )
+
+    plan = repository.plan(
+        "meta-models/Muse-Glimmer-30B",
+        cpu_available=False,
+        gpu_available=True,
+    )
+
+    assert plan.model.runtime == "vllm"
+    assert plan.model.model_type == "muse_glimmer"
+    assert plan.model.tool_call_parser == "muse_glimmer"
+    assert plan.model.reasoning_parser == "muse_glimmer"
+    assert plan.model.maximum_context_window == 131_072
 
 
 def test_repository_plan_bounds_context_from_model_metadata() -> None:
@@ -520,6 +553,7 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
     assert {choice.model_id for choice in downloadable if choice.runtime == "vllm"} == {
+        "muse-glimmer-30b-bf16-vllm",
         "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
     }
@@ -531,6 +565,10 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
         "qwen3-coder-30b-a3b-instruct-fp8-vllm",
         "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
     }
+    muse = gpu_choices["muse-glimmer-30b-bf16-vllm"]
+    assert muse.qualification == "unvalidated"
+    assert muse.tool_call_parser == "muse_glimmer"
+    assert muse.reasoning_parser == "muse_glimmer"
 
 
 def test_artifact_capability_tier_is_preserved_in_the_shared_catalog() -> None:

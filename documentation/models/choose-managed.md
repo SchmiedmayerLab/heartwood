@@ -49,6 +49,7 @@ The selection screen uses the release catalog as its authoritative source and re
 | Standard, qualified on generic Linux and containers | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
 | Powerful, qualified on Terra | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 96 GiB | 50 GiB | 18,432 | 4-15 minutes |
 | Powerful, qualified on Carina | Qwen3 Coder 30B FP8 | 29.06 GiB | 1 x 48 GB | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
+| Maximum capability, not tested with the packaged runtime | Muse Glimmer 30B BF16 | 55.49 GiB | 2 x 48 GB | 128 GiB | 96 GiB | 65,536 | 5-20 minutes |
 
 Runtime startup begins after the model is available in the project cache.
 A first download depends on platform network conditions and Hugging Face rate limits and can take considerably longer than later starts.

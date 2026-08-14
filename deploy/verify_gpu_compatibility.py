@@ -45,6 +45,7 @@ _CONFIGURATION_FIELDS = {
 _FORBIDDEN_CUDA_13 = (
     "cuda-tile==",
     "nvidia-cuda-crt==",
+    "nvidia-cuda-nvdisasm==",
     "nvidia-cuda-nvcc==",
     "nvidia-cuda-runtime==",
     "nvidia-cuda-tileiras==",
@@ -73,7 +74,6 @@ def verify_repository(root: Path) -> None:
         raise CompatibilityError("GPU compatibility matrix has no configurations")
 
     seen_ids: set[str] = set()
-    covered_snapshots: set[str] = set()
     qualified_platforms: dict[str, set[str]] = {}
     qualification_statuses: dict[str, str] = {}
     configurations_by_snapshot: dict[str, dict[str, Any]] = {}
@@ -98,7 +98,6 @@ def verify_repository(root: Path) -> None:
         snapshot = snapshots.get(snapshot_id)
         if not isinstance(snapshot, dict):
             raise CompatibilityError(f"unknown model snapshot in GPU matrix: {snapshot_id}")
-        covered_snapshots.add(snapshot_id)
         if snapshot_id in configurations_by_snapshot:
             raise CompatibilityError(
                 f"model snapshot has multiple selectable GPU configurations: {snapshot_id}"
@@ -129,7 +128,6 @@ def verify_repository(root: Path) -> None:
             raise CompatibilityError(
                 f"unknown model snapshot in unsupported GPU matrix: {snapshot_id}"
             )
-        covered_snapshots.add(snapshot_id)
 
     _verify_nonselectable_configurations(
         matrix.get("unsupported_configurations", ()),
@@ -142,21 +140,29 @@ def verify_repository(root: Path) -> None:
         seen_ids=seen_ids,
     )
 
-    if covered_snapshots != set(snapshots):
-        missing = sorted(set(snapshots) - covered_snapshots)
-        raise CompatibilityError(
-            f"GPU catalog snapshots are absent from the matrix: {', '.join(missing)}"
-        )
     for snapshot_id, snapshot in snapshots.items():
         if not isinstance(snapshot, dict):
             raise CompatibilityError(f"invalid model snapshot: {snapshot_id}")
         configuration = configurations_by_snapshot.get(snapshot_id)
+        qualification = snapshot.get("qualification")
+        platforms = set(_string_list(snapshot, "validated_platforms"))
+        if qualification == "unvalidated":
+            if configuration is not None or platforms or snapshot.get("recommended", False):
+                raise CompatibilityError(
+                    f"unvalidated model has qualified configuration metadata: {snapshot_id}"
+                )
+            if (
+                snapshot.get("qualification_date") is not None
+                or snapshot.get("qualification_evidence") is not None
+            ):
+                raise CompatibilityError(
+                    f"unvalidated model has qualification evidence: {snapshot_id}"
+                )
+            continue
         if configuration is None:
             raise CompatibilityError(
                 f"model snapshot has no selectable GPU configuration: {snapshot_id}"
             )
-        qualification = snapshot.get("qualification")
-        platforms = set(_string_list(snapshot, "validated_platforms"))
         if qualification != qualification_statuses.get(snapshot_id):
             raise CompatibilityError(
                 f"model qualification and compatibility evidence disagree: {snapshot_id}"
@@ -228,8 +234,19 @@ def _verify_nonselectable_configurations(
 
 def _verify_runtime_lock(root: Path, runtime: dict[str, Any]) -> None:
     lock = (root / "images/gpu/vllm-requirements.txt").read_text(encoding="utf-8")
+    vllm_version = _string(runtime, "vllm_version")
+    vllm_source_revision = _string(runtime, "vllm_source_revision")
+    vllm_wheel_sha256 = _string(runtime, "vllm_wheel_sha256")
+    if not vllm_version.endswith(".cu129"):
+        raise CompatibilityError("GPU runtime must use an explicit CUDA 12.9 vLLM wheel")
+    if re.fullmatch(r"[0-9a-f]{40}", vllm_source_revision) is None:
+        raise CompatibilityError("GPU runtime vLLM source revision must be immutable")
+    if re.fullmatch(r"[0-9a-f]{64}", vllm_wheel_sha256) is None:
+        raise CompatibilityError("GPU runtime vLLM wheel digest must be SHA-256")
+    encoded_vllm_version = vllm_version.replace("+", "%2B")
     expected = (
-        f"vllm-{_base_version(_string(runtime, 'vllm_version'))}%2Bcu129",
+        f"wheels.vllm.ai/{vllm_source_revision}/vllm-{encoded_vllm_version}",
+        f"#sha256={vllm_wheel_sha256}",
         f"torch-{_base_version(_string(runtime, 'pytorch_version'))}%2Bcu129",
         f"torchaudio-{_base_version(_string(runtime, 'torchaudio_version'))}%2Bcu129",
         f"torchvision-{_base_version(_string(runtime, 'torchvision_version'))}%2Bcu129",
@@ -257,6 +274,7 @@ def _verify_configuration(
         "precision": "precision",
         "tensor_parallel_size": "tensor_parallel_size",
         "tool_call_parser": "tool_call_parser",
+        "reasoning_parser": "reasoning_parser",
         "startup_seconds_min": "startup_seconds_min",
         "startup_seconds_max": "startup_seconds_max",
     }
@@ -285,7 +303,8 @@ def _verify_configuration(
         raise CompatibilityError("GPU model uses an unsupported agent tool mode")
     expected_tool_mode = (
         "openhands-native"
-        if configuration.get("tool_call_parser") in {"hermes", "openai", "qwen3_coder"}
+        if configuration.get("tool_call_parser")
+        in {"hermes", "muse_glimmer", "openai", "qwen3_coder"}
         else "openhands-prompt-conversion"
     )
     if configuration.get("agent_tool_mode") != expected_tool_mode:

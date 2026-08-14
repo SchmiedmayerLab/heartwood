@@ -902,6 +902,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         recommended_ram_bytes: 16 * 1024 * 1024 * 1024,
         recommended_disk_bytes: 8 * 1024 * 1024 * 1024,
         tool_call_parser: null,
+        reasoning_parser: null,
         tensor_parallel_size: 1,
         startup_seconds_min: 5,
         startup_seconds_max: 30,
