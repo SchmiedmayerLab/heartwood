@@ -389,6 +389,13 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         "python_version": "3.12",
         "vllm_version": "0.27.2rc1.dev77+gac7509e2b.cu129",
         "vllm_source_revision": "ac7509e2b1db40fec2f03dde1ed4e9dfdc2338c9",
+        "vllm_wheel_source_url": (
+            "https://wheels.vllm.ai/ac7509e2b1db40fec2f03dde1ed4e9dfdc2338c9/"
+            "vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
+        ),
+        "vllm_wheel_filename": (
+            "vllm-0.27.2rc1.dev77+gac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
+        ),
         "vllm_wheel_sha256": ("774cab63c82e511618fe859c2af4335be6f67ce1cab89dfcd0efb85f049e6d7e"),
         "pytorch_version": "2.13.0+cu129",
         "torchaudio_version": "2.11.0+cu129",
@@ -795,6 +802,8 @@ def test_carina_model_verifier_requires_exact_manifest_coverage(tmp_path: Path) 
 def test_native_release_assets_are_verified_before_installation() -> None:
     installer = _read("deploy/install.sh")
     packager = _read("deploy/package-native.sh")
+    gpu_packager = _read("deploy/package_gpu_runtime.py")
+    gpu_installer = _read("images/gpu/install_runtime.sh")
     workflow = _read(".github/workflows/native-release.yml")
     main_workflow = _read(".github/workflows/main-validation.yml")
     release_workflow = _read(".github/workflows/create-release.yml")
@@ -811,7 +820,8 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "HEARTWOOD_HOME" not in installer
     assert "HEARTWOOD_MODEL_CACHE" not in installer
     assert "exec %q" in installer
-    assert "checksum manifest must contain exactly heartwood-native.tar.gz" in installer
+    assert "checksum manifest does not contain heartwood-native.tar.gz" in installer
+    assert "checksum manifest does not contain the GPU runtime wheel" in installer
     assert "installer release ${installer_release} does not match bundle" in installer
     assert "__HEARTWOOD_RELEASE_VERSION__" in installer
     assert "__HEARTWOOD_RELEASE_VERSION__" in packager
@@ -822,6 +832,9 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "git archive --format=tar HEAD" in packager
     assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
     assert "native package version is unsafe" in packager
+    assert "vllm_wheel_source_url" in gpu_packager
+    assert "vllm_wheel_sha256" in gpu_packager
+    assert "localize_runtime_requirements.py" in gpu_installer
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow
@@ -842,6 +855,8 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "promote-release-images.sh promote" in release_workflow
     assert "actions/setup-node@v7" in release_workflow
     assert 'node-version: "24"' in release_workflow
+    assert "package_gpu_runtime.py --output-dir dist" in release_workflow
+    assert "dist/*.whl" in release_workflow
     assert "native_installer_ubuntu_smoke.sh" in release_workflow
     assert "observed media type:" in release_images
     assert "Linux platforms:" in release_images

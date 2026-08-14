@@ -47,7 +47,8 @@ chmod 700 heartwood-installer
 export PATH="$PWD/bin:$PATH"
 ```
 
-The version-stamped installer downloads the matching native archive and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
+The version-stamped installer downloads the matching native archive, GPU runtime, and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
+The GPU runtime is mirrored as an immutable Heartwood release asset because Carina blocks the upstream vLLM wheel host; its digest remains pinned to the upstream artifact.
 When started on a login node, it moves the dependency installation into a bounded CPU-only Slurm allocation on the `dev` partition before loading micromamba and creating the environments.
 This avoids performing sustained dependency work on the login node; no GPU is requested for installation.
 Dependency resolution and the vLLM environment can take several minutes, and the installer reports the allocation, seven named stages, and elapsed time.

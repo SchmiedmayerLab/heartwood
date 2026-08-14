@@ -9,15 +9,18 @@ set -euo pipefail
 
 root=""
 installer_state=""
+vllm_wheel=""
 while (($#)); do
   case "$1" in
     --environment-root) root="${2:?missing environment root}"; shift 2 ;;
     --installer-state) installer_state="${2:?missing installer state}"; shift 2 ;;
+    --vllm-wheel) vllm_wheel="${2:?missing vLLM wheel}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 : "${root:?--environment-root is required}"
 : "${installer_state:?--installer-state is required}"
+: "${vllm_wheel:?--vllm-wheel is required}"
 
 umask 077
 root="$(mkdir -p "${root}" && cd "${root}" && pwd -P)"
@@ -143,7 +146,8 @@ printf 'Installing the locked vLLM environment.\n'
 images/gpu/install_runtime.sh \
   --target "${root}/vllm" \
   --python "${bootstrap_python}" \
-  --uv "${root}/bootstrap/bin/uv"
+  --uv "${root}/bootstrap/bin/uv" \
+  --wheel "${vllm_wheel}"
 
 export PATH="${root}/bootstrap/bin:${PATH}"
 export LD_LIBRARY_PATH="${root}/bootstrap/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"

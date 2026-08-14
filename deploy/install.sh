@@ -14,6 +14,8 @@ installer_release="__HEARTWOOD_RELEASE_VERSION__"
 platform="auto"
 bundle=""
 checksums=""
+gpu_runtime_asset="vllm-0.27.2rc1.dev77+gac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
+gpu_runtime_wheel=""
 dry_run="false"
 minimum_free_gib="8"
 stage_number=0
@@ -41,6 +43,8 @@ Usage: heartwood-installer [options]
   --platform NAME      auto, carina, or generic
   --bundle PATH        Use a local heartwood-native.tar.gz
   --checksums PATH     SHA256SUMS for a local bundle
+  --gpu-runtime-wheel PATH
+                       Use the local release-pinned vLLM wheel on Carina
   --minimum-free-gib N Required free space in GiB (default: 8)
   --dry-run            Verify and display the installation without changing it
 EOF
@@ -52,6 +56,7 @@ while (($#)); do
     --platform) platform="${2:?missing platform}"; shift 2 ;;
     --bundle) bundle="${2:?missing bundle}"; shift 2 ;;
     --checksums) checksums="${2:?missing checksum manifest}"; shift 2 ;;
+    --gpu-runtime-wheel) gpu_runtime_wheel="${2:?missing GPU runtime wheel}"; shift 2 ;;
     --minimum-free-gib) minimum_free_gib="${2:?missing minimum free space}"; shift 2 ;;
     --dry-run) dry_run="true"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -68,6 +73,10 @@ if [[ "${platform}" == "auto" ]]; then
 fi
 if [[ "${platform}" != "carina" && "${platform}" != "generic" ]]; then
   echo "unsupported native platform: ${platform}" >&2
+  exit 64
+fi
+if [[ "${platform}" != "carina" && -n "${gpu_runtime_wheel}" ]]; then
+  echo "--gpu-runtime-wheel is supported only for Carina installations" >&2
   exit 64
 fi
 if [[ ! "${minimum_free_gib}" =~ ^[1-9][0-9]*$ ]]; then
@@ -247,26 +256,83 @@ if [[ -z "${bundle}" ]]; then
   checksums="${workspace}/SHA256SUMS"
   curl --fail --location --show-error --progress-bar "${release_root}/heartwood-native.tar.gz" --output "${bundle}"
   curl --fail --location --show-error --progress-bar "${release_root}/SHA256SUMS" --output "${checksums}"
+  if [[ "${platform}" == "carina" ]]; then
+    gpu_runtime_wheel="${workspace}/${gpu_runtime_asset}"
+    curl --fail --location --show-error --progress-bar \
+      "${release_root}/${gpu_runtime_asset}" \
+      --output "${gpu_runtime_wheel}"
+  fi
 elif [[ -z "${checksums}" ]]; then
   echo "--checksums is required with --bundle" >&2
   exit 64
+fi
+
+if [[ "${platform}" == "carina" && -z "${gpu_runtime_wheel}" ]]; then
+  sibling_wheel="$(dirname -- "${bundle}")/${gpu_runtime_asset}"
+  if [[ -f "${sibling_wheel}" ]]; then
+    gpu_runtime_wheel="${sibling_wheel}"
+  else
+    echo "Carina installation requires the release GPU runtime wheel." >&2
+    echo "Place ${gpu_runtime_asset} beside the bundle or pass --gpu-runtime-wheel." >&2
+    exit 66
+  fi
 fi
 
 if [[ ! -f "${bundle}" || ! -f "${checksums}" ]]; then
   echo "bundle and checksum manifest must be regular files" >&2
   exit 66
 fi
-checksum_line_count="$(wc -l <"${checksums}" | tr -d ' ')"
-checksum_line="$(cat "${checksums}")"
-if [[ "${checksum_line_count}" != "1" || ! "${checksum_line}" =~ ^[0-9a-f]{64}[[:space:]][[:space:]]heartwood-native\.tar\.gz$ ]]; then
-  echo "checksum manifest must contain exactly heartwood-native.tar.gz" >&2
+if [[ "${platform}" == "carina" && ! -f "${gpu_runtime_wheel}" ]]; then
+  echo "GPU runtime wheel must be a regular file" >&2
+  exit 66
+fi
+native_checksum=""
+gpu_runtime_checksum=""
+while IFS= read -r checksum_line || [[ -n "${checksum_line}" ]]; do
+  if [[ ! "${checksum_line}" =~ ^([0-9a-f]{64})[[:space:]][[:space:]]([^/[:space:]]+)$ ]]; then
+    echo "checksum manifest contains an invalid entry" >&2
+    exit 66
+  fi
+  checksum_digest="${BASH_REMATCH[1]}"
+  checksum_name="${BASH_REMATCH[2]}"
+  case "${checksum_name}" in
+    heartwood-native.tar.gz)
+      if [[ -n "${native_checksum}" ]]; then
+        echo "checksum manifest contains duplicate native assets" >&2
+        exit 66
+      fi
+      native_checksum="${checksum_digest}"
+      ;;
+    "${gpu_runtime_asset}")
+      if [[ -n "${gpu_runtime_checksum}" ]]; then
+        echo "checksum manifest contains duplicate GPU runtime assets" >&2
+        exit 66
+      fi
+      gpu_runtime_checksum="${checksum_digest}"
+      ;;
+    *)
+      echo "checksum manifest contains an unexpected asset: ${checksum_name}" >&2
+      exit 66
+      ;;
+  esac
+done <"${checksums}"
+if [[ -z "${native_checksum}" ]]; then
+  echo "checksum manifest does not contain heartwood-native.tar.gz" >&2
+  exit 66
+fi
+if [[ "${platform}" == "carina" && -z "${gpu_runtime_checksum}" ]]; then
+  echo "checksum manifest does not contain the GPU runtime wheel" >&2
   exit 66
 fi
 if [[ "${bundle}" != "${workspace}/heartwood-native.tar.gz" ]]; then
   cp "${bundle}" "${workspace}/heartwood-native.tar.gz"
 fi
-if [[ "${checksums}" != "${workspace}/SHA256SUMS" ]]; then
-  cp "${checksums}" "${workspace}/SHA256SUMS"
+if [[ "${platform}" == "carina" && "${gpu_runtime_wheel}" != "${workspace}/${gpu_runtime_asset}" ]]; then
+  cp "${gpu_runtime_wheel}" "${workspace}/${gpu_runtime_asset}"
+fi
+printf '%s  heartwood-native.tar.gz\n' "${native_checksum}" >"${workspace}/SHA256SUMS"
+if [[ "${platform}" == "carina" ]]; then
+  printf '%s  %s\n' "${gpu_runtime_checksum}" "${gpu_runtime_asset}" >>"${workspace}/SHA256SUMS"
 fi
 (
   cd "${workspace}"
@@ -355,7 +421,8 @@ if [[ "${platform}" == "carina" ]]; then
     cd "${source_root}"
     deploy/carina/bootstrap.sh \
       --environment-root "${runtime_root}" \
-      --installer-state "${installer_state}"
+      --installer-state "${installer_state}" \
+      --vllm-wheel "${workspace}/${gpu_runtime_asset}"
   )
 else
   require_command curl "to install the managed inference runtime"

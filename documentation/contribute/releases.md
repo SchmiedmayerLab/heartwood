@@ -38,6 +38,7 @@ Each release includes:
 
 - `heartwood-installer`;
 - `heartwood-native.tar.gz`;
+- the release-pinned CUDA 12.9 vLLM wheel used by Carina;
 - `SHA256SUMS`;
 - standard, GPU, Terra, and Terra GPU image tags; and
 - versioned documentation.

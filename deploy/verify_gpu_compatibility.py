@@ -236,6 +236,8 @@ def _verify_runtime_lock(root: Path, runtime: dict[str, Any]) -> None:
     lock = (root / "images/gpu/vllm-requirements.txt").read_text(encoding="utf-8")
     vllm_version = _string(runtime, "vllm_version")
     vllm_source_revision = _string(runtime, "vllm_source_revision")
+    vllm_wheel_source_url = _string(runtime, "vllm_wheel_source_url")
+    vllm_wheel_filename = _string(runtime, "vllm_wheel_filename")
     vllm_wheel_sha256 = _string(runtime, "vllm_wheel_sha256")
     if not vllm_version.endswith(".cu129"):
         raise CompatibilityError("GPU runtime must use an explicit CUDA 12.9 vLLM wheel")
@@ -243,9 +245,21 @@ def _verify_runtime_lock(root: Path, runtime: dict[str, Any]) -> None:
         raise CompatibilityError("GPU runtime vLLM source revision must be immutable")
     if re.fullmatch(r"[0-9a-f]{64}", vllm_wheel_sha256) is None:
         raise CompatibilityError("GPU runtime vLLM wheel digest must be SHA-256")
+    if Path(vllm_wheel_filename).name != vllm_wheel_filename or not vllm_wheel_filename.endswith(
+        ".whl"
+    ):
+        raise CompatibilityError("GPU runtime vLLM wheel filename is unsafe")
     encoded_vllm_version = vllm_version.replace("+", "%2B")
+    expected_source_url = (
+        f"https://wheels.vllm.ai/{vllm_source_revision}/"
+        f"vllm-{encoded_vllm_version}-cp38-abi3-manylinux_2_28_x86_64.whl"
+    )
+    if vllm_wheel_source_url != expected_source_url:
+        raise CompatibilityError("GPU runtime vLLM wheel source disagrees with its revision")
+    if vllm_wheel_filename != expected_source_url.rsplit("/", maxsplit=1)[1].replace("%2B", "+"):
+        raise CompatibilityError("GPU runtime vLLM release filename disagrees with its source")
     expected = (
-        f"wheels.vllm.ai/{vllm_source_revision}/vllm-{encoded_vllm_version}",
+        vllm_wheel_source_url,
         f"#sha256={vllm_wheel_sha256}",
         f"torch-{_base_version(_string(runtime, 'pytorch_version'))}%2Bcu129",
         f"torchaudio-{_base_version(_string(runtime, 'torchaudio_version'))}%2Bcu129",
