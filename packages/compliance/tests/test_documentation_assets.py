@@ -154,8 +154,7 @@ def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> N
     referenced_screenshots = set(_theme_screenshot_filenames(screenshot_documents))
     assert referenced_screenshots
     basenames = {
-        re.sub(r"-(?:light|dark)\.png$", "", filename)
-        for filename in referenced_screenshots
+        re.sub(r"-(?:light|dark)\.png$", "", filename) for filename in referenced_screenshots
     }
     for basename in basenames:
         assert f'"{basename}.png"' in screenshot_script
