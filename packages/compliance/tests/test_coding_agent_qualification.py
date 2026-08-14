@@ -396,18 +396,18 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
 
     resolved = load(
         _root() / "images/gpu/compatibility.toml",
-        "terra-2xt4-qwen3-coder-30b-awq",
+        "carina-2xl40s-muse-glimmer-30b-bf16",
     )
 
     assert resolved["runtime"]["cuda_version"] == "12.9"
-    assert resolved["configuration"]["tool_call_parser"] == "qwen3_coder"
+    assert resolved["configuration"]["tool_call_parser"] == "muse_glimmer"
+    assert resolved["configuration"]["reasoning_parser"] == "muse_glimmer"
     assert resolved["configuration"]["agent_tool_mode"] == "openhands-native"
-    assert resolved["configuration"]["context_window"] == 18_432
+    assert resolved["configuration"]["context_window"] == 32_768
     assert resolved["configuration"]["gpu_count"] == 2
     assert resolved["configuration"]["tensor_parallel_size"] == 2
-    assert resolved["configuration"]["enforce_eager"] is True
     assert resolved["configuration"]["model_revision"] == (
-        "e69e73813144d9b715648d8384b3f2c035397411"
+        "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
     )
 
 
@@ -422,9 +422,7 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
         platform="terra",
     )
 
-    assert {configuration["configuration_id"] for configuration in configurations} == {
-        "terra-2xt4-qwen3-coder-30b-awq",
-    }
+    assert configurations == []
 
 
 def test_gpu_qualification_catalog_rejects_malformed_entries(tmp_path: Path) -> None:
@@ -519,6 +517,20 @@ def test_gpu_compatibility_records_inconclusive_carina_attempts() -> None:
     assert inconclusive["carina-2xl40s-qwen3-coder-next-fp8"]["evaluated_at"] == ("2026-07-22")
 
 
+def test_gpu_compatibility_retains_expired_qualifications_as_history() -> None:
+    with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
+        matrix = tomllib.load(file)
+
+    historical = {entry["configuration_id"]: entry for entry in matrix["historical_configurations"]}
+    assert set(historical) == {
+        "carina-l40s-qwen3-coder-30b-fp8",
+        "terra-2xt4-qwen3-coder-30b-awq",
+    }
+    assert all(entry["vllm_version"] == "0.25.1+cu129" for entry in historical.values())
+    assert "current packaged runtime" in historical["carina-l40s-qwen3-coder-30b-fp8"]["reason"]
+    assert "Terra was unavailable" in historical["terra-2xt4-qwen3-coder-30b-awq"]["reason"]
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -557,7 +569,7 @@ def test_gpu_compatibility_rejects_ambiguous_attempt_evidence(
         )
 
 
-def test_gpu_compatibility_rejects_snapshot_without_selectable_configuration(
+def test_gpu_compatibility_rejects_an_empty_selectable_configuration_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     verifier = _module(
@@ -578,7 +590,7 @@ def test_gpu_compatibility_rejects_snapshot_without_selectable_configuration(
         lambda path: matrix if path.name == "compatibility.toml" else catalog,
     )
 
-    with pytest.raises(verifier.CompatibilityError, match="no selectable GPU configuration"):
+    with pytest.raises(verifier.CompatibilityError, match="has no configurations"):
         verifier.verify_repository(_root())
 
 
@@ -593,7 +605,7 @@ def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
     )
     resolved = loader.load_configuration(
         _root() / "images/gpu/compatibility.toml",
-        "terra-2xt4-qwen3-coder-30b-awq",
+        "carina-2xl40s-muse-glimmer-30b-bf16",
     )
     with (_root() / "images/generic/local-runtime/snapshots.toml").open("rb") as file:
         snapshot = tomllib.load(file)["snapshots"][resolved["configuration"]["model_snapshot"]]

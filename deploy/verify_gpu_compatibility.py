@@ -139,6 +139,11 @@ def verify_repository(root: Path) -> None:
         label="inconclusive",
         seen_ids=seen_ids,
     )
+    _verify_nonselectable_configurations(
+        matrix.get("historical_configurations", ()),
+        label="historical",
+        seen_ids=seen_ids,
+    )
 
     for snapshot_id, snapshot in snapshots.items():
         if not isinstance(snapshot, dict):
@@ -238,6 +243,7 @@ def _verify_runtime_lock(root: Path, runtime: dict[str, Any]) -> None:
     vllm_source_revision = _string(runtime, "vllm_source_revision")
     vllm_wheel_source_url = _string(runtime, "vllm_wheel_source_url")
     vllm_wheel_filename = _string(runtime, "vllm_wheel_filename")
+    vllm_wheel_size_bytes = runtime.get("vllm_wheel_size_bytes")
     vllm_wheel_sha256 = _string(runtime, "vllm_wheel_sha256")
     if not vllm_version.endswith(".cu129"):
         raise CompatibilityError("GPU runtime must use an explicit CUDA 12.9 vLLM wheel")
@@ -245,6 +251,12 @@ def _verify_runtime_lock(root: Path, runtime: dict[str, Any]) -> None:
         raise CompatibilityError("GPU runtime vLLM source revision must be immutable")
     if re.fullmatch(r"[0-9a-f]{64}", vllm_wheel_sha256) is None:
         raise CompatibilityError("GPU runtime vLLM wheel digest must be SHA-256")
+    if (
+        not isinstance(vllm_wheel_size_bytes, int)
+        or isinstance(vllm_wheel_size_bytes, bool)
+        or vllm_wheel_size_bytes <= 0
+    ):
+        raise CompatibilityError("GPU runtime vLLM wheel size must be positive")
     if Path(vllm_wheel_filename).name != vllm_wheel_filename or not vllm_wheel_filename.endswith(
         ".whl"
     ):

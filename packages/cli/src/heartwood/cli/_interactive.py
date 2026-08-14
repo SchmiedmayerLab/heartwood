@@ -292,7 +292,11 @@ class InteractiveSession:
             return InteractionResult(projection=self.replay(), replace_transcript=True)
         if directive == "/audit-export" and len(parts) == 1:
             events = self._handle(CommandKind.AUDIT_EXPORT)
-            return InteractionResult(events=events, projection=self.replay())
+            export_path = terminal_safe_text(str(events[-1].payload["path"]))
+            return InteractionResult(
+                events=events,
+                message=f"Audit export: {export_path}",
+            )
         if directive == "/status" and len(parts) == 1:
             try:
                 return InteractionResult(message=format_model_status(self.gateway))

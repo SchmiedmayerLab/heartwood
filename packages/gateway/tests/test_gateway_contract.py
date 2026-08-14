@@ -2288,13 +2288,20 @@ def test_local_model_availability_reflects_installed_runtime_executables(
         "qwen3-coder-next-fp8-vllm",
         "gpt-oss-120b-vllm",
     } & {str(model["model_id"]) for model in terra_models}
-    terra_qualified = next(
+    historical_terra_model = next(
         model
         for model in terra_models
         if model["model_id"] == "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
     )
-    assert terra_qualified["qualification"] == "qualified"
-    assert terra_qualified["available"] is False
+    assert historical_terra_model["qualification"] == "unvalidated"
+    assert historical_terra_model["available"] is False
+    muse_on_terra = next(
+        model for model in terra_models if model["model_id"] == "muse-glimmer-30b-bf16-vllm"
+    )
+    assert muse_on_terra["qualification"] == "unvalidated"
+    assert muse_on_terra["qualification_test"] is None
+    assert muse_on_terra["qualification_date"] is None
+    assert muse_on_terra["qualification_evidence"] is None
 
 
 def test_inaccessible_packaged_runtime_is_reported_as_unavailable(

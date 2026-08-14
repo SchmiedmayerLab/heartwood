@@ -60,10 +60,8 @@ _VALIDATED_PLATFORMS = {"carina", "generic", "terra"}
 
 def automatic_model_tier(platform_id: str) -> ModelTier:
     """Return the highest tier considered by automatic model selection."""
-    if platform_id == "terra":
+    if platform_id in {"carina", "terra"}:
         return "maximum"
-    if platform_id == "carina":
-        return "powerful"
     return "standard"
 
 

@@ -14,7 +14,7 @@ installer_release="__HEARTWOOD_RELEASE_VERSION__"
 platform="auto"
 bundle=""
 checksums=""
-gpu_runtime_asset="vllm-0.27.2rc1.dev77+gac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
+gpu_runtime_asset="__HEARTWOOD_GPU_RUNTIME_ASSET__"
 gpu_runtime_wheel=""
 dry_run="false"
 minimum_free_gib="8"
@@ -33,6 +33,21 @@ require_command() {
     printf '%s is required %s\n' "${command}" "${purpose}" >&2
     exit 69
   fi
+}
+
+download_release_asset() {
+  local source="$1"
+  local destination="$2"
+  curl \
+    --fail \
+    --location \
+    --show-error \
+    --progress-bar \
+    --retry 3 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    "${source}" \
+    --output "${destination}"
 }
 
 usage() {
@@ -254,13 +269,11 @@ if [[ -z "${bundle}" ]]; then
   release_root="https://github.com/${repository}/releases/download/${installer_release}"
   bundle="${workspace}/heartwood-native.tar.gz"
   checksums="${workspace}/SHA256SUMS"
-  curl --fail --location --show-error --progress-bar "${release_root}/heartwood-native.tar.gz" --output "${bundle}"
-  curl --fail --location --show-error --progress-bar "${release_root}/SHA256SUMS" --output "${checksums}"
+  download_release_asset "${release_root}/heartwood-native.tar.gz" "${bundle}"
+  download_release_asset "${release_root}/SHA256SUMS" "${checksums}"
   if [[ "${platform}" == "carina" ]]; then
     gpu_runtime_wheel="${workspace}/${gpu_runtime_asset}"
-    curl --fail --location --show-error --progress-bar \
-      "${release_root}/${gpu_runtime_asset}" \
-      --output "${gpu_runtime_wheel}"
+    download_release_asset "${release_root}/${gpu_runtime_asset}" "${gpu_runtime_wheel}"
   fi
 elif [[ -z "${checksums}" ]]; then
   echo "--checksums is required with --bundle" >&2
@@ -468,6 +481,57 @@ write_command_wrapper() {
 export PATH="${runtime}/bin:${runtime}:${PATH}"
 export LD_LIBRARY_PATH="${runtime}/lib:${runtime}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 EOF
+    if [[ "${platform}" == "carina" ]]; then
+      printf 'application=%q\n' "${executable}"
+      cat <<'EOF'
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  prepare_model=false
+  setup_command=false
+  help_requested=false
+  model_source=""
+  previous=""
+  for argument in "$@"; do
+    if [[ "${argument}" == "--help" || "${argument}" == "-h" ]]; then
+      help_requested=true
+    elif [[ "${argument}" == "setup" ]]; then
+      setup_command=true
+    elif [[ "${previous}" == "models" && "${argument}" == "download" ]]; then
+      prepare_model=true
+    elif [[ "${previous}" == "--model-source" ]]; then
+      model_source="${argument}"
+    elif [[ "${argument}" == --model-source=* ]]; then
+      model_source="${argument#--model-source=}"
+    fi
+    previous="${argument}"
+  done
+  if [[ "${setup_command}" == "true" && ( -z "${model_source}" || "${model_source}" == "heartwood" ) ]]; then
+    prepare_model=true
+  fi
+  if [[ "${prepare_model}" == "true" && "${help_requested}" == "false" ]]; then
+    if ! command -v srun >/dev/null 2>&1; then
+      echo "Carina model preparation requires srun." >&2
+      exit 69
+    fi
+    partition="${HEARTWOOD_MODEL_PREPARATION_PARTITION:-dev}"
+    printf 'Carina model preparation requires bounded CPU compute.\n'
+    printf 'Requesting partition %s with 8 CPUs and 64 GiB RAM for up to two hours.\n' \
+      "${partition}"
+    srun_arguments=(
+      --partition="${partition}"
+      --cpus-per-task=8
+      --mem=64G
+      --time=02:00:00
+      --chdir="${PWD}"
+      --export=ALL
+    )
+    if [[ -t 0 && -t 1 ]]; then
+      srun_arguments=(--pty "${srun_arguments[@]}")
+    fi
+    exec srun "${srun_arguments[@]}" "${application}" "$@"
+  fi
+fi
+EOF
+    fi
     printf 'exec %q "$@"\n' "${executable}"
   } >"${output}"
   chmod +x "${output}"

@@ -396,6 +396,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         "vllm_wheel_filename": (
             "vllm-0.27.2rc1.dev77+gac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
         ),
+        "vllm_wheel_size_bytes": 546833637,
         "vllm_wheel_sha256": ("774cab63c82e511618fe859c2af4335be6f67ce1cab89dfcd0efb85f049e6d7e"),
         "pytorch_version": "2.13.0+cu129",
         "torchaudio_version": "2.11.0+cu129",
@@ -825,6 +826,8 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "installer release ${installer_release} does not match bundle" in installer
     assert "__HEARTWOOD_RELEASE_VERSION__" in installer
     assert "__HEARTWOOD_RELEASE_VERSION__" in packager
+    assert "__HEARTWOOD_GPU_RUNTIME_ASSET__" in installer
+    assert "__HEARTWOOD_GPU_RUNTIME_ASSET__" in packager
     assert "--version VERSION" not in installer
     assert "releases/latest/download" not in installer
     assert "[A-Za-z0-9._+-]{0,127}" in installer
@@ -833,8 +836,9 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "COPYFILE_DISABLE=1 tar --no-xattrs" in packager
     assert "native package version is unsafe" in packager
     assert "vllm_wheel_source_url" in gpu_packager
+    assert "vllm_wheel_size_bytes" in gpu_packager
     assert "vllm_wheel_sha256" in gpu_packager
-    assert "localize_runtime_requirements.py" in gpu_installer
+    assert "localize_runtime_lock.py" in gpu_installer
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow

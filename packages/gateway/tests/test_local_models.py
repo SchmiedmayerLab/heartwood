@@ -545,11 +545,10 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
 
     assert {choice.model_id for choice in choices} == {
         "qwen25-7b-instruct-q4_k_m",
-        "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-        "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
+        "muse-glimmer-30b-bf16-vllm",
     }
     assert all(choice.recommended_resource_envelope for choice in choices)
-    assert {choice.context_window for choice in choices} == {18_432, 32_768}
+    assert {choice.context_window for choice in choices} == {32_768}
     assert "llama-cpp-stories260k-ci" in {choice.model_id for choice in downloadable}
     assert "qwen25-coder-7b-instruct-q4_k_m" in {choice.model_id for choice in downloadable}
     assert {choice.model_id for choice in downloadable if choice.runtime == "vllm"} == {
@@ -562,11 +561,10 @@ def test_central_catalog_exposes_only_recommended_models() -> None:
     assert {
         model_id for model_id, choice in gpu_choices.items() if choice.qualification == "qualified"
     } == {
-        "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-        "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
+        "muse-glimmer-30b-bf16-vllm",
     }
     muse = gpu_choices["muse-glimmer-30b-bf16-vllm"]
-    assert muse.qualification == "unvalidated"
+    assert muse.qualification == "qualified"
     assert muse.tool_call_parser == "muse_glimmer"
     assert muse.reasoning_parser == "muse_glimmer"
 
@@ -595,7 +593,16 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
         root / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
     cpu = catalog_model_choices(artifacts.artifacts, snapshots.snapshots)[0]
-    qualified_terra_gpu = next(
+    qualified_carina_gpu = next(
+        choice
+        for choice in catalog_model_choices(
+            artifacts.artifacts,
+            snapshots.snapshots,
+            recommended_only=False,
+        )
+        if choice.model_id == "muse-glimmer-30b-bf16-vllm"
+    )
+    historical_terra_gpu = next(
         choice
         for choice in catalog_model_choices(
             artifacts.artifacts,
@@ -608,8 +615,10 @@ def test_catalog_qualification_is_scoped_to_the_validated_platform() -> None:
     assert cpu.qualification_for("generic") == "qualified"
     assert cpu.qualification_for("terra") == "unvalidated"
     assert cpu.qualification_for("carina") == "unvalidated"
-    assert qualified_terra_gpu.qualification_for("terra") == "qualified"
-    assert qualified_terra_gpu.qualification_for("carina") == "unvalidated"
+    assert qualified_carina_gpu.qualification_for("carina") == "qualified"
+    assert qualified_carina_gpu.qualification_for("terra") == "unvalidated"
+    assert historical_terra_gpu.qualification_for("terra") == "unvalidated"
+    assert historical_terra_gpu.qualification_for("carina") == "unvalidated"
 
 
 def _repository(

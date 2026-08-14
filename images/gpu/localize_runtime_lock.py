@@ -38,9 +38,7 @@ def localize_requirements(
             f"GPU runtime wheel must retain its pinned filename: {expected_filename}"
         )
     if _sha256(wheel) != expected_digest:
-        raise LocalRuntimeError(
-            "GPU runtime wheel digest differs from the compatibility contract"
-        )
+        raise LocalRuntimeError("GPU runtime wheel digest differs from the compatibility contract")
 
     expected_line = f"vllm @ {source_url}#sha256={expected_digest} \\\n"
     replacement = f"vllm @ {wheel.resolve().as_uri()}#sha256={expected_digest} \\\n"

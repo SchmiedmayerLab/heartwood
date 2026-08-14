@@ -115,7 +115,7 @@ venv)
   mkdir -p "${runtime}/bin"
   cat >"${runtime}/bin/python" <<'COMMAND'
 #!/usr/bin/env bash
-if [[ "${1:-}" == */localize_runtime_requirements.py ]]; then
+if [[ "${1:-}" == */localize_runtime_lock.py ]]; then
   shift
   source=""
   output=""
@@ -203,14 +203,25 @@ chmod +x "${workspace}/bin/micromamba"
 cat >"${workspace}/bin/srun" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-expected=(
-  "--partition=dev"
-  "--cpus-per-task=8"
-  "--mem=32G"
-  "--time=01:00:00"
-  "--chdir=${PWD}"
-  "--export=ALL"
-)
+if [[ " $* " == *" --time=02:00:00 "* ]]; then
+  expected=(
+    "--partition=${HEARTWOOD_MODEL_PREPARATION_PARTITION:-dev}"
+    "--cpus-per-task=8"
+    "--mem=64G"
+    "--time=02:00:00"
+    "--chdir=${PWD}"
+    "--export=ALL"
+  )
+else
+  expected=(
+    "--partition=dev"
+    "--cpus-per-task=8"
+    "--mem=32G"
+    "--time=01:00:00"
+    "--chdir=${PWD}"
+    "--export=ALL"
+  )
+fi
 for argument in "${expected[@]}"; do
   argument_found=false
   for actual in "$@"; do
@@ -247,6 +258,8 @@ printf '%s  heartwood-native.tar.gz\n%s  %s\n' \
   >"${carina_checksums}"
 grep --fixed-strings --line-regexp --quiet \
   "installer_release=\"${expected_release}\"" "${assets}/heartwood-installer"
+grep --fixed-strings --line-regexp --quiet \
+  "gpu_runtime_asset=\"${gpu_runtime_asset}\"" "${assets}/heartwood-installer"
 if "${assets}/heartwood-installer" --help | grep --quiet -- '--version'; then
   echo "published installer exposes a redundant release version option" >&2
   exit 1
@@ -434,6 +447,31 @@ for directory in state models cache logs; do
   test ! -e "${carina_installation}/${directory}"
 done
 test "$("${carina_installation}/bin/heartwood")" = "heartwood synthetic command"
+model_project="${workspace}/model-project"
+mkdir "${model_project}"
+model_setup_output="$({
+  cd "${model_project}"
+  HOME="${workspace}/outside-home" \
+    HEARTWOOD_MODEL_PREPARATION_PARTITION=normal \
+    PATH="${workspace}/bin:${PATH}" \
+    "${carina_installation}/bin/heartwood" \
+      --plain setup --model-source heartwood --model-id synthetic --yes --yes-download
+})"
+grep --quiet 'Carina model preparation requires bounded CPU compute' \
+  <<<"${model_setup_output}"
+grep --quiet 'heartwood synthetic command' <<<"${model_setup_output}"
+model_help_output="$({
+  cd "${model_project}"
+  HOME="${workspace}/outside-home" \
+    PATH="${workspace}/bin:${PATH}" \
+    "${carina_installation}/bin/heartwood" setup --help
+})"
+if grep --quiet 'Carina model preparation requires bounded CPU compute' \
+  <<<"${model_help_output}"; then
+  echo "Carina help unexpectedly requested model-preparation compute" >&2
+  exit 1
+fi
+grep --quiet 'heartwood synthetic command' <<<"${model_help_output}"
 grep --fixed-strings --line-regexp --quiet 'export HEARTWOOD_PLATFORM=carina' \
   "${carina_generation}/bin/heartwood"
 grep --fixed-strings --line-regexp --quiet \

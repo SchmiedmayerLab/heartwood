@@ -30,7 +30,10 @@ _DEPENDENCY_VERSIONS = {
 }
 _REQUIRED_TOOL_PARSERS = ("hermes", "muse_glimmer", "openai", "qwen3_coder")
 _REQUIRED_REASONING_PARSERS = ("muse_glimmer",)
-_REQUIRED_MODEL_ARCHITECTURES = ("MuseGlimmerForCausalLM",)
+_REQUIRED_MODEL_ARCHITECTURES = (
+    "MuseGlimmerForCausalLM",
+    "MuseGlimmerForConditionalGeneration",
+)
 _CUDA_RUNTIME_PATTERN = re.compile(rb"libcudart\.so\.(\d+)")
 _FORBIDDEN_CUDA_13_PACKAGES = {
     "cuda-tile",

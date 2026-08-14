@@ -59,7 +59,7 @@ from heartwood.gateway import (
         ),
     ],
 )
-def test_repository_snapshot_catalog_pins_gpu_model_variants(
+def test_repository_snapshot_catalog_retains_historical_gpu_model_variants(
     snapshot_id: str,
     repository: str,
     revision: str,
@@ -81,18 +81,15 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
     assert snapshot.recommended_disk_bytes >= snapshot.minimum_free_bytes
     assert snapshot.context_window <= snapshot.maximum_context_window
-    assert snapshot.qualification == "qualified"
-    expected_platform = (
-        "carina" if snapshot_id == "qwen3-coder-30b-a3b-instruct-fp8-vllm" else "terra"
-    )
-    assert snapshot.validated_platforms == (expected_platform,)
-    assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
-    assert snapshot.qualification_date is not None
-    assert snapshot.qualification_evidence is not None
-    assert snapshot.recommended is True
+    assert snapshot.qualification == "unvalidated"
+    assert snapshot.validated_platforms == ()
+    assert snapshot.qualification_test is None
+    assert snapshot.qualification_date is None
+    assert snapshot.qualification_evidence is None
+    assert snapshot.recommended is False
 
 
-def test_repository_snapshot_catalog_pins_muse_as_an_unvalidated_advanced_model() -> None:
+def test_repository_snapshot_catalog_pins_qualified_muse_configuration() -> None:
     catalog = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
@@ -103,13 +100,18 @@ def test_repository_snapshot_catalog_pins_muse_as_an_unvalidated_advanced_model(
     assert snapshot.source_revision == "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
     assert snapshot.precision == "BF16"
     assert snapshot.minimum_gpu_count == 2
-    assert snapshot.context_window == 65_536
+    assert snapshot.context_window == 32_768
     assert snapshot.maximum_context_window == 131_072
     assert snapshot.tool_call_parser == "muse_glimmer"
     assert snapshot.reasoning_parser == "muse_glimmer"
-    assert snapshot.qualification == "unvalidated"
-    assert snapshot.validated_platforms == ()
-    assert snapshot.recommended is False
+    assert snapshot.qualification == "qualified"
+    assert snapshot.validated_platforms == ("carina",)
+    assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
+    assert snapshot.qualification_date == "2026-08-14"
+    assert snapshot.qualification_evidence == (
+        "https://github.com/SchmiedmayerLab/heartwood/pull/119"
+    )
+    assert snapshot.recommended is True
 
 
 @pytest.mark.parametrize(
@@ -117,7 +119,7 @@ def test_repository_snapshot_catalog_pins_muse_as_an_unvalidated_advanced_model(
     [
         ("generic", "standard"),
         ("terra", "maximum"),
-        ("carina", "powerful"),
+        ("carina", "maximum"),
         ("custom", "standard"),
     ],
 )
@@ -128,31 +130,24 @@ def test_automatic_model_tier_is_shared_across_interfaces(
     assert automatic_model_tier(platform_id) == tier
 
 
-@pytest.mark.parametrize(
-    ("snapshot_id", "minimum_vram_gib"),
-    [
-        ("qwen3-coder-30b-a3b-instruct-fp8-vllm", 48),
-    ],
-)
-def test_snapshot_minimum_vram_supports_an_agent_context(
-    snapshot_id: str,
-    minimum_vram_gib: int,
-) -> None:
+def test_qualified_snapshot_gpu_envelope_supports_its_agent_context() -> None:
     catalog = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
-    snapshot = catalog.snapshot(snapshot_id)
+    snapshot = catalog.snapshot("muse-glimmer-30b-bf16-vllm")
+    available_vram = snapshot.minimum_gpu_memory_bytes * snapshot.tensor_parallel_size
 
     plan = plan_local_context_window(
         model_limit=snapshot.context_window,
         model_size_bytes=snapshot.expected_size_bytes,
         runtime="vllm",
-        available_memory_bytes=minimum_vram_gib * 1024**3,
+        available_memory_bytes=available_vram,
+        qualified_memory_bytes=available_vram,
     )
 
-    assert plan.effective_window >= 18_432
-    assert plan.effective_window <= snapshot.context_window
-    assert f"{minimum_vram_gib} GB VRAM" in str(snapshot.minimum_resource_envelope)
+    assert plan.effective_window == snapshot.context_window
+    assert plan.estimated_required_bytes == available_vram
+    assert "48 GB VRAM" in str(snapshot.minimum_resource_envelope)
 
 
 def test_catalog_recommends_only_qualified_models_with_compatible_resources() -> None:
@@ -208,6 +203,12 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
         )
         is None
     )
+    assert source.recommend(
+        platform_id="carina",
+        gpu_count=2,
+        gpu_memory_bytes=48_000_000_000,
+        maximum_tier="maximum",
+    ) == source.snapshot("muse-glimmer-30b-bf16-vllm")
 
     assert (
         catalog.recommend_for_capacities(

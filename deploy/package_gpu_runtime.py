@@ -10,17 +10,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import os
 import re
 import shutil
 import tempfile
+import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, BinaryIO
 
 _CHECKSUM_PATTERN = re.compile(r"^(?P<digest>[0-9a-f]{64})  (?P<name>[^/\r\n]+)$")
 _CHUNK_SIZE = 1024 * 1024
+_DOWNLOAD_RETRY_DELAYS = (2.0, 8.0)
 
 
 class RuntimeAssetError(ValueError):
@@ -37,6 +41,7 @@ def package_runtime_asset(
     runtime = _runtime_contract(compatibility_path)
     filename = _string(runtime, "vllm_wheel_filename")
     source_url = _string(runtime, "vllm_wheel_source_url")
+    expected_size = _positive_int(runtime, "vllm_wheel_size_bytes")
     expected_digest = _string(runtime, "vllm_wheel_sha256")
     if Path(filename).name != filename or not filename.endswith(".whl"):
         raise RuntimeAssetError("GPU runtime wheel filename is unsafe")
@@ -52,15 +57,19 @@ def package_runtime_asset(
     temporary = Path(temporary_name)
     try:
         if source_file is None:
-            request = urllib.request.Request(
-                source_url,
-                headers={"User-Agent": "Heartwood release packager"},
+            print(
+                f"Downloading {filename} ({expected_size / 1024**2:.1f} MiB) "
+                "from the pinned vLLM build."
             )
-            with urllib.request.urlopen(request, timeout=120) as response:
-                _copy(response, temporary)
+            _download(source_url, temporary)
         else:
             with source_file.open("rb") as source:
                 _copy(source, temporary)
+        actual_size = temporary.stat().st_size
+        if actual_size != expected_size:
+            raise RuntimeAssetError(
+                "GPU runtime wheel size differs from the compatibility contract"
+            )
         actual_digest = _sha256(temporary)
         if actual_digest != expected_digest:
             raise RuntimeAssetError(
@@ -92,6 +101,38 @@ def _string(mapping: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise RuntimeAssetError(f"GPU runtime field is missing: {key}")
     return value
+
+
+def _positive_int(mapping: dict[str, Any], key: str) -> int:
+    value = mapping.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise RuntimeAssetError(f"GPU runtime field must be a positive integer: {key}")
+    return value
+
+
+def _download(source_url: str, destination: Path) -> None:
+    request = urllib.request.Request(
+        source_url,
+        headers={"User-Agent": "Heartwood release packager"},
+    )
+    for attempt in range(len(_DOWNLOAD_RETRY_DELAYS) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                _copy(response, destination)
+        except (
+            TimeoutError,
+            ConnectionError,
+            http.client.IncompleteRead,
+            urllib.error.URLError,
+        ) as error:
+            destination.unlink(missing_ok=True)
+            if attempt == len(_DOWNLOAD_RETRY_DELAYS):
+                raise RuntimeAssetError(
+                    f"pinned GPU runtime download did not complete after {attempt + 1} attempts"
+                ) from error
+            time.sleep(_DOWNLOAD_RETRY_DELAYS[attempt])
+        else:
+            return
 
 
 def _copy(source: BinaryIO, destination: Path) -> None:

@@ -462,6 +462,13 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         assert replay.projection == session.replay()
         assert replay.replace_transcript
 
+        audit_export = session.submit("/audit-export")
+        assert audit_export.projection is None
+        assert audit_export.message is not None
+        assert audit_export.message.startswith("Audit export: ")
+        assert audit_export.message.endswith("audit-export.jsonl")
+        assert audit_export.events[-1].kind == EventKind.AUDIT_EXPORT_RECORDED
+
         action_settings = session.submit("/permissions")
         specialists = session.submit("/specialists")
         selected = session.submit("/permissions auto-approve-low-risk")

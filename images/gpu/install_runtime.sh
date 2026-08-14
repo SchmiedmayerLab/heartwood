@@ -34,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 if [[ -n "${wheel}" ]]; then
   localized_requirements="$(mktemp "${target}/.vllm-requirements.XXXXXX")"
-  "${target}/bin/python" "${runtime_sources}/localize_runtime_requirements.py" \
+  "${target}/bin/python" "${runtime_sources}/localize_runtime_lock.py" \
     --source "${requirements}" \
     --output "${localized_requirements}" \
     --wheel "${wheel}" \

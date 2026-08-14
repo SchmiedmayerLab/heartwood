@@ -1278,7 +1278,8 @@ def _configure_local_model(
         lambda: _available_managed_models(gateway),
         activity=_MODEL_CATALOG_ACTIVITY,
     )
-    recommendations = [item for item in local_catalog["models"] if item["available"]]
+    catalog_models = local_catalog["models"]
+    recommendations = [item for item in catalog_models if item["available"]]
     if model_id is None:
         print("\nModels Heartwood can run:")
         choices: list[tuple[str, str]] = []
@@ -1318,7 +1319,7 @@ def _configure_local_model(
     if not model_id.strip():
         raise ModelRepositoryError("a Heartwood-managed model must be selected")
 
-    known_local_ids = {item["model_id"]: item for item in recommendations}
+    known_local_ids = {item["model_id"]: item for item in catalog_models}
     if model_id in known_local_ids:
         item = known_local_ids[model_id]
         print("\nSelected Heartwood-managed model")

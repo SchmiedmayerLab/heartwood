@@ -2795,6 +2795,15 @@ class SessionGateway:
         return {
             **choice.safe_dict(),
             "qualification": qualification,
+            "qualification_test": (
+                choice.qualification_test if qualification == "qualified" else None
+            ),
+            "qualification_date": (
+                choice.qualification_date if qualification == "qualified" else None
+            ),
+            "qualification_evidence": (
+                choice.qualification_evidence if qualification == "qualified" else None
+            ),
             "active": active,
             "available": available,
             "selected": selected,
