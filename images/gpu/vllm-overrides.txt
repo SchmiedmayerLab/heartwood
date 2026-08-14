@@ -9,4 +9,4 @@ nvidia-cutlass-dsl==4.6.2
 humming-kernels[cu12]==0.1.12
 
 # Keep the runtime packaging toolchain above known vulnerable releases.
-setuptools==80.10.2
+setuptools==83.0.0

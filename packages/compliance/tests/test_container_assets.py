@@ -351,8 +351,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert "torchvision-0.28.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl" in lock
     assert "nvidia-cuda-runtime-cu12==12.9.79" in lock
     assert "flashinfer-python==0.6.16.post3" in lock
-    assert "setuptools==80.10.2" in lock
-    assert "setuptools==80.10.2" in overrides
+    assert "setuptools==83.0.0" in lock
+    assert "setuptools==83.0.0" in overrides
     assert "xgrammar==0.2.3" in lock
     assert "--extra-index-url" not in lock
     for package in (
