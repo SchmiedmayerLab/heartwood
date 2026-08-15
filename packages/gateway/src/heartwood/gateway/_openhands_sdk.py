@@ -158,6 +158,13 @@ _AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30
 _MAX_TOOL_RESULT_CHARS = 16_000
 _MAX_TOOL_RESULT_LINES = 240
 _OPENHANDS_FINISH_TOOL_NAME = "finish"
+_OPENHANDS_ERROR_STATUSES = frozenset(
+    {
+        ConversationExecutionStatus.ERROR,
+        ConversationExecutionStatus.STUCK,
+        ConversationExecutionStatus.DELETING,
+    }
+)
 _SPECIALIST_REGISTRATION_LOCK = Lock()
 _REGISTERED_HEARTWOOD_SPECIALISTS: dict[str, AgentDefinition] = {}
 
@@ -1398,6 +1405,9 @@ class OpenHandsSdkBackend:
         unmatched_actions = ConversationState.get_unmatched_actions(branch)
         unmatched_group = self._unmatched_action_group(conversation)
         lifecycle = _backend_lifecycle(state.execution_status)
+        has_typed_conversation_error = any(
+            isinstance(event, ConversationErrorEvent) for event in branch
+        )
         with self._run_lock:
             run_failed = self._run_failed
             execution_active = self._execution_active
@@ -1405,11 +1415,17 @@ class OpenHandsSdkBackend:
         if (
             execution_active
             and not run_cancelled
-            and state.execution_status
-            in {
-                ConversationExecutionStatus.IDLE,
-                ConversationExecutionStatus.PAUSED,
-            }
+            and (
+                state.execution_status
+                in {
+                    ConversationExecutionStatus.IDLE,
+                    ConversationExecutionStatus.PAUSED,
+                }
+                or (
+                    state.execution_status in _OPENHANDS_ERROR_STATUSES
+                    and not has_typed_conversation_error
+                )
+            )
         ):
             lifecycle = BackendLifecycle.RUNNING
         outcome_error = self._interrupted_outcome_error(conversation)
@@ -1430,16 +1446,9 @@ class OpenHandsSdkBackend:
                     ),
                 )
             )
-        has_typed_conversation_error = any(
-            isinstance(event, ConversationErrorEvent) for event in branch
-        )
         if (
-            state.execution_status
-            in {
-                ConversationExecutionStatus.ERROR,
-                ConversationExecutionStatus.STUCK,
-                ConversationExecutionStatus.DELETING,
-            }
+            state.execution_status in _OPENHANDS_ERROR_STATUSES
+            and not execution_active
             and not run_failed
             and not has_typed_conversation_error
         ):
