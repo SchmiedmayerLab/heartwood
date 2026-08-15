@@ -44,7 +44,7 @@ Use one of these combinations:
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
 | Stanford AI API Gateway or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.3.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Managed GPU evaluation | `ghcr.io/schmiedmayerlab/heartwood:0.3.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Run with Heartwood: Qwen3 Coder 30B AWQ | `ghcr.io/schmiedmayerlab/heartwood:0.3.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
@@ -52,11 +52,13 @@ Use the GPU image for a capable model managed inside the Terra environment.
 These are starting points rather than universal requirements.
 Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
 The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
-The GPU image includes the release-pinned NVIDIA runtime, but this release has no current Terra-qualified Heartwood-managed model.
-Use it only for an explicit model evaluation until the exact runtime and model combination completes the Terra qualification workflow.
+The GPU image and Qwen3 Coder configuration above completed Heartwood's coding-agent qualification on two T4 GPUs with an 18,432-token context window.
+This qualification is specific to two T4 GPUs; the recorded one- and four-T4 configurations are not interchangeable with it.
 Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
 It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
-For the first model download, import, or startup, set auto-pause to at least 120 minutes; image creation, model copying and verification, and inference startup can each take several minutes without terminal output from the model itself.
+For the first model download, verification, or startup, set auto-pause to at least 120 minutes.
+The pinned model download is about 17 GiB and depends on network conditions.
+The first run can remain active well beyond 15 minutes while Heartwood reports each stage and its elapsed time.
 After setup is complete, shorten auto-pause to match the normal research workflow.
 
 Heartwood inspects model size and available memory before launch, chooses a context capacity with response headroom, and warns when the selected compute is below its conservative estimate.
@@ -117,13 +119,14 @@ The first-use flow confirms the project and asks where the model runs.
 - Choose **OpenAI API**, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
 - Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
 
-No Heartwood-managed model is recommended automatically on Terra in this release.
-You can choose an advanced catalog entry for explicit evaluation or choose **Other Hugging Face model** and enter another public repository.
+On the qualified two-T4 configuration, Heartwood recommends **Qwen3 Coder 30B AWQ** and shows its resource, license, and download details before asking for confirmation.
+You can instead choose an advanced catalog entry for explicit evaluation or choose **Other Hugging Face model** and enter another public repository.
 Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
 
 Model download progress appears in the terminal and files persist under `.heartwood/models/`.
 Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
-After the model is available in the project, verification and inference startup can take several minutes while Heartwood verifies the snapshot and vLLM prepares GPU memory.
+After the model is available in the project, Heartwood verifies every selected file before vLLM prepares GPU memory.
+Allow 10-15 minutes for a full verification on a Terra persistent disk and another 2-15 minutes for startup.
 Importing an existing model directory is a separate copy and integrity-verification operation; it needs another model-sized block of free space and can take considerably longer on a standard persistent disk.
 Heartwood reports the active stage, elapsed time, selected context capacity, and memory assessment while you wait.
 

@@ -16,6 +16,7 @@ on:
         type: choice
         options:
           - carina-2xl40s-muse-glimmer-30b-bf16
+          - terra-2xt4-qwen3-coder-30b-awq
 
 permissions:
   contents: read

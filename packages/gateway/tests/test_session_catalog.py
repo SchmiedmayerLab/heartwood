@@ -195,6 +195,7 @@ service.handle(
 
 def test_catalog_listing_waits_for_a_complete_concurrent_append(tmp_path: Path) -> None:
     writer_script = """
+import json
 import sys
 import time
 from pathlib import Path
@@ -209,7 +210,7 @@ original_append = state._append_private_json_line
 
 def pause_after_audit(path, content):
     original_append(path, content)
-    if path.name == "audit.jsonl":
+    if path.name == "audit.jsonl" and json.loads(content)["event_type"] == "session.paused":
         ready.write_text("ready", encoding="utf-8")
         while not release.exists():
             time.sleep(0.01)

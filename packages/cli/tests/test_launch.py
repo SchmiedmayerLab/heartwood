@@ -544,7 +544,7 @@ def test_launch_reports_a_safe_resumable_model_transfer_failure(
     assert private_failure not in output
 
 
-def test_real_launch_plan_does_not_offer_an_unqualified_terra_model(
+def test_real_launch_plan_offers_qualified_terra_model_without_implicit_setup(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -580,8 +580,10 @@ def test_real_launch_plan_does_not_offer_an_unqualified_terra_model(
     assert run_launch(options, env={"HEARTWOOD_PLATFORM": "terra"}, run_fn=runner) == 64
     output = capsys.readouterr().out
     assert "Model status: recommendation only" in output
-    assert "No qualified Heartwood-managed model matches" in output
-    assert "heartwood models managed" in output
+    assert "Qualification: Qualified" in output
+    assert "Compatible with 2 visible Tesla T4 GPU(s)" in output
+    assert "resource recommendation, not a selected model" in output
+    assert "Run `heartwood` to choose Run with Heartwood" in output
     assert not runner_called
     assert not any(options.project.models_dir.iterdir())
 

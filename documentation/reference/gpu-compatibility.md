@@ -36,20 +36,21 @@ The exact driver used in a live qualification is recorded with its machine-reada
 | Platform | Capability Tier | GPU | Model and Immutable Revision | Precision | Context | Execution | Tensor Parallelism | Server Tool Parser | Agent Tool Mode | Outcome | Date |
 |---|---|---|---|---|---:|---|---:|---|---|---|---|
 | Carina | Maximum capability | 2 x L40S, 48 GB each | [Muse-Glimmer-30B](https://huggingface.co/meta-models/Muse-Glimmer-30B/tree/a4e59da52a7bc87ae7251dd5545c0dd437c44b68) | BF16 | 32,768 | CUDA graphs | 2 | `muse_glimmer` tool and reasoning | OpenHands native tools | Qualified | 2026-08-14 |
+| Terra | Powerful | 2 x T4, 16 GB each | [Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ](https://huggingface.co/YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ/tree/e69e73813144d9b715648d8384b3f2c035397411) | W4A16 AWQ | 18,432 | Eager | 2 | `qwen3_coder` | OpenHands native tools | Qualified | 2026-08-15 |
 
 All listed model repositories declare the Apache-2.0 license at the pinned revision.
 Confirm that a model's license and intended use remain suitable for the project before downloading it.
+The Carina qualification observed NVIDIA driver `590.48.01`; the Terra qualification observed driver `535.154.05`.
 
 ## Historical Qualifications
 
 | Platform | Configuration | Qualified Date | Qualified Runtime | Current Status |
 |---|---|---|---|---|
 | Carina, 1 x L40S | Qwen3 Coder 30B FP8 | 2026-07-21 | vLLM `0.25.1+cu129` | Requalification required after the runtime update |
-| Terra, 2 x T4 | Qwen3 Coder 30B W4A16 AWQ | 2026-08-11 | vLLM `0.25.1+cu129` | Requalification required after the runtime update |
 
 Historical results document combinations that passed an earlier release contract.
 They are not current recommendations because changing the inference runtime expires the qualification.
-The snapshots remain available under advanced model choices for explicit requalification.
+The snapshot remains available under advanced model choices for explicit requalification.
 
 ## Unsupported Configurations
 

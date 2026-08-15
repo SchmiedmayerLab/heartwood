@@ -1514,6 +1514,7 @@ class SessionGateway:
                     choice.model_id
                     for choice in local_choices
                     if choice.model_id in self._recommended_local_model_ids
+                    and choice.minimum_gpu_count == 0
                     and choice.qualification_for(gpu_environment.platform_id) == "qualified"
                     and self._local_runtime_available(choice.runtime)
                     and choice.runtime == preferred_runtime
@@ -2811,6 +2812,7 @@ class SessionGateway:
             "recommended": (
                 qualification == "qualified"
                 and choice.model_id in self._recommended_local_model_ids
+                and available
             ),
         }
 

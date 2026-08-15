@@ -48,6 +48,33 @@ qualification_test = "heartwood.coding-agent-e2e.v1"
 startup_seconds_min = 300
 startup_seconds_max = 1200
 
+[[configurations]]
+configuration_id = "terra-2xt4-qwen3-coder-30b-awq"
+status = "qualified"
+evaluated_at = "2026-08-15"
+observed_driver_version = "535.154.05"
+evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/119"
+platform = "terra"
+gpu_model = "NVIDIA T4"
+gpu_count = 2
+minimum_gpu_memory_bytes = 15000000000
+model_snapshot = "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
+model_repository = "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ"
+model_revision = "e69e73813144d9b715648d8384b3f2c035397411"
+precision = "W4A16 AWQ"
+context_window = 18432
+tensor_parallel_size = 2
+tool_call_parser = "qwen3_coder"
+agent_tool_mode = "openhands-native"
+enforce_eager = true
+vllm_version = "0.27.2rc1.dev77+gac7509e2b.cu129"
+pytorch_version = "2.13.0+cu129"
+cuda_version = "12.9"
+minimum_driver_version = "525.60.13"
+qualification_test = "heartwood.coding-agent-e2e.v1"
+startup_seconds_min = 120
+startup_seconds_max = 900
+
 [[historical_configurations]]
 configuration_id = "carina-l40s-qwen3-coder-30b-fp8"
 platform = "carina"
@@ -112,22 +139,6 @@ vllm_version = "0.25.1+cu129"
 evaluated_at = "2026-07-21"
 evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/72"
 reason = "The model's W4A16 quantization group size crosses four-way tensor-parallel shard boundaries."
-
-[[historical_configurations]]
-configuration_id = "terra-2xt4-qwen3-coder-30b-awq"
-evaluated_at = "2026-08-11"
-observed_driver_version = "535.154.05"
-evidence = "https://github.com/SchmiedmayerLab/heartwood/pull/116"
-platform = "terra"
-gpu_model = "NVIDIA T4"
-gpu_count = 2
-model_repository = "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ"
-model_revision = "e69e73813144d9b715648d8384b3f2c035397411"
-precision = "W4A16 AWQ"
-context_window = 18432
-tensor_parallel_size = 2
-vllm_version = "0.25.1+cu129"
-reason = "This configuration passed Heartwood qualification on vLLM 0.25.1, but Terra was unavailable for qualification of the current packaged runtime."
 
 [[unsupported_configurations]]
 configuration_id = "terra-4xt4-gpt-oss-20b"

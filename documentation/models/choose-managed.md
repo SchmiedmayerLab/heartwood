@@ -47,6 +47,7 @@ The selection screen uses the release catalog as its authoritative source and re
 | Tier | Model Configuration | Download | GPU Memory | Recommended RAM | Recommended Free Disk | Default Context | Estimated Runtime Startup |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Standard, qualified on generic Linux and containers | Qwen2.5 7B Instruct Q4_K_M, CPU | 4.36 GiB | None | 32 GiB | 50 GiB | 32,768 | Hardware dependent |
+| Powerful, qualified on Terra | Qwen3 Coder 30B W4A16 AWQ | 16.81 GiB | 2 x 16 GB | 120 GiB | 50 GiB | 18,432 | 2-15 minutes |
 | Maximum capability, qualified on Carina | Muse Glimmer 30B BF16 | 55.49 GiB | 2 x 48 GB | 128 GiB | 96 GiB | 32,768 | 5-20 minutes |
 
 Runtime startup begins after the model is available in the project cache.
@@ -57,9 +58,9 @@ Model weights are only part of the memory requirement.
 The runtime also needs space for temporary downloads, key/value cache, request handling, and the project itself.
 Heartwood therefore uses conservative headroom and may choose a smaller context than the model's advertised maximum.
 
-The current release has no qualified Heartwood-managed model for Terra.
-Earlier Qwen qualifications used a different vLLM runtime and remain visible as historical evidence in the [GPU compatibility matrix](../reference/gpu-compatibility.md).
-Models without a current platform qualification can be selected explicitly for evaluation, but Heartwood does not recommend them automatically.
+Terra recommends Qwen3 Coder 30B AWQ only when Heartwood detects the qualified two-T4 resource envelope.
+One-T4 and four-T4 results are separate compatibility records and do not qualify a different GPU count automatically.
+Models without a current platform qualification can still be selected explicitly for evaluation, but Heartwood labels them as not tested and does not recommend them automatically.
 
 ## Other Hugging Face Models
 

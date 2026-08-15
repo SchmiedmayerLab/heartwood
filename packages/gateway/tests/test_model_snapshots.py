@@ -31,53 +31,18 @@ from heartwood.gateway import (
 )
 
 
-@pytest.mark.parametrize(
-    (
-        "snapshot_id",
-        "repository",
-        "revision",
-        "tier",
-        "gpu_count",
-        "tool_parser",
-    ),
-    [
-        (
-            "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-            "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
-            "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
-            "powerful",
-            1,
-            "qwen3_coder",
-        ),
-        (
-            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
-            "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
-            "e69e73813144d9b715648d8384b3f2c035397411",
-            "powerful",
-            2,
-            "qwen3_coder",
-        ),
-    ],
-)
-def test_repository_snapshot_catalog_retains_historical_gpu_model_variants(
-    snapshot_id: str,
-    repository: str,
-    revision: str,
-    tier: str,
-    gpu_count: int,
-    tool_parser: str,
-) -> None:
+def test_repository_snapshot_catalog_retains_unvalidated_gpu_model_variant() -> None:
     catalog = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
 
-    snapshot = catalog.snapshot(snapshot_id)
+    snapshot = catalog.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm")
     assert snapshot.runtime_profile == "vllm-cuda"
-    assert snapshot.source_repository == repository
-    assert snapshot.source_revision == revision
-    assert snapshot.tier == tier
-    assert snapshot.tensor_parallel_size == gpu_count
-    assert snapshot.tool_call_parser == tool_parser
+    assert snapshot.source_repository == "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+    assert snapshot.source_revision == "dcaee4d4dfc5ee71ad501f01f530e5652438fde0"
+    assert snapshot.tier == "powerful"
+    assert snapshot.tensor_parallel_size == 1
+    assert snapshot.tool_call_parser == "qwen3_coder"
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
     assert snapshot.recommended_disk_bytes >= snapshot.minimum_free_bytes
     assert snapshot.context_window <= snapshot.maximum_context_window
@@ -87,6 +52,31 @@ def test_repository_snapshot_catalog_retains_historical_gpu_model_variants(
     assert snapshot.qualification_date is None
     assert snapshot.qualification_evidence is None
     assert snapshot.recommended is False
+
+
+def test_repository_snapshot_catalog_pins_qualified_terra_configuration() -> None:
+    catalog = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+
+    snapshot = catalog.snapshot("qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm")
+
+    assert snapshot.source_repository == ("YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ")
+    assert snapshot.source_revision == "e69e73813144d9b715648d8384b3f2c035397411"
+    assert snapshot.precision == "W4A16 AWQ"
+    assert snapshot.minimum_gpu_count == 2
+    assert snapshot.context_window == 18_432
+    assert snapshot.tool_call_parser == "qwen3_coder"
+    assert snapshot.qualification == "qualified"
+    assert snapshot.validated_platforms == ("terra",)
+    assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
+    assert snapshot.qualification_date == "2026-08-15"
+    assert snapshot.qualification_evidence == (
+        "https://github.com/SchmiedmayerLab/heartwood/pull/119"
+    )
+    assert snapshot.recommended_cpu_count == 32
+    assert snapshot.recommended_ram_bytes == 120 * 1024**3
+    assert snapshot.recommended is True
 
 
 def test_repository_snapshot_catalog_pins_qualified_muse_configuration() -> None:
@@ -203,6 +193,15 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
         )
         is None
     )
+    assert (
+        source.recommend(
+            platform_id="terra",
+            gpu_count=2,
+            gpu_memory_bytes=16_000_000_000,
+            maximum_tier="maximum",
+        )
+        == terra_model
+    )
     assert source.recommend(
         platform_id="carina",
         gpu_count=2,
@@ -217,6 +216,14 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
             maximum_tier="maximum",
         )
         is None
+    )
+    assert (
+        source.recommend_for_capacities(
+            platform_id="terra",
+            capacities=((1, 16_000_000_000), (2, 16_000_000_000)),
+            maximum_tier="maximum",
+        )
+        == terra_model
     )
     assert (
         catalog.recommend_for_capacities(

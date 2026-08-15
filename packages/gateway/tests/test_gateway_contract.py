@@ -2271,9 +2271,9 @@ def test_local_model_availability_reflects_installed_runtime_executables(
             slurm_partitions=(),
             capacities=(
                 GpuCapacity(
-                    label="1 visible NVIDIA T4 GPU",
+                    label="2 visible NVIDIA T4 GPUs",
                     gpu_model="NVIDIA T4",
-                    gpu_count=1,
+                    gpu_count=2,
                     gpu_memory_bytes=16_000_000_000,
                     allocation_required=False,
                 ),
@@ -2288,13 +2288,25 @@ def test_local_model_availability_reflects_installed_runtime_executables(
         "qwen3-coder-next-fp8-vllm",
         "gpt-oss-120b-vllm",
     } & {str(model["model_id"]) for model in terra_models}
-    historical_terra_model = next(
+    qualified_terra_model = next(
         model
         for model in terra_models
         if model["model_id"] == "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
     )
-    assert historical_terra_model["qualification"] == "unvalidated"
-    assert historical_terra_model["available"] is False
+    assert qualified_terra_model["qualification"] == "qualified"
+    assert qualified_terra_model["qualification_test"] == "heartwood.coding-agent-e2e.v1"
+    assert qualified_terra_model["qualification_date"] == "2026-08-15"
+    assert qualified_terra_model["qualification_evidence"] == (
+        "https://github.com/SchmiedmayerLab/heartwood/pull/119"
+    )
+    assert qualified_terra_model["available"] is True
+    assert qualified_terra_model["recommended"] is True
+    assert str(qualified_terra_model["availability_reason"]).startswith(
+        "Recommended for this deployment"
+    )
+    assert "Compatible with 2 visible NVIDIA T4 GPU(s)" in str(
+        qualified_terra_model["availability_reason"]
+    )
     muse_on_terra = next(
         model for model in terra_models if model["model_id"] == "muse-glimmer-30b-bf16-vllm"
     )
@@ -2302,6 +2314,44 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     assert muse_on_terra["qualification_test"] is None
     assert muse_on_terra["qualification_date"] is None
     assert muse_on_terra["qualification_evidence"] is None
+
+
+def test_terra_gpu_recommendation_requires_the_qualified_resource_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path)
+    monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    monkeypatch.setattr(
+        gateway,
+        "gpu_environment",
+        lambda: GpuEnvironment(
+            platform_id="terra",
+            visible_devices=(),
+            slurm_partitions=(),
+            capacities=(
+                GpuCapacity(
+                    label="1 visible NVIDIA T4 GPU",
+                    gpu_model="NVIDIA T4",
+                    gpu_count=1,
+                    gpu_memory_bytes=16_000_000_000,
+                    allocation_required=False,
+                ),
+            ),
+        ),
+    )
+
+    models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
+    terra_model = next(
+        model
+        for model in models
+        if model["model_id"] == "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm"
+    )
+
+    assert terra_model["qualification"] == "qualified"
+    assert terra_model["available"] is False
+    assert terra_model["recommended"] is False
+    assert str(terra_model["availability_reason"]).startswith("Requires 2 GPU(s)")
 
 
 def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
