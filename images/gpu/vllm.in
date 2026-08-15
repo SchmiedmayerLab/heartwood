@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-vllm @ https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1%2Bcu129-cp38-abi3-manylinux_2_28_x86_64.whl#sha256=9e206f370c934a2d4b6b1f05d3d09708d344e05d80260189ef19f60755709431
-torch @ https://download-r2.pytorch.org/whl/cu129/torch-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=68b83cb7d7d43bc67c2833c8aebaea6a966f2017c3389885affa3361c258b7e3
+vllm @ https://wheels.vllm.ai/ac7509e2b1db40fec2f03dde1ed4e9dfdc2338c9/vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl#sha256=774cab63c82e511618fe859c2af4335be6f67ce1cab89dfcd0efb85f049e6d7e
+torch @ https://download-r2.pytorch.org/whl/cu129/torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=df28741fcd89e3da7cce2d48cbe5299d6732d510ac20f5d422d0b85edf18c327
 torchaudio @ https://download-r2.pytorch.org/whl/cu129/torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=de4105653562f031edd6ddf7dd1485f07db6ac62cdc90d17364648cd3c89eb5a
-torchvision @ https://download-r2.pytorch.org/whl/cu129/torchvision-0.26.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=086aa9ac91e56cf339ea6c646bc000b970e62159b609d84e0a2d3c9859fe5885
+torchvision @ https://download-r2.pytorch.org/whl/cu129/torchvision-0.28.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=909365f448f66daece26fcb827bbeec1c6f9b4934a2de232d1e95244baa5335b

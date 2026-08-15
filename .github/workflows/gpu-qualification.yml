@@ -12,11 +12,11 @@ on:
       qualification_configuration:
         description: Compatibility-matrix row to qualify
         required: true
-        default: terra-2xt4-qwen3-coder-30b-awq
+        default: carina-2xl40s-muse-glimmer-30b-bf16
         type: choice
         options:
+          - carina-2xl40s-muse-glimmer-30b-bf16
           - terra-2xt4-qwen3-coder-30b-awq
-          - carina-l40s-qwen3-coder-30b-fp8
 
 permissions:
   contents: read

@@ -10,8 +10,8 @@ SPDX-License-Identifier: MIT
 
 # Heartwood
 
-Heartwood is an open-source coding agent for biomedical research projects.
-Describe the work you need in ordinary language, inspect the files and commands the agent proposes, and keep a reviewable history of the session inside your research environment.
+Heartwood is an open-source, auditable coding agent for biomedical research environments.
+Describe the work you need in ordinary language, inspect the files and commands the agent proposes, and keep a verifiable history of the session where the project already resides.
 
 Heartwood is designed for workstations, containers, Terra, Stanford Carina, and operator-managed research platforms.
 It can use models provided by a research environment, hosted model services, another compatible service, or a model managed by Heartwood in the same compute environment.
@@ -45,6 +45,11 @@ These [research specialists](use/specialists.md) use the active model and return
 
 The terminal, browser, and notebook bridge use the same project configuration, model selection, sessions, action decisions, and audit history when the platform supports those interfaces.
 
+### Preserve a Verifiable Record
+
+Resume a persisted session, replay its durable events, or create a scrubbed audit export for review.
+Managed deployments can publish a signed checkpoint through a deployment-controlled signer without placing signing keys in the project.
+
 ## Start With Your Environment
 
 | Where You Work | Recommended Starting Point | Available Interfaces |
@@ -75,6 +80,7 @@ See [Security and Controlled Data](operate/security.md) before using restricted 
 - [Your First Project](start/index.md) provides the shortest complete path from installation to a reviewed action.
 - [Work With Heartwood](use/index.md) explains the normal conversation, action, replay, and audit workflow.
 - [Research Specialists](use/specialists.md) explains focused planning and review through OpenHands.
+- [Actions and Audit History](use/actions-audit.md) explains grouped decisions, replay, exports, and signed checkpoints.
 - [Models](models/index.md) compares institution-managed, hosted, compatible-service, and Heartwood-managed routes.
 - [Platforms](platforms/index.md) covers containers, Terra, and Stanford Carina.
 - [Diagnostics and Troubleshooting](reference/troubleshooting.md) maps stable `HW-*` codes to recovery steps.

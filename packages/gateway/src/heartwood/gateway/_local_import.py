@@ -18,6 +18,7 @@ from pathlib import Path
 from heartwood.gateway._local_model_contract import (
     DEFAULT_LOCAL_CONTEXT_WINDOW,
     MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
+    managed_model_reasoning_parser,
 )
 from heartwood.gateway._local_models import (
     LocalModelChoice,
@@ -152,6 +153,7 @@ def import_local_model(
         recommended_disk_bytes=max(minimum_free_bytes, size_bytes * 2),
         maximum_context_window=context_window,
         tool_call_parser=tool_call_parser,
+        reasoning_parser=managed_model_reasoning_parser(tool_call_parser),
         download_policy=download_policy if runtime == "vllm" else None,
         allow_patterns=allow_patterns if runtime == "vllm" else (),
         ignore_patterns=ignore_patterns if runtime == "vllm" else (),

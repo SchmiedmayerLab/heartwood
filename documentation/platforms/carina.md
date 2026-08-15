@@ -41,13 +41,14 @@ Do not use a shared project root itself as the Heartwood project.
 ```bash
 cd heartwood-installation
 curl --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.3.0-beta.4/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.3.0/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"
 ```
 
-The version-stamped installer downloads the matching native archive and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
+The version-stamped installer downloads the matching native archive, GPU runtime, and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
+The GPU runtime is mirrored as an immutable Heartwood release asset because Carina blocks the upstream vLLM wheel host; its digest remains pinned to the upstream artifact.
 When started on a login node, it moves the dependency installation into a bounded CPU-only Slurm allocation on the `dev` partition before loading micromamba and creating the environments.
 This avoids performing sustained dependency work on the login node; no GPU is requested for installation.
 Dependency resolution and the vLLM environment can take several minutes, and the installer reports the allocation, seven named stages, and elapsed time.
@@ -83,6 +84,14 @@ Choose **Run with Heartwood**, select a catalog model or another public Hugging 
 Model files are stored under the project's `.heartwood/models/`, not the installation directory.
 Model setup verifies every file before it persists the selection.
 On project storage, verification of a large existing cache can take several minutes even when no network download is needed.
+Start managed-model setup explicitly from the project directory:
+
+```bash
+heartwood setup --model-source heartwood
+```
+
+On a Carina login node, the installed wrapper moves this download and verification work into a bounded CPU Slurm allocation before Heartwood presents the model choices.
+It requests eight CPUs, 64 GiB RAM, and at most two hours on `dev` by default; set `HEARTWOOD_MODEL_PREPARATION_PARTITION` when the project requires another CPU partition.
 
 When you start Heartwood with a selected Heartwood-managed model, it inspects the GPU-capable Slurm partitions, available L40S count, GPU memory, CPU and RAM limits, existing model cache, and requested capability tier.
 It then prints the strongest compatible qualified model, expected download and startup range, and complete `srun` request.
@@ -97,10 +106,11 @@ The following release-pinned configuration has completed the tool, approval, edi
 
 | Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated Runtime Startup |
 |---|---|---:|---:|---:|---:|---:|
-| Powerful, qualified | Qwen3 Coder 30B FP8 | 1 x L40S | 96 GiB | 64 GiB | 32,768 | 3-10 minutes |
+| Maximum capability, qualified | Muse Glimmer 30B BF16 | 2 x L40S | 128 GiB | 96 GiB | 32,768 | 5-20 minutes |
 
-The qualified model downloads about 29.1 GiB.
+The qualified model downloads about 55.5 GiB.
 Runtime startup estimates apply after the model is available in `.heartwood/models/`.
+Complex agent turns can take several minutes even after startup; Heartwood keeps the elapsed-time indicator active while the model is working.
 An approved `HF_TOKEN` can improve Hugging Face rate limits during the first download and is used only by the download process.
 See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
 
@@ -120,14 +130,14 @@ heartwood runtime start --partition dev --time 01:00:00
 Preview a particular capability tier without downloading or allocating:
 
 ```bash
-heartwood runtime start --task-profile powerful --dry-run
+heartwood runtime start --task-profile maximum --dry-run
 ```
 
 This preview is a recommendation only.
 It does not select or download the model.
 Run `heartwood` and complete model setup before using `heartwood runtime start` without `--dry-run`; Heartwood otherwise stops before requesting an allocation.
 
-`auto` prefers **Powerful** on Carina and falls back to the strongest qualified configuration that fits one available allocation.
+`auto` considers the **Maximum capability** tier on Carina and recommends only a qualified configuration that fits an available allocation.
 Use `--task-profile standard`, `powerful`, or `maximum` when the task has a known resource envelope.
 The `--gpus` option is an advanced constraint and must match a catalog configuration that was qualified at that tensor-parallel size.
 

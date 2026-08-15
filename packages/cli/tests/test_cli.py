@@ -30,6 +30,7 @@ from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
     _MODEL_PREPARATION_ACTIVITY,
     __version__,
+    _configure_local_model,
     _consume_prompt,
     _float_payload,
     _format_transfer_bytes,
@@ -56,6 +57,7 @@ from heartwood.gateway import (
     LocalModelChoice,
     LocalModelDownloadPlan,
     ModelArtifact,
+    ModelCatalogError,
     ModelCatalogService,
     ModelConnection,
     ModelTransferError,
@@ -1058,6 +1060,49 @@ def test_carina_local_setup_rejects_an_unknown_model_without_saving_configuratio
     assert "unknown Heartwood-managed model in non-interactive setup" in output
     assert "recommended model or Other Hugging Face model" in output
     assert not (project / ".heartwood" / "config.toml").exists()
+
+
+def test_explicit_catalog_model_can_be_prepared_outside_its_gpu_allocation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    downloaded: list[str] = []
+
+    class PreparationGateway:
+        def model_artifacts(self) -> object:
+            return {
+                "models": [
+                    {
+                        "model_id": "synthetic-gpu-model",
+                        "label": "Synthetic GPU Model",
+                        "runtime": "vllm",
+                        "available": False,
+                        "recommended": False,
+                        "catalog_source": "catalog",
+                        "tier": "maximum",
+                        "source_repository": "example/synthetic-gpu-model",
+                        "source_revision": "1" * 40,
+                        "size_bytes": 1024,
+                        "recommended_resource_envelope": "Two synthetic GPUs.",
+                    }
+                ]
+            }
+
+        def discover_models(self, *_args: object, **_kwargs: object) -> object:
+            raise ModelCatalogError("no running service")
+
+        def download_local_model_now(self, model_id: str) -> Path:
+            downloaded.append(model_id)
+            return Path(".heartwood/models") / model_id
+
+    _configure_local_model(
+        cast(RealSessionGateway, PreparationGateway()),
+        model_id="synthetic-gpu-model",
+        non_interactive=True,
+        yes_download=True,
+    )
+
+    assert downloaded == ["synthetic-gpu-model"]
+    assert "Selected Heartwood-managed model" in capsys.readouterr().out
 
 
 def test_invalid_session_and_launch_resources_are_argument_errors(

@@ -396,10 +396,34 @@ def test_gpu_qualification_configuration_resolves_runtime_and_model() -> None:
 
     resolved = load(
         _root() / "images/gpu/compatibility.toml",
-        "terra-2xt4-qwen3-coder-30b-awq",
+        "carina-2xl40s-muse-glimmer-30b-bf16",
     )
 
     assert resolved["runtime"]["cuda_version"] == "12.9"
+    assert resolved["configuration"]["tool_call_parser"] == "muse_glimmer"
+    assert resolved["configuration"]["reasoning_parser"] == "muse_glimmer"
+    assert resolved["configuration"]["agent_tool_mode"] == "openhands-native"
+    assert resolved["configuration"]["context_window"] == 32_768
+    assert resolved["configuration"]["gpu_count"] == 2
+    assert resolved["configuration"]["tensor_parallel_size"] == 2
+    assert resolved["configuration"]["model_revision"] == (
+        "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
+    )
+
+
+def test_terra_gpu_qualification_resolves_exact_validated_configuration() -> None:
+    module = _module(
+        "terra_gpu_qualification_config",
+        _root() / "images/gpu/qualification_config.py",
+    )
+    load = cast(Callable[[Path, str], dict[str, Any]], module.load_configuration)
+
+    resolved = load(
+        _root() / "images/gpu/compatibility.toml",
+        "terra-2xt4-qwen3-coder-30b-awq",
+    )
+
+    assert resolved["runtime"]["vllm_version"] == "0.27.2rc1.dev77+gac7509e2b.cu129"
     assert resolved["configuration"]["tool_call_parser"] == "qwen3_coder"
     assert resolved["configuration"]["agent_tool_mode"] == "openhands-native"
     assert resolved["configuration"]["context_window"] == 18_432
@@ -422,9 +446,12 @@ def test_gpu_qualification_catalog_lists_all_terra_profiles() -> None:
         platform="terra",
     )
 
-    assert {configuration["configuration_id"] for configuration in configurations} == {
-        "terra-2xt4-qwen3-coder-30b-awq",
-    }
+    assert [configuration["configuration_id"] for configuration in configurations] == [
+        "terra-2xt4-qwen3-coder-30b-awq"
+    ]
+    assert configurations[0]["status"] == "qualified"
+    assert configurations[0]["evaluated_at"] == "2026-08-15"
+    assert configurations[0]["observed_driver_version"] == "535.154.05"
 
 
 def test_gpu_qualification_catalog_rejects_malformed_entries(tmp_path: Path) -> None:
@@ -519,6 +546,16 @@ def test_gpu_compatibility_records_inconclusive_carina_attempts() -> None:
     assert inconclusive["carina-2xl40s-qwen3-coder-next-fp8"]["evaluated_at"] == ("2026-07-22")
 
 
+def test_gpu_compatibility_retains_expired_qualifications_as_history() -> None:
+    with (_root() / "images/gpu/compatibility.toml").open("rb") as file:
+        matrix = tomllib.load(file)
+
+    historical = {entry["configuration_id"]: entry for entry in matrix["historical_configurations"]}
+    assert set(historical) == {"carina-l40s-qwen3-coder-30b-fp8"}
+    assert all(entry["vllm_version"] == "0.25.1+cu129" for entry in historical.values())
+    assert "current packaged runtime" in historical["carina-l40s-qwen3-coder-30b-fp8"]["reason"]
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -557,7 +594,7 @@ def test_gpu_compatibility_rejects_ambiguous_attempt_evidence(
         )
 
 
-def test_gpu_compatibility_rejects_snapshot_without_selectable_configuration(
+def test_gpu_compatibility_rejects_an_empty_selectable_configuration_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     verifier = _module(
@@ -568,8 +605,7 @@ def test_gpu_compatibility_rejects_snapshot_without_selectable_configuration(
         matrix = tomllib.load(file)
     with (_root() / "images/generic/local-runtime/snapshots.toml").open("rb") as file:
         catalog = tomllib.load(file)
-    removed = matrix["configurations"].pop()
-    matrix["unsupported_configurations"][0]["model_snapshot"] = removed["model_snapshot"]
+    matrix["configurations"].clear()
 
     monkeypatch.setattr(verifier, "_verify_runtime_lock", lambda _root, _runtime: None)
     monkeypatch.setattr(
@@ -578,7 +614,7 @@ def test_gpu_compatibility_rejects_snapshot_without_selectable_configuration(
         lambda path: matrix if path.name == "compatibility.toml" else catalog,
     )
 
-    with pytest.raises(verifier.CompatibilityError, match="no selectable GPU configuration"):
+    with pytest.raises(verifier.CompatibilityError, match="has no configurations"):
         verifier.verify_repository(_root())
 
 
@@ -593,7 +629,7 @@ def test_gpu_qualification_context_can_be_bounded_by_platform_memory() -> None:
     )
     resolved = loader.load_configuration(
         _root() / "images/gpu/compatibility.toml",
-        "terra-2xt4-qwen3-coder-30b-awq",
+        "carina-2xl40s-muse-glimmer-30b-bf16",
     )
     with (_root() / "images/generic/local-runtime/snapshots.toml").open("rb") as file:
         snapshot = tomllib.load(file)["snapshots"][resolved["configuration"]["model_snapshot"]]

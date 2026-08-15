@@ -120,6 +120,8 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: deploy/package-native.sh dist "${RELEASE_VERSION}"
+      - name: Mirror the pinned GPU runtime for restricted environments
+        run: python3 deploy/package_gpu_runtime.py --output-dir dist
       - name: Test native installation layout
         run: deploy/tests/native_installer_smoke.sh dist
       - name: Test exact release assets from empty Ubuntu
@@ -136,6 +138,7 @@ jobs:
           path: |
             dist/heartwood-installer
             dist/heartwood-native.tar.gz
+            dist/*.whl
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
@@ -256,14 +259,15 @@ jobs:
             exit 1
           fi
           actual_assets="$(jq -r '.assets[].name' <<<"${release_json}" | sort)"
-          expected_assets="$(printf '%s\n' SHA256SUMS heartwood-installer heartwood-native.tar.gz | sort)"
+          gpu_runtime_asset="$(python3 -c 'import tomllib; print(tomllib.load(open("images/gpu/compatibility.toml", "rb"))["runtime"]["vllm_wheel_filename"])')"
+          expected_assets="$(printf '%s\n' SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}" | sort)"
           if [[ "${actual_assets}" != "${expected_assets}" ]]; then
             echo "release draft assets differ from the verified candidate" >&2
             exit 1
           fi
           mkdir -p /tmp/release-assets
           gh release download "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --dir /tmp/release-assets
-          for asset in SHA256SUMS heartwood-installer heartwood-native.tar.gz; do
+          for asset in SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}"; do
             cmp "dist/${asset}" "/tmp/release-assets/${asset}"
           done
           if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then

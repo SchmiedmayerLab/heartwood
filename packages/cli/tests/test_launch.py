@@ -544,7 +544,7 @@ def test_launch_reports_a_safe_resumable_model_transfer_failure(
     assert private_failure not in output
 
 
-def test_real_launch_plan_cannot_download_a_recommendation_before_setup(
+def test_real_launch_plan_offers_qualified_terra_model_without_implicit_setup(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -580,6 +580,9 @@ def test_real_launch_plan_cannot_download_a_recommendation_before_setup(
     assert run_launch(options, env={"HEARTWOOD_PLATFORM": "terra"}, run_fn=runner) == 64
     output = capsys.readouterr().out
     assert "Model status: recommendation only" in output
+    assert "Qualification: Qualified" in output
+    assert "Compatible with 2 visible Tesla T4 GPU(s)" in output
+    assert "resource recommendation, not a selected model" in output
     assert "Run `heartwood` to choose Run with Heartwood" in output
     assert not runner_called
     assert not any(options.project.models_dir.iterdir())
@@ -982,6 +985,40 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
     assert "--jinja" in command
     context_index = command.index("--ctx-size")
     assert command[context_index + 1] == "32768"
+
+
+def test_vllm_command_uses_muse_tool_and_reasoning_parsers(tmp_path: Path) -> None:
+    model = tmp_path / "model"
+    model.mkdir()
+    selection = LocalRuntimeSelection(
+        artifact_id="muse-glimmer-30b-bf16-vllm",
+        model_root=model,
+        runtime="vllm",
+        model_id="heartwood-managed-model",
+        size_bytes=59_581_827_646,
+        artifact_sha256=None,
+        context_window=65_536,
+        maximum_context_window=131_072,
+        tier="maximum",
+        precision="BF16",
+        qualification="unvalidated",
+        minimum_gpu_count=2,
+        minimum_gpu_memory_bytes=42_000_000_000,
+        recommended_ram_bytes=128 * 1024**3,
+        recommended_disk_bytes=96 * 1024**3,
+        tool_call_parser="muse_glimmer",
+        reasoning_parser="muse_glimmer",
+        tensor_parallel_size=2,
+        startup_seconds_min=300,
+        startup_seconds_max=1200,
+        catalog_source="catalog",
+    )
+
+    command = _runtime_command(Path("/opt/vllm/bin/vllm"), model, selection)
+
+    assert command[command.index("--tool-call-parser") + 1] == "muse_glimmer"
+    assert command[command.index("--reasoning-parser") + 1] == "muse_glimmer"
+    assert command[command.index("--tensor-parallel-size") + 1] == "2"
 
 
 def test_resource_assessment_reports_context_and_memory_status(
@@ -1542,7 +1579,11 @@ def test_vllm_preflight_and_output_helpers(
                     "xgrammar GHSA-7rgv-gqhr-fxg3 fixes verified\n"
                 ),
             )
-        return subprocess.CompletedProcess(command, 0, stdout="0.25.1+cu129 2.11.0+cu129 12.9\n")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="0.27.2rc1.dev77+gac7509e2b.cu129 2.13.0+cu129 12.9\n",
+        )
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
     assert _preflight_vllm(executable, {"PATH": "/usr/bin"}) is None
@@ -1601,12 +1642,12 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
             stdout="",
             stderr=(
                 "Traceback (most recent call last):\n"
-                "AssertionError: CUDA is unavailable to PyTorch 2.11.0 (built for CUDA 12.9)\n"
+                "AssertionError: CUDA is unavailable to PyTorch 2.13.0 (built for CUDA 12.9)\n"
             ),
         ),
     )
     assert _preflight_vllm(executable, {}) == (
-        "AssertionError: CUDA is unavailable to PyTorch 2.11.0 (built for CUDA 12.9)"
+        "AssertionError: CUDA is unavailable to PyTorch 2.13.0 (built for CUDA 12.9)"
     )
 
     monkeypatch.setattr(
@@ -1645,7 +1686,11 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
                 stdout="",
                 stderr="first line\nincompatible model configuration\n",
             )
-        return subprocess.CompletedProcess(command, 0, stdout="0.25.1+cu129 2.11.0+cu129 12.9\n")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="0.27.2rc1.dev77+gac7509e2b.cu129 2.13.0+cu129 12.9\n",
+        )
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", failed_compatibility)
     assert _preflight_vllm(wrapper, {}) == "incompatible model configuration"
@@ -1655,7 +1700,11 @@ def test_vllm_preflight_reports_missing_and_failed_runtime(
     ) -> subprocess.CompletedProcess[str]:
         if command == (str(wrapper), "__heartwood_verify_runtime__"):
             raise subprocess.TimeoutExpired(command, 60)
-        return subprocess.CompletedProcess(command, 0, stdout="0.25.1+cu129 2.11.0+cu129 12.9\n")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="0.27.2rc1.dev77+gac7509e2b.cu129 2.13.0+cu129 12.9\n",
+        )
 
     monkeypatch.setattr("heartwood.cli._launch.subprocess.run", timed_out_compatibility)
     assert "timed out after 60 seconds" in str(_preflight_vllm(wrapper, {}))

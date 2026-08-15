@@ -115,13 +115,30 @@ venv)
   mkdir -p "${runtime}/bin"
   cat >"${runtime}/bin/python" <<'COMMAND'
 #!/usr/bin/env bash
+if [[ "${1:-}" == */localize_runtime_lock.py ]]; then
+  shift
+  source=""
+  output=""
+  wheel=""
+  while (($#)); do
+    case "$1" in
+      --source) source="${2:?missing source}"; shift 2 ;;
+      --output) output="${2:?missing output}"; shift 2 ;;
+      --wheel) wheel="${2:?missing wheel}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ -f "${source}" && -f "${wheel}" ]]
+  cp "${source}" "${output}"
+  exit 0
+fi
 if [[ "${1:-}" == */verify_vllm.py ]]; then
   grep --quiet 'vllm_version' "$1"
   grep --quiet 'cuda_13_qualified' "$1"
   echo "Heartwood GPU runtime verified: synthetic CUDA 12.9 stack"
   exit 0
 fi
-echo "0.25.1+cu129 2.11.0+cu129 12.9"
+echo "0.27.2rc1.dev77+gac7509e2b.cu129 2.13.0+cu129 12.9"
 COMMAND
   cat >"${runtime}/bin/vllm" <<'COMMAND'
 #!/usr/bin/env bash
@@ -186,14 +203,25 @@ chmod +x "${workspace}/bin/micromamba"
 cat >"${workspace}/bin/srun" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-expected=(
-  "--partition=dev"
-  "--cpus-per-task=8"
-  "--mem=32G"
-  "--time=01:00:00"
-  "--chdir=${PWD}"
-  "--export=ALL"
-)
+if [[ " $* " == *" --time=02:00:00 "* ]]; then
+  expected=(
+    "--partition=${HEARTWOOD_MODEL_PREPARATION_PARTITION:-dev}"
+    "--cpus-per-task=8"
+    "--mem=64G"
+    "--time=02:00:00"
+    "--chdir=${PWD}"
+    "--export=ALL"
+  )
+else
+  expected=(
+    "--partition=dev"
+    "--cpus-per-task=8"
+    "--mem=32G"
+    "--time=01:00:00"
+    "--chdir=${PWD}"
+    "--export=ALL"
+  )
+fi
 for argument in "${expected[@]}"; do
   argument_found=false
   for actual in "$@"; do
@@ -219,8 +247,19 @@ EOF
 chmod +x "${workspace}/bin/srun"
 
 expected_release="$(tar -xOf "${assets}/heartwood-native.tar.gz" heartwood/HEARTWOOD_VERSION)"
+gpu_runtime_asset="$(python3 -c 'import tomllib; print(tomllib.load(open("images/gpu/compatibility.toml", "rb"))["runtime"]["vllm_wheel_filename"])')"
+gpu_runtime_wheel="${workspace}/${gpu_runtime_asset}"
+printf 'synthetic GPU runtime wheel\n' >"${gpu_runtime_wheel}"
+native_digest="$(sha256sum "${assets}/heartwood-native.tar.gz" | cut -d ' ' -f 1)"
+gpu_runtime_digest="$(sha256sum "${gpu_runtime_wheel}" | cut -d ' ' -f 1)"
+carina_checksums="${workspace}/carina-SHA256SUMS"
+printf '%s  heartwood-native.tar.gz\n%s  %s\n' \
+  "${native_digest}" "${gpu_runtime_digest}" "${gpu_runtime_asset}" \
+  >"${carina_checksums}"
 grep --fixed-strings --line-regexp --quiet \
   "installer_release=\"${expected_release}\"" "${assets}/heartwood-installer"
+grep --fixed-strings --line-regexp --quiet \
+  "gpu_runtime_asset=\"${gpu_runtime_asset}\"" "${assets}/heartwood-installer"
 if "${assets}/heartwood-installer" --help | grep --quiet -- '--version'; then
   echo "published installer exposes a redundant release version option" >&2
   exit 1
@@ -350,7 +389,8 @@ for thread_case in "default:8" "4:4" "64:8"; do
     env -u MAMBA_EXTRACT_THREADS "${installer_environment[@]}" \
       "${assets}/heartwood-installer" \
       --bundle "${assets}/heartwood-native.tar.gz" \
-      --checksums "${assets}/SHA256SUMS" \
+      --checksums "${carina_checksums}" \
+      --gpu-runtime-wheel "${gpu_runtime_wheel}" \
       --root "${carina_installation}" \
       --minimum-free-gib 1 \
       --platform carina
@@ -358,7 +398,8 @@ for thread_case in "default:8" "4:4" "64:8"; do
     env "${installer_environment[@]}" "MAMBA_EXTRACT_THREADS=${requested_threads}" \
       "${assets}/heartwood-installer" \
       --bundle "${assets}/heartwood-native.tar.gz" \
-      --checksums "${assets}/SHA256SUMS" \
+      --checksums "${carina_checksums}" \
+      --gpu-runtime-wheel "${gpu_runtime_wheel}" \
       --root "${carina_installation}" \
       --minimum-free-gib 1 \
       --platform carina
@@ -406,6 +447,31 @@ for directory in state models cache logs; do
   test ! -e "${carina_installation}/${directory}"
 done
 test "$("${carina_installation}/bin/heartwood")" = "heartwood synthetic command"
+model_project="${workspace}/model-project"
+mkdir "${model_project}"
+model_setup_output="$({
+  cd "${model_project}"
+  HOME="${workspace}/outside-home" \
+    HEARTWOOD_MODEL_PREPARATION_PARTITION=normal \
+    PATH="${workspace}/bin:${PATH}" \
+    "${carina_installation}/bin/heartwood" \
+      --plain setup --model-source heartwood --model-id synthetic --yes --yes-download
+})"
+grep --quiet 'Carina model preparation requires bounded CPU compute' \
+  <<<"${model_setup_output}"
+grep --quiet 'heartwood synthetic command' <<<"${model_setup_output}"
+model_help_output="$({
+  cd "${model_project}"
+  HOME="${workspace}/outside-home" \
+    PATH="${workspace}/bin:${PATH}" \
+    "${carina_installation}/bin/heartwood" setup --help
+})"
+if grep --quiet 'Carina model preparation requires bounded CPU compute' \
+  <<<"${model_help_output}"; then
+  echo "Carina help unexpectedly requested model-preparation compute" >&2
+  exit 1
+fi
+grep --quiet 'heartwood synthetic command' <<<"${model_help_output}"
 grep --fixed-strings --line-regexp --quiet 'export HEARTWOOD_PLATFORM=carina' \
   "${carina_generation}/bin/heartwood"
 grep --fixed-strings --line-regexp --quiet \
@@ -432,7 +498,8 @@ if HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
   PATH="${workspace}/bin:${PATH}" \
   "${assets}/heartwood-installer" \
   --bundle "${assets}/heartwood-native.tar.gz" \
-  --checksums "${assets}/SHA256SUMS" \
+  --checksums "${carina_checksums}" \
+  --gpu-runtime-wheel "${gpu_runtime_wheel}" \
   --root "${carina_installation}" \
   --minimum-free-gib 1 \
   --platform carina; then
@@ -456,7 +523,8 @@ if HOME="${workspace}/outside-home" TMPDIR="${workspace}/outside-tmp" \
   PATH="${workspace}/bin:${PATH}" \
   "${assets}/heartwood-installer" \
   --bundle "${assets}/heartwood-native.tar.gz" \
-  --checksums "${assets}/SHA256SUMS" \
+  --checksums "${carina_checksums}" \
+  --gpu-runtime-wheel "${gpu_runtime_wheel}" \
   --root "${carina_installation}" \
   --minimum-free-gib 1 \
   --platform carina >"${publish_failure_log}" 2>&1; then

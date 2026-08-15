@@ -543,6 +543,39 @@ def test_project_config_rejects_symlink(tmp_path: Path) -> None:
             LocalModelSelection(
                 artifact_id="model",
                 path=".heartwood/models/model",
+                reasoning_parser="unknown",
+            ),
+            "unsupported Heartwood-managed reasoning parser",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                tool_call_parser="muse_glimmer",
+            ),
+            "tool-call and reasoning parsers are incompatible",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                reasoning_parser="muse_glimmer",
+            ),
+            "tool-call and reasoning parsers are incompatible",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
+                tool_call_parser="hermes",
+                reasoning_parser="muse_glimmer",
+            ),
+            "tool-call and reasoning parsers are incompatible",
+        ),
+        (
+            LocalModelSelection(
+                artifact_id="model",
+                path=".heartwood/models/model",
                 runtime="vllm",
                 minimum_gpu_count=1,
                 minimum_gpu_memory_bytes=1,

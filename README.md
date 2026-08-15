@@ -17,21 +17,21 @@ SPDX-License-Identifier: MIT
 
 [Stable Documentation](https://schmiedmayerlab.github.io/heartwood/) · [Prerelease Documentation](https://schmiedmayerlab.github.io/heartwood/preview/)
 
-Heartwood is an open-source coding agent from the Schmiedmayer Lab at Stanford University for biomedical research projects. Researchers describe work in ordinary language, inspect proposed commands and file operations before they run, and keep a reviewable session history inside the environment where the project already resides.
+Heartwood is an open-source, auditable coding agent for biomedical research environments. Researchers can work with code and analysis projects through ordinary language while keeping the active folder as an explicit boundary, reviewing proposed changes before they run, and retaining a verifiable session history.
 
-Heartwood reuses OpenHands for the agent loop and coding tools, then adds project boundaries, research Skills, platform-aware model setup, grouped action review, persistent sessions, and a tamper-evident audit record. The terminal, browser, and notebook bridge use the same project and state.
+Heartwood reuses OpenHands for the agent loop and coding tools, then adds project-scoped state, research Skills and specialists, platform-aware model setup, grouped action review, replay, and tamper-evident audit records. One gateway keeps the terminal, browser, and notebook bridge aligned on the same configuration and session state.
 
 ## What Heartwood Provides
 
-- A conversation-first coding workflow for the current project directory.
-- Full-screen and plain terminal interfaces, a browser interface, and a notebook bridge with shared read-only file and change inspection.
-- Research-environment, ChatGPT sign-in, hosted API, compatible-service, and Heartwood-managed model connections through one setup flow.
-- Recommended Heartwood-managed models plus best-effort support for arbitrary public Hugging Face repositories and reviewed offline imports.
-- Clear review of complete OpenHands action sets before execution.
+- A current-directory project boundary with private configuration, models, sessions, and audit state under `.heartwood/`.
+- Full-screen and plain terminal interfaces, a browser interface, and a notebook bridge over one shared session contract.
+- Read-only file and change inspection alongside clear review of complete OpenHands action sets before execution.
+- Model connections for institution-managed environments, ChatGPT sign-in, hosted APIs, OpenAI-compatible services, and models managed by Heartwood.
+- Qualified model recommendations, best-effort planning for other public Hugging Face models, and verified offline model transfer.
 - Repository-reviewed research Skills, signed extension catalogs, and explicitly approved project installations.
 - Bounded research-planning, data-quality, cohort, statistical, and reproducibility specialists delegated through OpenHands.
-- Persistent sessions, replay, and scrubbed audit export.
-- Versioned workstation, NVIDIA, Terra, and native Stanford Carina artifacts.
+- Persistent sessions, deterministic replay, scrubbed audit export, and provider-neutral signed audit checkpoints.
+- Versioned multi-architecture workstation containers, NVIDIA GPU images, Terra images, and native Linux releases for environments such as Stanford Carina.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-conversation-dark.png">
@@ -51,19 +51,29 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0-beta.4 \
+  ghcr.io/schmiedmayerlab/heartwood:0.3.0 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
 Open [http://127.0.0.1:8767/](http://127.0.0.1:8767/), confirm the project, and choose an authorized model connection. Heartwood treats the mounted host directory as the project and keeps private state in `.heartwood/` inside it.
 
 For the interactive terminal, replace the final command with `heartwood`.
-The [prerelease documentation](https://schmiedmayerlab.github.io/heartwood/preview/) provides the complete first task and action-review workflow for this release.
+The [stable documentation](https://schmiedmayerlab.github.io/heartwood/) provides the complete first task and action-review workflow for this release.
 
-## Focused Research Review
+## Review Before Execution
+
+OpenHands may propose several related commands or file operations through one confirmation callback.
+Heartwood shows the complete action set, its affected paths and risk information, and applies one allow-or-reject decision to the group.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-action-review-dark.png">
+  <img alt="Heartwood browser interface showing a grouped action review" src="documentation/assets/screenshots/browser-action-review-light.png">
+</picture>
+
+## Research Skills and Focused Review
 
 The parent agent can ask one bounded specialist at a time to plan an analysis or review supplied evidence for data-quality, cohort, statistical, or reproducibility concerns.
-Specialists use the active model and verified Skills, and their delegation appears in the same action-review flow as other OpenHands work.
+Specialists use the active model and verified Skills, remain advisory without project tools, and return their result to the parent conversation.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-specialists-dark.png">

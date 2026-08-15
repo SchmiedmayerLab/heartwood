@@ -45,42 +45,55 @@ When project direction changes, update the relevant architecture or operations p
 | Research Skill contribution, policy, and validation | [documentation/contribute/skills.md](documentation/contribute/skills.md) |
 | Testing layers and evidence language | [documentation/architecture/testing.md](documentation/architecture/testing.md) |
 | Python and web development workflow | [documentation/contribute/development.md](documentation/contribute/development.md) |
-| Pull request description structure | [Schmiedmayer Lab pull request template](https://github.com/SchmiedmayerLab/.github/blob/main/.github/pull_request_template.md) |
+| Pull request description structure | [Organization pull request template](https://github.com/SchmiedmayerLab/.github/blob/main/.github/pull_request_template.md) |
 | Planned implementation, acceptance criteria, and delivery status | [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) |
 | Acronyms and specialized terms | [documentation/reference/glossary.md](documentation/reference/glossary.md) |
 
-## Current Implementation Stance
+## Engineering Invariants
 
-- Follow the relevant [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2) for planned implementation, acceptance criteria, and delivery status.
-- Treat the CLI as the primary development and CI surface; the notebook bridge and researcher web UI are presentation adapters over the same session command/event contract, served through the session gateway and its OpenHands SDK backend. See [documentation/architecture/system.md](documentation/architecture/system.md).
-- Use Python for the core, session gateway, OpenHands adapter, model settings, adapters, CLI, schemas, policy layer, audit log, replay tests, synthetic fixtures, Docker entrypoint, notebook API, and widgets; use TypeScript and Grove for the researcher web UI. See [documentation/contribute/development.md](documentation/contribute/development.md).
-- Keep one core repository through the controlled-data reference workflow unless a reviewed design change establishes independent ownership, release cadence, and versioned contracts.
-- Use synthetic fixtures only in source control, public examples, and CI. Live PHI must not be recorded into fixtures, replay traces, tests, or public logs.
-- Attribute Heartwood only to the Schmiedmayer Lab at Stanford University; do not add legacy organizational attributions.
+- The process current directory is the project boundary, and project-private configuration, models, sessions, and audit state live under `.heartwood/`.
+- The gateway owns project behavior, persisted settings, session mutation, and interface projections. The terminal, browser, and notebook bridge adapt the same typed contracts rather than maintaining separate business rules.
+- OpenHands owns the agent loop, conversation behavior, task tracking, and coding tools. Extend its public contracts through the existing adapter instead of introducing a parallel agent or tool implementation.
+- Platform-specific behavior belongs in capability, policy, detector, launcher, and packaging adapters. It must not fork the application workflow.
+- Generic and platform-derived artifacts share manifests, installers, image stages, runtime locks, and qualification scripts. Parameterize real platform differences rather than copying assembly logic.
+- Images and installers contain inference software but no model weights or credentials. Model acquisition and secret delivery remain explicit runtime operations.
+- Use Python for the application and shared contracts, and TypeScript with Grove for the researcher browser interface. Do not add another implementation language, UI stack, service, registry, or repository boundary without a reviewed architecture decision.
+- Describe Heartwood by its purpose, behavior, and boundaries rather than using organizational attribution as the product description. Preserve required copyright and license metadata, and maintain individual credits in `CONTRIBUTORS.md`.
 
 ## Working Rules
 
-- Read the relevant architecture, operations, or reference page before editing implementation code in that area.
-- Prefer the existing architecture: typed contracts, adapters at platform boundaries, deterministic fake providers for tests, one shared session command/event model for all interfaces, OpenHands-owned conversations and coding tools, and a gateway-owned OpenHands adapter as the only agent path.
-- Keep business rules, labels, setup choices, readiness, and persisted state in the gateway or their owning typed package; CLI, browser, and notebook code should only adapt those shared projections to their interaction style.
-- Assemble generic and platform-derived artifacts through shared manifests, installers, and image stages. Parameterize genuine platform differences instead of copying dependency installation, application assembly, or validation logic.
+- Read the owning architecture, operations, or reference page and inspect the current implementation before editing that area.
+- Prefer established package ownership, typed contracts, and trusted dependencies over project-local alternatives. Add an abstraction only when it gives duplicated behavior one clear owner.
+- Keep changes scoped, preserve unrelated worktree changes, and remove superseded paths completely when the requested behavior replaces them.
 - Until Heartwood reaches `1.0.0`, prefer one clean, coherent contract over backward compatibility with unreleased commands, flags, environment variables, state layouts, APIs, or internal abstractions. Remove superseded paths completely and update implementation, tests, documentation, and release notes together; add a compatibility layer only when a documented data-integrity, security, or deployment requirement makes it necessary.
-- Keep changes scoped to the requested behavior. Avoid unrelated refactors, metadata churn, or parallel architecture tracks.
+- Update the owning contract first when behavior is shared, then update every terminal, browser, notebook, platform, and packaging adapter that exposes it.
+- Scale tests with risk. Test observable behavior, state transitions, failure recovery, and cross-interface consistency; avoid assertions tied only to prose, branding, formatting, or implementation trivia unless that exact value is a machine-consumed or security-critical contract.
+- Add a regression test for a defect that escaped earlier checks whenever it can be reproduced deterministically at the appropriate layer.
+- Use concise, descriptive branch names and title-style commit subjects. Do not use all-capital titles or identify an assistant or code-generation tool in branch names, commits, source files, documentation, or release artifacts.
+- Prefer additive commits and ordinary pushes while a branch is under review. Rewrite published branch history only when an explicit correction requires it.
 - Write pull request titles and descriptions as compact, natural project communication using the [organization template](https://github.com/SchmiedmayerLab/.github/blob/main/.github/pull_request_template.md). Include only decision-relevant context, release notes, documentation changes, and concise verification results; omit raw command output, development narration, and redundant detail.
+- Do not post issue or pull-request comments without explicit approval. Resolving an already-addressed automated review thread is allowed.
 - Never merge a pull request, enable auto-merge, queue a merge, or bypass a merge requirement without the user's explicit approval to merge that specific pull request. Passing checks or a general request to prepare a pull request does not constitute merge approval.
-- Add or update tests when changing detector logic, policy decisions, adapter behavior, skill validation, audit records, attestation export, CLI output, notebook view models, or web-UI view models.
-- Keep security and compliance claims evidence-backed. If a claim cannot be tested, audited, or linked to a platform control, document it as a limitation.
-- Do not add a new implementation language, UI stack, service, registry, or repository split without updating the architecture or operations page that owns that decision.
+
+## Testing and Evidence
+
+- Use deterministic fake providers for contract and failure-path tests, the real OpenHands SDK with `TestLLM` for conformance, and capable models only for the bounded acceptance path that requires real inference.
+- Cover shared behavior at its owner and add interface tests for presentation differences; do not duplicate the same business-rule test independently in each interface.
+- Exercise persistence and audit changes across interruption, retry, restart, concurrency, corruption, and replay boundaries appropriate to the change.
+- Verify artifact changes through the shared assembly path and each affected platform contract. A platform-specific claim requires the evidence level defined in [Testing and Evidence](documentation/architecture/testing.md).
+- Keep security, compatibility, and controlled-data claims evidence-backed. If a claim cannot be tested, audited, or linked to a platform control, state the limitation.
+- Use synthetic fixtures only in source control, public examples, screenshots, CI, and public issue reproduction. Never place live protected health information in fixtures, replay traces, tests, screenshots, pull requests, or public logs.
 
 ## Documentation Rules
 
-- Documentation should be standalone project material, not conversational or version-relative narrative.
+- Write for progressive disclosure: begin with a first successful workflow, then explain choices and recovery, and reserve implementation detail for architecture, operations, and reference pages.
+- Documentation should be standalone project material, not conversational, version-relative, or development-process narrative.
 - Keep current user guidance, operational instructions, reference material, and durable rationale in `documentation/`; keep planned implementation, acceptance criteria, dependencies, and delivery status in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
 - State current support conservatively; do not present implemented or CI-validated behavior as live-validated or institution-approved.
-- Avoid meta-commentary about how the document was created.
+- Keep commands, release tags, interface availability, screenshots, and compatibility tables synchronized with the implementation that publishes them.
+- Avoid meta-commentary about how the document was created, validation transcripts, and future implementation discussions.
 - Use semantic line breaks: place each complete prose sentence and each list item on its own source line; do not hard-wrap a sentence.
 - Preserve tables, headings, fenced code blocks, and intentional blank-line structure.
-- Do not use project documentation as a development log, backlog, or implementation discussion.
 - Keep run-specific timings, transcripts, failures, and validation evidence in CI artifacts or pull requests. Add only durable operational conclusions to user or architecture documentation.
 
 ## Acronyms

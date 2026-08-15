@@ -193,4 +193,4 @@ __all__ = [
     "schema_names",
 ]
 
-__version__ = "0.3.0-beta.4"
+__version__ = "0.3.0"

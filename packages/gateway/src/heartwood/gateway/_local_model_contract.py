@@ -31,6 +31,11 @@ _MEMORY_UTILIZATION = 0.8
 _GIB = 1024**3
 
 type LocalRuntimeKind = Literal["llama-cpp", "vllm"]
+type ToolCallParser = Literal["hermes", "muse_glimmer", "openai", "qwen3_coder"]
+type ReasoningParser = Literal["muse_glimmer"]
+
+MANAGED_MODEL_TOOL_CALL_PARSERS = frozenset({"hermes", "muse_glimmer", "openai", "qwen3_coder"})
+MANAGED_MODEL_REASONING_PARSERS = frozenset({"muse_glimmer"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +180,24 @@ def managed_model_request_body(model_type: str | None) -> dict[str, object]:
 
 def managed_model_native_tool_calling(tool_call_parser: str | None) -> bool:
     """Return whether OpenHands should use the runtime's structured tool calls."""
-    return tool_call_parser in {"hermes", "openai", "qwen3_coder"}
+    return tool_call_parser in MANAGED_MODEL_TOOL_CALL_PARSERS
+
+
+def managed_model_reasoning_parser(tool_call_parser: str | None) -> ReasoningParser | None:
+    """Return the reasoning parser required by one structured tool protocol."""
+    return "muse_glimmer" if tool_call_parser == "muse_glimmer" else None
+
+
+def managed_model_parsers_compatible(
+    tool_call_parser: str | None,
+    reasoning_parser: str | None,
+) -> bool:
+    """Return whether one vLLM parser pair is supported by Heartwood."""
+    return (
+        tool_call_parser in MANAGED_MODEL_TOOL_CALL_PARSERS
+        and reasoning_parser in MANAGED_MODEL_REASONING_PARSERS | {None}
+        and reasoning_parser == managed_model_reasoning_parser(tool_call_parser)
+    )
 
 
 def _tier_at_or_below(limit: int, fallback: int) -> int:

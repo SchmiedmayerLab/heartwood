@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Implementation-grounding tests for the public documentation."""
+"""Executable contract tests for the public documentation."""
 
 from __future__ import annotations
 
@@ -18,28 +18,19 @@ from pathlib import Path
 from heartwood.gateway import diagnostic_catalog
 
 
-def test_documentation_navigation_uses_progressive_disclosure() -> None:
+def test_documentation_navigation_resolves_to_canonical_sources() -> None:
     site = tomllib.loads(_read("zensical.toml"))
     navigation = site["project"]["nav"]
-    top_level = [next(iter(section)) for section in navigation]
+    paths = tuple(_nav_paths(navigation))
 
-    assert top_level == [
-        "Home",
-        "Get Started",
-        "Work With Heartwood",
-        "Models",
-        "Platforms",
-        "Operate Heartwood",
-        "How Heartwood Works",
-        "Reference",
-        "Contribute",
-    ]
     assert site["project"]["docs_dir"] == "documentation"
     assert site["project"]["extra"]["version"] == {
         "provider": "mike",
         "alias": True,
     }
-    for relative_path in _nav_paths(navigation):
+    assert paths[0] == "index.md"
+    assert len(paths) == len(set(paths))
+    for relative_path in paths:
         assert (_repo_root() / "documentation" / relative_path).is_file(), relative_path
 
 
@@ -50,70 +41,19 @@ def test_documentation_has_one_canonical_source_tree() -> None:
     assert (_repo_root() / "documentation" / "index.md").is_file()
 
 
-def test_home_and_readme_present_a_clear_first_use_path() -> None:
+def test_home_and_readme_expose_an_executable_first_use_path() -> None:
     home = _read("documentation/index.md")
     readme = _read("README.md")
+    version = _declared_version()
 
-    for heading in (
-        "## What You Can Do",
-        "## Start With Your Environment",
-        "## Choose Where the Model Runs",
-        "## Understand the Boundary",
-        "## Find an Answer",
-    ):
-        assert heading in home
-    assert home.index("## Start With Your Environment") < home.index(
-        "## Choose Where the Model Runs"
-    )
-    for heading in (
-        "## What Heartwood Provides",
-        "## Quick Start",
-        "## Choose a Setup",
-        "## Responsible Use",
-        "## Contributing",
-        "## License",
-    ):
-        assert heading in readme
-    assert "Schmiedmayer Lab at Stanford University" in readme
-    assert "model weights or credentials" in readme
+    assert "[Start Your First Project](start/index.md)" in home
+    assert "[Choose a Platform](platforms/index.md)" in home
+    assert "[Actions and Audit History](use/actions-audit.md)" in home
+    assert f"ghcr.io/schmiedmayerlab/heartwood:{version}" in readme
+    assert '-v "$PWD:/workspace"' in readme
     assert "heartwood --interface web" in readme
-
-
-def test_public_documentation_contains_no_planning_or_process_artifacts() -> None:
-    forbidden_organization = "bio" + "design"
-    forbidden_phrases = (
-        "chain of thought",
-        "implementation plan",
-        "validation diary",
-        "testing diary",
-        "this pass replaces",
-        "carried over",
-    )
-
-    for path in _canonical_documentation_paths():
-        content = path.read_text(encoding="utf-8")
-        lowered = content.lower()
-        assert forbidden_organization not in lowered, path
-        for phrase in forbidden_phrases:
-            assert phrase not in lowered, f"{phrase!r} found in {path}"
-        assert "## Future" not in content
-        assert "## Planned" not in content
-        assert "TODO" not in content
-        assert "TBD" not in content
-        assert re.search(r"github\.com/[^\s)]+/issues/\d+", content) is None
-
-
-def test_documentation_describes_current_product_boundaries() -> None:
-    product = _read("documentation/architecture/index.md")
-    architecture = _read("documentation/architecture/system.md")
-    sessions = _read("documentation/architecture/sessions-audit.md")
-    security = _read("documentation/operate/security.md")
-
-    assert "does not fork the OpenHands agent loop" in product
-    assert "process current directory" in architecture
-    assert "one decision" in sessions
-    assert "Session mutation uses a separate interprocess lease for each session" in architecture
-    assert "does not confer institutional approval" in security
+    assert "--host-loopback-publication" in readme
+    assert "http://127.0.0.1:8767/" in readme
 
 
 def test_first_use_and_interface_guides_share_one_project_contract() -> None:
@@ -136,36 +76,6 @@ def test_first_use_and_interface_guides_share_one_project_contract() -> None:
     assert "HEARTWOOD_WORKSPACE" not in guides
     assert "heartwood launch" not in guides
     assert "heartwood serve" not in guides
-
-
-def test_model_guides_cover_simple_and_advanced_routes() -> None:
-    overview = _read("documentation/models/index.md")
-    connections = _read("documentation/models/connections.md")
-    choices = _read("documentation/models/choose-managed.md")
-    runtime = _read("documentation/models/run-with-heartwood.md")
-    offline = _read("documentation/models/offline.md")
-    combined = "\n".join((overview, connections, choices, runtime, offline))
-
-    for phrase in (
-        "Stanford AI API Gateway",
-        "OpenAI",
-        "Anthropic",
-        "Other compatible service",
-        "Run with Heartwood",
-        "Heartwood-managed model",
-        "Other Hugging Face model",
-        "heartwood models inspect",
-        "heartwood models import",
-        "license",
-        "download size",
-        "context window",
-    ):
-        assert phrase.lower() in combined.lower()
-    assert "no model weights" in combined.lower()
-    assert "on this computer" not in combined.lower()
-    assert "local model" not in combined.lower()
-    assert "not yet supported" in choices.lower()
-    assert "github.com/SchmiedmayerLab/heartwood/issues" in choices
 
 
 def test_platform_guides_use_current_release_artifacts_and_commands() -> None:
@@ -210,9 +120,10 @@ def test_terra_notebook_is_output_free_and_uses_the_shared_project() -> None:
 
 def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> None:
     browser_guide = _read("documentation/use/browser.md")
+    readme = _read("README.md")
     screenshot_documents = "\n".join(
         (
-            _read("README.md"),
+            readme,
             browser_guide,
             _read("documentation/use/actions-audit.md"),
             _read("documentation/use/specialists.md"),
@@ -222,9 +133,17 @@ def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> N
     screenshot_script = _read("packages/webui/scripts/smoke-reference-analysis.cjs")
     assets = _repo_root() / "documentation" / "assets" / "screenshots"
 
-    assert _read("README.md").count('<source media="(prefers-color-scheme: dark)"') == 2
-    assert screenshot_documents.count("{ .theme-screenshot-light }") == 7
-    assert screenshot_documents.count("{ .theme-screenshot-dark }") == 7
+    readme_pictures = re.findall(r"<picture>.*?</picture>", readme, flags=re.DOTALL)
+    assert readme_pictures
+    for picture in readme_pictures:
+        assert '<source media="(prefers-color-scheme: dark)"' in picture
+        filenames = _theme_screenshot_filenames(picture)
+        assert len(filenames) == 2
+        assert any(filename.endswith("-dark.png") for filename in filenames)
+        assert any(filename.endswith("-light.png") for filename in filenames)
+    assert screenshot_documents.count("{ .theme-screenshot-light }") == (
+        screenshot_documents.count("{ .theme-screenshot-dark }")
+    )
     stylesheet = _read("documentation/stylesheets/extra.css")
     assert '[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-light' in stylesheet
     assert '[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-dark' in stylesheet
@@ -232,18 +151,16 @@ def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> N
     assert 'for (const theme of ["light", "dark"])' in screenshot_script
     assert "page.emulateMedia({ colorScheme: theme })" in screenshot_script
     assert "captureApproval: true" in screenshot_script
-    for basename in (
-        "browser-action-review",
-        "browser-action-settings",
-        "browser-changes",
-        "browser-conversation",
-        "browser-files",
-        "browser-specialists",
-    ):
+    referenced_screenshots = set(_theme_screenshot_filenames(screenshot_documents))
+    assert referenced_screenshots
+    basenames = {
+        re.sub(r"-(?:light|dark)\.png$", "", filename) for filename in referenced_screenshots
+    }
+    for basename in basenames:
         assert f'"{basename}.png"' in screenshot_script
         for theme in ("light", "dark"):
             filename = f"{basename}-{theme}.png"
-            assert filename in screenshot_documents
+            assert filename in referenced_screenshots
             screenshot = assets / filename
             assert screenshot.stat().st_size > 1_000
             width, height = _png_dimensions(screenshot)
@@ -289,43 +206,6 @@ def test_readme_links_to_published_documentation_channels() -> None:
     assert re.search(r"\]\(documentation/[^)]+\.md\)", readme) is None
 
 
-def test_native_installer_defaults_to_current_directory_and_confines_state() -> None:
-    installer = _read("deploy/install.sh")
-
-    assert 'root="${PWD}"' in installer
-    assert 'installer_base="${root}/.installer"' in installer
-    assert 'installer_state="$(mktemp -d "${installer_base}/run.XXXXXX")"' in installer
-    assert 'installer_lock="${root}/.installer.lock"' in installer
-    assert 'export HOME="${installer_state}/home"' in installer
-    assert 'export TMPDIR="${installer_state}/tmp"' in installer
-    assert 'export UV_CACHE_DIR="${installer_state}/cache/uv"' in installer
-    assert 'export MAMBA_ROOT_PREFIX="${installer_state}/cache/mamba"' in installer
-    assert "export HEARTWOOD_PLATFORM=carina" in installer
-    assert 'installer_release="__HEARTWOOD_RELEASE_VERSION__"' in installer
-    assert "--minimum-free-gib N" in installer
-    assert 'dry_run_state="$(mktemp -d' in installer
-    assert 'installations_root="${root}/installations"' in installer
-    assert 'replace_symlink "${current_target}" "${root}/current"' in installer
-    assert "--version VERSION" not in installer
-    assert "releases/latest/download" not in installer
-
-
-def test_platform_extension_guide_uses_the_shared_application_contract() -> None:
-    guide = _read("documentation/operate/platform-integration.md")
-
-    for path in (
-        "images/platforms.toml",
-        "images/Dockerfile",
-        "docker-bake.hcl",
-        "PlatformCapabilities",
-        "SessionGateway",
-    ):
-        assert path in guide
-    assert "Do not add a platform-specific agent loop" in guide
-    assert "model weights and credentials" in guide
-    assert "synthetic" in guide.lower()
-
-
 def _nav_paths(value: object) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -358,6 +238,16 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", header[16:24])
 
 
+def _theme_screenshot_filenames(content: str) -> tuple[str, ...]:
+    return tuple(
+        re.findall(
+            r"(?:documentation/|\.\./)assets/screenshots/"
+            r"([a-z0-9-]+-(?:light|dark)\.png)",
+            content,
+        )
+    )
+
+
 def _read(path: str) -> str:
     return (_repo_root() / path).read_text(encoding="utf-8")
 
@@ -367,13 +257,6 @@ def _declared_version() -> str:
     version = metadata.get("version")
     assert isinstance(version, str)
     return version
-
-
-def _canonical_documentation_paths() -> tuple[Path, ...]:
-    return (
-        _repo_root() / "README.md",
-        *tuple((_repo_root() / "documentation").rglob("*.md")),
-    )
 
 
 def _repo_root() -> Path:

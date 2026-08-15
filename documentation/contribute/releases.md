@@ -26,8 +26,8 @@ Repository administrators may recover interrupted workflows, but they must not r
 
 ## Stable and Preview Documentation
 
-A stable version such as `0.2.0` updates the `stable` alias and the documentation root.
-A prerelease such as `0.3.0-beta.4` updates the `preview` alias without replacing the stable root.
+A stable version such as `0.3.0` updates the `stable` alias and the documentation root.
+A prerelease such as `0.4.0-beta.1` updates the `preview` alias without replacing the stable root.
 
 The version store is deployed to GitHub Pages and retains immutable version paths.
 Publishing the same version with different content is rejected.
@@ -38,6 +38,7 @@ Each release includes:
 
 - `heartwood-installer`;
 - `heartwood-native.tar.gz`;
+- the release-pinned CUDA 12.9 vLLM wheel used by Carina;
 - `SHA256SUMS`;
 - standard, GPU, Terra, and Terra GPU image tags; and
 - versioned documentation.

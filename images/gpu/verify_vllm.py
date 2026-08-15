@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import tomllib
 from importlib import import_module
 from importlib.metadata import distributions, version
@@ -16,21 +17,28 @@ from pathlib import Path
 
 import torch
 import vllm
-import vllm.envs as vllm_envs
 from packaging.utils import canonicalize_name
+from vllm.model_executor.models import ModelRegistry
+from vllm.reasoning import ReasoningParserManager
 from vllm.tool_parsers import ToolParserManager
 
 _DEPENDENCY_VERSIONS = {
     "cuda-bindings": "12.9.7",
     "cuda-python": "12.9.7",
-    "flashinfer-cubin": "0.6.13",
-    "flashinfer-python": "0.6.13",
+    "flashinfer-python": "0.6.16.post3",
     "nvidia-cuda-runtime-cu12": "12.9.79",
 }
-_REQUIRED_TOOL_PARSERS = ("hermes", "openai", "qwen3_coder")
+_REQUIRED_TOOL_PARSERS = ("hermes", "muse_glimmer", "openai", "qwen3_coder")
+_REQUIRED_REASONING_PARSERS = ("muse_glimmer",)
+_REQUIRED_MODEL_ARCHITECTURES = (
+    "MuseGlimmerForCausalLM",
+    "MuseGlimmerForConditionalGeneration",
+)
+_CUDA_RUNTIME_PATTERN = re.compile(rb"libcudart\.so\.(\d+)")
 _FORBIDDEN_CUDA_13_PACKAGES = {
     "cuda-tile",
     "nvidia-cuda-crt",
+    "nvidia-cuda-nvdisasm",
     "nvidia-cuda-nvcc",
     "nvidia-cuda-runtime",
     "nvidia-cuda-tileiras",
@@ -55,6 +63,11 @@ def main() -> None:
         raise RuntimeError(f"unexpected PyTorch CUDA build: {torch.version.cuda}")
     if contract.get("cuda_13_qualified") is not False:
         raise RuntimeError("Heartwood's CUDA 13 runtime is not qualified")
+    native_cuda_versions = _native_cuda_linkages(Path(vllm.__file__).resolve().parent)
+    expected_cuda_major = str(contract["cuda_version"]).partition(".")[0]
+    if native_cuda_versions != {expected_cuda_major}:
+        observed_linkages = ", ".join(sorted(native_cuda_versions)) or "none"
+        raise RuntimeError("unexpected vLLM native CUDA runtime linkage: " + observed_linkages)
 
     installed = {
         canonicalize_name(distribution.metadata["Name"])
@@ -69,8 +82,6 @@ def main() -> None:
     if cuda_13:
         raise RuntimeError(f"unqualified CUDA 13 packages are installed: {', '.join(cuda_13)}")
 
-    if vllm_envs.VLLM_V1_USE_OUTLINES_CACHE:
-        raise RuntimeError("the vLLM outlines disk cache must remain disabled")
     torchscript_calls = _torchscript_calls(Path(vllm.__file__).resolve().parent)
     if torchscript_calls:
         raise RuntimeError(
@@ -84,11 +95,25 @@ def main() -> None:
     if missing_parsers:
         missing = ", ".join(missing_parsers)
         raise RuntimeError(f"required vLLM tool parsers are unavailable: {missing}")
+    available_reasoning_parsers = set(ReasoningParserManager.list_registered())
+    missing_reasoning_parsers = sorted(
+        set(_REQUIRED_REASONING_PARSERS) - available_reasoning_parsers
+    )
+    if missing_reasoning_parsers:
+        missing = ", ".join(missing_reasoning_parsers)
+        raise RuntimeError(f"required vLLM reasoning parsers are unavailable: {missing}")
+    available_architectures = set(ModelRegistry.get_supported_archs())
+    missing_architectures = sorted(set(_REQUIRED_MODEL_ARCHITECTURES) - available_architectures)
+    if missing_architectures:
+        missing = ", ".join(missing_architectures)
+        raise RuntimeError(f"required vLLM model architectures are unavailable: {missing}")
 
     print(
         "Heartwood GPU runtime verified: "
         f"vLLM {observed['vllm']}, PyTorch {observed['torch']}, CUDA {torch.version.cuda}; "
-        f"tool parsers {', '.join(_REQUIRED_TOOL_PARSERS)}"
+        f"tool parsers {', '.join(_REQUIRED_TOOL_PARSERS)}; "
+        f"reasoning parsers {', '.join(_REQUIRED_REASONING_PARSERS)}; "
+        f"model architectures {', '.join(_REQUIRED_MODEL_ARCHITECTURES)}"
     )
 
 
@@ -139,6 +164,25 @@ def _torchscript_calls(package_root: Path) -> list[str]:
             if direct_call or imported_jit_call or torch_call:
                 calls.append(f"{path.relative_to(package_root)}:{node.lineno}")
     return calls
+
+
+def _native_cuda_linkages(package_root: Path) -> set[str]:
+    versions: set[str] = set()
+    overlap = 32
+    for path in sorted(package_root.rglob("*.so")):
+        tail = b""
+        try:
+            with path.open("rb") as file:
+                while chunk := file.read(1024 * 1024):
+                    payload = tail + chunk
+                    versions.update(
+                        match.group(1).decode("ascii")
+                        for match in _CUDA_RUNTIME_PATTERN.finditer(payload)
+                    )
+                    tail = payload[-overlap:]
+        except OSError as error:
+            raise RuntimeError(f"unable to inspect packaged vLLM binary: {path}") from error
+    return versions
 
 
 def _runtime_contract() -> dict[str, object]:

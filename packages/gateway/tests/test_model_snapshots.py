@@ -31,64 +31,76 @@ from heartwood.gateway import (
 )
 
 
-@pytest.mark.parametrize(
-    (
-        "snapshot_id",
-        "repository",
-        "revision",
-        "tier",
-        "gpu_count",
-        "tool_parser",
-    ),
-    [
-        (
-            "qwen3-coder-30b-a3b-instruct-fp8-vllm",
-            "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
-            "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
-            "powerful",
-            1,
-            "qwen3_coder",
-        ),
-        (
-            "qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm",
-            "YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ",
-            "e69e73813144d9b715648d8384b3f2c035397411",
-            "powerful",
-            2,
-            "qwen3_coder",
-        ),
-    ],
-)
-def test_repository_snapshot_catalog_pins_gpu_model_variants(
-    snapshot_id: str,
-    repository: str,
-    revision: str,
-    tier: str,
-    gpu_count: int,
-    tool_parser: str,
-) -> None:
+def test_repository_snapshot_catalog_retains_unvalidated_gpu_model_variant() -> None:
     catalog = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
 
-    snapshot = catalog.snapshot(snapshot_id)
+    snapshot = catalog.snapshot("qwen3-coder-30b-a3b-instruct-fp8-vllm")
     assert snapshot.runtime_profile == "vllm-cuda"
-    assert snapshot.source_repository == repository
-    assert snapshot.source_revision == revision
-    assert snapshot.tier == tier
-    assert snapshot.tensor_parallel_size == gpu_count
-    assert snapshot.tool_call_parser == tool_parser
+    assert snapshot.source_repository == "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+    assert snapshot.source_revision == "dcaee4d4dfc5ee71ad501f01f530e5652438fde0"
+    assert snapshot.tier == "powerful"
+    assert snapshot.tensor_parallel_size == 1
+    assert snapshot.tool_call_parser == "qwen3_coder"
     assert snapshot.minimum_free_bytes >= snapshot.expected_size_bytes
     assert snapshot.recommended_disk_bytes >= snapshot.minimum_free_bytes
     assert snapshot.context_window <= snapshot.maximum_context_window
-    assert snapshot.qualification == "qualified"
-    expected_platform = (
-        "carina" if snapshot_id == "qwen3-coder-30b-a3b-instruct-fp8-vllm" else "terra"
+    assert snapshot.qualification == "unvalidated"
+    assert snapshot.validated_platforms == ()
+    assert snapshot.qualification_test is None
+    assert snapshot.qualification_date is None
+    assert snapshot.qualification_evidence is None
+    assert snapshot.recommended is False
+
+
+def test_repository_snapshot_catalog_pins_qualified_terra_configuration() -> None:
+    catalog = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
-    assert snapshot.validated_platforms == (expected_platform,)
+
+    snapshot = catalog.snapshot("qwen3-coder-30b-a3b-instruct-w4a16-awq-vllm")
+
+    assert snapshot.source_repository == ("YCWTG/Qwen3-Coder-30B-A3B-Instruct-W4A16-mixed-AWQ")
+    assert snapshot.source_revision == "e69e73813144d9b715648d8384b3f2c035397411"
+    assert snapshot.precision == "W4A16 AWQ"
+    assert snapshot.minimum_gpu_count == 2
+    assert snapshot.context_window == 18_432
+    assert snapshot.tool_call_parser == "qwen3_coder"
+    assert snapshot.qualification == "qualified"
+    assert snapshot.validated_platforms == ("terra",)
     assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
-    assert snapshot.qualification_date is not None
-    assert snapshot.qualification_evidence is not None
+    assert snapshot.qualification_date == "2026-08-15"
+    assert snapshot.qualification_evidence == (
+        "https://github.com/SchmiedmayerLab/heartwood/pull/119"
+    )
+    assert snapshot.recommended_cpu_count == 32
+    assert snapshot.recommended_ram_bytes == 120 * 1024**3
+    assert snapshot.recommended is True
+
+
+def test_repository_snapshot_catalog_pins_qualified_muse_configuration() -> None:
+    catalog = load_model_snapshot_catalog(
+        _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
+    )
+
+    snapshot = catalog.snapshot("muse-glimmer-30b-bf16-vllm")
+
+    assert snapshot.source_repository == "meta-models/Muse-Glimmer-30B"
+    assert snapshot.source_revision == "a4e59da52a7bc87ae7251dd5545c0dd437c44b68"
+    assert snapshot.precision == "BF16"
+    assert snapshot.minimum_gpu_count == 2
+    assert snapshot.context_window == 32_768
+    assert snapshot.maximum_context_window == 131_072
+    assert snapshot.tool_call_parser == "muse_glimmer"
+    assert snapshot.reasoning_parser == "muse_glimmer"
+    assert snapshot.qualification == "qualified"
+    assert snapshot.validated_platforms == ("carina",)
+    assert snapshot.qualification_test == "heartwood.coding-agent-e2e.v1"
+    assert snapshot.qualification_date == "2026-08-14"
+    assert snapshot.qualification_evidence == (
+        "https://github.com/SchmiedmayerLab/heartwood/pull/119"
+    )
     assert snapshot.recommended is True
 
 
@@ -97,7 +109,7 @@ def test_repository_snapshot_catalog_pins_gpu_model_variants(
     [
         ("generic", "standard"),
         ("terra", "maximum"),
-        ("carina", "powerful"),
+        ("carina", "maximum"),
         ("custom", "standard"),
     ],
 )
@@ -108,31 +120,24 @@ def test_automatic_model_tier_is_shared_across_interfaces(
     assert automatic_model_tier(platform_id) == tier
 
 
-@pytest.mark.parametrize(
-    ("snapshot_id", "minimum_vram_gib"),
-    [
-        ("qwen3-coder-30b-a3b-instruct-fp8-vllm", 48),
-    ],
-)
-def test_snapshot_minimum_vram_supports_an_agent_context(
-    snapshot_id: str,
-    minimum_vram_gib: int,
-) -> None:
+def test_qualified_snapshot_gpu_envelope_supports_its_agent_context() -> None:
     catalog = load_model_snapshot_catalog(
         _repo_root() / "images" / "generic" / "local-runtime" / "snapshots.toml"
     )
-    snapshot = catalog.snapshot(snapshot_id)
+    snapshot = catalog.snapshot("muse-glimmer-30b-bf16-vllm")
+    available_vram = snapshot.minimum_gpu_memory_bytes * snapshot.tensor_parallel_size
 
     plan = plan_local_context_window(
         model_limit=snapshot.context_window,
         model_size_bytes=snapshot.expected_size_bytes,
         runtime="vllm",
-        available_memory_bytes=minimum_vram_gib * 1024**3,
+        available_memory_bytes=available_vram,
+        qualified_memory_bytes=available_vram,
     )
 
-    assert plan.effective_window >= 18_432
-    assert plan.effective_window <= snapshot.context_window
-    assert f"{minimum_vram_gib} GB VRAM" in str(snapshot.minimum_resource_envelope)
+    assert plan.effective_window == snapshot.context_window
+    assert plan.estimated_required_bytes == available_vram
+    assert "48 GB VRAM" in str(snapshot.minimum_resource_envelope)
 
 
 def test_catalog_recommends_only_qualified_models_with_compatible_resources() -> None:
@@ -188,6 +193,21 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
         )
         is None
     )
+    assert (
+        source.recommend(
+            platform_id="terra",
+            gpu_count=2,
+            gpu_memory_bytes=16_000_000_000,
+            maximum_tier="maximum",
+        )
+        == terra_model
+    )
+    assert source.recommend(
+        platform_id="carina",
+        gpu_count=2,
+        gpu_memory_bytes=48_000_000_000,
+        maximum_tier="maximum",
+    ) == source.snapshot("muse-glimmer-30b-bf16-vllm")
 
     assert (
         catalog.recommend_for_capacities(
@@ -196,6 +216,14 @@ def test_catalog_recommends_only_qualified_models_with_compatible_resources() ->
             maximum_tier="maximum",
         )
         is None
+    )
+    assert (
+        source.recommend_for_capacities(
+            platform_id="terra",
+            capacities=((1, 16_000_000_000), (2, 16_000_000_000)),
+            maximum_tier="maximum",
+        )
+        == terra_model
     )
     assert (
         catalog.recommend_for_capacities(
@@ -601,6 +629,12 @@ def test_snapshot_metadata_rejects_floating_revisions() -> None:
         ({"tier": "unknown"}, "unsupported model tier"),
         ({"qualification": "unknown"}, "unsupported model qualification"),
         ({"tool_call_parser": "unknown"}, "unsupported vLLM tool-call parser"),
+        ({"reasoning_parser": "unknown"}, "unsupported vLLM reasoning parser"),
+        ({"reasoning_parser": "muse_glimmer"}, "parsers are incompatible"),
+        (
+            {"tool_call_parser": "muse_glimmer", "reasoning_parser": None},
+            "parsers are incompatible",
+        ),
         ({"startup_seconds_min": 0}, "startup estimate is invalid"),
         ({"startup_seconds_max": 0}, "startup estimate is invalid"),
         ({"context_window": 2047}, "between 2048 and 1048576"),

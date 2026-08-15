@@ -22,6 +22,7 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from heartwood.gateway._local_model_contract import ReasoningParser, ToolCallParser
 from heartwood.gateway._local_models import LocalModelChoice, ModelRepositoryError
 from heartwood.gateway._model_artifacts import verify_model_artifact
 from heartwood.gateway._model_snapshots import verify_model_snapshot
@@ -110,7 +111,8 @@ class ModelBundleMetadata(_BundleRecord):
     recommended_ram_bytes: int = Field(gt=0)
     recommended_disk_bytes: int = Field(gt=0)
     maximum_context_window: int = Field(ge=2_048)
-    tool_call_parser: Literal["hermes", "openai", "qwen3_coder"] | None = None
+    tool_call_parser: ToolCallParser | None = None
+    reasoning_parser: ReasoningParser | None = None
     tensor_parallel_size: int = Field(gt=0)
     startup_seconds_min: int = Field(gt=0)
     startup_seconds_max: int = Field(gt=0)

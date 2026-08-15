@@ -1514,6 +1514,7 @@ class SessionGateway:
                     choice.model_id
                     for choice in local_choices
                     if choice.model_id in self._recommended_local_model_ids
+                    and choice.minimum_gpu_count == 0
                     and choice.qualification_for(gpu_environment.platform_id) == "qualified"
                     and self._local_runtime_available(choice.runtime)
                     and choice.runtime == preferred_runtime
@@ -2634,6 +2635,7 @@ class SessionGateway:
             recommended_disk_bytes=choice.recommended_disk_bytes,
             recommended_cpu_count=choice.recommended_cpu_count,
             tool_call_parser=choice.tool_call_parser,
+            reasoning_parser=choice.reasoning_parser,
             tensor_parallel_size=choice.tensor_parallel_size,
             startup_seconds_min=choice.startup_seconds_min,
             startup_seconds_max=choice.startup_seconds_max,
@@ -2794,6 +2796,15 @@ class SessionGateway:
         return {
             **choice.safe_dict(),
             "qualification": qualification,
+            "qualification_test": (
+                choice.qualification_test if qualification == "qualified" else None
+            ),
+            "qualification_date": (
+                choice.qualification_date if qualification == "qualified" else None
+            ),
+            "qualification_evidence": (
+                choice.qualification_evidence if qualification == "qualified" else None
+            ),
             "active": active,
             "available": available,
             "selected": selected,
@@ -2801,6 +2812,7 @@ class SessionGateway:
             "recommended": (
                 qualification == "qualified"
                 and choice.model_id in self._recommended_local_model_ids
+                and available
             ),
         }
 
@@ -2978,6 +2990,7 @@ def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelCh
         recommended_cpu_count=selection.recommended_cpu_count,
         maximum_context_window=selection.maximum_context_window,
         tool_call_parser=cast(Any, selection.tool_call_parser),
+        reasoning_parser=cast(Any, selection.reasoning_parser),
         tensor_parallel_size=selection.tensor_parallel_size,
         startup_seconds_min=selection.startup_seconds_min,
         startup_seconds_max=selection.startup_seconds_max,
@@ -3020,6 +3033,7 @@ def _model_transfer_identity(choice: LocalModelChoice) -> tuple[object, ...]:
         choice.recommended_disk_bytes,
         choice.maximum_context_window,
         choice.tool_call_parser,
+        choice.reasoning_parser,
         choice.tensor_parallel_size,
         choice.startup_seconds_min,
         choice.startup_seconds_max,

@@ -13,6 +13,11 @@ if [[ ! "${version}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]]; then
   echo "native package version is unsafe: ${version}" >&2
   exit 64
 fi
+gpu_runtime_asset="$(python3 -c 'import tomllib; print(tomllib.load(open("images/gpu/compatibility.toml", "rb"))["runtime"]["vllm_wheel_filename"])')"
+if [[ ! "${gpu_runtime_asset}" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*\.whl$ ]]; then
+  echo "GPU runtime asset filename is unsafe: ${gpu_runtime_asset}" >&2
+  exit 64
+fi
 archive="${output_dir}/heartwood-native.tar.gz"
 workspace="$(mktemp -d)"
 cleanup() {
@@ -54,10 +59,12 @@ COPYFILE_DISABLE=1 tar --no-xattrs -czf "${archive}" -C "${workspace}" heartwood
   cd "${output_dir}"
   sha256sum "$(basename "${archive}")" >SHA256SUMS
 )
-sed "s/__HEARTWOOD_RELEASE_VERSION__/${version}/g" \
+sed \
+  -e "s/__HEARTWOOD_RELEASE_VERSION__/${version}/g" \
+  -e "s/__HEARTWOOD_GPU_RUNTIME_ASSET__/${gpu_runtime_asset}/g" \
   deploy/install.sh >"${output_dir}/heartwood-installer"
-if grep --quiet '__HEARTWOOD_RELEASE_VERSION__' "${output_dir}/heartwood-installer"; then
-  echo "native installer release placeholder was not replaced" >&2
+if grep --quiet '__HEARTWOOD_.*__' "${output_dir}/heartwood-installer"; then
+  echo "native installer placeholder was not replaced" >&2
   exit 1
 fi
 chmod +x "${output_dir}/heartwood-installer"
