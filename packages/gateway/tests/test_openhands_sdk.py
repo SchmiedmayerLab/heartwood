@@ -1290,6 +1290,9 @@ def test_usage_is_transient_during_execution_and_durable_at_the_run_boundary(
     [
         ConversationExecutionStatus.IDLE,
         ConversationExecutionStatus.PAUSED,
+        ConversationExecutionStatus.ERROR,
+        ConversationExecutionStatus.STUCK,
+        ConversationExecutionStatus.DELETING,
     ],
 )
 def test_active_worker_hides_transitional_non_running_sdk_state(
@@ -1317,6 +1320,7 @@ def test_active_worker_hides_transitional_non_running_sdk_state(
 
         assert lifecycle_events
         assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
+        assert not any(isinstance(event, BackendErrorEvent) for event in events)
     finally:
         with backend._run_lock:
             backend._execution_active = False
