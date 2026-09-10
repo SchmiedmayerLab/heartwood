@@ -399,6 +399,79 @@ def test_duplicate_action_proposal_fails_closed_without_replacing_identity() -> 
     assert projection.available_commands == ()
 
 
+@pytest.mark.parametrize("approved_first", [False, True])
+def test_confirmation_before_first_proposal_preserves_the_review_state(
+    approved_first: bool,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "tool_call_id": "call-1",
+        "action_id": "action-1",
+        "tool_name": "terminal",
+        "kind": "terminal",
+        "risk": "medium",
+        "arguments": {"command": "printf synthetic"},
+    }
+    events = [
+        _event(
+            0,
+            EventKind.CONFIRMATION_REQUESTED,
+            {"request": {**payload, "group_id": "group-1", "request_id": "request-1"}},
+        )
+    ]
+    if approved_first:
+        events.append(
+            _event(
+                1,
+                EventKind.APPROVAL_RECORDED,
+                {"group_id": "group-1", "decision": "approved", "tool_call_ids": ["call-1"]},
+            )
+        )
+    events.append(_event(len(events), EventKind.TOOL_CALL_PROPOSED, payload))
+    projection = project_session(tuple(events), session_id="session-1")
+    assert projection.lifecycle.status != SessionLifecycle.ERROR
+    assert projection.actions[0].group_id == "group-1"
+    assert projection.actions[0].arguments == payload["arguments"]
+    assert projection.actions[0].decision == ("approved" if approved_first else None)
+    if not approved_first:
+        assert projection.pending_approval is not None
+        assert projection.pending_approval.group_id == "group-1"
+    duplicate = project_session(
+        (*events, _event(len(events), EventKind.TOOL_CALL_PROPOSED, payload)),
+        session_id="session-1",
+    )
+    assert duplicate.lifecycle.status == SessionLifecycle.ERROR
+
+
+@pytest.mark.parametrize("changed_field", ["action_id", "tool_name", "arguments"])
+def test_late_proposal_cannot_replace_previously_reviewed_action_details(
+    changed_field: str,
+) -> None:
+    payload: dict[str, JsonValue] = {
+        "tool_call_id": "call-1",
+        "action_id": "action-1",
+        "tool_name": "terminal",
+        "kind": "terminal",
+        "risk": "medium",
+        "arguments": {"command": "printf synthetic"},
+    }
+    proposal = dict(payload)
+    proposal[changed_field] = (
+        {"command": "different"} if changed_field == "arguments" else "different"
+    )
+    projection = project_session(
+        (
+            _event(
+                0, EventKind.CONFIRMATION_REQUESTED, {"request": {**payload, "group_id": "group-1"}}
+            ),
+            _event(1, EventKind.TOOL_CALL_PROPOSED, proposal),
+        ),
+        session_id="session-1",
+    )
+    assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert projection.actions[0].state == "outcome-unknown"
+    assert projection.actions[0].arguments == payload["arguments"]
+
+
 @pytest.mark.parametrize(
     ("execution_action_id", "execution_tool_name"),
     [

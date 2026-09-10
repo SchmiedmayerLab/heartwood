@@ -339,6 +339,7 @@ def project_session(
     activity: list[ProjectionActivity] = []
     conversation: list[ProjectionMessage] = []
     actions: dict[str, ProjectionActionRecord] = {}
+    proposed_action_ids: set[str] = set()
     approval_group_actions: dict[str, list[str]] = {}
     approval_group_decisions: dict[str, Literal["approved", "denied"] | None] = {}
     approval_group_resolutions: dict[
@@ -388,25 +389,53 @@ def project_session(
             arguments = _mapping(event.payload.get("arguments"))
             tool_call_id = _string(event.payload.get("tool_call_id"))
             if tool_call_id:
-                if tool_call_id in actions:
+                prior = actions.get(tool_call_id)
+                # Reconciliation may capture a complete confirmation before its
+                # callback proposal. It is not a second proposal, but its action
+                # identity and reviewed arguments must remain unchanged.
+                if tool_call_id in proposed_action_ids or (
+                    prior is not None
+                    and (
+                        prior.tool_name != tool_name
+                        or prior.arguments != arguments
+                        or (
+                            prior.action_id is not None
+                            and prior.action_id != (_string(event.payload.get("action_id")) or None)
+                        )
+                        or tool_call_id in integrity_failed_action_ids
+                    )
+                ):
                     integrity_failed_action_ids.add(tool_call_id)
                     _mark_projection_integrity_failure(
                         actions,
                         conversation,
                         event,
                         tool_call_ids=(tool_call_id,),
-                        detail="An action identity was proposed more than once.",
+                        detail="An action proposal repeats or conflicts with its stable identity.",
                     )
                     lifecycle_status = SessionLifecycle.ERROR
                     lifecycle_sequence = event.sequence
                     lifecycle_error_recoverable = False
                     continue
-                actions[tool_call_id] = _action_record(
+                proposed_action_ids.add(tool_call_id)
+                proposal = _action_record(
                     event,
                     payload=event.payload,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments=arguments,
+                )
+                actions[tool_call_id] = (
+                    proposal
+                    if prior is None
+                    else proposal.model_copy(
+                        update={
+                            "group_id": prior.group_id,
+                            "state": prior.state,
+                            "decision": prior.decision,
+                            "outcome": prior.outcome,
+                        }
+                    )
                 )
         elif kind == EventKind.TOOL_EXECUTION_RECORDED.value:
             tool_name = _string(event.payload.get("tool_name"))
