@@ -41,6 +41,9 @@ Deterministic tests additionally cover reproducible bundle bytes, GGUF and vLLM 
 
 OpenHands SDK conformance tests use the real conversation persistence layer and deterministic `TestLLM`.
 They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state fails closed as an unknown outcome, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
+Structured-outcome conformance tests exercise the upstream finish-tool schema through the same private persistence layer.
+Reported success, partial success, blocked, failed, and unknown outcomes survive restart without another model call.
+The SDK conversation can be finished for any of these outcomes; neither lifecycle completion nor a model-reported success proves that required artifacts or independent checks passed.
 Workspace contract tests qualify the pinned OpenHands Git change and diff APIs, non-Git typed-action fallback, canonical path handling, nested private-state exclusion, traversal and symlink rejection, special and binary files, UTF-8 boundaries, limits, audit scrubbing, and cross-interface transport.
 The browser reference analysis stops its gateway, replays and mutates the same session through the CLI, restarts the gateway, and verifies that the browser receives the CLI update on one contiguous authoritative sequence.
 Browser tests build the current production assets before starting the preview server, exercise direct and fallback live-update states, scan the rendered interface with axe, and verify keyboard focus, reduced motion, and reflow at desktop, tablet, and narrow notebook widths.
