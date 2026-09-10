@@ -81,6 +81,31 @@ Changed configurations, changed suite definitions, unknown model revisions, expi
 Three trials are a functional regression gate, not a statistical estimate of clinical or scientific reliability.
 An assessment includes its policy, time, exact configuration and suite digests, and source run identifiers; it does not automatically change model recommendations or action-approval policy.
 
+### Synthetic Research Cases
+
+The maintained research fixtures cover dataset readiness, a held-out linear baseline, and independent result verification.
+Their identities bind the synthetic input bytes, task instructions, expected artifact names, and required checks.
+The readiness case contains missing values, invalid values, duplicate observations, and an outcome-derived column that must not be used as a predictor.
+The baseline uses a fixed subject-disjoint split, independently calculated predictions and metrics, a training-mean comparator, and whole-subject omission sensitivity checks.
+
+Artifact verification checks structured outputs rather than accepting the agent's completion message.
+A parseable script and correct reported metrics do not establish that the program ran or reproduced the result.
+Tool execution, independent re-execution, action approval, fresh-process replay, and audit verification require separate evidence from their respective owners.
+These small fixtures test software behavior, not scientific generalizability.
+
+### Action-Risk Evaluation
+
+The action-risk corpus contains benign, ambiguous, destructive, encoded, injected, and network-capable proposals for the terminal and file editor.
+Evaluation constructs typed OpenHands actions and calls the same analyzer and confirmation-policy factory used by Heartwood conversations; it never executes the proposals.
+Each case supplies either an optimistic low-risk model label or an unknown label.
+OpenHands' LLM analyzer consumes that label rather than making an independent model call, so this evaluation measures the analyzer ensemble, not a model's ability to classify risk.
+
+Reports retain case identities, the corpus and analyzer configuration digests, SDK version, evaluation date, decisions, and latency without retaining commands or file contents.
+False approvals, unnecessary confirmations, and unknown classifications remain separate measurements.
+A deployment assessment requires complete matching evidence, no false approvals, confirmation of unknown classifications, and explicit limits for unnecessary confirmations and latency.
+Passing a synthetic corpus is necessary evidence for a policy decision, not proof that arbitrary actions are safe.
+Unrecognized commands and misleading model labels can escape static analysis; Review Every Action remains the safe fallback, and benchmark results never change the selected policy automatically.
+
 ## Synthetic Data Rule
 
 Source control, public examples, CI, screenshots, and replay fixtures use synthetic data only.
