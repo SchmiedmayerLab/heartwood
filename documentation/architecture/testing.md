@@ -65,6 +65,22 @@ Registry writes, multi-platform manifest assembly, and moving-tag promotion rema
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Compute-intensive container builds and capable-model acceptance run on appropriately sized Blacksmith runners and reuse bounded GitHub Actions BuildKit caches; short policy and documentation checks remain on standard GitHub runners.
 
+## Research Evaluation Evidence
+
+Research evaluations distinguish connectivity, tool compatibility, workflow completion, artifact completeness, coding correctness, statistical correctness, policy adherence, and recovery.
+A successful connection or tool call does not establish research-task quality.
+
+The evaluation contracts record the suite and fixture identity, model revision, provider, runtime, hardware, context, tool parser, Skill digest, harness revision, dated trial, independent checks, and measured usage.
+Unavailable token counts and reported cost remain unknown rather than being recorded as zero.
+The records have no fields for prompts, tool output, credentials, or participant data.
+Metadata still requires review before publication, and a content digest does not prove who produced an evaluation.
+
+The evidence assessor requires the latest three real-model trials of every case to pass all required checks within a configurable freshness window, which defaults to 30 days.
+Deterministic test doubles exercise the harness but cannot qualify a model.
+Changed configurations, changed suite definitions, unknown model revisions, expired evidence, missing checks, and recent failures cannot inherit earlier successful results.
+Three trials are a functional regression gate, not a statistical estimate of clinical or scientific reliability.
+An assessment includes its policy, time, exact configuration and suite digests, and source run identifiers; it does not automatically change model recommendations or action-approval policy.
+
 ## Synthetic Data Rule
 
 Source control, public examples, CI, screenshots, and replay fixtures use synthetic data only.
