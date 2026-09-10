@@ -190,6 +190,13 @@ Open model settings, correct the connection, and validate it before retrying.
 The configured model service could not be reached or returned a temporary availability failure.
 Check the connection and provider status, then retry the task.
 
+### `HW-AGENT-013` — Session Runtime Is Incompatible
+
+The session was saved by a different OpenHands SDK version and cannot be resumed without a supported migration.
+Keep its history and start a new session in the same project to continue working with the updated runtime.
+To resume the original conversation, use the Heartwood version that created it.
+Do not edit or delete the persistence marker to bypass this check; pending actions must not be replayed against an unqualified runtime.
+
 ### `HW-AGENT-999` — The Agent Runtime Reported an Error
 
 An execution backend returned an error without a more specific stable code.

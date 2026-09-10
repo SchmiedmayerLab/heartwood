@@ -53,6 +53,12 @@ class _CatalogTaskManager(TaskManager):
         self._active_child_lock = RLock()
 
     @override
+    def _generate_ids(self) -> tuple[str, uuid.UUID]:
+        """Keep task lineage and cumulative usage distinct across manager restarts."""
+        _, conversation_id = super()._generate_ids()
+        return f"task_{conversation_id.hex}", conversation_id
+
+    @override
     def start_task(
         self,
         prompt: str,
@@ -110,6 +116,7 @@ class _CatalogTaskManager(TaskManager):
                 delete_on_close=True,
                 prompt_cache_key=str(parent.state.id),
                 file_store=file_store,
+                profile_store_dir=Path(file_store.root) / "profiles",
                 visualizer=None,
                 observability_metadata=self._delegate_observability_metadata(
                     task_id=task_id,

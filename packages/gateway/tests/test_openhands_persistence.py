@@ -15,8 +15,16 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
-from openhands.sdk.event import ObservationEvent
+from openhands.sdk import LocalFileStore
+from openhands.sdk.context.condenser import LLMSummarizingCondenser
+from openhands.sdk.context.view import View
+from openhands.sdk.conversation.event_store import EventLog
+from openhands.sdk.event import MessageEvent, ObservationEvent
+from openhands.sdk.event.condenser import Condensation
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
+from openhands.sdk.llm import Message, TextContent
+from openhands.sdk.settings import LLMSummarizingCondenserSettings
+from openhands.sdk.testing import TestLLM
 from openhands.tools.task import TaskObservation
 
 import heartwood.gateway._openhands_persistence as openhands_persistence
@@ -26,6 +34,80 @@ from heartwood.gateway._openhands_persistence import (
 )
 
 _MARKER = ".heartwood-persistence.json"
+
+
+def test_sdk_condensation_persists_and_rebuilds_the_same_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OH_PERSISTENCE_DIR", str(tmp_path / "sdk-cache"))
+    root = tmp_path / "openhands"
+    log = EventLog(ContentMinimizedLocalFileStore(str(root)))
+    for index in range(25):
+        log.append(
+            MessageEvent(
+                source="user",
+                llm_message=Message(
+                    role="user", content=[TextContent(text=f"Synthetic aggregate {index}")]
+                ),
+            )
+        )
+    llm = TestLLM.from_messages(
+        [Message(role="assistant", content=[TextContent(text="Earlier synthetic aggregates.")])],
+        base_url="http://127.0.0.1:9999/v1",
+        stream=True,
+    )
+    condenser = LLMSummarizingCondenserSettings(max_size=20, keep_first=1).build_condenser(llm)
+    assert isinstance(condenser, LLMSummarizingCondenser)
+    assert condenser.llm.base_url == llm.base_url
+    assert condenser.llm.usage_id == "condenser"
+    assert not condenser.llm.stream
+    view = View.from_events(log)
+    original_ids = [event.id for event in view.events]
+
+    result = condenser.condense(view)
+
+    assert isinstance(result, Condensation)
+    assert result.summary == "Earlier synthetic aggregates."
+    assert result.forgotten_event_ids
+    assert [event.id for event in view.events] == original_ids
+    log.append(result)
+    expected = View.from_events(log)
+    restored = View.from_events(EventLog(ContentMinimizedLocalFileStore(str(root))))
+    # The SDK synthesizes the summary timestamp when rebuilding a view.
+    assert [event.model_dump(exclude={"timestamp"}) for event in restored.events] == [
+        event.model_dump(exclude={"timestamp"}) for event in expected.events
+    ]
+    assert restored.events[0].id == original_ids[0]
+    assert restored.events[-1].id == original_ids[-1]
+    assert len(restored.events) < len(original_ids)
+    assert isinstance(condenser.condense(restored), View)
+
+
+@pytest.mark.parametrize("sidecar", ["present", "missing", "stale"])
+def test_adopts_real_sdk_log_with_disposable_count_sidecars(tmp_path: Path, sidecar: str) -> None:
+    root = tmp_path / "openhands"
+    log = EventLog(LocalFileStore(str(root)))
+    event = ConversationErrorEvent(
+        source="environment", code="OpenAIError", detail="participant-secret"
+    )
+    log.append(event)
+    markers = list((root / "events").glob(".eventlog-len-*.marker"))
+    assert len(markers) == 1
+    if sidecar == "missing":
+        markers[0].unlink()
+    elif sidecar == "stale":
+        markers[0].rename(root / "events" / ".eventlog-len-0.marker")
+
+    adopted = ContentMinimizedLocalFileStore(str(root))
+    restored = EventLog(adopted)
+
+    assert len(restored) == 1
+    assert restored[0].id == event.id
+    assert "participant-secret" not in restored[0].model_dump_json()
+    followup = ConversationErrorEvent(source="environment", code="RuntimeError", detail="safe")
+    restored.append(followup)
+    reopened = EventLog(ContentMinimizedLocalFileStore(str(root)))
+    assert [item.id for item in reopened] == [event.id, followup.id]
 
 
 def test_fresh_store_records_the_owned_schema_and_sdk_version(tmp_path: Path) -> None:

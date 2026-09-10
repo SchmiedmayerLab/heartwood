@@ -108,6 +108,19 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     }
     assert options["observability_tags"] == ["delegate"]
     assert isinstance(options["file_store"], ContentMinimizedLocalFileStore)
+    assert options["profile_store_dir"] == tmp_path / "subagent" / "profiles"
+
+
+def test_task_identity_does_not_restart_with_the_manager() -> None:
+    first = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
+    restored = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
+
+    first_id, first_conversation = first._generate_ids()
+    restored_id, restored_conversation = restored._generate_ids()
+
+    assert first_id != restored_id
+    assert first_id == f"task_{first_conversation.hex}"
+    assert restored_id == f"task_{restored_conversation.hex}"
 
 
 def test_task_action_resume_remains_typed_for_fail_closed_validation() -> None:

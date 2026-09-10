@@ -84,6 +84,9 @@ Unknown versions, migration cycles, nondeterministic transforms, malformed recor
 OpenHands persistence records the exact SDK version and Heartwood content-minimization policy that wrote the state.
 Heartwood validates that marker before reading or rewriting conversation events.
 An SDK change therefore requires an explicit, tested migration instead of silently adopting possibly incompatible state.
+When no migration is supported, Heartwood leaves the saved OpenHands records unchanged and reports `HW-AGENT-013`.
+The session history remains available for inspection; new work can start in a new session in the same project.
+SDK profile and provider-connection storage is scoped to private conversation state rather than a global OpenHands installation.
 
 ## Action Decisions
 
@@ -134,6 +137,7 @@ Free-form task notes are not copied into Heartwood session or audit events.
 
 Sequential specialist work is represented with its specialist name, task identifier, status, parent session, and parent action.
 The parent OpenHands conversation remains authoritative and receives the specialist result before continuing.
+Each invocation uses its child conversation UUID for task identity, preventing usage and lineage collisions after the parent restarts.
 Parallel delegation is not part of the current runtime contract.
 
 ## Move Between Interfaces

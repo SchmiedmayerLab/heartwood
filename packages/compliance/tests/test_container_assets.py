@@ -211,7 +211,14 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
         if Requirement(requirement).name.startswith("openhands-")
     )
 
-    assert pins == {"openhands-sdk": "1.41.0", "openhands-tools": "1.41.0"}
+    assert set(pins) == {"openhands-sdk", "openhands-tools"}
+    assert len(set(pins.values())) == 1
+    locked = {
+        package["name"]: package["version"]
+        for package in _toml("uv.lock")["package"]
+        if package["name"] in pins
+    }
+    assert locked == pins
     assert "optional-dependencies" not in gateway["project"]
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
     assert "openhands-agent-server" not in _read("uv.lock")

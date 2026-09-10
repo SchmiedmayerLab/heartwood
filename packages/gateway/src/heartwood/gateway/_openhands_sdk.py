@@ -676,6 +676,7 @@ class OpenHandsSdkBackend:
             workspace=self.workspace,
             persistence_dir=self.persistence_dir,
             file_store=conversation_store,
+            profile_store_dir=Path(conversation_store.root) / "profiles",
             conversation_id=conversation_id,
             callbacks=[callback],
             token_callbacks=[token_callback],
@@ -770,9 +771,9 @@ class OpenHandsSdkBackend:
     def _handle_sdk_event(self, event: Event) -> None:
         """Leave durable translation to the persisted OpenHands state.
 
-        OpenHands invokes this callback before its own persistence callback.
-        Durable Heartwood translation therefore occurs only from conversation
-        state after the run reaches a stable boundary.
+        OpenHands persists each event before invoking this callback.
+        Durable Heartwood translation reads conversation state at a stable
+        boundary so the event and its derived state are consistent.
         """
         if not isinstance(event, ObservationBaseEvent):
             return

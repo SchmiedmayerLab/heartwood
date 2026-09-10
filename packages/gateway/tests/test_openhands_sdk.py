@@ -141,6 +141,42 @@ def _disable_profile_store_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_base, "has_vision_profile_available", lambda: False)
 
 
+@pytest.mark.parametrize("fail_write", [False, True])
+def test_sdk_notifies_consumers_only_after_durable_event_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_write: bool
+) -> None:
+    llm = TestLLM.from_messages([])
+    received: list[str] = []
+    original_write = ContentMinimizedLocalFileStore.write
+
+    def write(store: ContentMinimizedLocalFileStore, path: str, contents: str | bytes) -> None:
+        if fail_write and path.startswith("events/event-"):
+            raise OSError("Synthetic event persistence failure")
+        original_write(store, path, contents)
+
+    def callback(event: OpenHandsEvent) -> None:
+        persisted = [
+            json.loads(path.read_text(encoding="utf-8"))["id"]
+            for path in (tmp_path / "openhands").rglob("event-*.json")
+        ]
+        assert event.id in persisted
+        received.append(event.id)
+
+    monkeypatch.setattr(ContentMinimizedLocalFileStore, "write", write)
+    conversation = _conversation_factory(tmp_path, llm, tools=[])(callback, lambda _chunk: None)
+    try:
+        if fail_write:
+            with pytest.raises(OSError, match="Synthetic event persistence failure"):
+                conversation.send_message("Inspect synthetic aggregates")
+            assert received == []
+        else:
+            conversation.send_message("Inspect synthetic aggregates")
+            assert received
+        assert llm.call_count == 0
+    finally:
+        conversation.close()
+
+
 def test_verified_skills_load_through_openhands_native_loader() -> None:
     repository, knowledge, agent = load_skills_from_dir(_verified_skills_root())
 
@@ -1479,6 +1515,44 @@ def test_corrupted_openhands_event_store_fails_closed_without_model_work(
     restored.close()
 
 
+def test_published_sdk_session_is_rejected_without_model_calls_or_state_rewrites(
+    tmp_path: Path,
+) -> None:
+    conversation_id = uuid.UUID("00000000-0000-4000-8000-000000000141")
+    persistence_dir = tmp_path / "openhands"
+    state_root = Path(LocalConversation.get_persistence_dir(persistence_dir, conversation_id))
+    fixture = Path(__file__).parent / "fixtures" / "openhands-1.41.0-pending.json"
+    records = json.loads(fixture.read_text(encoding="utf-8"))
+    for relative, payload in records.items():
+        path = state_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    before = {path: path.read_bytes() for path in state_root.rglob("*.json")}
+    llm = TestLLM.from_messages([])
+    backend = _backend(
+        tmp_path,
+        _conversation_factory(
+            tmp_path,
+            llm,
+            tools=[Tool(name=TerminalTool.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+
+    events = backend.submit_turn(session_id="session-1", prompt="Continue the saved task")
+
+    assert llm.call_count == 0
+    assert not (tmp_path / "workspace" / "result.txt").exists()
+    assert {path: path.read_bytes() for path in state_root.rglob("*.json")} == before
+    assert any(
+        isinstance(event, BackendErrorEvent)
+        and event.error_code == BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE
+        for event in events
+    )
+    backend.close()
+
+
 def test_pending_action_restart_recovers_without_duplicate_model_or_tool_work(
     tmp_path: Path,
 ) -> None:
@@ -2578,7 +2652,9 @@ def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
         BackendSubagentStatus.COMPLETED,
     }
     assert {item.invocation_id for item in subagents} == {"task-call-1"}
-    assert {item.task_id for item in subagents} == {None, "task_00000001"}
+    task_ids = {item.task_id for item in subagents if item.task_id is not None}
+    assert len(task_ids) == 1
+    assert None in {item.task_id for item in subagents}
     assert all(item.parent_session_id == "session-1" for item in subagents)
     assert subagents[0].parent_action_id
     assert parent_llm.call_count == 2
@@ -2807,7 +2883,7 @@ def test_specialist_resume_fails_closed_until_lineage_is_restart_durable(
     )
     assert any(
         isinstance(event, BackendSubagentEvent)
-        and event.subagent.task_id == "task_00000001"
+        and event.subagent.task_id is not None
         and event.subagent.status == BackendSubagentStatus.COMPLETED
         for event in events
     )
@@ -2926,9 +3002,26 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         approved=True,
     )
     _wait_for_lifecycle(first, BackendLifecycle.FINISHED)
+    first_task_usage = {
+        key: value.model_dump(mode="json")
+        for key, value in first._get_conversation().conversation_stats.usage_to_metrics.items()
+        if key.startswith("task:")
+    }
+    assert len(first_task_usage) == 1
     first.close()
 
-    restored_llm = TestLLM.from_messages([])
+    restored_llm = TestLLM.from_messages(
+        [
+            _task_message(
+                "second-specialist-call",
+                description="Review the revised cohort",
+                prompt="Review the revised synthetic index-date definition.",
+                specialist_id="cohort-feature-reviewer",
+            ),
+            _assistant_message("The revised definition has no temporal leakage."),
+            _assistant_message("The second cohort review is complete."),
+        ]
+    )
     restored = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
@@ -2965,6 +3058,27 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         and event.message == "The cohort review is complete."
         for event in replayed
     )
+    restored.submit_turn(session_id="session-1", prompt="Review the revised cohort")
+    second_group = _wait_for_pending_group(restored)
+    restored.resolve_confirmation(
+        session_id="session-1", action_group_id=second_group.group_id, approved=True
+    )
+    completed = _wait_for_lifecycle(restored, BackendLifecycle.FINISHED)
+    task_usage = {
+        key: value.model_dump(mode="json")
+        for key, value in restored._get_conversation().conversation_stats.usage_to_metrics.items()
+        if key.startswith("task:")
+    }
+    assert len(task_usage) == 2
+    assert all(task_usage[key] == value for key, value in first_task_usage.items())
+    completed_tasks = {
+        event.subagent.task_id
+        for event in (*replayed, *completed)
+        if isinstance(event, BackendSubagentEvent)
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+    }
+    assert len(completed_tasks) == 2
+    assert restored_llm.call_count == 2
     restored.close()
 
 
@@ -3374,6 +3488,7 @@ def _conversation_factory(
             workspace=workspace or tmp_path / "workspace",
             persistence_dir=resolved_persistence_dir,
             conversation_id=resolved_conversation_id,
+            profile_store_dir=resolved_persistence_dir / "profiles",
             file_store=ContentMinimizedLocalFileStore(
                 LocalConversation.get_persistence_dir(
                     resolved_persistence_dir,

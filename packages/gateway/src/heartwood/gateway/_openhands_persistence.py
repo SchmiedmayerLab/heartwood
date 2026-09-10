@@ -41,6 +41,7 @@ _CONTENT_POLICY = "heartwood.openhands-content-minimized.v1"
 _MARKER_NAME = ".heartwood-persistence.json"
 _MIGRATION_LOCK_SUFFIX = ".heartwood-migration.lock"
 _EVENT_FILE = re.compile(r"^event-(?P<index>[0-9]{5,})-[0-9A-Fa-f-]{8,}\.json$")
+_EVENT_LENGTH_MARKER = re.compile(r"^\.eventlog-len-[0-9]+\.marker$")
 
 _SAFE_ERROR_DETAILS = {
     FailureKind.AUTH: "Model provider authentication failed.",
@@ -56,6 +57,10 @@ _SAFE_ERROR_DETAILS = {
 
 class OpenHandsPersistenceError(ValueError):
     """Raised when persisted OpenHands state is unsafe or incompatible."""
+
+
+class OpenHandsSdkVersionError(OpenHandsPersistenceError):
+    """Raised before loading a conversation written by a different SDK version."""
 
 
 class ContentMinimizedLocalFileStore(LocalFileStore):
@@ -150,7 +155,7 @@ def _validate_marker(payload: dict[str, object], *, sdk_version: str) -> None:
     if payload.get("content_policy") != _CONTENT_POLICY:
         raise OpenHandsPersistenceError("OpenHands persistence content policy is unsupported")
     if payload.get("openhands_sdk_version") != sdk_version:
-        raise OpenHandsPersistenceError(
+        raise OpenHandsSdkVersionError(
             "OpenHands persisted state requires an explicit SDK migration"
         )
     if payload.get("adopted_from") not in {"new", "unversioned"}:
@@ -187,6 +192,9 @@ def _validate_and_minimize_existing_state(
                 raise OpenHandsPersistenceError("OpenHands base state is malformed") from error
             continue
         if relative.parent == Path("events") and relative.name != ".eventlog.lock":
+            # Upstream count markers are disposable hints, not sequence evidence.
+            if _EVENT_LENGTH_MARKER.fullmatch(relative.name):
+                continue
             match = _EVENT_FILE.fullmatch(relative.name)
             if match is None:
                 raise OpenHandsPersistenceError("OpenHands event filename is unsupported")
@@ -248,4 +256,8 @@ def _fresh_marker() -> dict[str, object]:
     }
 
 
-__all__ = ["ContentMinimizedLocalFileStore", "OpenHandsPersistenceError"]
+__all__ = [
+    "ContentMinimizedLocalFileStore",
+    "OpenHandsPersistenceError",
+    "OpenHandsSdkVersionError",
+]
