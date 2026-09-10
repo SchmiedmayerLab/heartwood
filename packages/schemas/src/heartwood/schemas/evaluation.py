@@ -160,6 +160,8 @@ class EvaluationRun(EvaluationRecord):
     checks: tuple[EvaluationCheck, ...]
     usage: EvaluationUsage
     budget: EvaluationBudget = Field(default_factory=EvaluationBudget)
+    status: Literal["incomplete", "completed"] = "completed"
+    session_id: EvaluationIdentifier | None = None
 
     @model_validator(mode="after")
     def validate_trial(self) -> Self:
@@ -169,6 +171,8 @@ class EvaluationRun(EvaluationRecord):
         identifiers = [check.check_id for check in self.checks]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("Evaluation check identifiers must be unique")
+        if self.status == "incomplete" and any(check.status != "not_run" for check in self.checks):
+            raise ValueError("Incomplete evaluation cannot claim checked results")
         return self
 
 

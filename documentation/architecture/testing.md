@@ -97,7 +97,18 @@ The shared research driver accepts a dedicated project containing only the pinne
 It uses normal gateway commands and requires a review callback for every pending action group; it does not execute generated programs directly or implicitly approve proposals.
 The baseline's reproduction step requests a separate, reviewed terminal execution of the unchanged program and checks its regenerated outputs against the originals.
 The independent verification case distinguishes a truthful byte comparison from evidence that the program actually ran.
+Reproduction evidence requires a previously absent output directory and captures the outputs after a separately approved command, before approving subsequent actions.
+It binds the original program, fixture inputs, and primary outputs before approval and after execution.
+A no-op command followed or preceded by copied outputs does not satisfy this check.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
+
+The driver reserves a private result under `.heartwood/evaluations/` before starting model work.
+An interrupted evaluator leaves an incomplete trial with unverified checks, rather than silently removing an unsuccessful attempt from the evidence.
+Successful evaluation replaces that record atomically; completed evidence cannot be overwritten with different results.
+The result loader includes incomplete trials and rejects corrupt or substituted records.
+Loading results does not resume a session or repeat a model call.
+An incomplete record's finish timestamp is its reservation time, not an estimate of when the process stopped.
+These reports do not replace authoritative session events or signed audit checkpoints.
 
 Evaluation records include observed time, action, model-call, token, and reported-cost budgets.
 Limits are checked between gateway updates and after review, before admitting another action; a request already in flight may finish before pause takes effect.

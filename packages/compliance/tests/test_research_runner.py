@@ -24,6 +24,7 @@ from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
 from openhands.tools import TerminalTool
 
+from heartwood.compliance.evaluation_store import EvaluationStore
 from heartwood.compliance.research import ResearchTask, research_tasks
 from heartwood.compliance.research_runner import ReviewDecision, run_research_trial
 from heartwood.core_adapter import SessionService
@@ -173,16 +174,20 @@ def _gateway(root: Path, llm: TestLLM) -> SessionGateway:
     return SessionGateway(project=ProjectContext(root), service_factory=service_factory, env={})
 
 
+@pytest.mark.parametrize("scratch_directory", [False, True])
 def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    scratch_directory: bool,
 ) -> None:
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
     task = _prepare(tmp_path)
     command = "python analysis.py --data data.csv --output-dir ."
     rerun = "python analysis.py --data data.csv --output-dir benchmark-reproduced"
+    scratch = "mkdir -p scratch && printf synthetic > scratch/note.txt"
     llm = TestLLM.from_messages(
         [
+            *([_message(scratch, "scratch")] if scratch_directory else []),
             _file_message(tmp_path),
             _message(command, "primary"),
             _finish(),
@@ -196,7 +201,7 @@ def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_re
     def review(group: ProjectionApprovalGroup) -> ReviewDecision:
         for action in group.actions:
             if action.details.kind == "terminal":
-                assert action.details.command in (command, rerun)
+                assert action.details.command in (command, rerun, scratch)
             else:
                 assert action.details.kind == "file-editor"
                 path = Path(str(action.arguments["path"]))
@@ -215,15 +220,18 @@ def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_re
             budget=EvaluationBudget(maximum_seconds=20),
         )
         assert trial.stop == "finished"
-        assert len(groups) == len(set(groups)) == 3
+        assert len(groups) == len(set(groups)) == (4 if scratch_directory else 3)
         assert {check.check_id: check.status for check in trial.record.checks} == {
             check.check_id: "passed" for check in task.case.required_checks
         }
         assert trial.record.execution == "deterministic"
-        assert llm.call_count == 5
+        assert llm.call_count == (6 if scratch_directory else 5)
         assert trial.record.usage.model_calls is None
         assert trial.record.usage.reported_cost_usd is None
         assert "Synthetic analysis complete" not in trial.record.model_dump_json()
+        assert EvaluationStore(gateway.project.state_root / "evaluations").records() == (
+            trial.record,
+        )
     finally:
         gateway.stop()
 
@@ -403,7 +411,11 @@ def test_readiness_completes_through_grouped_tools_without_an_extra_model_turn(
         gateway.stop()
 
 
-def test_copied_outputs_are_not_evidence_of_independent_execution(tmp_path: Path) -> None:
+@pytest.mark.parametrize("noop_order", ["absent", "before", "after"])
+def test_copied_outputs_are_not_evidence_of_independent_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, noop_order: str
+) -> None:
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
     task = _prepare(tmp_path, "result-verification")
     originals = {"metrics.json": "{}\n", "predictions.csv": "subject_id,visit,prediction\n"}
     for name, value in {
@@ -422,16 +434,17 @@ def test_copied_outputs_are_not_evidence_of_independent_execution(tmp_path: Path
         ),
         "verification.md": "The copied bytes match, but the script did not run.",
     }
-    gateway = _gateway(
-        tmp_path,
-        TestLLM.from_messages(
-            [
-                _message("mkdir reproduced", "prepare-output"),
-                _file_message(tmp_path, outputs),
-                _finish(),
-            ]
-        ),
-    )
+    messages: list[Message | Exception] = [
+        _message("mkdir reproduced", "prepare-output"),
+        _file_message(tmp_path, outputs),
+    ]
+    if noop_order != "absent":
+        messages.insert(
+            0 if noop_order == "before" else len(messages),
+            _message("python analysis.py --data data.csv --output-dir reproduced", "noop"),
+        )
+    messages.append(_finish())
+    gateway = _gateway(tmp_path, TestLLM.from_messages(messages))
     try:
         trial = run_research_trial(
             gateway,
@@ -466,5 +479,152 @@ def test_nonempty_projects_are_rejected_without_reading_unrelated_files(
                 review=lambda _group: "approve",
             )
         assert llm.call_count == 0
+    finally:
+        gateway.stop()
+
+
+def test_review_failure_leaves_durable_incomplete_evidence_without_executing_tools(
+    tmp_path: Path,
+) -> None:
+    task = _prepare(tmp_path)
+    llm = TestLLM.from_messages([_file_message(tmp_path)])
+    gateway = _gateway(tmp_path, llm)
+    store = EvaluationStore(gateway.project.state_root / "evaluations")
+
+    def review(_group: ProjectionApprovalGroup) -> ReviewDecision:
+        records = store.records()
+        assert len(records) == 1
+        assert records[0].status == "incomplete"
+        raise RuntimeError("synthetic reviewer failure: never publish this text")
+
+    try:
+        with pytest.raises(RuntimeError, match="synthetic reviewer failure"):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration(),
+                execution="deterministic",
+                review=review,
+            )
+        records = EvaluationStore(store.root).records()
+        assert len(records) == 1
+        record = records[0]
+        assert record.status == "incomplete"
+        assert all(check.status == "not_run" for check in record.checks)
+        assert "never publish" not in record.model_dump_json()
+        assert record.session_id is not None
+        projection = gateway.session_projection(session_id=record.session_id)
+        assert projection.lifecycle.status == "waiting-for-confirmation"
+        assert projection.pending_approval is not None
+        assert all(action.state == "awaiting-review" for action in projection.actions)
+        assert llm.call_count == 1
+        assert not (tmp_path / "analysis.py").exists()
+    finally:
+        gateway.stop()
+
+
+def test_failed_evidence_reservation_prevents_model_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _prepare(tmp_path)
+    llm = TestLLM.from_messages([])
+    gateway = _gateway(tmp_path, llm)
+
+    def fail(*_args: object) -> None:
+        raise OSError("synthetic full disk")
+
+    monkeypatch.setattr(EvaluationStore, "begin", fail)
+    try:
+        with pytest.raises(OSError, match="synthetic full disk"):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration(),
+                execution="deterministic",
+                review=lambda _group: "stop",
+            )
+        assert llm.call_count == 0
+    finally:
+        gateway.stop()
+
+
+def test_replacing_the_program_for_reexecution_then_restoring_it_does_not_qualify(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    task = _prepare(tmp_path, "result-verification")
+    originals = {"metrics.json": "{}\n", "predictions.csv": "subject_id,visit,prediction\n"}
+    original_program = "# The supplied program produces no outputs.\n"
+    for name, text in {**originals, "analysis.py": original_program}.items():
+        (tmp_path / name).write_text(text)
+    replacement = (
+        "from pathlib import Path\nPath('reproduced').mkdir()\n"
+        + "\n".join(
+            f"Path({f'reproduced/{name}'!r}).write_text({text!r})"
+            for name, text in originals.items()
+        )
+        + "\n"
+    )
+
+    def replace_program(old: str, new: str, call_id: str) -> Message:
+        return Message(
+            role="assistant",
+            content=[],
+            tool_calls=[
+                MessageToolCall(
+                    id=call_id,
+                    name="file_editor",
+                    origin="completion",
+                    arguments=json.dumps(
+                        {
+                            "command": "str_replace",
+                            "path": str(tmp_path / "analysis.py"),
+                            "old_str": old,
+                            "new_str": new,
+                        }
+                    ),
+                )
+            ],
+        )
+
+    report = {
+        "verification.json": json.dumps(
+            {
+                "status": "reproduced",
+                "matching_artifacts": list(originals),
+                "mismatched_artifacts": [],
+            }
+        ),
+        "verification.md": "The replacement produced matching bytes, not a reproduction.",
+    }
+    llm = TestLLM.from_messages(
+        [
+            replace_program(original_program, replacement, "replace-program"),
+            _message(
+                "python analysis.py --data data.csv --output-dir reproduced", "replacement-run"
+            ),
+            replace_program(replacement, original_program, "restore-program"),
+            _file_message(tmp_path, report),
+            _finish(),
+        ]
+    )
+    gateway = _gateway(tmp_path, llm)
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _group: "approve",
+            budget=EvaluationBudget(maximum_seconds=15),
+        )
+        assert trial.stop == "finished"
+        assert llm.call_count == 5
+        assert (tmp_path / "analysis.py").read_text() == original_program
+        checks = {check.check_id: check.status for check in trial.record.checks}
+        assert checks["verification-comparison"] == "passed"
+        assert checks["independent-script-rerun"] == "failed"
     finally:
         gateway.stop()

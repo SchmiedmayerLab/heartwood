@@ -72,6 +72,8 @@ def assess_research_evidence(
             reasons.add(f"{case.case_id}:insufficient_repeats")
         required = {check.check_id: check.dimension for check in case.required_checks}
         for run in candidates:
+            if run.status != "completed":
+                reasons.add(f"{case.case_id}:incomplete_trial")
             observed = {check.check_id: check for check in run.checks}
             for check_id, dimension in required.items():
                 check = observed.get(check_id)

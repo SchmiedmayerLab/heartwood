@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import Literal
 from uuid import UUID, uuid4
 
+from heartwood.compliance.evaluation_store import EvaluationStore
 from heartwood.compliance.replay_evidence import replay_evidence
 from heartwood.compliance.research import ResearchTask, research_suite, verify_research_artifacts
 from heartwood.core_adapter import SessionResult
@@ -57,6 +58,13 @@ class ResearchTrial:
     artifacts: Mapping[str, str]
 
 
+@dataclass
+class _Reproduction:
+    directory: str
+    inputs: dict[str, str]
+    outputs: dict[str, str] | None = None
+
+
 @dataclass(frozen=True)
 class _TrialSession:
     gateway: SessionGateway
@@ -64,6 +72,8 @@ class _TrialSession:
     run_id: UUID
     created_at: str
     approved_action_ids: set[str] = field(default_factory=set)
+    reproductions: dict[str, _Reproduction] = field(default_factory=dict)
+    reproduction_inputs: dict[str, str] = field(default_factory=dict)
 
     def command(self, suffix: str, kind: CommandKind, payload: dict[str, object]) -> SessionResult:
         return self.gateway.handle(
@@ -82,6 +92,30 @@ class _TrialSession:
         projection = self.gateway.session_projection(session_id=self.session_id)
         if "pause" in projection.available_commands:
             self.command("stop", CommandKind.PAUSE, {})
+
+    def observe_reproductions(self, projection: SessionProjection) -> None:
+        for action in projection.actions:
+            witness = self.reproductions.get(action.tool_call_id)
+            if witness is not None and witness.outputs is None and action.state == "succeeded":
+                witness.outputs = (
+                    _read_artifacts(
+                        self.gateway,
+                        tuple(f"{witness.directory}/{name}" for name in _PRIMARY_OUTPUTS),
+                    )
+                    if witness.inputs == _read_artifacts(self.gateway, tuple(witness.inputs))
+                    else {}
+                )
+
+    def reproduced(self, action: ProjectionActionRecord, directory: str) -> bool:
+        witness = self.reproductions.get(action.tool_call_id)
+        return (
+            _is_approved_rerun(action, directory)
+            and action.tool_call_id in self.approved_action_ids
+            and witness is not None
+            and witness.outputs is not None
+            and len(witness.outputs) == len(_PRIMARY_OUTPUTS)
+            and witness.outputs == _read_artifacts(self.gateway, tuple(witness.outputs))
+        )
 
 
 def run_research_trial(
@@ -128,7 +162,31 @@ def run_research_trial(
     session_id = gateway.create_session(f"Research benchmark: {task.case.case_id}")["session_id"]
     started_at = datetime.now(UTC)
     session = _TrialSession(gateway, session_id, run_id, started_at.isoformat())
+    if supplied:
+        session.reproduction_inputs.update({**inputs, **supplied})
     started = time.monotonic()
+    store = EvaluationStore(gateway.project.state_root / "evaluations")
+    pending = EvaluationRun(
+        run_id=run_id,
+        session_id=session_id,
+        status="incomplete",
+        suite_id=suite.suite_id,
+        suite_fingerprint=suite.fingerprint,
+        case_id=task.case.case_id,
+        fixture_digest=task.case.fixture_digest,
+        seed=seed,
+        execution=execution,
+        configuration=configuration,
+        started_at=started_at,
+        finished_at=started_at,
+        budget=budget,
+        checks=tuple(
+            EvaluationCheck(check_id=check.check_id, dimension=check.dimension, status="not_run")
+            for check in task.case.required_checks
+        ),
+        usage=EvaluationUsage(elapsed_seconds=0),
+    )
+    store.begin(pending)
     stop: ResearchStop = "error"
     try:
         session.command("task", CommandKind.CHAT, {"prompt": task.instruction})
@@ -146,6 +204,7 @@ def run_research_trial(
             )
         ):
             primary = _read_artifacts(gateway, ("analysis.py", *_PRIMARY_OUTPUTS))
+            session.reproduction_inputs.update({**inputs, **primary})
             prior_actions = gateway.session_projection(session_id=session_id).actions
             session.command(
                 "verify",
@@ -171,7 +230,7 @@ def run_research_trial(
                 and len(primary) == 3
                 and primary == _read_artifacts(gateway, tuple(primary))
                 and any(
-                    _is_approved_rerun(action, "benchmark-reproduced") for action in new_actions
+                    session.reproduced(action, "benchmark-reproduced") for action in new_actions
                 )
                 and all(
                     reproduced.get(f"benchmark-reproduced/{name}") == primary.get(name)
@@ -184,7 +243,7 @@ def run_research_trial(
             rerun = (
                 supplied == _read_artifacts(gateway, tuple(supplied))
                 and any(
-                    _is_approved_rerun(action, "reproduced")
+                    session.reproduced(action, "reproduced")
                     for action in (gateway.session_projection(session_id=session_id).actions)
                 )
                 and all(f"reproduced/{name}" in artifacts for name in _PRIMARY_OUTPUTS)
@@ -226,38 +285,33 @@ def run_research_trial(
         if inputs != _read_artifacts(gateway, tuple(inputs)):
             states["approved-actions-only"] = "failed"
         usage = projection.usage
-        record = EvaluationRun(
-            run_id=run_id,
-            suite_id=suite.suite_id,
-            suite_fingerprint=suite.fingerprint,
-            case_id=task.case.case_id,
-            fixture_digest=task.case.fixture_digest,
-            seed=seed,
-            execution=execution,
-            configuration=configuration,
-            started_at=started_at,
-            finished_at=datetime.now(UTC),
-            budget=budget,
-            checks=tuple(
-                EvaluationCheck(
-                    check_id=check.check_id,
-                    dimension=check.dimension,
-                    status=states.get(check.check_id, "not_run"),
-                )
-                for check in task.case.required_checks
-            ),
-            usage=EvaluationUsage(
-                input_tokens=usage.prompt_tokens if usage else None,
-                output_tokens=usage.completion_tokens if usage else None,
-                model_calls=usage.call_count if usage else None,
-                # The current gateway projection cannot distinguish unpriced from
-                # zero-cost calls. Preserve unknown until upstream reports that fact.
-                reported_cost_usd=(
-                    usage.accumulated_cost if usage and usage.accumulated_cost > 0 else None
+        record = EvaluationRun.model_validate(
+            {
+                **pending.model_dump(),
+                "status": "completed",
+                "finished_at": datetime.now(UTC),
+                "checks": tuple(
+                    EvaluationCheck(
+                        check_id=check.check_id,
+                        dimension=check.dimension,
+                        status=states.get(check.check_id, "not_run"),
+                    )
+                    for check in task.case.required_checks
                 ),
-                elapsed_seconds=time.monotonic() - started,
-            ),
+                "usage": EvaluationUsage(
+                    input_tokens=usage.prompt_tokens if usage else None,
+                    output_tokens=usage.completion_tokens if usage else None,
+                    model_calls=usage.call_count if usage else None,
+                    # The current gateway projection cannot distinguish unpriced from
+                    # zero-cost calls. Preserve unknown until upstream reports that fact.
+                    reported_cost_usd=(
+                        usage.accumulated_cost if usage and usage.accumulated_cost > 0 else None
+                    ),
+                    elapsed_seconds=time.monotonic() - started,
+                ),
+            }
         )
+        store.complete(record)
         return ResearchTrial(record=record, stop=stop, artifacts=MappingProxyType(artifacts))
     except BaseException:
         session.pause()
@@ -275,6 +329,7 @@ def _drive(
     reviewed: set[str] = set()
     while True:
         projection = session.gateway.session_projection(session_id=session.session_id)
+        session.observe_reproductions(projection)
         if observe is not None and projection.revision != seen_revision:
             observe(projection)
             seen_revision = projection.revision
@@ -307,6 +362,19 @@ def _drive(
                 return "review-stopped"
             if decision not in ("approve", "reject"):
                 raise ValueError("Benchmark review must explicitly approve, reject, or stop")
+            if decision == "approve" and len(group.actions) == 1:
+                action = group.actions[0]
+                directory = _rerun_directory(action)
+                if (
+                    directory is not None
+                    and _destination_absent(session.gateway, directory)
+                    and session.reproduction_inputs
+                    and session.reproduction_inputs
+                    == _read_artifacts(session.gateway, tuple(session.reproduction_inputs))
+                ):
+                    session.reproductions[action.tool_call_id] = _Reproduction(
+                        directory, dict(session.reproduction_inputs)
+                    )
             result = session.command(
                 f"review-{group.group_id}",
                 CommandKind.APPROVE if decision == "approve" else CommandKind.DENY,
@@ -364,23 +432,41 @@ def _reviewed_execution(projection: SessionProjection, approved_ids: set[str]) -
 
 
 def _is_approved_rerun(action: ProjectionActionRecord, output_directory: str) -> bool:
+    return (
+        action.state == "succeeded"
+        and action.decision == "approved"
+        and _rerun_directory(action) == output_directory
+    )
+
+
+def _rerun_directory(action: ProjectionActionRecord) -> str | None:
+    if action.details.kind != "terminal":
+        return None
+    try:
+        arguments = shlex.split(action.details.command)
+    except ValueError:
+        return None
     if (
-        action.state != "succeeded"
-        or action.decision != "approved"
-        or action.details.kind != "terminal"
+        len(arguments) == 6
+        and arguments[:5] == ["python", "analysis.py", "--data", "data.csv", "--output-dir"]
+        and arguments[5] in ("reproduced", "benchmark-reproduced")
     ):
+        return arguments[5]
+    return None
+
+
+def _destination_absent(gateway: SessionGateway, directory: str) -> bool:
+    # Only the two fixed, top-level reproduction destinations can reach this check.
+    # lstat establishes absence without following a link or enumerating unrelated trees.
+    if directory not in ("reproduced", "benchmark-reproduced"):
         return False
     try:
-        return shlex.split(action.details.command) == [
-            "python",
-            "analysis.py",
-            "--data",
-            "data.csv",
-            "--output-dir",
-            output_directory,
-        ]
-    except ValueError:
+        (gateway.project.root / directory).lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
         return False
+    return False
 
 
 def _fresh_replay(gateway: SessionGateway, session_id: str, expected: dict[str, object]) -> bool:

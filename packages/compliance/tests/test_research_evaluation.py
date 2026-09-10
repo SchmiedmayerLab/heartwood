@@ -8,13 +8,17 @@
 
 from __future__ import annotations
 
+import traceback
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from heartwood.compliance.evaluation import assess_research_evidence
+from heartwood.compliance.evaluation_store import EvaluationStore
+from heartwood.persistence import DurableFileError
 from heartwood.schemas.evaluation import (
     EvaluationCase,
     EvaluationCheck,
@@ -304,3 +308,160 @@ def test_trial_rejects_duplicate_checks_and_backwards_time() -> None:
     ):
         with pytest.raises(ValidationError):
             EvaluationRun.model_validate({**run.model_dump(), **change})
+
+
+def _incomplete(run: EvaluationRun) -> EvaluationRun:
+    return EvaluationRun.model_validate(
+        {
+            **run.model_dump(),
+            "status": "incomplete",
+            "finished_at": run.started_at,
+            "usage": {"elapsed_seconds": 0},
+            "checks": [{**check.model_dump(), "status": "not_run"} for check in run.checks],
+        }
+    )
+
+
+def test_trial_store_retains_pending_evidence_and_finalizes_once(tmp_path: Path) -> None:
+    store = EvaluationStore(tmp_path / "evaluations")
+    run = _runs()[0]
+    pending = _incomplete(run)
+    store.begin(pending)
+
+    assert EvaluationStore(store.root).records() == (pending,)
+    assert store.root.stat().st_mode & 0o777 == 0o700
+    assert (store.root / f"{run.run_id}.json").stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match="already exists"):
+        store.begin(pending)
+    store.complete(run)
+    store.complete(run)
+    assert EvaluationStore(store.root).records() == (run,)
+    changed = run.model_copy(update={"finished_at": NOW})
+    with pytest.raises(ValueError, match="cannot be replaced"):
+        store.complete(changed)
+    assert store.records() == (run,)
+
+
+@pytest.mark.parametrize("field", ["configuration", "seed", "session_id", "checks"])
+def test_trial_finalization_cannot_substitute_reserved_contract(tmp_path: Path, field: str) -> None:
+    run = _runs()[0]
+    store = EvaluationStore(tmp_path)
+    pending = _incomplete(run)
+    store.begin(pending)
+    changes: dict[str, object] = {
+        "configuration": {**run.configuration.model_dump(), "model": "replacement"},
+        "seed": 999,
+        "session_id": "other-session",
+        "checks": [check.model_dump() for check in run.checks[1:]],
+    }
+    changed = EvaluationRun.model_validate({**run.model_dump(), field: changes[field]})
+
+    with pytest.raises(ValueError, match="changed the reserved"):
+        store.complete(changed)
+    assert store.records() == (pending,)
+
+
+def test_incomplete_evidence_cannot_claim_passed_checks() -> None:
+    with pytest.raises(ValidationError, match="Incomplete evaluation"):
+        EvaluationRun.model_validate({**_runs()[0].model_dump(), "status": "incomplete"})
+
+
+def test_recent_interrupted_trial_invalidates_older_successes(tmp_path: Path) -> None:
+    runs = _runs()
+    interrupted = _incomplete(
+        runs[0].model_copy(update={"run_id": uuid4(), "started_at": NOW, "finished_at": NOW})
+    )
+    store = EvaluationStore(tmp_path)
+    for run in runs:
+        store.begin(_incomplete(run))
+        store.complete(run)
+    store.begin(interrupted)
+
+    result = assess_research_evidence(
+        suite=_suite(),
+        configuration=_configuration(),
+        runs=store.records(),
+        policy=EvaluationPolicy(),
+        now=NOW,
+    )
+
+    assert not result.qualified
+    assert interrupted.run_id in result.evidence_run_ids
+    assert f"{interrupted.case_id}:incomplete_trial" in result.reasons
+
+
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_interrupted_final_write_retains_a_complete_valid_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_replace: bool
+) -> None:
+    store = EvaluationStore(tmp_path)
+    run = _runs()[0]
+    pending = _incomplete(run)
+    store.begin(pending)
+    original = Path.replace
+
+    def interrupt(source: Path, target: Path) -> Path:
+        if after_replace:
+            original(source, target)
+        raise OSError("synthetic interruption")
+
+    monkeypatch.setattr(Path, "replace", interrupt)
+    with pytest.raises(OSError, match="synthetic interruption"):
+        store.complete(run)
+    monkeypatch.setattr(Path, "replace", original)
+
+    assert EvaluationStore(tmp_path).records() == ((run,) if after_replace else (pending,))
+    store.complete(run)
+    assert store.records() == (run,)
+
+
+@pytest.mark.parametrize("damage", ["malformed", "renamed", "other-suffix", "symlink"])
+def test_trial_loader_never_silently_drops_damaged_evidence(tmp_path: Path, damage: str) -> None:
+    store = EvaluationStore(tmp_path)
+    pending = _incomplete(_runs()[0])
+    store.begin(pending)
+    path = tmp_path / f"{pending.run_id}.json"
+    if damage == "malformed":
+        path.write_text("{broken")
+    elif damage == "renamed":
+        path.rename(tmp_path / f"{uuid4()}.json")
+    elif damage == "other-suffix":
+        path.rename(path.with_suffix(".bak"))
+    else:
+        saved = tmp_path / "saved"
+        path.rename(saved)
+        path.symlink_to(saved)
+
+    with pytest.raises((ValueError, DurableFileError)):
+        store.records()
+
+
+def test_invalid_report_diagnostic_does_not_disclose_record_contents(tmp_path: Path) -> None:
+    store = EvaluationStore(tmp_path)
+    run = _incomplete(_runs()[0])
+    store.begin(run)
+    path = tmp_path / f"{run.run_id}.json"
+    path.write_text('{"unexpected":"synthetic-private-canary"}')
+
+    with pytest.raises(ValueError, match="record is invalid") as caught:
+        store.records()
+    assert "synthetic-private-canary" not in "".join(traceback.format_exception(caught.value))
+
+
+def test_abandoned_atomic_temporary_does_not_hide_pending_trial(tmp_path: Path) -> None:
+    store = EvaluationStore(tmp_path)
+    run = _incomplete(_runs()[0])
+    store.begin(run)
+    (tmp_path / f".{run.run_id}.json-abcdefgh").write_text("incomplete temporary write")
+
+    assert store.records() == (run,)
+
+
+def test_renaming_a_trial_to_temporary_format_does_not_remove_its_evidence(tmp_path: Path) -> None:
+    store = EvaluationStore(tmp_path)
+    run = _incomplete(_runs()[0])
+    store.begin(run)
+    (tmp_path / f"{run.run_id}.json").rename(tmp_path / f".{run.run_id}.json-abcdefgh")
+
+    with pytest.raises(ValueError, match="Orphaned"):
+        store.records()
