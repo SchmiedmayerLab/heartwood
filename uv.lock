@@ -1653,12 +1653,14 @@ version = "0.3.0"
 source = { editable = "packages/compliance" }
 dependencies = [
     { name = "heartwood-audit" },
+    { name = "heartwood-gateway" },
     { name = "heartwood-schemas" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "heartwood-audit", editable = "packages/audit" },
+    { name = "heartwood-gateway", editable = "packages/gateway" },
     { name = "heartwood-schemas", editable = "packages/schemas" },
 ]
 

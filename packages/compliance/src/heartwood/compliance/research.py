@@ -159,7 +159,7 @@ def research_tasks() -> tuple[ResearchTask, ...]:
             "fresh-process-replay": EvaluationDimension.RECOVERY,
             "audit-verified": EvaluationDimension.POLICY_ADHERENCE,
         }
-        if case_id == "baseline-analysis":
+        if case_id in ("baseline-analysis", "result-verification"):
             required["independent-script-rerun"] = EvaluationDimension.CODING_CORRECTNESS
         tasks.append(
             ResearchTask(

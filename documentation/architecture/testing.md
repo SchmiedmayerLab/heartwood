@@ -93,6 +93,18 @@ A parseable script and correct reported metrics do not establish that the progra
 Tool execution, independent re-execution, action approval, fresh-process replay, and audit verification require separate evidence from their respective owners.
 These small fixtures test software behavior, not scientific generalizability.
 
+The shared research driver accepts a dedicated project containing only the pinned synthetic inputs and explicitly supplied verification artifacts.
+It uses normal gateway commands and requires a review callback for every pending action group; it does not execute generated programs directly or implicitly approve proposals.
+The baseline's reproduction step requests a separate, reviewed terminal execution of the unchanged program and checks its regenerated outputs against the originals.
+The independent verification case distinguishes a truthful byte comparison from evidence that the program actually ran.
+Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
+
+Evaluation records include observed time, action, model-call, token, and reported-cost budgets.
+Limits are checked between gateway updates and after review, before admitting another action; a request already in flight may finish before pause takes effect.
+Unavailable usage remains unknown, including a zero value when the gateway cannot distinguish an unpriced call from a genuinely free call.
+Use provider-side spending limits as an additional control for hosted evaluations.
+Run generated code in an appropriately isolated synthetic environment and inspect complete action groups before approving them.
+
 ### Action-Risk Evaluation
 
 The action-risk corpus contains benign, ambiguous, destructive, encoded, injected, and network-capable proposals for the terminal and file editor.

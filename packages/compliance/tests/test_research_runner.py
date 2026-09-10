@@ -1,0 +1,470 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+"""Real gateway, SDK, tool execution, review, independent rerun, and fresh replay."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import uuid
+from collections.abc import Callable, Mapping
+from pathlib import Path
+
+import pytest
+from openhands.sdk import LLMStreamChunk, LocalConversation, Tool
+from openhands.sdk.event import Event
+from openhands.sdk.llm import Message, MessageToolCall, TextContent
+from openhands.sdk.security import AlwaysConfirm
+from openhands.sdk.settings import OpenHandsAgentSettings
+from openhands.sdk.testing import TestLLM
+from openhands.tools import TerminalTool
+
+from heartwood.compliance.research import ResearchTask, research_tasks
+from heartwood.compliance.research_runner import ReviewDecision, run_research_trial
+from heartwood.core_adapter import SessionService
+from heartwood.gateway import (
+    ModelProfile,
+    OpenHandsSdkBackend,
+    ProjectContext,
+    ProjectionApprovalGroup,
+    SessionGateway,
+)
+from heartwood.gateway._project_file_editor import PROJECT_FILE_EDITOR_SPEC
+from heartwood.schemas.evaluation import EvaluationBudget, EvaluationConfiguration
+
+
+def _configuration() -> EvaluationConfiguration:
+    return EvaluationConfiguration(
+        provider="synthetic",
+        model="test-model",
+        model_revision="a" * 40,
+        platform="generic",
+        hardware=("cpu",),
+        runtime="TestLLM",
+        openhands_version="1.46.0",
+        precision="not-applicable",
+        context_tokens=32768,
+        output_tokens=4096,
+        tool_parser="native",
+        skill_tree_digest="b" * 64,
+        harness_revision="c" * 64,
+    )
+
+
+def _prepare(root: Path, case_id: str = "baseline-analysis") -> ResearchTask:
+    task = next(task for task in research_tasks() if task.case.case_id == case_id)
+    for name, text in task.inputs.items():
+        (root / name).write_text(text)
+    return task
+
+
+def _message(command: str, call_id: str) -> Message:
+    return Message(
+        role="assistant",
+        content=[],
+        tool_calls=[
+            MessageToolCall(
+                id=call_id,
+                name="terminal",
+                arguments=json.dumps({"command": command}),
+                origin="completion",
+            )
+        ],
+    )
+
+
+def _finish() -> Message:
+    return Message(role="assistant", content=[TextContent(text="Synthetic analysis complete.")])
+
+
+def _program_files() -> dict[str, str]:
+    reference = (Path(__file__).parent / "fixtures/research/reference_analysis.py").read_text()
+    plan = json.dumps(
+        {
+            "question": "Does measurement predict response for held-out subjects?",
+            "estimand": "Held-out visit prediction error",
+            "outcome": "response",
+            "features": ["measurement"],
+            "group_column": "subject_id",
+            "split_column": "partition",
+            "assumptions": ["Prespecified subject-disjoint split"],
+            "limitations": ["Synthetic data with too few subjects for scientific inference"],
+        }
+    )
+    return {
+        "analysis.py": reference,
+        "plan.json": plan,
+        "report.md": "Synthetic held-out baseline and subject sensitivity.\n",
+    }
+
+
+def _file_message(root: Path, artifacts: Mapping[str, str] | None = None) -> Message:
+    return Message(
+        role="assistant",
+        content=[],
+        tool_calls=[
+            MessageToolCall(
+                id=f"create-{name}",
+                name="file_editor",
+                arguments=json.dumps(
+                    {"command": "create", "path": str(root / name), "file_text": text}
+                ),
+                origin="completion",
+            )
+            for name, text in (_program_files() if artifacts is None else artifacts).items()
+        ],
+    )
+
+
+def _gateway(root: Path, llm: TestLLM) -> SessionGateway:
+    def service_factory(sessions_root: Path, session_id: str) -> SessionService:
+        persistence = sessions_root / session_id / "openhands"
+
+        def factory(
+            callback: Callable[[Event], None], token_callback: Callable[[LLMStreamChunk], None]
+        ) -> LocalConversation:
+            agent = OpenHandsAgentSettings(
+                llm=llm,
+                tools=[
+                    Tool(name=TerminalTool.name),
+                    Tool(name=PROJECT_FILE_EDITOR_SPEC, params={"project_root": str(root)}),
+                ],
+                enable_switch_llm_tool=False,
+                tool_concurrency_limit=1,
+            ).create_agent()
+            conversation = LocalConversation(
+                agent=agent,
+                workspace=root,
+                persistence_dir=persistence,
+                profile_store_dir=persistence / "profiles",
+                conversation_id=uuid.uuid5(uuid.NAMESPACE_URL, str(persistence)),
+                callbacks=[callback],
+                token_callbacks=[token_callback],
+                visualizer=None,
+                delete_on_close=False,
+            )
+            conversation.set_confirmation_policy(AlwaysConfirm())
+            return conversation
+
+        backend = OpenHandsSdkBackend(
+            profile=ModelProfile(
+                profile_id="heartwood",
+                model="openai/local-model",
+                base_url="http://127.0.0.1:8765/v1",
+                policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+                credential_kind="none",
+            ),
+            workspace=root,
+            skills_dir=root / ".heartwood/skills",
+            persistence_dir=persistence,
+            conversation_key=f"{root}#{session_id}",
+            env={},
+            conversation_factory=factory,
+        )
+        return SessionService.local_default(
+            sessions_root, session_id=session_id, backend=backend, env={}
+        )
+
+    return SessionGateway(project=ProjectContext(root), service_factory=service_factory, env={})
+
+
+def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    task = _prepare(tmp_path)
+    command = "python analysis.py --data data.csv --output-dir ."
+    rerun = "python analysis.py --data data.csv --output-dir benchmark-reproduced"
+    llm = TestLLM.from_messages(
+        [
+            _file_message(tmp_path),
+            _message(command, "primary"),
+            _finish(),
+            _message(rerun, "rerun"),
+            _finish(),
+        ]
+    )
+    gateway = _gateway(tmp_path, llm)
+    groups: list[str] = []
+
+    def review(group: ProjectionApprovalGroup) -> ReviewDecision:
+        for action in group.actions:
+            if action.details.kind == "terminal":
+                assert action.details.command in (command, rerun)
+            else:
+                assert action.details.kind == "file-editor"
+                path = Path(str(action.arguments["path"]))
+                assert path.parent == tmp_path
+                assert action.arguments["file_text"] == _program_files()[path.name]
+        groups.append(group.group_id)
+        return "approve"
+
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=review,
+            budget=EvaluationBudget(maximum_seconds=20),
+        )
+        assert trial.stop == "finished"
+        assert len(groups) == len(set(groups)) == 3
+        assert {check.check_id: check.status for check in trial.record.checks} == {
+            check.check_id: "passed" for check in task.case.required_checks
+        }
+        assert trial.record.execution == "deterministic"
+        assert llm.call_count == 5
+        assert trial.record.usage.model_calls is None
+        assert trial.record.usage.reported_cost_usd is None
+        assert "Synthetic analysis complete" not in trial.record.model_dump_json()
+    finally:
+        gateway.stop()
+
+    verification_root = tmp_path / "independent-verification"
+    verification_root.mkdir()
+    verification_task = _prepare(verification_root, "result-verification")
+    for name in ("analysis.py", "metrics.json", "predictions.csv"):
+        (verification_root / name).write_text(trial.artifacts[name])
+    outputs = {
+        "verification.json": json.dumps(
+            {
+                "status": "reproduced",
+                "matching_artifacts": ["metrics.json", "predictions.csv"],
+                "mismatched_artifacts": [],
+            }
+        ),
+        "verification.md": "Re-executed the source program and verified identical outputs.",
+    }
+    command = "python analysis.py --data data.csv --output-dir reproduced"
+    verification_llm = TestLLM.from_messages(
+        [_message(command, "reexecute"), _file_message(verification_root, outputs), _finish()]
+    )
+    verification_gateway = _gateway(verification_root, verification_llm)
+
+    def verify_review(group: ProjectionApprovalGroup) -> ReviewDecision:
+        for action in group.actions:
+            if action.details.kind == "terminal":
+                assert action.details.command == command
+            else:
+                assert action.details.kind == "file-editor"
+                path = Path(str(action.arguments["path"]))
+                assert path.parent == verification_root
+                assert action.arguments["file_text"] == outputs[path.name]
+        return "approve"
+
+    try:
+        verified = run_research_trial(
+            verification_gateway,
+            verification_task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=verify_review,
+            budget=EvaluationBudget(maximum_seconds=20),
+        )
+        assert verified.stop == "finished"
+        assert all(check.status == "passed" for check in verified.record.checks)
+        assert verification_llm.call_count == 3
+    finally:
+        verification_gateway.stop()
+
+
+def test_refused_action_never_creates_research_artifacts(tmp_path: Path) -> None:
+    task = _prepare(tmp_path)
+    llm = TestLLM.from_messages([_file_message(tmp_path), _finish()])
+    gateway = _gateway(tmp_path, llm)
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _group: "stop",
+        )
+        assert trial.stop == "review-stopped"
+        assert not (tmp_path / "analysis.py").exists()
+        checks = {check.check_id: check.status for check in trial.record.checks}
+        assert checks["workflow-completed"] == checks["tools-executed"] == "failed"
+        assert checks["audit-verified"] == checks["fresh-process-replay"] == "passed"
+    finally:
+        gateway.stop()
+
+
+def test_nonfixture_input_is_rejected_before_a_model_call(tmp_path: Path) -> None:
+    task = _prepare(tmp_path)
+    (tmp_path / "data.csv").write_text("not the supplied synthetic fixture")
+    gateway = _gateway(tmp_path, TestLLM.from_messages([]))
+    try:
+        with pytest.raises(ValueError, match="pinned synthetic"):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration(),
+                execution="deterministic",
+                review=lambda _group: "approve",
+            )
+        assert gateway.sessions()["sessions"] == []
+    finally:
+        gateway.stop()
+
+
+def test_budget_stops_before_any_pending_tool_is_approved(tmp_path: Path) -> None:
+    task = _prepare(tmp_path)
+    gateway = _gateway(tmp_path, TestLLM.from_messages([_file_message(tmp_path)]))
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _group: pytest.fail("No action should be reviewed after the budget"),
+            budget=EvaluationBudget(maximum_seconds=0.001),
+        )
+        assert trial.stop == "budget-exceeded"
+        assert not (tmp_path / "analysis.py").exists()
+    finally:
+        gateway.stop()
+
+
+def test_rejected_group_never_executes_and_does_not_schedule_a_reproduction(tmp_path: Path) -> None:
+    task = _prepare(tmp_path)
+    llm = TestLLM.from_messages([_file_message(tmp_path), _finish()])
+    gateway = _gateway(tmp_path, llm)
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _group: "reject",
+            budget=EvaluationBudget(maximum_seconds=10),
+        )
+        assert not trial.artifacts
+        assert llm.call_count == 1
+        checks = {check.check_id: check.status for check in trial.record.checks}
+        assert checks["baseline-artifacts"] == checks["tools-executed"] == "failed"
+        assert checks["independent-script-rerun"] == "failed"
+    finally:
+        gateway.stop()
+
+
+def test_readiness_completes_through_grouped_tools_without_an_extra_model_turn(
+    tmp_path: Path,
+) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    outputs = {
+        "readiness.json": json.dumps(
+            {
+                "row_count": 15,
+                "subject_count": 8,
+                "duplicate_rows": 1,
+                "missing_by_column": {"measurement": 1},
+                "invalid_by_column": {"measurement": 1, "visit": 1},
+                "arm_counts": {"A": 7, "B": 8},
+                "leakage_columns": ["future_response"],
+                "ready_for_analysis": False,
+            }
+        ),
+        "readiness.md": (
+            "Resolve invalid/missing measurements and duplicates; exclude future_response."
+        ),
+    }
+    llm = TestLLM.from_messages([_file_message(tmp_path, outputs), _finish()])
+    gateway = _gateway(tmp_path, llm)
+
+    def review(group: ProjectionApprovalGroup) -> ReviewDecision:
+        assert len(group.actions) == 2
+        for action in group.actions:
+            assert action.details.kind == "file-editor"
+            assert (
+                action.arguments["file_text"] == outputs[Path(str(action.arguments["path"])).name]
+            )
+        return "approve"
+
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=review,
+            budget=EvaluationBudget(maximum_seconds=10),
+        )
+        assert trial.stop == "finished"
+        assert llm.call_count == 2
+        assert all(check.status == "passed" for check in trial.record.checks)
+    finally:
+        gateway.stop()
+
+
+def test_copied_outputs_are_not_evidence_of_independent_execution(tmp_path: Path) -> None:
+    task = _prepare(tmp_path, "result-verification")
+    originals = {"metrics.json": "{}\n", "predictions.csv": "subject_id,visit,prediction\n"}
+    for name, value in {
+        **originals,
+        "analysis.py": "# A source program with no execution\n",
+    }.items():
+        (tmp_path / name).write_text(value)
+    outputs = {
+        **{f"reproduced/{name}": value for name, value in originals.items()},
+        "verification.json": json.dumps(
+            {
+                "status": "reproduced",
+                "matching_artifacts": ["metrics.json", "predictions.csv"],
+                "mismatched_artifacts": [],
+            }
+        ),
+        "verification.md": "The copied bytes match, but the script did not run.",
+    }
+    gateway = _gateway(
+        tmp_path,
+        TestLLM.from_messages(
+            [
+                _message("mkdir reproduced", "prepare-output"),
+                _file_message(tmp_path, outputs),
+                _finish(),
+            ]
+        ),
+    )
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _group: "approve",
+            budget=EvaluationBudget(maximum_seconds=10),
+        )
+        checks = {check.check_id: check.status for check in trial.record.checks}
+        assert checks["verification-comparison"] == "passed"
+        assert checks["independent-script-rerun"] == "failed"
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("name", ["analysis.py", "unrelated.txt", "benchmark-reproduced"])
+def test_nonempty_projects_are_rejected_without_reading_unrelated_files(
+    tmp_path: Path, name: str
+) -> None:
+    task = _prepare(tmp_path)
+    (tmp_path / name).write_text("Do not inspect unrelated content.")
+    llm = TestLLM.from_messages([])
+    gateway = _gateway(tmp_path, llm)
+    try:
+        with pytest.raises(ValueError, match="dedicated project"):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration(),
+                execution="deterministic",
+                review=lambda _group: "approve",
+            )
+        assert llm.call_count == 0
+    finally:
+        gateway.stop()

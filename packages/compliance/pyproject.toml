@@ -14,6 +14,7 @@ license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "heartwood-audit",
+    "heartwood-gateway",
     "heartwood-schemas",
 ]
 
@@ -26,4 +27,5 @@ packages = ["src/heartwood"]
 
 [tool.uv.sources]
 heartwood-audit = { workspace = true }
+heartwood-gateway = { workspace = true }
 heartwood-schemas = { workspace = true }

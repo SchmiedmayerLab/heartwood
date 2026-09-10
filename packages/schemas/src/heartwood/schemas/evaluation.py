@@ -133,6 +133,16 @@ class EvaluationUsage(EvaluationRecord):
     elapsed_seconds: NonnegativeFloat
 
 
+class EvaluationBudget(EvaluationRecord):
+    """Observed admission limits for a benchmark, not a provider-side spending cap."""
+
+    maximum_seconds: float = Field(default=300, gt=0, le=3600)
+    maximum_model_calls: int = Field(default=20, gt=0, le=100)
+    maximum_tokens: int = Field(default=100_000, gt=0)
+    maximum_reported_cost_usd: float = Field(default=1, gt=0)
+    maximum_actions: int = Field(default=30, gt=0, le=100)
+
+
 class EvaluationRun(EvaluationRecord):
     """One dated trial of a pinned case against an exact runtime configuration."""
 
@@ -149,6 +159,7 @@ class EvaluationRun(EvaluationRecord):
     finished_at: AwareDatetime
     checks: tuple[EvaluationCheck, ...]
     usage: EvaluationUsage
+    budget: EvaluationBudget = Field(default_factory=EvaluationBudget)
 
     @model_validator(mode="after")
     def validate_trial(self) -> Self:
