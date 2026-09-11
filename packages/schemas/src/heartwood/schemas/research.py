@@ -96,7 +96,12 @@ class ReadinessResult(ResearchArtifact):
     missing_by_column: dict[str, Count]
     invalid_by_column: dict[str, Count]
     arm_counts: dict[str, Count]
-    leakage_columns: list[ResearchText]
+    leakage_columns: list[ResearchText] = Field(
+        description=(
+            "Exact dataset column names that introduce leakage, without prose or explanations. "
+            "Put explanations in the accompanying readiness report."
+        )
+    )
     ready_for_analysis: bool
 
 
