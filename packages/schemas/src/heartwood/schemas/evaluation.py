@@ -75,6 +75,8 @@ class EvaluationConfiguration(EvaluationRecord):
     skill_tree_digest: Sha256
     harness_revision: Sha256
     runtime_fingerprint: Sha256 | None = None
+    specialist_concurrency: int = Field(default=1, ge=1, strict=True)
+    specialist_catalog_fingerprint: Sha256 | None = None
 
 
 class EvaluationRuntimeObservation(EvaluationRecord):
@@ -90,16 +92,31 @@ class EvaluationRuntimeObservation(EvaluationRecord):
     action_confirmation: ActionConfirmationMode
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    specialist_concurrency: int = Field(default=1, ge=1, strict=True)
+    specialist_catalog_fingerprint: Sha256 | None = None
 
     def declaration_mismatches(self, configuration: EvaluationConfiguration) -> tuple[str, ...]:
         """Compare only observed client fields, not remote-server declarations."""
-        pairs = (
+        pairs: tuple[tuple[str, object, object], ...] = (
             ("request_model", self.request_model, configuration.request_model),
             ("openhands_version", self.openhands_version, configuration.openhands_version),
             ("platform", self.platform, configuration.platform),
             ("context_tokens", self.max_input_tokens, configuration.context_tokens),
             ("output_tokens", self.max_output_tokens, configuration.output_tokens),
+            (
+                "specialist_concurrency",
+                self.specialist_concurrency,
+                configuration.specialist_concurrency,
+            ),
         )
+        if configuration.specialist_catalog_fingerprint is not None:
+            pairs += (
+                (
+                    "specialist_catalog_fingerprint",
+                    self.specialist_catalog_fingerprint,
+                    configuration.specialist_catalog_fingerprint,
+                ),
+            )
         return tuple(
             name for name, actual, expected in pairs if actual is not None and actual != expected
         )

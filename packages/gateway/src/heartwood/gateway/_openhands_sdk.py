@@ -372,6 +372,10 @@ class OpenHandsSdkBackend:
             action_confirmation=self._action_confirmation_mode,
             max_input_tokens=llm.max_input_tokens,
             max_output_tokens=llm.max_output_tokens,
+            specialist_concurrency=state.agent.tool_concurrency_limit,
+            specialist_catalog_fingerprint=(
+                self.specialist_catalog.fingerprint if self.specialist_catalog is not None else None
+            ),
         )
 
     def bind_runtime(

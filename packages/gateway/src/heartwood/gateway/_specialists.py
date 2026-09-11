@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -98,6 +100,23 @@ class SpecialistCatalog:
     """Ordered, validated research-specialist catalog."""
 
     roles: tuple[SpecialistRole, ...]
+
+    @property
+    def fingerprint(self) -> str:
+        """Bind executable definitions and supplied Skill metadata without installation paths."""
+        payload = [
+            {
+                "definition": role.definition.model_dump(mode="json", exclude={"source"}),
+                "skills": [
+                    skill.model_dump(mode="json", exclude={"source", "resources"})
+                    for skill in sorted(role.verified_skills, key=lambda skill: skill.name)
+                ],
+            }
+            for role in sorted(self.available_roles, key=lambda role: role.specialist_id)
+        ]
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
     @property
     def available_roles(self) -> tuple[SpecialistRole, ...]:

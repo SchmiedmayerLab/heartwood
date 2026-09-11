@@ -92,6 +92,19 @@ Changed configurations, changed suite definitions, unknown model revisions, expi
 Three trials are a functional regression gate, not a statistical estimate of clinical or scientific reliability.
 An assessment includes its policy, time, exact configuration and suite digests, and source run identifiers; it does not automatically change model recommendations or action-approval policy.
 
+### Parallel Review Comparison
+
+`heartwood.compliance.parallel_reviews.assess_parallel_reviews` compares matched sequential and parallel trials through the same evidence assessor.
+Both configurations must pass the complete research checks and additional checks for reviewer scheduling, isolation, lineage, findings, and parent synthesis.
+The configurations differ only in specialist concurrency and the runtime fingerprint that records it; model, context, tools, Skills, specialist definitions, fixtures, seeds, and budgets remain matched.
+The gateway observes the actual OpenHands concurrency setting and a fingerprint of executable specialist definitions and supplied Skill metadata.
+That fingerprint excludes installation paths and does not replace the separate Skill-tree digest for bundled resource bytes.
+
+The default comparison policy requires three recent trials per case, at least a 10% reduction in both median and total elapsed time, and no more than a 25% increase in total reported cost or tokens.
+Unknown usage, missing reviewer checks, changed configurations, and failed trials prevent qualification.
+These thresholds are explicit policy parameters, not statistical evidence of general model superiority.
+The assessment preserves both source assessments and per-case measurements; it neither authenticates arbitrary evidence files nor grants permission to launch parallel tasks.
+
 ### Synthetic Research Cases
 
 The maintained research fixtures cover dataset readiness, a held-out linear baseline, and independent result verification.

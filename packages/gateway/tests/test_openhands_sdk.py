@@ -3319,6 +3319,9 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         group = _wait_for_pending_group(backend)
         assert len(group.actions) == 2
         assert calls == 0
+        observed = backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
+        assert observed.specialist_concurrency == workers
+        assert observed.specialist_catalog_fingerprint == _specialist_catalog().fingerprint
         backend.resolve_confirmation(
             session_id="session-1", action_group_id=group.group_id, approved=True
         )
