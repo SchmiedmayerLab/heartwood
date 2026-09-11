@@ -219,6 +219,7 @@ def test_retry_after_signer_failure_does_not_repeat_an_analysis(
         return sign(self, statement)
 
     monkeypatch.setattr(LocalEd25519CheckpointSigner, "sign", fail_once)
+
     def publish() -> AuditCheckpointVerification:
         return gateway.create_audit_checkpoint(
             session_id="research",
