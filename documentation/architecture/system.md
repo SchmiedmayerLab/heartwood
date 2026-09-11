@@ -42,6 +42,9 @@ Interfaces submit typed commands to the gateway.
 OpenHands work runs in a supervised background thread so an interface can send guidance, pause, resume, or review an action set while the task is active.
 Final messages, actions, lifecycle changes, task plans, usage snapshots, specialist lineage, and errors become typed durable events.
 Incremental token text is transient and is never appended to the session or audit log.
+Progress can expose a terminal lifecycle before native execution has released its worker slot.
+The adapter therefore emits a separate transient execution-settled signal after final reconciliation, and automatic review assessment waits for that boundary or an idle backend.
+This signal does not authorize a new turn, grant tool permission, or cause replay to resume execution.
 
 ### Interface Projections
 

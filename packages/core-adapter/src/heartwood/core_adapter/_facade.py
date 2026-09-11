@@ -31,6 +31,7 @@ class BackendEventKind(StrEnum):
     CONFIRMATION_RESOLVED = "confirmation_resolved"
     TOOL_EXECUTION = "tool_execution"
     LIFECYCLE = "lifecycle"
+    EXECUTION_SETTLED = "execution_settled"
     TASK_PLAN = "task_plan"
     USAGE = "usage"
     SUBAGENT = "subagent"
@@ -291,6 +292,21 @@ class BackendLifecycleEvent(_BackendEvent):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class BackendExecutionSettledEvent(_BackendEvent):
+    """Transient worker boundary after final reconciliation, not permission to continue.
+
+    Lifecycle events can arrive during progress publication. This signal is emitted
+    only after native execution releases its run slot; it is never replayed as work.
+    """
+
+    source_event_id: None = field(default=None, init=False)
+    kind: Literal[BackendEventKind.EXECUTION_SETTLED] = field(
+        default=BackendEventKind.EXECUTION_SETTLED,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BackendTaskPlanEvent(_BackendEvent):
     tasks: tuple[BackendTask, ...]
     kind: Literal[BackendEventKind.TASK_PLAN] = field(
@@ -333,6 +349,7 @@ type BackendEvent = (
     | BackendConfirmationResolutionEvent
     | BackendToolExecutionEvent
     | BackendLifecycleEvent
+    | BackendExecutionSettledEvent
     | BackendTaskPlanEvent
     | BackendUsageEvent
     | BackendSubagentEvent

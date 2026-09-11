@@ -79,6 +79,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
     BackendEventSink,
+    BackendExecutionSettledEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
     BackendSubagent,
@@ -974,7 +975,7 @@ class OpenHandsSdkBackend:
                 if self._run_thread is worker:
                     self._run_thread = None
             try:
-                self._event_sink(final_events)
+                self._event_sink((*final_events, BackendExecutionSettledEvent()))
             finally:
                 with self._run_lock:
                     self._worker_threads.discard(worker)

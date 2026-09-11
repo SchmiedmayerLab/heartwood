@@ -30,6 +30,7 @@ from heartwood.core_adapter._facade import (
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
+    BackendExecutionSettledEvent,
     BackendLifecycleEvent,
     BackendSubagentEvent,
     BackendTaskPlanEvent,
@@ -596,8 +597,12 @@ class SessionService:
         self, stream: tuple[BackendEvent, ...], *, live: bool = True
     ) -> list[SessionEvent]:
         translated: list[SessionEvent] = []
+        execution_settled = False
         known_source_event_ids = self._known_source_event_ids_locked()
         for event in stream:
+            if isinstance(event, BackendExecutionSettledEvent):
+                execution_settled = live
+                continue
             if (
                 event.source_event_id is not None
                 and event.source_event_id in known_source_event_ids
@@ -776,7 +781,11 @@ class SessionService:
                 )
             else:
                 assert_never(event)
-        translated.extend(settle_workflow_review(self, self._workflow_evaluator))
+        translated.extend(
+            settle_workflow_review(
+                self, self._workflow_evaluator, execution_settled=execution_settled
+            )
+        )
         return translated
 
     def _record_confirmation_request(

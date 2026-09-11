@@ -23,6 +23,7 @@ from heartwood.compliance.research import research_tasks
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendEvent,
+    BackendExecutionSettledEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
     BackendSubagent,
@@ -229,7 +230,9 @@ class ReviewBackend(FinishedBackend):
             *events[1:],
         )
         review_events = tuple(
-            replace(event, source_event_id=f"synthetic-review:{index}")
+            event
+            if isinstance(event, BackendExecutionSettledEvent)
+            else replace(event, source_event_id=f"synthetic-review:{index}")
             for index, event in enumerate(review_events)
         )
         self.pending_review_events = review_events[2:]
@@ -259,6 +262,40 @@ def test_synchronous_review_settlement_is_part_of_the_original_receipt(tmp_path:
         assert assessed.payload["command_id"] == command.command_id
         assert assessed.payload["actor_id"] == "gateway"
         assert gateway.handle(command).events == result.events
+        assert len(backend.prompts) == 2
+    finally:
+        gateway.stop()
+
+
+def test_review_waits_for_execution_boundary_despite_terminal_progress(tmp_path: Path) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        gateway.handle(_projected_command(gateway, "request-review"))
+        backend._event_sink(backend.pending_review_events)
+        pending = _state(gateway).research_review
+        assert pending is not None
+        assert pending.status == "pending"
+        before = len(gateway._services["research"].replay_events())
+        service = gateway._services["research"]
+        assert (
+            service._translate_backend_events((BackendExecutionSettledEvent(),), live=False) == []
+        )
+        assert _state(gateway).research_review == pending
+        # A final callback runs on its own worker and therefore cannot join itself.
+        assert not backend.idle
+        backend._event_sink((BackendExecutionSettledEvent(),))
+        assessed = _state(gateway).research_review
+        assert assessed is not None
+        assert assessed.status == "assessed"
+        events = gateway._services["research"].replay_events()
+        assert len(events) == before + 1
+        assert events[-1].payload["transition"] == "assess-review"
+        backend._event_sink((BackendExecutionSettledEvent(),))
+        assert gateway._services["research"].replay_events() == events
         assert len(backend.prompts) == 2
     finally:
         gateway.stop()

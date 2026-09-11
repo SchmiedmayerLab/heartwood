@@ -82,6 +82,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
     BackendEventKind,
+    BackendExecutionSettledEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
     BackendSubagentEvent,
@@ -2300,6 +2301,7 @@ def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path)
     assert progress_published.wait(timeout=2)
 
     assert not conversation.finished.is_set()
+    assert not any(isinstance(event, BackendExecutionSettledEvent) for event in emitted)
     conversation.release.set()
     assert conversation.finished.wait(timeout=2)
     backend.close()
@@ -2349,8 +2351,8 @@ def test_idle_wait_includes_final_publication_and_never_joins_its_own_worker(
     )
     callback_idle: list[bool] = []
 
-    def publish(_events: tuple[BackendEvent, ...]) -> None:
-        if not backend._execution_in_flight():
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        if isinstance(events[-1], BackendExecutionSettledEvent):
             callback_idle.append(backend.wait_for_idle(0))
             publishing.set()
             if not release_publication.wait(timeout=3):
@@ -2374,6 +2376,60 @@ def test_idle_wait_includes_final_publication_and_never_joins_its_own_worker(
     finally:
         conversation.release.set()
         release_publication.set()
+        backend.close()
+
+
+def test_real_sdk_continues_at_settled_boundary_without_overlapping_native_runs(
+    tmp_path: Path,
+) -> None:
+    llm = TestLLM.from_messages(
+        [_assistant_message("First inspection."), _assistant_message("Second inspection.")]
+    )
+    backend = _backend(tmp_path, _conversation_factory(tmp_path, llm, tools=[]))
+    boundaries: list[tuple[bool, bool]] = []
+    emitted: list[BackendEvent] = []
+    continuations: list[tuple[BackendEvent, ...]] = []
+    finished = Event()
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        emitted.extend(events)
+        if isinstance(events[-1], BackendExecutionSettledEvent):
+            boundaries.append((backend._execution_in_flight(), backend.wait_for_idle(0)))
+            if len(boundaries) == 1:
+                continuations.append(
+                    backend.submit_turn(session_id="session-1", prompt="Second authorized turn")
+                )
+            else:
+                finished.set()
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        backend.submit_turn(session_id="session-1", prompt="First authorized turn")
+        assert finished.wait(5)
+        assert backend.wait_for_idle(5)
+        assert boundaries == [(False, False), (False, False)]
+        assert len(continuations) == 1
+        assert any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.RUNNING
+            for event in continuations[0]
+        )
+        assert llm.call_count == 2
+        assert not any(isinstance(event, BackendErrorEvent) for event in emitted)
+        messages: dict[str, BackendAgentMessageEvent] = {}
+        for event in emitted:
+            if isinstance(event, BackendAgentMessageEvent):
+                assert event.source_event_id is not None
+                if event.source_event_id in messages:
+                    assert messages[event.source_event_id] == event
+                messages[event.source_event_id] = event
+        assert [event.message for event in messages.values()] == [
+            "First inspection.",
+            "Second inspection.",
+        ]
+        replayed = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert not any(isinstance(event, BackendExecutionSettledEvent) for event in replayed)
+        assert llm.call_count == 2
+    finally:
         backend.close()
 
 

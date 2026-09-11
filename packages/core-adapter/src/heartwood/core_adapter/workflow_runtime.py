@@ -536,6 +536,8 @@ def _record_snapshot(
 def settle_workflow_review(
     service: SessionService,
     evaluator: WorkflowEvaluator | None,
+    *,
+    execution_settled: bool = False,
 ) -> tuple[SessionEvent, ...]:
     """Assess settled review evidence under the existing writer lease, without model work."""
     if evaluator is None:
@@ -546,6 +548,8 @@ def settle_workflow_review(
         return ()
     review = current.research_review
     if review is None or review.status != "pending":
+        return ()
+    if not execution_settled and not service.backend.wait_for_idle(0):
         return ()
     lifecycle = next(
         (
