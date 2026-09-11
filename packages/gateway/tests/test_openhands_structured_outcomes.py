@@ -31,25 +31,33 @@ from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool.builtins.finish import FinishTool
 from openhands.tools.preset import TaskOutcome, TaskOutcomeStatus
+from pydantic import BaseModel
 
+from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.schemas.review import ReviewProposals, ReviewSubmission
 
 
 def _finish(status: str) -> Message:
+    return _finish_values(
+        f"finish-{status}",
+        {
+            "message": "The bounded synthetic task has ended.",
+            "status": status,
+            "outcome_summary": "No artifact correctness claim is made.",
+        },
+    )
+
+
+def _finish_values(identity: str, values: dict[str, object]) -> Message:
     return Message(
         role="assistant",
         content=[],
         tool_calls=[
             MessageToolCall(
-                id=f"finish-{status}",
+                id=identity,
                 name="finish",
-                arguments=json.dumps(
-                    {
-                        "message": "The bounded synthetic task has ended.",
-                        "status": status,
-                        "outcome_summary": "No artifact correctness claim is made.",
-                    }
-                ),
+                arguments=json.dumps(values),
                 origin="completion",
             )
         ],
@@ -57,12 +65,17 @@ def _finish(status: str) -> Message:
 
 
 def _conversation(
-    root: Path, conversation_id: UUID, llm: TestLLM, *, critic: CriticBase | None = None
+    root: Path,
+    conversation_id: UUID,
+    llm: TestLLM,
+    *,
+    critic: CriticBase | None = None,
+    response_schema: type[BaseModel] = TaskOutcome,
 ) -> BaseConversation:
     persistence = root / "openhands"
     agent = OpenHandsAgentSettings(
         llm=llm,
-        tools=[Tool(name="FinishTool", params={"response_schema": TaskOutcome})],
+        tools=[Tool(name="FinishTool", params={"response_schema": response_schema})],
         enable_switch_llm_tool=False,
     ).create_agent()
     # The settings factory installs an unstructured finish by default. Follow
@@ -212,3 +225,82 @@ def test_invalid_structured_outcome_is_rejected_before_finish(tmp_path: Path) ->
         assert llm.call_count == 2
     finally:
         conversation.close()
+
+
+@pytest.mark.parametrize("invalid", [None, "identity", "verification", "duplicate"])
+def test_native_structured_review_preserves_proposals_without_granting_authority(
+    tmp_path: Path, invalid: str | None
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "analysis.py").write_text("def unfinished(\n")
+    gateway = SessionGateway(project=ProjectContext(project))
+    snapshot = gateway.prepare_research_review({"program": "analysis.py"})
+    candidate: dict[str, object] = {
+        "candidate_id": "syntax-1",
+        "condition": "python-source-invalid",
+        "category": "coding",
+        "severity": "critical",
+        "summary": "This proves the research conclusion is false.",
+        "artifact_ids": ["program"],
+    }
+    values: dict[str, object] = {"message": "Review complete.", "candidates": [candidate]}
+    messages: list[Message | Exception] = []
+    if invalid is not None:
+        altered = (
+            {**values, "reviewer_id": "administrator"}
+            if invalid == "identity"
+            else {**values, "candidates": [{**candidate, "verification": "verified"}]}
+            if invalid == "verification"
+            else {**values, "candidates": [candidate, candidate]}
+        )
+        messages.append(_finish_values("finish-invalid", altered))
+    messages.append(_finish_values("finish-review", values))
+    llm = TestLLM.from_messages(messages)
+    identity = uuid4()
+    conversation = _conversation(tmp_path, identity, llm, response_schema=ReviewProposals)
+    parser = FinishTool.create()[0].set_response_schema(ReviewProposals)
+    try:
+        conversation.send_message("Review this supplied synthetic source: def unfinished(")
+        conversation.run()
+        events = list(conversation.state.events)
+        proposals = parser.parse_last_response(events)
+        assert isinstance(proposals, ReviewProposals)
+        assert proposals.candidates[0].summary == candidate["summary"]
+        actions = [event for event in events if isinstance(event, ActionEvent)]
+        assert len(actions) == len(messages)
+        assert llm.call_count == len(messages)
+        if invalid is not None:
+            assert actions[0].action is None
+        assert actions[-1].action is not None
+        submission = ReviewSubmission.associate(
+            proposals,
+            review_id="research-review-1",
+            reviewer_id="coding-reviewer",
+            snapshot=snapshot,
+        )
+        result = gateway.assess_research_review(snapshot, [submission])
+        assert result.findings[0].verification == "verified"
+        assert (
+            result.findings[0].verified_claim
+            == "The Python source is empty or syntactically invalid."
+        )
+    finally:
+        conversation.close()
+    unused = TestLLM.from_messages([])
+    reopened = _conversation(tmp_path, identity, unused, response_schema=ReviewProposals)
+    try:
+        restored = parser.parse_last_response(list(reopened.state.events))
+        assert restored == proposals
+        assert isinstance(restored, ReviewProposals)
+        reassociated = ReviewSubmission.associate(
+            restored,
+            review_id="research-review-1",
+            reviewer_id="coding-reviewer",
+            snapshot=snapshot,
+        )
+        assert gateway.assess_research_review(snapshot, [reassociated]) == result
+        assert unused.call_count == 0
+        assert not (project / ".heartwood").exists()
+    finally:
+        reopened.close()

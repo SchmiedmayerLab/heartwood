@@ -91,6 +91,8 @@ Execution and recovery belong to the existing gateway and authoritative session 
 ### Independent Review Evidence
 
 Review proposals and independently verified findings have separate typed contracts.
+The proposal schema works with OpenHands' structured `FinishTool` and contains only advisory candidates.
+The caller attaches the review identity, reviewer, and evidence snapshot after parsing; these are not model-selected fields.
 The gateway binds explicitly selected project files to their exact content hashes and byte counts through the existing confined workspace reader.
 A submission references that snapshot; changed or unavailable context cannot support an actionable finding.
 Review identities reject conflicting retries, and equivalent conditions on the same evidence produce one finding with the original reviewer claims retained separately.

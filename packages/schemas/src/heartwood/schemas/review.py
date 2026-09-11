@@ -77,13 +77,9 @@ class ReviewCandidate(ExperimentRecord):
         return self
 
 
-class ReviewSubmission(ExperimentRecord):
-    """Gateway-associated reviewer output for one immutable review context."""
+class ReviewProposals(ExperimentRecord):
+    """Structured model output has no authority to select a reviewer or evidence snapshot."""
 
-    schema_version: Literal["heartwood.review-submission.v1"] = "heartwood.review-submission.v1"
-    review_id: Reference
-    reviewer_id: Reference
-    snapshot_sha256: Digest
     candidates: tuple[ReviewCandidate, ...] = Field(default=(), max_length=32)
 
     @model_validator(mode="after")
@@ -92,6 +88,34 @@ class ReviewSubmission(ExperimentRecord):
         if len({item.candidate_id for item in self.candidates}) != len(self.candidates):
             raise ValueError("Reviewer candidate identities must be unique")
         return self
+
+
+class ReviewSubmission(ReviewProposals):
+    """Gateway-associated reviewer output for one immutable review context."""
+
+    schema_version: Literal["heartwood.review-submission.v1"] = "heartwood.review-submission.v1"
+    review_id: Reference
+    reviewer_id: Reference
+    snapshot_sha256: Digest
+
+    @classmethod
+    def associate(
+        cls,
+        proposals: ReviewProposals,
+        *,
+        review_id: str,
+        reviewer_id: str,
+        snapshot: ReviewSnapshot,
+    ) -> Self:
+        """Attach caller-owned lineage; this does not authenticate an arbitrary principal."""
+        proposals = ReviewProposals.model_validate(proposals)
+        snapshot = ReviewSnapshot.model_validate(snapshot)
+        return cls(
+            review_id=review_id,
+            reviewer_id=reviewer_id,
+            snapshot_sha256=snapshot.fingerprint,
+            candidates=proposals.candidates,
+        )
 
 
 class ReviewSource(ExperimentRecord):
