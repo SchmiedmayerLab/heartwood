@@ -345,7 +345,7 @@ def _verification() -> WorkflowDefinition:
         workflow_id="result-verification",
         version=1,
         label="Independent Result Verification",
-        description="Reconstruct an analysis environment and report whether its outputs reproduce.",
+        description="Check Python compatibility, rerun an analysis, and compare its outputs.",
         inputs=(
             WorkflowInput(
                 input_id="data",
