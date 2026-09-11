@@ -23,6 +23,10 @@ Cancelling a started stage records cancellation; cancelling before a stage start
 Inspect **Experiment Records** in the browser's Research tab, enter `/experiments` in the terminal, or read `NotebookViewModel.experiments` in a notebook.
 All three use the same gateway-owned session projection.
 The notebook widget also includes an Experiment Records section.
+For all sessions and recorded scripts in the project, expand **Project Experiment Records** in the browser's Research tab.
+**Refresh** reads current project state; **Export Records** downloads the gateway's canonical JSON Lines and displays its digest.
+The export is project-local scientific metadata, not a signed audit checkpoint.
+The notebook exposes the same collection and export through `session.experiment_records()` and `session.export_experiments()`.
 
 The start and outcome are committed with their workflow transitions in the existing paired session and audit journal.
 Their content-minimized fingerprints are included in the security audit; the full scientific records remain project-private.

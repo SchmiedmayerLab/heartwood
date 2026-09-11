@@ -1221,6 +1221,34 @@ describe("GatewayClient", () => {
     ).rejects.toThrowErrorMatchingInlineSnapshot(`[Error: denied]`);
   });
 
+  it.each(["getExperimentRecords", "getExperimentExport"] as const)(
+    "loads %s through the deployment prefix",
+    async (method) => {
+      const body =
+        method === "getExperimentRecords" ?
+          {
+            schema_version: "heartwood.experiment-collection.v1",
+            retention: "project-local",
+            runs: [],
+          }
+        : {
+            schema_version: "heartwood.experiment-export.v1",
+            sha256: "a".repeat(64),
+            jsonl: "",
+          };
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify(body)));
+      vi.stubGlobal("fetch", fetch);
+      await expect(new GatewayClient("/proxy/8767")[method]()).resolves.toEqual(
+        body,
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        `/proxy/8767/research/experiments${method === "getExperimentExport" ? "/export" : ""}`,
+      );
+    },
+  );
+
   it("preserves gateway status for non-JSON error responses", async () => {
     vi.stubGlobal(
       "fetch",

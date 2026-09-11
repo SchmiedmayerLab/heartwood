@@ -1071,6 +1071,22 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({ workflows: [] });
   }
 
+  getExperimentRecords(): ReturnType<HeartwoodClient["getExperimentRecords"]> {
+    return Promise.resolve({
+      schema_version: "heartwood.experiment-collection.v1",
+      retention: "project-local",
+      runs: [],
+    });
+  }
+
+  getExperimentExport(): ReturnType<HeartwoodClient["getExperimentExport"]> {
+    return Promise.resolve({
+      schema_version: "heartwood.experiment-export.v1",
+      sha256: "0".repeat(64),
+      jsonl: "",
+    });
+  }
+
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary> {
     return Promise.resolve({
       ...bundledSkill(),

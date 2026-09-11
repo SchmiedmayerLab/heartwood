@@ -158,6 +158,24 @@ The gateway rejects stale requests and shares the resulting state with the termi
 
 Specialist delegation remains part of the parent OpenHands conversation; the notebook does not maintain a separate agent registry or task queue.
 
+## Inspect Experiment Records
+
+`view.experiments` contains the active session's workflow records.
+For all workflow and explicitly recorded script analyses in the project:
+
+```python
+records = session.experiment_records()
+[(run.run_id, run.status, run.outputs) for run in records.runs]
+
+exported = session.export_experiments()
+print(exported.sha256)
+```
+
+`exported.jsonl` contains the same verified JSON Lines downloaded by the browser or written by `heartwood experiments export`.
+These calls do not start a model or repeat an analysis.
+The export can contain sensitive paths and metadata; handle it as project data, not as an anonymized or signed audit record.
+See [Experiment Records](../architecture/experiments.md) for recording analyses, recovery, and evidence boundaries.
+
 ## Inspect Files and Changes
 
 The notebook bridge exposes the same bounded read-only service as the terminal and browser without building a separate notebook file browser:

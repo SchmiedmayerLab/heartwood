@@ -15,6 +15,8 @@ import type {
   CommandKind,
   CustomLocalModelDownloadRequest,
   CredentialSettings,
+  ExperimentCollection,
+  ExperimentExport,
   JsonValue,
   LocalModelImportRequest,
   LocalModelImportResult,
@@ -150,6 +152,8 @@ export interface HeartwoodClient {
   getSkillSettings(): Promise<SkillSettings>;
   getSpecialistSettings(): Promise<SpecialistSettings>;
   getResearchWorkflows(): Promise<WorkflowCatalog>;
+  getExperimentRecords(): Promise<ExperimentCollection>;
+  getExperimentExport(): Promise<ExperimentExport>;
   refreshSkills(sourceId?: string): Promise<SkillSettings>;
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary>;
   installSkill(
@@ -581,6 +585,18 @@ export class GatewayClient implements HeartwoodClient {
   async getResearchWorkflows(): Promise<WorkflowCatalog> {
     return parseJsonResponse<WorkflowCatalog>(
       await fetch(this.url("/research/workflows")),
+    );
+  }
+
+  async getExperimentRecords(): Promise<ExperimentCollection> {
+    return parseJsonResponse<ExperimentCollection>(
+      await fetch(this.url("/research/experiments")),
+    );
+  }
+
+  async getExperimentExport(): Promise<ExperimentExport> {
+    return parseJsonResponse<ExperimentExport>(
+      await fetch(this.url("/research/experiments/export")),
     );
   }
 

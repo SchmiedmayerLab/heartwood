@@ -135,6 +135,12 @@ const setup = (
     client: {
       getResearchWorkflows: vi.fn().mockResolvedValue(catalog),
       getWorkspaceFile: vi.fn(),
+      getExperimentRecords: vi.fn().mockResolvedValue({
+        schema_version: "heartwood.experiment-collection.v1",
+        retention: "project-local",
+        runs: [],
+      }),
+      getExperimentExport: vi.fn(),
     },
     sessionId: "session-test",
     projection,
@@ -149,6 +155,26 @@ const setup = (
 };
 
 describe("research workflow workspace", () => {
+  it("does not reload project provenance for unrelated session events", async () => {
+    const view = setup();
+    fireEvent.click(screen.getByText("Project Experiment Records"));
+    await screen.findByText("No experiments recorded in this project.");
+    view.rerender(
+      <ResearchWorkspace
+        {...view}
+        projection={{
+          ...view.projection,
+          revision: view.projection.revision + 1,
+        }}
+      />,
+    );
+    expect(view.client.getExperimentRecords).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(view.client.getExperimentRecords).toHaveBeenCalledTimes(2),
+    );
+  });
+
   it("shows recorded stage evidence without inferring successful execution", async () => {
     setup(
       syntheticProjection({
@@ -196,7 +222,9 @@ describe("research workflow workspace", () => {
       }),
     );
     fireEvent.click(await screen.findByText("Experiment Records"));
-    const record = screen.getByRole("region", { name: "Experiment inspect" });
+    const record = screen.getByRole("region", {
+      name: "Experiment Inspect Data",
+    });
     expect(record).toHaveTextContent("Awaiting stage acceptance");
     expect(record).toHaveTextContent("3064c9dc-826f-4793-9203-e381dbf26303");
     expect(record).toHaveTextContent("b".repeat(64));

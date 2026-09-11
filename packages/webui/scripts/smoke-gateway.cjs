@@ -266,6 +266,19 @@ async function inspectResearchSetup(url) {
     ) {
       throw new Error("baseline workflow is missing from the shared catalog");
     }
+    await page.getByText("Project Experiment Records", { exact: true }).click();
+    const records = page.locator(".project-experiments");
+    await expect(
+      records.getByText("No experiments recorded in this project."),
+    ).toBeVisible();
+    const exported = await fetchJson(`${url}research/experiments/export`);
+    const downloadPromise = page.waitForEvent("download");
+    await records.getByRole("button", { name: "Export Records" }).click();
+    const downloaded = await downloadPromise;
+    expect(fs.readFileSync(await downloaded.path(), "utf8")).toBe(
+      exported.jsonl,
+    );
+    await expect(records.getByRole("status")).toContainText(exported.sha256);
     for (const theme of ["light", "dark"]) {
       if (theme === "dark")
         await page.getByRole("button", { name: "Switch to dark mode" }).click();

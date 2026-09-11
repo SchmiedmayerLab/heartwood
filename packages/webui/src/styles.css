@@ -10,6 +10,12 @@
   overflow-wrap: anywhere;
 }
 
+.project-experiments {
+  margin: 24px auto;
+  max-width: 960px;
+  width: calc(100% - 48px);
+}
+
 .research-provenance summary {
   cursor: pointer;
   padding-block: 8px;
@@ -44,6 +50,9 @@
 }
 
 @media (max-width: 640px) {
+  .project-experiments {
+    width: calc(100% - 32px);
+  }
   .research-provenance dl {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;

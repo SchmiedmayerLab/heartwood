@@ -49,6 +49,7 @@ from heartwood.gateway import (
     SessionLifecycle,
     SessionProjection,
 )
+from heartwood.gateway.experiments import ExperimentRecorder
 from heartwood.notebook import (
     NotebookSession,
     build_view_model,
@@ -66,8 +67,37 @@ def test_notebook_workflow_catalog_does_not_start_a_session(tmp_path: Path) -> N
     try:
         notebook = NotebookSession(gateway=gateway, session_id="catalog")
         assert notebook.research_workflows() == gateway.research_workflows()
+        assert notebook.experiment_records() == gateway.experiment_records()
+        assert notebook.export_experiments() == gateway.export_experiments()
         assert not gateway._services
         assert list(tmp_path.iterdir()) == []
+    finally:
+        gateway.stop()
+
+
+def test_notebook_project_experiments_match_python_and_http_export(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    (tmp_path / "analysis.py").write_text("# Synthetic analysis entry point\n")
+    recorder = ExperimentRecorder(project)
+    definition = recorder.describe(
+        actor_ref="test",
+        entry_point="analysis.py",
+        inputs=(),
+        outputs=("result.json",),
+        parameters={"seed": 42},
+    )
+    with recorder.record(definition):
+        (tmp_path / "result.json").write_text('{"mean": 2}\n')
+    gateway = SessionGateway(project=project, env={})
+    try:
+        notebook = NotebookSession(gateway=gateway)
+        assert notebook.experiment_records().runs == recorder.runs()
+        assert notebook.export_experiments().jsonl.encode() == recorder.export()
+        rest = RestGateway(gateway)
+        response = rest.handle(RestRequest(method="GET", path="/research/experiments/export"))
+        assert response.status_code == 200
+        assert response.body == notebook.export_experiments().model_dump(mode="json")
+        assert not gateway._services
     finally:
         gateway.stop()
 
