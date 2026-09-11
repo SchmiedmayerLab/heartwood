@@ -130,16 +130,18 @@ Start a [research workflow](research-workflows.md) in a new session:
 ```python
 from heartwood.schemas.workflows import WorkflowStart
 
-view = session.workflow(WorkflowStart(
-    action="start",
-    workflow_id="baseline-analysis",
-    inputs={
-        "data": "data.csv",
-        "dictionary": "dictionary.json",
-        "question": "Does baseline score predict the held-out outcome?",
-    },
-    output_directory="results",
-))
+view = session.workflow(
+    WorkflowStart(
+        action="start",
+        workflow_id="baseline-analysis",
+        inputs={
+            "data": "data.csv",
+            "dictionary": "dictionary.json",
+            "question": "Does baseline score predict the held-out outcome?",
+        },
+        output_directory="results",
+    )
+)
 [(control.control_id, control.label) for control in view.workflow_controls]
 ```
 
